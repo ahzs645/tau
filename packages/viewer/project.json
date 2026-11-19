@@ -1,0 +1,69 @@
+{
+  "name": "viewer",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/viewer",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:package"],
+  "targets": {
+    "build": {
+      "dependsOn": ["^build"]
+    },
+    "test:e2e": {
+      "executor": "nx:noop",
+      "dependsOn": ["test:e2e:svg-viewer", "test:e2e:gltf-batches", "test:e2e:viewer-resize"],
+      "metadata": {
+        "description": "Chromium suites for the viewer's SVG presentation, glTF batch pixels, section clipping and resize continuation. Named test:e2e so `nx affected -t test:e2e` selects them on the CI lane that installs Chromium. Each Vitest Browser config is its own task (dependsOn): Nx runs every task that does not depend on a failed one, so one failing config no longer hides the others' results, and the target still fails when any config fails. The suites declare parallelism false, so they still run one at a time as before."
+      }
+    },
+    "test:e2e:svg-viewer": {
+      "executor": "nx:run-commands",
+      "parallelism": false,
+      "metadata": {
+        "description": "The SVG viewer's Chromium suite (svg-viewer.vitest.browser.config.ts). One task of test:e2e."
+      },
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "vitest run --config src/graphics/svg/svg-viewer.vitest.browser.config.ts"
+      }
+    },
+    "test:e2e:gltf-batches": {
+      "executor": "nx:run-commands",
+      "parallelism": false,
+      "metadata": {
+        "description": "The glTF batch pixel suite (gltf-batches.vitest.browser.config.ts). One task of test:e2e."
+      },
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "vitest run --config src/graphics/three/utils/gltf-batches.vitest.browser.config.ts"
+      }
+    },
+    "test:e2e:viewer-resize": {
+      "executor": "nx:run-commands",
+      "parallelism": false,
+      "metadata": {
+        "description": "The Three.js node frame, post-processing, section clipping and resize continuation suite (viewer-resize.vitest.browser.config.ts) under TAU_E2E_WEBGPU_PROFILE. One task of test:e2e."
+      },
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "vitest run --config src/graphics/three/viewer-resize.vitest.browser.config.ts"
+      }
+    },
+    "capture:viewer-parity": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "Viewer parity references (Tau Brain research/nanoraster-viewer-parity-charter.md, W6): the production viewer's frame and camera per parity fixture, AO on and off, for tau-examples:test:viewer-parity. Software GPUs need TAU_E2E_WEBGPU_PROFILE=software and PARITY_HEADED=1 under xvfb-run; inputs are documented in the config."
+      },
+      "cache": false,
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "vitest run --config src/graphics/three/viewer-parity-capture.vitest.browser.config.ts"
+      }
+    },
+    "test": {
+      "inputs": ["default", "^production", "serviceEnvironment", "reactEventLayer"]
+    },
+    "typecheck": {
+      "inputs": ["default", "^production", "reactEventLayer"]
+    }
+  }
+}

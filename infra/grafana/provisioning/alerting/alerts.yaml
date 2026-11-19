@@ -1,135 +1,3983 @@
-# Grafana Alerting Rules for Tau API
-# These are provisioned as code via the grafana/otel-lgtm volume mount.
-# In production (Fly.io managed Grafana), import these via the Grafana API.
-#
-# To configure Grafana Cloud alerts, set OTEL_EXPORTER_OTLP_ENDPOINT and
-# OTEL_EXPORTER_OTLP_HEADERS as Fly.io secrets:
-#
-#   fly secrets set OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-<region>.grafana.net/otlp
-#   fly secrets set OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(instanceId:apiKey)>"
+# Local Grafana alert provisioning, mounted into grafana/otel-lgtm. It carries exactly the rule
+# groups in infra/grafana/alerts/*.json, consumed by the versioned Terraform bundle and local sync helper; scripts:validate-grafana fails when a rule here differs from its JSON. Change the JSON
+# first, then mirror it here.
 
 apiVersion: 1
+
+# Rules removed from this file stay in an existing Grafana until deleted here.
+deleteRules:
+  - orgId: 1
+    uid: rpc-failure-rate # rpc_* lost its emitter in 15ef0677e
 
 groups:
   - orgId: 1
     name: tau-critical
     folder: Tau Alerts
-    interval: 1m
+    interval: 60s
     rules:
       - uid: redis-connection-lost
         title: 'P0: Redis Connection Lost'
         condition: redis_down
         data:
           - refId: redis_down
-            datasourceUid: prometheus
+            queryType: ''
             relativeTimeRange:
               from: 300
               to: 0
+            datasourceUid: prometheus
             model:
-              expr: redis_connection_state{service_name="tau-api"} == 0
+              instant: true
+              range: false
+              expr: redis_connection_state{app=~".*",service_name="tau-api"} == bool 0
               intervalMs: 15000
               maxDataPoints: 20
+              refId: redis_down
+        noDataState: OK
+        execErrState: OK
         for: 1m
         annotations:
-          summary: Redis connection is down. Chat RPC, session management, and adapter services are degraded.
-          runbook_url: ''
+          summary: Redis connection is down. Host relay presence, session routing and adapter services are degraded.
+          runbook_url: docs/handbooks/cloud/playbooks/redis-loss.md
         labels:
           severity: critical
           service: tau-api
           component: redis
-
-  - orgId: 1
-    name: tau-warning
-    folder: Tau Alerts
-    interval: 1m
-    rules:
-      - uid: rpc-failure-rate
-        title: 'P1: RPC Failure Rate Spike'
-        condition: rpc_errors_high
+      - uid: database-startup-failure
+        title: 'P0: Database Startup Failure'
+        condition: db_startup_threshold
         data:
-          - refId: rpc_errors_high
+          - refId: db_startup_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({service_name="tau-api"} |~ "Database (connectivity probe|schema compatibility check) failed" [5m]))
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: db_startup_logs
+          - refId: db_startup_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: db_startup_logs
+              refId: db_startup_reduce
+          - refId: db_startup_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: db_startup_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: db_startup_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: Database probe or schema compatibility check failed during API startup. Inspect Loki for `Database connectivity probe failed` / `Database schema compatibility check failed` lines and act on the structured `hint` field (paused provider, DNS, TCP timeout, role rotation, pooler exhaustion, privilege).
+          runbook_url: docs/handbooks/cloud/playbooks/postgres-saturation.md
+        labels:
+          severity: critical
+          service: tau-api
+          component: database
+      - uid: billing-ledger-drift
+        title: 'P0: Billing Ledger Drift'
+        condition: drift_threshold
+        data:
+          - refId: drift
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
             datasourceUid: prometheus
+            model:
+              expr: max(max_over_time(tau_billing_ledger_drift{app=~".*",service_name="tau-api"}[15m]))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: drift
+          - refId: drift_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: drift
+              refId: drift_threshold
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          summary: 'SUM(credit_transaction.deltaMicro) disagrees with materialised balances (C12). Money invariant broken — treat as a page, not a log line. Runbook: repos/tau-cloud/docs/stripe-iac-runbook.md.'
+          runbook_url: docs/handbooks/cloud/playbooks/ledger-drift.md
+        labels:
+          severity: critical
+          service: tau-api
+          component: billing
+      - uid: supplier-auth-failure
+        title: "P0: Supplier Rejected Tau's Key"
+        condition: supplier_auth
+        data:
+          - refId: supplier_auth
+            queryType: ''
             relativeTimeRange:
               from: 300
               to: 0
+            datasourceUid: prometheus
             model:
-              expr: >
-                sum(rate(rpc_server_call_duration_count{service_name="tau-api",rpc_status="error"}[5m]))
-                / sum(rate(rpc_server_call_duration_count{service_name="tau-api"}[5m])) > 0.1
+              expr: sum by (app, gen_ai_provider_name) (increase(gen_ai_client_operation_duration_count{app=~".*",service_name="tau-api",error_type="upstream_auth"}[5m])) > 0
               intervalMs: 15000
               maxDataPoints: 20
+              refId: supplier_auth
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/supplier-outage.md
+          summary: 'A supplier answered a funded call with 401/403 (F-11). The key is Tau''s, so every funded call to that supplier fails as PROVIDER_UNAVAILABLE until the key is replaced. A new process fires from its second rejection: increase() cannot see a series'' first sample. Grouped by Fly `app`, so staging (tau-api-staging) and prod (tau-api) fire separately. Same event as tau_billing_provider_account_refusals_total{reason="credential_rejected"}.'
+        labels:
+          severity: critical
+          service: tau-api
+          component: billing
+      - uid: supplier-credit-exhausted
+        title: 'P0: Supplier Account Out of Credit'
+        condition: supplier_credit
+        data:
+          - refId: supplier_credit
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum by (app, providerId) (increase(tau_billing_provider_account_refusals_total{app=~".*",service_name="tau-api",reason!="credential_rejected"}[5m])) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: supplier_credit
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/supplier-outage.md
+          summary: A supplier refused a funded call because Tau's account with it is out of credit (BIL-11). Funded calls to that supplier fail until it is topped up. Credential rejections are excluded here; supplier-auth-failure pages for them.
+        labels:
+          severity: critical
+          service: tau-api
+          component: billing
+      - uid: billing-worker-stalled
+        title: 'P0: Billing Worker Stalled'
+        condition: worker_stalled
+        data:
+          - refId: worker_stalled
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum by (app, tau_worker) (max_over_time(tau_billing_worker_passes_total{app=~".*",service_name="tau-api"}[24h])) unless sum by (app, tau_worker) (increase(tau_billing_worker_passes_total{app=~".*",service_name="tau-api",outcome="ok"}[15m]) > 0)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: worker_stalled
+        noDataState: OK
+        execErrState: OK
         for: 5m
         annotations:
-          summary: RPC error rate exceeds 10% over 5 minutes.
+          runbook_url: docs/handbooks/cloud/playbooks/paid-not-credited.md
+          summary: 'A billing worker seen in the last 24 h has completed no successful pass in 15 min: hung, dead or failing every pass (F-10). operations stalled means paid purchases are not credited; recovery stalled means no API replica is completing its in-process recovery pass, so funded operations stay held (see chat-llm-failing.md). Grouped by Fly `app` and `tau_worker`. A worker scaled to 0 on purpose also fires until 24 h pass, so silence it.'
         labels:
-          severity: warning
+          severity: critical
           service: tau-api
-          component: rpc
-
+          component: billing
+      - uid: billing-account-spend-blocked
+        title: 'P0: Customer Chat Blocked by a Financial Case'
+        condition: account_spend_blocked
+        data:
+          - refId: account_spend_blocked
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max by (app, kind) (tau_billing_open_financial_cases{app=~".*",service_name="tau-api",attributed="true",kind=~"dispute_unresolved|orphan_local_receipt|invalid_grant_cause|entitlement_source_disagreement|journal_.+"}) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: account_spend_blocked
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/ledger-drift.md
+          summary: 'Tier T1: a spend-blocking financial case (dispute, orphan receipt, invalid grant cause, entitlement disagreement or journal drift; charter D11) that names an account has been open for more than 15 min. That customer gets 403 BILLING_ACCOUNT_RESTRICTED on every model step and cannot start a new purchase until an operator resolves it. Start with the billing lifecycle `list-cases` with `attributed: true`. An unattributed case pages as billing-case-unattributed instead; owed-money and bookkeeping kinds never block and are not in this rule. Grouped by Fly `app` and case kind.'
+        labels:
+          severity: critical
+          service: tau-api
+          component: billing
+      - uid: billing-case-unattributed
+        title: 'P0: Financial Case Without an Account'
+        condition: case_unattributed
+        data:
+          - refId: case_unattributed
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max by (app, kind) (tau_billing_open_financial_cases{app=~".*",service_name="tau-api",attributed="false",kind!~"tax_registration_review|supplier_.+"}) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: case_unattributed
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/refunds-and-financial-cases.md
+          summary: 'Tier U (billing collection gate blueprint D5): an open financial case names no Tau account, usually foreign cash (a payment with no Tau customer) or a Stripe read that could not attribute it. No customer is refused anything; it is operator work and pages at the first evaluation after the hourly gauge write. Run the billing lifecycle `list-cases` with `attributed: false`, then close each row with `resolve-case` (`resolved` for foreign cash). tax_registration_review and supplier_* cases never name an account, so they are left to billing-books-overdue-24h (and billing-supplier-invoice-mismatch) instead of paging here. Grouped by Fly `app` and case kind.'
+        labels:
+          severity: critical
+          service: tau-api
+          component: billing
+      - uid: billing-owed-overdue-24h
+        title: 'P0: Customer Owed for More Than 24 h'
+        condition: owed_overdue
+        data:
+          - refId: owed_overdue
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max by (app, kind) (tau_billing_open_financial_case_age_seconds{app=~".*",service_name="tau-api",attributed="true",kind=~"missing_local_payment|paid_unfulfilled_recovery|unfulfilled_purchase_obligation"}) > 86400
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: owed_overdue
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/paid-not-credited.md
+          summary: 'Tier T2: Tau has owed a named customer for more than 24 h: the oldest open missing_local_payment, paid_unfulfilled_recovery or unfulfilled_purchase_obligation case (paid, not yet credited or fulfilled) is older than a day. Nothing is refused; the customer is still waiting for what they paid for. Start with the billing lifecycle `list-cases` with `attributed: true`, then follow paid-not-credited. billing-owed-stale-2h warned at 2 h. Reads the oldest-case age gauge, written hourly. Grouped by Fly `app` and case kind.'
+        labels:
+          severity: critical
+          service: tau-api
+          component: billing
+      - uid: db-pooler-clients-near-cap
+        title: 'P0: Pooler Login Near Its Session Pool Cap'
+        condition: db_pooler_clients_near_cap
+        data:
+          - refId: db_pooler_clients_near_cap
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(max_over_time(tau_db_client_connections{app=~".*",service_name="tau-api",tau_db_pool=~"request|background"}[1m])) + 2 >= 14
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: db_pooler_clients_near_cap
+        noDataState: OK
+        execErrState: OK
+        for: 1m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/postgres-saturation.md
+          summary: API pooled PostgreSQL clients reached 14 of the 15-client session pool; the next connection is refused and fails its query (database connection audit R4). The sum is every API instance's own request and background sockets plus the 2 of revisions-maintenance, which shares the login and exports no metrics. The prod-us login's Supavisor session pool is 15 and the declared budget is 2 × (4 + 1) + 2 = 12 (apps/api/app/config/connection-budget.test.ts).
+        labels:
+          severity: critical
+          service: tau-api
+          component: database
+      - uid: db-pool-refusals
+        title: 'P0: Database Refused API Connections'
+        condition: db_pool_refusals
+        data:
+          - refId: db_pool_refusals
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(increase(tau_db_client_refusals_total{app=~".*",service_name="tau-api"}[5m])) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: db_pool_refusals
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/postgres-saturation.md
+          summary: A query on the API failed because the session pooler or PostgreSQL refused its connection (Supavisor EMAXCONN, SQLSTATE 53300). Each refused query fails, often as 500 Failed to get session (database connection audit R4).
+        labels:
+          severity: critical
+          service: tau-api
+          component: database
+      - uid: agent-replay-rejected
+        title: 'P0: Model Provider Rejected Replayed Reasoning'
+        condition: replay_rejected
+        data:
+          - refId: replay_rejected
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: '(sum by (app) (increase(tau_agent_errors_total{app=~".*",service_name="tau-api",error_code="REASONING_REPLAY_REJECTED"}[15m])) > 0) or (sum by (app) (tau_agent_errors_total{app=~".*",service_name="tau-api",error_code="REASONING_REPLAY_REJECTED"} unless tau_agent_errors_total{app=~".*",service_name="tau-api",error_code="REASONING_REPLAY_REJECTED"} offset 15m) > 0)'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: replay_rejected
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/chat-llm-failing.md
+          summary: "A model provider refused a request because of reasoning Tau replayed from earlier in the chat (REASONING_REPLAY_REJECTED, reported by the agent client). The user saw 'This model cannot continue this chat' with no Resume, and that chat cannot continue on that model. Every occurrence is a replay-rule bug. The second leg counts a series first seen in the window, which increase() reads as zero."
+        labels:
+          severity: critical
+          service: tau-api
+          component: agent
+  - orgId: 1
+    name: tau-warning
+    folder: Tau Alerts
+    interval: 60s
+    rules:
       - uid: ws-disconnect-storm
         title: 'P1: WebSocket Disconnect Storm'
         condition: ws_disconnect_spike
         data:
           - refId: ws_disconnect_spike
-            datasourceUid: prometheus
+            queryType: ''
             relativeTimeRange:
               from: 300
               to: 0
+            datasourceUid: prometheus
             model:
-              expr: >
-                rate(ws_disconnections_total{service_name="tau-api",ws_close_reason=~"transport close|transport error|ping timeout"}[5m]) > 1
+              expr: sum(rate(ws_disconnections_total{app=~".*",service_name="tau-api",ws_close_reason="error"}[5m])) > 1
               intervalMs: 15000
               maxDataPoints: 20
+              refId: ws_disconnect_spike
+        noDataState: OK
+        execErrState: OK
         for: 2m
         annotations:
-          summary: High rate of abnormal WebSocket disconnections detected.
+          runbook_url: docs/handbooks/cloud/playbooks/api-5xx.md
+          summary: More than one abnormal WebSocket close (close-code class `error`) per second across the hosts and kernels gateways.
         labels:
           severity: warning
           service: tau-api
           component: websocket
-
       - uid: llm-error-rate
         title: 'P1: LLM API Error Rate'
         condition: llm_errors
         data:
           - refId: llm_errors
-            datasourceUid: prometheus
+            queryType: ''
             relativeTimeRange:
               from: 600
               to: 0
+            datasourceUid: prometheus
             model:
-              expr: >
-                sum(rate(gen_ai_client_operation_duration_count{service_name="tau-api",error_type!=""}[10m]))
-                / sum(rate(gen_ai_client_operation_duration_count{service_name="tau-api"}[10m])) > 0.05
+              expr: (sum(rate(gen_ai_client_operation_duration_count{app=~".*",service_name="tau-api",error_type!=""}[10m])) / sum(rate(gen_ai_client_operation_duration_count{app=~".*",service_name="tau-api"}[10m])) and sum(increase(gen_ai_client_operation_duration_count{app=~".*",service_name="tau-api"}[10m])) >= 20) > 0.05
               intervalMs: 15000
               maxDataPoints: 20
+              refId: llm_errors
+        noDataState: OK
+        execErrState: OK
         for: 5m
         annotations:
-          summary: LLM API error rate exceeds 5%.
+          runbook_url: docs/handbooks/cloud/playbooks/chat-llm-failing.md
+          summary: LLM API error rate exceeds 5% over at least 20 calls in 10 min; below that volume a handful of failures is not a rate.
         labels:
           severity: warning
           service: tau-api
           component: ai
-
       - uid: high-5xx-rate
         title: 'P1: High 5xx Error Rate'
         condition: http_5xx_high
         data:
           - refId: http_5xx_high
-            datasourceUid: prometheus
+            queryType: ''
             relativeTimeRange:
               from: 300
               to: 0
+            datasourceUid: prometheus
             model:
-              expr: >
-                sum(rate(http_server_duration_count{service_name="tau-api",http_status_code=~"5.."}[5m]))
-                / sum(rate(http_server_duration_count{service_name="tau-api"}[5m])) > 0.05
+              expr: (sum(rate(http_server_request_duration_count{app=~".*",service_name="tau-api",http_response_status_code=~"5.."}[5m])) or vector(0)) / sum(rate(http_server_request_duration_count{app=~".*",service_name="tau-api"}[5m])) > 0.05
               intervalMs: 15000
               maxDataPoints: 20
+              refId: http_5xx_high
+        noDataState: OK
+        execErrState: OK
         for: 5m
         annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/api-5xx.md
           summary: HTTP 5xx error rate exceeds 5% over 5 minutes.
         labels:
           severity: warning
           service: tau-api
           component: api
+      - uid: redis-memory-high
+        title: 'P1: Redis Memory High'
+        condition: redis_memory_high
+        data:
+          - refId: redis_memory_high
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max(redis_memory_utilization{app=~".*",service_name="tau-api"}) > 0.7
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: redis_memory_high
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/redis.md
+          summary: 'Redis memory is above 70% of its limit for 10 minutes. The instance runs without eviction, so at 100% it refuses writes: pairing, GitHub connect, git leases and rate limits fail.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: redis
+      - uid: gen-ai-prompt-cache-hit-rate-low
+        title: 'GenAiPromptCacheHitRateLow: Prompt cache hit rate below 40% (cost bleed)'
+        condition: cache_hit_rate_low
+        data:
+          - refId: cache_hit_rate_low
+            queryType: ''
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: |-
+                (
+                  (
+                    sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{app=~".*",service_name="tau-api", gen_ai_token_type="cache_read"}[30m]))
+                    or
+                    0 * sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{app=~".*",service_name="tau-api", gen_ai_token_type="input"}[30m]))
+                  )
+                  /
+                  sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{app=~".*",service_name="tau-api", gen_ai_token_type=~"input|cache_read|cache_write"}[30m]))
+                ) < 0.4
+                and
+                sum by (gen_ai_request_model, gen_ai_provider_name) (increase(gen_ai_client_token_usage_sum{app=~".*",service_name="tau-api", gen_ai_token_type="input"}[30m])) >= 200000
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: cache_hit_rate_low
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/llm-suppliers.md
+          summary: Prompt cache hit rate <40% sustained for 30m on a model with non-trivial volume.
+          description: 'Provider-side prompt caches (Gemini implicit, Anthropic incremental, OpenAI prompt) are not hitting on {{ $labels.gen_ai_provider_name }}/{{ $labels.gen_ai_request_model }} despite >=200K input tokens billed in the last 30m. This is a cost-bleed signal, not a user-facing failure. Common causes: per-turn-mutating prefix bytes (token-usage reminders, dynamic system-prompt fields), tool-list churn, or provider request-shape regressions. See docs/research/gemini-prompt-cache-busting.md for the diagnosis playbook.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: ai
+      - uid: billing-funded-operation-occupancy
+        title: 'P1: Funded LLM Pool Near Failsafe'
+        condition: billing_funded_operation_occupancy
+        data:
+          - refId: billing_funded_operation_occupancy
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max(tau_billing_funded_operation_current{app=~".*",service_name="tau-api",tau_billing_pending_state="pending"}) >= 56
+              intervalMs: 15000
+              maxDataPoints: 60
+              refId: billing_funded_operation_occupancy
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/chat-llm-failing.md
+          summary: A funded LLM capacity pool has remained above 87.5% of its 64-operation abuse failsafe.
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-funded-operation-limit
+        title: 'P1: Funded LLM Failsafe Reached'
+        condition: billing_funded_operation_limit
+        data:
+          - refId: billing_funded_operation_limit
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(tau_billing_funded_operation_denials_total{app=~".*",service_name="tau-api",tau_billing_capacity_pool="primary",tau_billing_denial_reason="genuine_saturation"}[5m])) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: billing_funded_operation_limit
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/chat-llm-failing.md
+          summary: A primary funded LLM request reached the account abuse failsafe after recovery.
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-funded-operation-recovery-failed
+        title: 'P1: Funded LLM Recovery Failed'
+        condition: billing_funded_operation_recovery_failed
+        data:
+          - refId: billing_funded_operation_recovery_failed
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(tau_billing_funded_operation_recoveries_total{app=~".*",service_name="tau-api",tau_billing_recovery_outcome="failed"}[5m])) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: billing_funded_operation_recovery_failed
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/chat-llm-failing.md
+          summary: Funded LLM recovery failed; admission remains fail-closed without changing customer money.
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-funded-operation-due-age
+        title: 'P1: Funded LLM Recovery SLO Breach'
+        condition: billing_funded_operation_due_age
+        data:
+          - refId: billing_funded_operation_due_age
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max by (deployment_environment, tau_billing_capacity_pool) (tau_billing_funded_operation_oldest_due_age{app=~".*",service_name="tau-api"}) > 30000
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: billing_funded_operation_due_age
+        noDataState: OK
+        execErrState: OK
+        for: 1m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/chat-llm-failing.md
+          summary: The oldest due funded LLM operation has exceeded the 30-second healthy recovery SLO.
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-recovery-provider-execution
+        title: 'P1: Provider Execution During Recovery'
+        condition: billing_funded_operation_recovery_provider_execution
+        data:
+          - refId: billing_funded_operation_recovery_provider_execution
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max(tau_billing_funded_operation_recovery_provider_executions{app=~".*",service_name="tau-api"}) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: billing_funded_operation_recovery_provider_execution
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/ledger-drift.md
+          summary: DB-only funded LLM recovery observed a provider execution; the invariant is zero.
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: tau-process-restarting
+        title: 'P1: Tau Process Crash-Looping'
+        condition: process_restarting
+        data:
+          - refId: process_restarting
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: count by (app, instance, tau_process, service_version) (count_over_time(target_info{app=~".*",service_name="tau-api"}[30m])) > 3
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: process_restarting
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/paid-not-credited.md
+          summary: 'A Tau process (app or billing worker) started more than three times on one image in 30 min: it is crash-looping (F-10: billing-operations OOM-kills on a 256 MB Machine, before its first pass completes). Reads target_info, one series per process start (process_pid) labelled with the image (service_version), so a deploy starts a new image and is never counted, however often main deploys staging.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: billing-supplier-route-margin
+        title: 'P1: Supplier Cost Above 85% of Charge'
+        condition: supplier_margin
+        data:
+          - refId: supplier_margin
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum by (app, gen_ai_request_model, gen_ai_provider_name) (increase(tau_billing_supplier_cost_picousd_total{app=~".*",service_name="tau-api"}[24h])) / (sum by (app, gen_ai_request_model, gen_ai_provider_name) (increase(gen_ai_client_cost_total{app=~".*",service_name="tau-api"}[24h])) * 1e12) > 0.85
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: supplier_margin
+        noDataState: OK
+        execErrState: OK
+        for: 24h
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/llm-suppliers.md
+          summary: "Over 24 h, a model's metered supplier cost is above 85% of what customers were charged for it (expected about 0.77 at the 30% markup), and has stayed there for 24 h: the route's pinned supplier rate or retail price is wrong. Supplier cost is an estimate written on the terminal receipt (charter W3), live-settled operations only; recovery-settled ones are in the unpriced gauge. Grouped by Fly `app`, model and provider. Soft alert: the provider console limit is the cap (BIL-21)."
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-supplier-daily-spend
+        title: 'P1: Daily Supplier Spend Spike'
+        condition: supplier_daily_spend
+        data:
+          - refId: supplier_daily_spend
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: (sum by (deployment_environment) (increase(tau_billing_supplier_cost_picousd_total{app=~".*",service_name="tau-api"}[24h])) / 1e12 > on (deployment_environment) clamp_min(3 * sum by (deployment_environment) (increase(tau_billing_supplier_cost_picousd_total{app=~".*",service_name="tau-api"}[7d] offset 24h)) / 7 / 1e12, 50)) or (sum by (deployment_environment) (increase(tau_billing_supplier_cost_picousd_total{app=~".*",service_name="tau-api"}[24h])) / 1e12 > 50 unless on (deployment_environment) sum by (deployment_environment) (increase(tau_billing_supplier_cost_picousd_total{app=~".*",service_name="tau-api"}[7d] offset 24h)))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: supplier_daily_spend
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/llm-suppliers.md
+          summary: "Metered supplier spend in the last 24 h for one environment is above max(US$50, 3x its trailing 7-day daily mean); with no 7-day history, above US$50. A runaway agent, a mispriced route or abuse. Soft alert: the provider console hard limit is the cap (BIL-21). increase() cannot see a counter's first sample, so a new process under-counts by one call."
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-supplier-unpriced-usage
+        title: 'P1: Unpriced Supplier Usage'
+        condition: supplier_unpriced
+        data:
+          - refId: supplier_unpriced
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: (max by (app, deployment_environment, gen_ai_provider_name, tau_billing_sku, tau_billing_unpriced_reason) (tau_billing_supplier_unpriced_operations{app=~".*",service_name="tau-api",tau_billing_unpriced_reason=~"missing_rate|dimension_mismatch"}) > on (app, deployment_environment, gen_ai_provider_name, tau_billing_sku, tau_billing_unpriced_reason) max by (app, deployment_environment, gen_ai_provider_name, tau_billing_sku, tau_billing_unpriced_reason) (max_over_time(tau_billing_supplier_unpriced_operations{app=~".*",service_name="tau-api",tau_billing_unpriced_reason=~"missing_rate|dimension_mismatch"}[1h] offset 2h))) or (max by (app, deployment_environment, gen_ai_provider_name, tau_billing_sku, tau_billing_unpriced_reason) (tau_billing_supplier_unpriced_operations{app=~".*",service_name="tau-api",tau_billing_unpriced_reason=~"missing_rate|dimension_mismatch"}) > 0 unless on (app, deployment_environment, gen_ai_provider_name, tau_billing_sku, tau_billing_unpriced_reason) max by (app, deployment_environment, gen_ai_provider_name, tau_billing_sku, tau_billing_unpriced_reason) (max_over_time(tau_billing_supplier_unpriced_operations{app=~".*",service_name="tau-api",tau_billing_unpriced_reason=~"missing_rate|dimension_mismatch"}[1h] offset 2h)))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: supplier_unpriced
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/llm-suppliers.md
+          summary: "New settled operations carry no supplier-cost estimate because a route's supplier valuation is incomplete (tau_billing_supplier_unpriced_operations with reason `missing_rate` or `dimension_mismatch` grew, or a provider/SKU/reason appeared, in the last 2 h): it needs a code fix. Cut streams (`absorbed`) have their own rate rule, billing-supplier-absorbed-usage. The gauge is a running total recorded hourly by billing-operations, so this rule watches its growth, not its level; the baseline is the gauge's maximum over the hour ending 2 h ago, so a scrape gap is not read as a new series. Clears 2 h after the last increase."
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-supplier-absorbed-usage
+        title: 'P1: Absorbed Supplier Usage Surge'
+        condition: supplier_absorbed
+        data:
+          - refId: supplier_absorbed
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: (max by (app, deployment_environment, gen_ai_provider_name, tau_billing_sku) (tau_billing_supplier_unpriced_operations{app=~".*",service_name="tau-api",tau_billing_unpriced_reason="absorbed"}) - on (app, deployment_environment, gen_ai_provider_name, tau_billing_sku) max by (app, deployment_environment, gen_ai_provider_name, tau_billing_sku) (max_over_time(tau_billing_supplier_unpriced_operations{app=~".*",service_name="tau-api",tau_billing_unpriced_reason="absorbed"}[1h] offset 1h)) > 10) or (max by (app, deployment_environment, gen_ai_provider_name, tau_billing_sku) (tau_billing_supplier_unpriced_operations{app=~".*",service_name="tau-api",tau_billing_unpriced_reason="absorbed"}) > 10 unless on (app, deployment_environment, gen_ai_provider_name, tau_billing_sku) max by (app, deployment_environment, gen_ai_provider_name, tau_billing_sku) (max_over_time(tau_billing_supplier_unpriced_operations{app=~".*",service_name="tau-api",tau_billing_unpriced_reason="absorbed"}[1h] offset 1h)))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: supplier_absorbed
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/llm-suppliers.md
+          summary: 'More than 10 settled operations in one provider/SKU were absorbed unpriced in the last hour (tau_billing_supplier_unpriced_operations with reason `absorbed` grew by more than 10, or appeared above 10): cut streams or expired recoveries at an unusual rate, so a client, the gateway or a provider is aborting turns. A single client abort is expected and does not fire. The gauge is a running total recorded hourly by billing-operations; the baseline is its maximum over the hour ending 1 h ago, so a scrape gap is not read as a new series.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-supplier-invoice-mismatch
+        title: 'P1: Supplier Invoice Does Not Match Meter'
+        condition: supplier_invoice
+        data:
+          - refId: supplier_invoice
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max by (app, kind) (tau_billing_open_financial_cases{app=~".*",service_name="tau-api",kind="supplier_invoice_total_mismatch"}) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: supplier_invoice
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/refunds-and-financial-cases.md
+          summary: reconcile-supplier-invoice found a provider invoice total outside tolerance of the summed supplier cost on terminal receipts and opened a supplier_invoice_total_mismatch case. Operator work; it blocks nothing. The case evidence carries both totals and the unpriced and unattributed counts.
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-owed-stale-2h
+        title: 'P1: Customer Owed for More Than 2 h'
+        condition: owed_stale
+        data:
+          - refId: owed_stale
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max by (app, kind) (tau_billing_open_financial_case_age_seconds{app=~".*",service_name="tau-api",attributed="true",kind=~"missing_local_payment|paid_unfulfilled_recovery|unfulfilled_purchase_obligation"}) > 7200
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: owed_stale
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/paid-not-credited.md
+          summary: 'Tier T2: Tau has owed a named customer for more than 2 h: the oldest open missing_local_payment, paid_unfulfilled_recovery or unfulfilled_purchase_obligation case (paid, not yet credited or fulfilled) is older than 2 h. Nothing is refused; the customer is waiting for what they paid for. Start with the billing lifecycle `list-cases` with `attributed: true`, then follow paid-not-credited. Pages as billing-owed-overdue-24h after 24 h. Reads the oldest-case age gauge, written hourly. Grouped by Fly `app` and case kind.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+      - uid: billing-books-overdue-24h
+        title: 'P1: Bookkeeping Case Open for More Than 24 h'
+        condition: books_overdue
+        data:
+          - refId: books_overdue
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: max by (app, kind) (tau_billing_open_financial_case_age_seconds{app=~".*",service_name="tau-api",kind=~"gross_fee_net_mismatch|refund_unresolved|dispute_balance_transaction|tax_registration_review|supplier_.+"}) > 86400
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: books_overdue
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/refunds-and-financial-cases.md
+          summary: "Tier T3, daily digest (repeat_interval 24h): one of Tau's bookkeeping cases (gross_fee_net_mismatch, refund_unresolved, dispute_balance_transaction, tax_registration_review or a supplier_* kind), attributed or not, has been open for more than 24 h. No customer is refused anything. Run the billing lifecycle `list-cases` and work each row by its owner, next step and deadline. An unattributed row also pages as billing-case-unattributed; billing-supplier-invoice-mismatch still warns on its own. Grouped by Fly `app` and case kind."
+        labels:
+          severity: warning
+          service: tau-api
+          component: billing
+          repeat_interval: 24h
+      - uid: runtime-implementation-failures
+        title: TauRuntimeImplementationFailures
+        condition: implementation_failures
+        data:
+          - refId: implementation_failures
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum by (tau_runtime_operation) (rate(tau_runtime_operations_total{app=~".*",service_name="tau-api",tau_runtime_cause="implementation"}[15m])) / sum by (tau_runtime_operation) (rate(tau_runtime_operations_total{app=~".*",service_name="tau-api",tau_runtime_outcome!~"superseded|cancelled|abandoned"}[15m])) > 0.05 and sum by (tau_runtime_operation) (increase(tau_runtime_operations_total{app=~".*",service_name="tau-api",tau_runtime_cause="implementation"}[15m])) >= 10 and sum by (tau_runtime_operation) (increase(tau_runtime_operations_total{app=~".*",service_name="tau-api",tau_runtime_outcome!~"superseded|cancelled|abandoned"}[15m])) >= 50
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: implementation_failures
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: "More than 5 % of one operation's completed runtime attempts failed with an implementation-class cause (failed, discarded, or an implementation-class issue) over 15 min, with at least 10 failures and 50 completed attempts. Completed excludes superseded, cancelled and abandoned, so merged counts cannot move the ratio. Drill: T14 fixture, which stops at its own deadline."
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: runtime-host-kills-deadlines
+        title: TauRuntimeHostKillsAndDeadlines
+        condition: host_kills
+        data:
+          - refId: host_kills
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(tau_runtime_operation_errors_total{app=~".*",service_name="tau-api",error_type=~"HOST_LIMIT_EXCEEDED|HOST_EXITED|TIMEOUT_RECOVERY|RUNTIME_OPERATION_TIMEOUT"}[15m])) >= 5
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: host_kills
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'At least 5 runtime attempts in 15 min ended in a host limit kill, an unexplained host exit, a timeout recovery or a client deadline (error.type on the errors counter; a timed-out attempt carries RUNTIME_OPERATION_TIMEOUT). Drill: a desktop runner with a low residentLimit.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: runtime-boot-failures
+        title: TauRuntimeBootFailures
+        condition: boot_failures
+        data:
+          - refId: boot_failures
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(tau_runtime_operations_total{app=~".*",service_name="tau-api",tau_runtime_operation="initialize",tau_runtime_outcome!~"succeeded|cancelled|abandoned|superseded"}[15m])) / sum(increase(tau_runtime_operations_total{app=~".*",service_name="tau-api",tau_runtime_operation="initialize"}[15m])) > 0.1 and sum(increase(tau_runtime_operations_total{app=~".*",service_name="tau-api",tau_runtime_operation="initialize",tau_runtime_outcome!~"succeeded|cancelled|abandoned|superseded"}[15m])) >= 5 and sum(increase(tau_runtime_operations_total{app=~".*",service_name="tau-api",tau_runtime_operation="initialize"}[15m])) >= 20
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: boot_failures
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'More than 10 % of runtime worker boots (initialize) failed over 15 min, with at least 5 failures and 20 boots. Drill: T04 fixture.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: runtime-capacity-refusal-surge
+        title: TauRuntimeCapacityRefusalSurge
+        condition: capacity_surge
+        data:
+          - refId: capacity_surge
+            queryType: ''
+            relativeTimeRange:
+              from: 608400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(tau_runtime_capacity_refusals_total{app=~".*",service_name="tau-api"}[1h])) > 2 * avg_over_time(sum(rate(tau_runtime_capacity_refusals_total{app=~".*",service_name="tau-api"}[1h]))[7d:1h]) and sum(increase(tau_runtime_capacity_refusals_total{app=~".*",service_name="tau-api"}[1h])) >= 20
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: capacity_surge
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: "Capacity refusals (RESOURCE_LIMIT issues and supervisor limit kills) over the last hour are more than twice their 7-day hourly mean, with at least 20 in the hour. Info until a 7-day baseline exists, then warning. Info trigger (package.md §12.2): Tau Cloud routes it to the environment's info contact point with its own per-rule repeat interval, so it never mails the operator contact every four hours. It is live in staging and production; isPaused here applies only to the local stack, since Tau Cloud reads pausing from its rule_overrides."
+        labels:
+          severity: info
+          service: tau-api
+          component: runtime
+          kind: trigger
+          trigger: runtime-capacity-refusal-surge
+          package: runtime-observability
+        isPaused: true
+      - uid: runtime-stalls
+        title: TauRuntimeStalls
+        condition: stalls
+        data:
+          - refId: stalls
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: (sum(increase(tau_runtime_late_terminals_total{app=~".*",service_name="tau-api"}[1h])) or vector(0)) + ((sum(increase(tau_runtime_operation_duration_bucket{app=~".*",service_name="tau-api",tau_runtime_outcome="abandoned",le="+Inf"}[1h])) - sum(increase(tau_runtime_operation_duration_bucket{app=~".*",service_name="tau-api",tau_runtime_outcome="abandoned",le="120"}[1h]))) or vector(0)) >= 5
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: stalls
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: "Stall evidence: worker replies that arrived after their attempt settled plus abandoned attempts longer than 120 s reached 5 in an hour. Cancellation, supersession and abandonment never page. Drill: T23 in CI only. Info trigger (package.md §12.2): Tau Cloud routes it to the environment's info contact point with its own per-rule repeat interval, so it never mails the operator contact every four hours. It is live in staging and production; isPaused here applies only to the local stack, since Tau Cloud reads pausing from its rule_overrides."
+        labels:
+          severity: info
+          service: tau-api
+          component: runtime
+          kind: trigger
+          trigger: runtime-stalls
+          package: runtime-observability
+        isPaused: true
+      - uid: runtime-viewer-context-loss
+        title: TauRuntimeViewerContextLoss
+        condition: viewer_context_loss
+        data:
+          - refId: viewer_context_loss
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum by (tau_runtime_backend) (increase(tau_runtime_viewer_events_total{app=~".*",service_name="tau-api",tau_runtime_viewer_event="context-lost"}[1h])) / sum by (tau_runtime_backend) (increase(tau_runtime_viewer_events_total{app=~".*",service_name="tau-api",tau_runtime_viewer_event="first-frame"}[1h])) > 0.02 and sum by (tau_runtime_backend) (increase(tau_runtime_viewer_events_total{app=~".*",service_name="tau-api",tau_runtime_viewer_event="first-frame"}[1h])) >= 200
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: viewer_context_loss
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: "More than 2 % of viewer first frames on one backend (webgl, webgpu) were followed by a context loss in the last hour, with at least 200 first frames (FR-17). Drill: Playwright forced WEBGL_lose_context in T12. Info trigger (package.md §12.2): Tau Cloud routes it to the environment's info contact point with its own per-rule repeat interval, so it never mails the operator contact every four hours. It is live in staging and production; isPaused here applies only to the local stack, since Tau Cloud reads pausing from its rule_overrides."
+        labels:
+          severity: info
+          service: tau-api
+          component: runtime
+          kind: trigger
+          trigger: runtime-viewer-context-loss
+          package: runtime-observability
+        isPaused: true
+      - uid: runtime-jobs-need-attention
+        title: TauRuntimeJobsNeedAttention
+        condition: jobs_attention
+        data:
+          - refId: jobs_attention
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum by (tau_runtime_plugin) (increase(tau_runtime_job_attention_total{app=~".*",service_name="tau-api"}[1h])) >= 5
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: jobs_attention
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'At least 5 jobs of one provider entered attention_required in the last hour (FR-15). Read from the job attention counter, once per job, never from the operations denominator. Drill: T20 fixture.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: telemetry-ingest-rejections
+        title: TauTelemetryIngestRejections
+        condition: ingest_rejections
+        data:
+          - refId: ingest_rejections
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(tau_telemetry_ingest_entries_total{app=~".*",service_name="tau-api",disposition=~"rejected.*|overflow"}[15m])) >= 100
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: ingest_rejections
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'The runtime telemetry ingest rejected or overflowed at least 100 entries in 15 min (invalid, rate-limited, unknown entry or Loki event overflow). Drill: T10, with a hard deadline.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: telemetry-spans-dropped
+        title: TauTelemetrySpansDropped
+        condition: spans_dropped
+        data:
+          - refId: spans_dropped
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(tau_telemetry_spans_dropped_total{app=~".*",service_name="tau-api"}[1h])) >= 10000
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: spans_dropped
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: "Hosts reported at least 10,000 spans refused by worker collectors at their 10,000-entry bound in an hour (D-T5): local traces are being lost under load. Drill: T22 in CI. Info trigger (package.md §12.2): Tau Cloud routes it to the environment's info contact point with its own per-rule repeat interval, so it never mails the operator contact every four hours. It is live in staging and production; isPaused here applies only to the local stack, since Tau Cloud reads pausing from its rule_overrides."
+        labels:
+          severity: info
+          service: tau-api
+          component: runtime
+          kind: trigger
+          trigger: telemetry-spans-dropped
+          package: runtime-observability
+        isPaused: true
+      - uid: telemetry-runtime-absent
+        title: TauRuntimeTelemetryAbsent
+        condition: telemetry_absent
+        data:
+          - refId: telemetry_absent
+            queryType: ''
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: (sum(rate(http_server_request_duration_count{app=~".*",service_name="tau-api",http_route!="/v1/telemetry/ingest",http_route=~"/v1/(projects|chat|privacy).*"}[30m])) > 0.05) and on() (max(tau_telemetry_runtime_enabled{app=~".*",service_name="tau-api"}) == 1) and on() (absent_over_time(tau_telemetry_ingest_entries_total{app=~".*",service_name="tau-api",disposition="recorded"}[30m]) or on() (sum(increase(tau_telemetry_ingest_entries_total{app=~".*",service_name="tau-api",disposition="recorded"}[30m])) == 0))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: telemetry_absent
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'Other UI traffic reaches the API but no runtime telemetry entry was recorded for 30 min, on a deployment whose runtime telemetry is on (the clause on tau_telemetry_runtime_enabled keeps a self-hosted or paused API silent; the billing gate plays no part). Route labels are illustrative until W4 reads the real http_route values. Drill: T15, a self-expiring pause.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: telemetry-delivery-delay
+        title: TauTelemetryDeliveryDelay
+        condition: delivery_delay
+        data:
+          - refId: delivery_delay
+            queryType: ''
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: histogram_quantile(0.95, sum by (le) (rate(tau_telemetry_client_delivery_delay_bucket{app=~".*",service_name="tau-api"}[30m]))) > 120 and sum(increase(tau_telemetry_client_delivery_delay_count{app=~".*",service_name="tau-api"}[30m])) >= 20
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: delivery_delay
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: "The p95 age of the oldest entry in delivered runtime telemetry batches exceeded 120 s over 30 min, with at least 20 batches. Drill: throttled network in Playwright. Info trigger (package.md §12.2): Tau Cloud routes it to the environment's info contact point with its own per-rule repeat interval, so it never mails the operator contact every four hours. It is live in staging and production; isPaused here applies only to the local stack, since Tau Cloud reads pausing from its rule_overrides."
+        labels:
+          severity: info
+          service: tau-api
+          component: runtime
+          kind: trigger
+          trigger: telemetry-delivery-delay
+          package: runtime-observability
+        isPaused: true
+      - uid: telemetry-metric-overflow
+        title: TauTelemetryMetricOverflow
+        condition: metric_overflow
+        data:
+          - refId: metric_overflow
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: count({app=~".*",service_name="tau-api",otel_metric_overflow="true"}) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: metric_overflow
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'An API instrument reached its cardinality limit and is recording into its otel_metric_overflow="true" series, so it undercounts. Every registry metric is covered, not only tau_runtime_*: today''s instruments keep the SDK default of 2,000 series (FR-29, D-T16). Drill: T10 label-stress script.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: telemetry-ingest-redis-unavailable
+        title: TauTelemetryIngestRedisUnavailable
+        condition: ingest_redis
+        data:
+          - refId: ingest_redis
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(tau_telemetry_ingest_unavailable_total{app=~".*",service_name="tau-api"}[10m])) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: ingest_redis
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'The runtime telemetry ingest admitted batches while Redis was unavailable for the rate budget or the dedupe key for 10 min (fail-open, counted; FR-23). Drill: Redis fault injection in CI only (T29); on staging the rule is observational.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: telemetry-signed-out-surge
+        title: TauTelemetrySignedOutSurge
+        condition: signed_out_surge
+        data:
+          - refId: signed_out_surge
+            queryType: ''
+            relativeTimeRange:
+              from: 608400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: (sum(rate(tau_telemetry_ingest_entries_total{app=~".*",service_name="tau-api",disposition="recorded",tau_runtime_population="signed-out"}[1h])) > 3 * avg_over_time(sum(rate(tau_telemetry_ingest_entries_total{app=~".*",service_name="tau-api",disposition="recorded",tau_runtime_population="signed-out"}[1h]))[7d:1h]) and sum(increase(tau_telemetry_ingest_entries_total{app=~".*",service_name="tau-api",disposition="recorded",tau_runtime_population="signed-out"}[1h])) >= 2000) or sum(increase(tau_telemetry_ingest_entries_total{app=~".*",service_name="tau-api",disposition="rejected-rate-limit",tau_runtime_population="signed-out"}[15m])) >= 1000
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: signed_out_surge
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'Signed-out runtime telemetry surged: recorded signed-out entries over the last hour exceed three times their 7-day hourly mean with at least 2,000 in the hour, or at least 1,000 signed-out entries were rate-limited in 15 min (AR-W4-07). Drill: T10 many-network flood, with a hard deadline.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: runtime
+      - uid: telemetry-heartbeat
+        title: TauTelemetryHeartbeat
+        condition: heartbeat
+        data:
+          - refId: heartbeat
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: vector(1)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: heartbeat
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: "Always firing: the operator's weekly receipt proves the notification path, and a missing receipt is the alarm (resolved Q19). Tau Cloud routes it to the environment's info contact point and repeats it every 7 days (its repeat_interval label). It is live in staging and production; isPaused here applies only to the local stack."
+        labels:
+          severity: info
+          service: tau-api
+          component: runtime
+          kind: trigger
+          trigger: telemetry-heartbeat
+          package: runtime-observability
+          repeat_interval: 7d
+        isPaused: true
+      - uid: alerting-rule-health
+        title: TauAlertingRuleHealth
+        condition: rule_health_threshold
+        data:
+          - refId: rule_health_logs
+            queryType: range
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: alert-state-history
+            model:
+              expr: 'sum(count_over_time({from="state-history", folderUID="tau-local"} | json | current=~"Error.*" | ruleTitle!="TauAlertingRuleHealth" [30m]))'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: rule_health_logs
+          - refId: rule_health_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: rule_health_logs
+              refId: rule_health_reduce
+          - refId: rule_health_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: rule_health_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: rule_health_threshold
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/runtime-observability-bootstrap.md
+          summary: 'Some rule in this environment''s folder entered an Error state in the last 30 min, by Grafana''s own alert state history (Loki, logical datasource alert-state-history; folderUID="tau-local" binds to tau-<environment>). Lines carry ruleTitle, ruleUID and error: query {from="state-history", folderUID="tau-<environment>"} | json | current=~"Error.*" to see which rule failed and why. Excludes its own title so its own evaluation error cannot keep it firing. Locally the datasource maps to the local Loki, which has no state-history streams; the local copy stays paused.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: alerting
+        isPaused: true
+      - uid: agent-evidence-worker-stalled
+        title: 'P1: Agent Evidence Worker Stalled'
+        condition: worker_stalled
+        data:
+          - refId: worker_stalled
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'sum by (app, tau_worker) (max_over_time(tau_agent_evidence_passes_total{app=~".*",service_name="tau-api"}[24h])) unless sum by (app, tau_worker) (increase(tau_agent_evidence_passes_total{app=~".*",service_name="tau-api",outcome="ok"}[15m]) > 0)'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: worker_stalled
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/agent-observability.md
+          summary: 'An agent-evidence worker seen in the last 24 h has completed no successful pass in 15 min. lifecycle stalled means sealed payloads past their 180-day retention are not purged and erasures are not sent to Langfuse; delivery stalled means admitted evidence is not delivered. Grouped by Fly `app` and `tau_worker`.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: agent-observability
+      - uid: agent-evidence-visibility-gap
+        title: 'P1: Agent Evidence Never Became Visible'
+        condition: visibility_gap
+        data:
+          - refId: visibility_gap
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'sum by (app) (increase(tau_agent_evidence_deliveries_total{app=~".*",service_name="tau-api",outcome="gap"}[1h])) > 0'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: visibility_gap
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/agent-observability.md
+          summary: 'At least one acknowledged or uncertain Langfuse send was still invisible 15 min later and was recorded as a gap. It is never resent, because a late write would duplicate it, so Langfuse is missing evidence Tau holds a receipt for.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: agent-observability
+      - uid: agent-evidence-key-unavailable
+        title: 'P1: Agent Evidence Held for a Missing Payload Key'
+        condition: key_unavailable
+        data:
+          - refId: key_unavailable
+            queryType: ''
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'sum by (app) (increase(tau_agent_evidence_deliveries_total{app=~".*",service_name="tau-api",outcome="key_unavailable"}[30m])) > 0'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: key_unavailable
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/agent-observability.md
+          summary: 'Backlog payloads are sealed under a key version this deployment no longer has (`TAU_OBSERVABILITY_PAYLOAD_KEY_VERSION` rotated without the old key). They are held, not sent, until the key returns or retention purges them.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: agent-observability
+      - uid: agent-evidence-capacity-refusals
+        title: 'P1: Agent Evidence Refused at Capacity'
+        condition: capacity_refused
+        data:
+          - refId: capacity_refused
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'sum by (app) (increase(tau_agent_evidence_admissions_total{app=~".*",service_name="tau-api",outcome="capacity"}[15m])) > 0'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: capacity_refused
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/agent-observability.md
+          summary: 'Evidence admission has been refusing submissions at the backlog byte budget (`TAU_OBSERVABILITY_BACKLOG_BYTES` or the per-principal budget) for 15 min. Hosts keep their queues and retry; delivery is not draining as fast as evidence arrives.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: agent-observability
+      - uid: agent-evidence-erasure-stuck
+        title: 'P1: Agent Evidence Erasure Not Progressing'
+        condition: erasure_stuck
+        data:
+          - refId: erasure_stuck
+            queryType: ''
+            relativeTimeRange:
+              from: 7200
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'sum by (app) (increase(tau_agent_evidence_erasure_traces_total{app=~".*",service_name="tau-api",outcome="retry"}[2h])) > 0 unless sum by (app) (increase(tau_agent_evidence_erasure_traces_total{app=~".*",service_name="tau-api",outcome="accepted"}[2h])) > 0'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: erasure_stuck
+        noDataState: OK
+        execErrState: OK
+        for: 2h
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/agent-observability.md
+          summary: "For 2 h Langfuse trace deletions have been retried (a 429, a 5xx, a timeout or an unreachable host) with none accepted. An accepted delete is the erasure and Tau does not read it back; erasure of a deleted account is owed within a day, so check Langfuse availability and the deletion API's answer codes in the lifecycle log."
+        labels:
+          severity: warning
+          service: tau-api
+          component: agent-observability
+      - uid: agent-evidence-delivery-rejected
+        title: 'P1: Agent Evidence Rejected'
+        condition: delivery_rejected
+        data:
+          - refId: delivery_rejected
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'sum by (app) (increase(tau_agent_evidence_deliveries_total{app=~".*",service_name="tau-api",outcome="rejected"}[1h])) > 0'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: delivery_rejected
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/agent-observability.md
+          summary: "Langfuse rejected a send, or a backlog payload could not be opened or parsed. The evidence is dropped, never retried; the row's bounded reason says which."
+        labels:
+          severity: warning
+          service: tau-api
+          component: agent-observability
+      - uid: agent-evidence-langfuse-units
+        title: 'P1: Langfuse Units at 70% of Hobby Plan'
+        condition: langfuse_units
+        data:
+          - refId: langfuse_units
+            queryType: ''
+            relativeTimeRange:
+              from: 2678400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'sum by (app) (increase(tau_agent_evidence_langfuse_units_total{app=~".*",service_name="tau-api"}[31d])) >= 35000'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: langfuse_units
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/agent-observability.md
+          summary: "Tau wrote 35,000 Langfuse units in the last 31 days, 70% of the Hobby plan's 50k a month (a unit is a trace, an observation or a score; ruling 13). Bound to this environment's API, as every hosted rule is, while staging and production share the organisation's 50k: add the other environment's figure from the Langfuse units panel. Respond in order: pause staging delivery (TAU_OBSERVABILITY_DELIVERY_ENABLED), build sampling (LW13), or reopen the plan. The counter misses units Langfuse features or other projects create, and increase() cannot see a new process's first sample."
+        labels:
+          severity: warning
+          service: tau-api
+          component: agent-observability
+      - uid: api-llm-stream-severed
+        title: 'P1: API Response Stream Severed (Fly PU05)'
+        condition: stream_severed_threshold
+        data:
+          - refId: stream_severed_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: 'sum by (fly_app_instance) (count_over_time({service_name="tau-api"} | event_provider="proxy" |= "[PU05]" [5m]))'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: stream_severed_logs
+          - refId: stream_severed_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: stream_severed_logs
+              refId: stream_severed_reduce
+          - refId: stream_severed_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: stream_severed_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: stream_severed_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/chat-llm-failing.md
+          summary: "Fly's proxy logged [PU05] (could not finish reading the response body from the instance) for an API Machine in the last 5 min: a response stream was cut mid-body, in practice a funded LLM step on /v1/llm/* killed by a stop that did not drain (2026-11-05 deploy cut). Fly's proxy line carries no request path, so every API response counts. Check the Machine's stop lines and api-exit-without-drain, then whether a funded step was cut and settled."
+        labels:
+          severity: warning
+          service: tau-api
+          component: lifecycle
+      - uid: api-exit-without-drain
+        title: 'P1: API Exit Without Drain'
+        condition: exit_undrained_threshold
+        data:
+          - refId: exit_undrained_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: 'sum by (fly_app_instance) (count_over_time({service_name="tau-api"} | event_provider="app" |= "Main child exited" |= `"process_group":"app"` [2m])) unless on (fly_app_instance) sum by (fly_app_instance) (count_over_time({service_name="tau-api"} | event_provider="app" |= "Shutdown drained" [5m]))'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: exit_undrained_logs
+          - refId: exit_undrained_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: exit_undrained_logs
+              refId: exit_undrained_reduce
+          - refId: exit_undrained_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: exit_undrained_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: exit_undrained_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/api.md
+          summary: "An API app Machine's init logged `Main child exited` with no `Shutdown drained` on the same Machine in the 5 min before: the process died without completing its graceful drain (a repeated stop signal, a crash or a SIGKILL at kill_timeout). In-flight model steps were cut without the zero settlement; read the Machine's log around the exit and the funded-operation recovery rules."
+        labels:
+          severity: warning
+          service: tau-api
+          component: lifecycle
+      - uid: api-email-send-failed
+        title: 'P1: Email Send Refused by Resend'
+        condition: email_failed_threshold
+        data:
+          - refId: email_failed_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: 'sum(count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend failed" [5m]))'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: email_failed_logs
+          - refId: email_failed_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: email_failed_logs
+              refId: email_failed_reduce
+          - refId: email_failed_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: email_failed_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: email_failed_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/email.md
+          summary: 'The API logged `Resend failed` in the last 5 min: Resend refused an email (verification, sign-in, reset, invite or billing) and the person did not receive it. Refused sends are not retried. Read the error text on the line: an unverified domain, a revoked key or a rate limit each name themselves. See incident 2026-11-11-prod-email-domain-unverified.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: email
+      - uid: api-email-complaint
+        title: 'P1: Email Marked as Spam'
+        condition: email_complaint_threshold
+        data:
+          - refId: email_complaint_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: 'sum by (kind) (count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend event email.complained kind=" | regexp `Resend event email[.]complained kind=(?P<kind>[a-z-]+)` [1h]))'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: email_complaint_logs
+          - refId: email_complaint_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: email_complaint_logs
+              refId: email_complaint_reduce
+          - refId: email_complaint_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: email_complaint_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: email_complaint_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/email-deliverability.md
+          summary: "The API logged `Resend event email.complained` in the last hour: a recipient marked Tau mail as spam and Resend suppressed the address. Resend's limit is one complaint in 1,250 sends, so each one deserves a look at this volume. The `kind` label names the mail: an invite means read that owner's invite volume, an identity kind means check for a sign-up flood, billing needs no action beyond the notice path. Follow the runbook's Complaint received section."
+        labels:
+          severity: warning
+          service: tau-api
+          component: email
+      - uid: api-email-bounce-rate
+        title: 'P1: Hard-Bounce Rate Above 2% (7 d)'
+        condition: email_bounce_rate_threshold
+        data:
+          - refId: email_bounce_rate_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: '(sum(count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend event email.bounced kind=" |= "bounce_type=Permanent" [7d])) / sum(count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend event email.sent kind=" [7d])) > 0.02) and (sum(count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend event email.bounced kind=" |= "bounce_type=Permanent" [7d])) >= 5)'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: email_bounce_rate_logs
+          - refId: email_bounce_rate_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: email_bounce_rate_logs
+              refId: email_bounce_rate_reduce
+          - refId: email_bounce_rate_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: email_bounce_rate_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: email_bounce_rate_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/email-deliverability.md
+          summary: "Permanent bounces are above 2% of `email.sent` events over 7 days, with at least 5 bounces (the value is the ratio). 2% is half of Resend's limit: past 4% Resend may pause sending, which stops sign-up and password reset. Find the kind and whether the bounced addresses share a domain or pattern; a flood on verify-email is abuse, so tighten sign-up with the existing rate-limit levers. Follow the runbook's Bounce spike section."
+        labels:
+          severity: warning
+          service: tau-api
+          component: email
+      - uid: api-email-bounce-urgent
+        title: 'P1: Hard-Bounce Rate Above 4% (7 d, urgent)'
+        condition: email_bounce_urgent_threshold
+        data:
+          - refId: email_bounce_urgent_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: '(sum(count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend event email.bounced kind=" |= "bounce_type=Permanent" [7d])) / sum(count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend event email.sent kind=" [7d])) > 0.04) and (sum(count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend event email.bounced kind=" |= "bounce_type=Permanent" [7d])) >= 10)'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: email_bounce_urgent_logs
+          - refId: email_bounce_urgent_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: email_bounce_urgent_logs
+              refId: email_bounce_urgent_reduce
+          - refId: email_bounce_urgent_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: email_bounce_urgent_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: email_bounce_urgent_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/email-deliverability.md
+          summary: "URGENT: permanent bounces are above 4% of `email.sent` events over 7 days, with at least 10 bounces (the value is the ratio). This is Resend's own limit; Resend may pause the account, which stops verification, magic-link and reset mail. Act now: find the kind and the source of the bad addresses, stop it (pause or tighten sign-up if verify-email is flooded), and read the Resend dashboard for a notice. If Resend has paused sending, declare an incident first. Follow the runbook's Bounce spike and Resend pauses sending sections."
+        labels:
+          severity: warning
+          service: tau-api
+          component: email
+      - uid: api-email-identity-undelivered
+        title: 'P1: Identity Email Suppressed or Failed'
+        condition: email_identity_threshold
+        data:
+          - refId: email_identity_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: 'sum by (type, kind) (count_over_time({service_name="tau-api"} | event_provider="app" |~ `Resend event email[.](suppressed|failed) kind=(verify-email|magic-link|reset-password|account-exists|password-changed)\b` | regexp `Resend event email[.](?P<type>[a-z_]+) kind=(?P<kind>[a-z-]+)` [1h]))'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: email_identity_logs
+          - refId: email_identity_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: email_identity_logs
+              refId: email_identity_reduce
+          - refId: email_identity_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: email_identity_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: email_identity_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/email-deliverability.md
+          summary: "Resend reported `email.suppressed` or `email.failed` for an identity email (verify-email, magic-link, reset-password, account-exists or password-changed) in the last hour: a person asked for a link and did not get it. Suppressed means the address is on Resend's suppression list after an earlier bounce or complaint; failed means Resend could not send it. Look the recipient up in Resend's suppressions and follow the runbook's A user says no email arrives section."
+        labels:
+          severity: warning
+          service: tau-api
+          component: email
+      - uid: api-email-webhook-silent
+        title: 'P1: Resend Webhook Silent'
+        condition: email_webhook_silent_threshold
+        data:
+          - refId: email_webhook_silent_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: 'sum(count_over_time({service_name="tau-api"} | event_provider="app" |~ "Sent .* via Resend" [6h])) unless sum(count_over_time({service_name="tau-api"} | event_provider="app" |= "Resend event email.sent kind=" [6h]))'
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: email_webhook_silent_logs
+          - refId: email_webhook_silent_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: email_webhook_silent_logs
+              refId: email_webhook_silent_reduce
+          - refId: email_webhook_silent_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: email_webhook_silent_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: email_webhook_silent_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/email-deliverability.md
+          summary: "The API logged `Sent ... via Resend` in the last 6 h but no `Resend event email.sent` webhook event in the same window: Resend is not delivering events, or the API rejects them. Bounces and complaints are invisible until this is fixed, and the other email alerts cannot fire. Search the API logs for `Resend webhook rejected` (a wrong or rotated signing secret), then check the endpoint's delivery log in Resend; fix, re-enable and replay missed events from the dashboard. Do not recreate the endpoint by hand: it is a Terraform resource. Follow the runbook's Webhook failing or disabled section."
+        labels:
+          severity: warning
+          service: tau-api
+          component: email
+      - uid: db-pooler-clients-high
+        title: 'P1: Pooler Login Over Its Connection Budget'
+        condition: db_pooler_clients_high
+        data:
+          - refId: db_pooler_clients_high
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(max_over_time(tau_db_client_connections{app=~".*",service_name="tau-api",tau_db_pool=~"request|background"}[1m])) + 2 > 12
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: db_pooler_clients_high
+        noDataState: OK
+        execErrState: OK
+        for: 2m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/postgres-saturation.md
+          summary: API pooled PostgreSQL clients have exceeded the declared budget of 12 (at least 13 of the 15-client session pool) for 2 minutes, so more pools are open than the budget allows (database connection audit R4). The sum is every API instance's own request and background sockets plus the 2 of revisions-maintenance, which shares the login and exports no metrics. The prod-us login's Supavisor session pool is 15 and the declared budget is 2 × (4 + 1) + 2 = 12 (apps/api/app/config/connection-budget.test.ts). A sum of exactly 12 is normal, because postgres.js pools stay full after a burst and recycle only after 30–60 minutes. Above it, a deploy overlap, a third Machine or a raised pool cap is the usual cause; db-pooler-clients-near-cap pages at 14.
+        labels:
+          severity: warning
+          service: tau-api
+          component: database
+      - uid: agent-prefix-break-unsanctioned
+        title: 'P1: Unsanctioned Prompt Prefix Break'
+        condition: unsanctioned_break
+        data:
+          - refId: unsanctioned_break
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: '(sum by (app, gen_ai_provider_name) (increase(tau_agent_prefix_breaks_total{app=~".*",service_name="tau-api",prefix_break_cause="unsanctioned"}[1h])) > 0) or (sum by (app, gen_ai_provider_name) (tau_agent_prefix_breaks_total{app=~".*",service_name="tau-api",prefix_break_cause="unsanctioned"} unless tau_agent_prefix_breaks_total{app=~".*",service_name="tau-api",prefix_break_cause="unsanctioned"} offset 1h) > 0)'
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: unsanctioned_break
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/chat-llm-failing.md
+          summary: "A request's prompt prefix changed and no recorded cause explains it, or a provider reported dropping reasoning Tau replayed. The reply still arrived, but its prompt cache missed and its earlier reasoning was lost. Something is rewriting chat history without moving the codec epoch. The second leg counts a series first seen in the window, which increase() reads as zero."
+        labels:
+          severity: warning
+          service: tau-api
+          component: agent
+  - orgId: 1
+    name: tau-storage-critical
+    folder: Tau Alerts
+    interval: 60s
+    rules:
+      - uid: storage-push-slo-fast-burn
+        title: 'P0: Push Error Budget Burning Fast'
+        condition: push_fast_burn
+        data:
+          - refId: push_fast_burn
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="error"}[1h]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[1h])), 1e-10) > 14.4 * 0.001) and (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="error"}[5m]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[5m])), 1e-10) > 14.4 * 0.001) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[1h])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: push_fast_burn
+        noDataState: OK
+        execErrState: OK
+        for: 2m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: Pushes ending outcome=error are burning SLO-1's 0.1% budget at 14.4x over 1 h and 5 m, with at least 20 pushes in the hour. Refusals the client retries (busy, conflict) are not counted.
+        labels:
+          severity: critical
+          service: tau-api
+          component: git
+      - uid: storage-fetch-slo-fast-burn
+        title: 'P0: Fetch Error Budget Burning Fast'
+        condition: fetch_fast_burn
+        data:
+          - refId: fetch_fast_burn
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch",outcome="error"}[1h]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch"}[1h])), 1e-10) > 14.4 * 0.001) and (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch",outcome="error"}[5m]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch"}[5m])), 1e-10) > 14.4 * 0.001) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch"}[1h])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: fetch_fast_burn
+        noDataState: OK
+        execErrState: OK
+        for: 2m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: Fetches and clones ending outcome=error are burning SLO-2's 0.1% budget at 14.4x over 1 h and 5 m, with at least 20 fetches in the hour.
+        labels:
+          severity: critical
+          service: tau-api
+          component: git
+      - uid: storage-workers-below-floor
+        title: 'P0: tau-storage Below Two Workers'
+        condition: workers_below_floor
+        data:
+          - refId: workers_below_floor
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (sum(fly_instance_up{app=~".*storage.*"}) or on() (count(last_over_time(fly_instance_up{app=~".*storage.*"}[1d])) * 0)) < 2
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: workers_below_floor
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/scaling.md
+          summary: Fewer than two tau-storage Machines are up (min_machines_running is 2), so forwarded git has no failover. A Machine that is down drops out of fly_instance_up, so the sum falls back to 0 while the app reported in the last day; silent where Fly has reported no tau-storage Machine for a day (an environment without the app).
+        labels:
+          severity: critical
+          service: tau-storage
+          component: git
+      - uid: storage-r2-unavailable
+        title: 'P0: Object Store Failing'
+        condition: r2_unavailable
+        data:
+          - refId: r2_unavailable
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(rate(tau_storage_operation_duration_count{app=~".*",service_name="tau-api",outcome="error",error_type!~"NoSuchKey|NotFound|PreconditionFailed|AbortError"}[5m]) or rate(tau_storage_operation_duration_count{app=~".*storage.*",service_name="tau-storage",outcome="error",error_type!~"NoSuchKey|NotFound|PreconditionFailed|AbortError"}[5m]) or rate(tau_storage_operation_duration_count{app=~".*mirror.*",service_name="tau-mirror",outcome="error",error_type!~"NoSuchKey|NotFound|PreconditionFailed|AbortError"}[5m]))) or vector(0)) / clamp_min(sum(rate(tau_storage_operation_duration_count{app=~".*",service_name="tau-api"}[5m]) or rate(tau_storage_operation_duration_count{app=~".*storage.*",service_name="tau-storage"}[5m]) or rate(tau_storage_operation_duration_count{app=~".*mirror.*",service_name="tau-mirror"}[5m])), 1e-10) > 0.05) and (sum(increase(tau_storage_operation_duration_count{app=~".*",service_name="tau-api"}[5m]) or increase(tau_storage_operation_duration_count{app=~".*storage.*",service_name="tau-storage"}[5m]) or increase(tau_storage_operation_duration_count{app=~".*mirror.*",service_name="tau-mirror"}[5m])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: r2_unavailable
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: "More than 5% of S3 calls from tau-api, tau-storage and tau-mirror failed after the SDK's retries over 5 min (a missing key, a lost conditional write and a client abort excluded), with at least 20 calls. Adapted from the W14 draft: tau_storage_attempts_total (per-attempt status) is not emitted yet, so absorbed 429s and 5xx are invisible."
+        labels:
+          severity: critical
+          service: tau-api
+          component: r2
+      - uid: storage-b2-lag-critical
+        title: 'P0: B2 Second Copy Over 60 min Behind'
+        condition: b2_lag_critical
+        data:
+          - refId: b2_lag_critical
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_mirror_copy_lag_seconds{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) > 3600
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: b2_lag_critical
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: The second copy's recovery point is more than 60 min behind (W13 B5 page line, SLO-6).
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-rpo-breached
+        title: 'P0: B2 Second Copy More Than 24 h Behind'
+        condition: b2_rpo_breached
+        data:
+          - refId: b2_rpo_breached
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_mirror_copy_lag_seconds{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) > 86400
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: b2_rpo_breached
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: 'Backstop: the second copy is a day behind, so the copier has missed every page. The primary sweeps uncopied retired packs only after about 30 days (W13 Finding 2).'
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+      - uid: storage-mirror-copy-stalled
+        title: 'P0: B2 Copier Stalled With Backlog'
+        condition: copy_stalled
+        data:
+          - refId: copy_stalled
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: ((sum(increase(tau_mirror_rounds_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2",outcome="copied"}[15m])) or on() vector(0)) == 0) and on() (sum(tau_mirror_backlog_repositories{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) > 0)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: copy_stalled
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: Repositories are waiting for the second copy and no copy round copied anything in 15 min. A restarted copier has no outcome="copied" series until its first copy, so that case counts as zero copied.
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+      - uid: storage-mirror-absent
+        title: 'P0: B2 Copier Not Reporting'
+        condition: mirror_absent
+        data:
+          - refId: mirror_absent
+            queryType: ''
+            relativeTimeRange:
+              from: 86400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (count(present_over_time(tau_mirror_rounds_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}[1d])) unless on() count(tau_mirror_rounds_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2"})) or (count(fly_instance_up{app=~".*mirror.*"} == 1) unless on() count(tau_mirror_rounds_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: mirror_absent
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: tau-mirror reported copy rounds in the last day but reports none now, or Fly has a tau-mirror Machine up that reports none. A live copier counts a noop round every poll. Written without absent() so an environment with no copier is silent; a copier gone for more than a day with no Machine left is caught by storage-b2-lag-critical's absence on the dashboard and storage-b2-drill-stale.
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+      - uid: storage-mirror-source-missing
+        title: 'P0: Manifest Names an Object Missing From R2'
+        condition: source_missing
+        data:
+          - refId: source_missing
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(increase(tau_mirror_copy_failures_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2",reason="source_missing"}[1h])) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: source_missing
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: 'The copier found a manifest naming an object R2 does not hold: possible primary data loss. Stop sweeps and investigate before anything else.'
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-down-page
+        title: 'P0: B2 Unreachable for 60 min'
+        condition: b2_down_page
+        data:
+          - refId: b2_down_page
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_mirror_destination_up{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) == 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: b2_down_page
+        noDataState: OK
+        execErrState: OK
+        for: 60m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: The copier's probe of the B2 destination has failed for an hour, so the recovery point is ageing.
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-hidden-versions
+        title: 'P0: Hide Markers Found in B2 (Security)'
+        condition: hidden_versions
+        data:
+          - refId: hidden_versions
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_mirror_reconcile_hidden_versions{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: hidden_versions
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: 'The reconciler found hide (delete) markers in the second copy. The copier never hides, so another key wrote them: treat as a credential incident.'
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-lock-overlong
+        title: 'P0: B2 Lock Extended Beyond 35 Days (Security)'
+        condition: lock_overlong
+        data:
+          - refId: lock_overlong
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_mirror_retention_max_ahead_seconds{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) > 3024000
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: lock_overlong
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: A version in the second copy is locked more than 35 days ahead, which the copier never does; erased data would outlive the 31-day deadline.
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-drill-failed
+        title: 'P0: B2 Restore Drill Failed'
+        condition: drill_failed
+        data:
+          - refId: drill_failed
+            queryType: ''
+            relativeTimeRange:
+              from: 691200
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: ((max_over_time((timestamp(sum(increase(tau_mirror_drill_runs_total{app=~".*mirror.*",service_name="tau-mirror",outcome="fail"}[2m])) > 0))[8d:1m]) - 120) > on() max(tau_mirror_drill_last_success_timestamp_seconds{app=~".*mirror.*",service_name="tau-mirror"})) or ((max_over_time((timestamp(sum(increase(tau_mirror_drill_runs_total{app=~".*mirror.*",service_name="tau-mirror",outcome="fail"}[2m])) > 0))[8d:1m]) - 120) unless on() max(tau_mirror_drill_last_success_timestamp_seconds{app=~".*mirror.*",service_name="tau-mirror"}))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: drill_failed
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: The newest second-copy drill failure in the last 8 days is later than the newest passing drill (D23, STO-1), so a later pass clears it. The failure time is the minute the fail counter rose, less 2 min, so a pass within 2 min before a failure can hide it. The copier exports drill results from mirror_drill_run rows, so the failure survives the drill Machine's exit.
+        labels:
+          severity: critical
+          service: tau-mirror
+          component: mirror
+  - orgId: 1
+    name: tau-storage-warning
+    folder: Tau Alerts
+    interval: 60s
+    rules:
+      - uid: storage-push-slo-slow-burn
+        title: 'P1: Push Error Budget Burning'
+        condition: push_slow_burn
+        data:
+          - refId: push_slow_burn
+            queryType: ''
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="error"}[6h]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[6h])), 1e-10) > 6 * 0.001) and (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="error"}[30m]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[30m])), 1e-10) > 6 * 0.001) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[6h])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: push_slow_burn
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: Pushes ending outcome=error are burning SLO-1's budget at 6x over 6 h and 30 m, with at least 20 pushes in 6 h.
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-fetch-slo-slow-burn
+        title: 'P1: Fetch Error Budget Burning'
+        condition: fetch_slow_burn
+        data:
+          - refId: fetch_slow_burn
+            queryType: ''
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch",outcome="error"}[6h]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch"}[6h])), 1e-10) > 6 * 0.001) and (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch",outcome="error"}[30m]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch"}[30m])), 1e-10) > 6 * 0.001) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch"}[6h])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: fetch_slow_burn
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: Fetches ending outcome=error are burning SLO-2's budget at 6x over 6 h and 30 m, with at least 20 fetches in 6 h.
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-retryable-refusals
+        title: 'P1: Git Retryable Refusals Above 2%'
+        condition: retryable_refusals
+        data:
+          - refId: retryable_refusals
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",outcome=~"busy|conflict"}[15m]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api"}[15m])), 1e-10) > 0.02) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api"}[15m])) > 50)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: retryable_refusals
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: More than 2% of git requests were answered busy or conflict over 15 min, with at least 50 requests (SLO-3, W6 X3).
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-lease-refusals
+        title: 'P1: Git Lease Refusals (TAU-API-5 Class)'
+        condition: lease_refusals
+        data:
+          - refId: lease_refusals
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(rate(tau_sync_refusals_total{app=~".*",service_name="tau-api",tau_sync_refusal_code=~"GIT_LEASE_.*|GIT_HYDRATE_BUDGET_EXHAUSTED"}[15m]))) or vector(0)) / clamp_min(sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api"}[15m])), 1e-10) > 0.005) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api"}[15m])) > 50)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: lease_refusals
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: 'GIT_LEASE_* and GIT_HYDRATE_BUDGET_EXHAUSTED refusals above 0.5% of git requests over 15 min, with at least 50 requests: capacity refusals below documented capacity (TAU-API-5, STO-20).'
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-push-latency-high
+        title: 'P1: Push p95 Above 2 s'
+        condition: push_latency
+        data:
+          - refId: push_latency
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (histogram_quantile(0.95, sum by (le) (rate(tau_sync_operation_duration_bucket{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome!~"unauthorized|quota_refused"}[15m]))) > 2) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[15m])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: push_latency
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: Push p95 at the API edge is above 2 s over 15 min with at least 20 requests (SLO-4).
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-fetch-latency-high
+        title: 'P1: Fetch p95 Above 5 s'
+        condition: fetch_latency
+        data:
+          - refId: fetch_latency
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (histogram_quantile(0.95, sum by (le) (rate(tau_sync_operation_duration_bucket{app=~".*",service_name="tau-api",tau_sync_operation="fetch",outcome!~"unauthorized|quota_refused"}[15m]))) > 5) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="fetch"}[15m])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: fetch_latency
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: Fetch p95 at the API edge is above 5 s over 15 min with at least 20 requests (SLO-5).
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: project-open-cold-slow
+        title: 'P1: Cold Project Open p75 Above 5 s'
+        condition: open_slow
+        data:
+          - refId: open_slow
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (histogram_quantile(0.75, sum by (le) (rate(tau_project_open_duration_bucket{app=~".*",service_name="tau-api",phase="first_view",cache="cold"}[1h]))) > 5) and (sum(increase(tau_project_open_duration_count{app=~".*",service_name="tau-api",phase="first_view",cache="cold"}[1h])) >= 5)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: open_slow
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: Cold hosted project opens reach a first usable view in more than 5 s at p75 over 1 h, with at least 5 cold opens (go-live STO-25, research AC-1).
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-spill-high
+        title: 'P1: Affinity Spill Above 5%'
+        condition: spill_high
+        data:
+          - refId: spill_high
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(increase(tau_git_spills_total{app=~".*",service_name="tau-api"}[15m]))) or vector(0)) / clamp_min(sum(increase(tau_sync_operation_duration_count{app=~".*",service_name="tau-api",tau_git_execution="forwarded"}[15m])), 1e-10) > 0.05) and (sum(increase(tau_sync_operation_duration_count{app=~".*",service_name="tau-api",tau_git_execution="forwarded"}[15m])) > 50)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: spill_high
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/scaling.md
+          summary: More than 5% of forwarded git requests went past their rendezvous-preferred tau-storage member over 15 min, with at least 50 forwarded. tau_git_forwards_total is not emitted, so forwarded requests are counted from tau_sync_operation_duration with tau_git_execution="forwarded".
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-proxy-hard-limit
+        title: 'P1: tau-storage Hit Fly hard_limit'
+        condition: proxy_hard_limit
+        data:
+          - refId: proxy_hard_limit
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(increase(fly_app_hard_limit_reached_count{app=~".*storage.*"}[10m])) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: proxy_hard_limit
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/scaling.md
+          summary: Fly's proxy refused tau-storage connections at hard_limit in the last 10 min.
+        labels:
+          severity: warning
+          service: tau-storage
+          component: git
+      - uid: storage-worker-cpu-high
+        title: 'P1: tau-storage CPU Above 70%'
+        condition: worker_cpu_high
+        data:
+          - refId: worker_cpu_high
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: avg(1 - (sum by (instance) (rate(fly_instance_cpu{app=~".*storage.*",mode="idle"}[15m])) / sum by (instance) (rate(fly_instance_cpu{app=~".*storage.*"}[15m])))) > 0.7
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: worker_cpu_high
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/scaling.md
+          summary: Mean busy CPU across tau-storage Machines is above 70% over 15 min.
+        labels:
+          severity: warning
+          service: tau-storage
+          component: git
+      - uid: storage-commit-indeterminate
+        title: 'P1: Indeterminate Manifest Writes'
+        condition: commit_indeterminate
+        data:
+          - refId: commit_indeterminate
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(increase(tau_git_commit_attempts_total{app=~".*",service_name="tau-api",outcome="indeterminate"}[10m]) or increase(tau_git_commit_attempts_total{app=~".*storage.*",service_name="tau-storage",outcome="indeterminate"}[10m])) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: commit_indeterminate
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: 'A conditional manifest write ended indeterminate in the last 10 min: the client was told nothing certain, so verify the repository.'
+        labels:
+          severity: warning
+          service: tau-storage
+          component: git
+      - uid: storage-forward-errors
+        title: 'P1: API to tau-storage Hop Failing'
+        condition: forward_errors
+        data:
+          - refId: forward_errors
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(increase(tau_git_forward_errors_total{app=~".*",service_name="tau-api"}[10m]))) or vector(0)) / clamp_min(sum(increase(tau_sync_operation_duration_count{app=~".*",service_name="tau-api",tau_git_execution="forwarded"}[10m])), 1e-10) > 0.01) and (sum(increase(tau_sync_operation_duration_count{app=~".*",service_name="tau-api",tau_git_execution="forwarded"}[10m])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: forward_errors
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: More than 1% of forwarded git requests failed at the hop over 10 min, with at least 20 forwarded.
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-grants-rejected
+        title: 'P1: tau-storage Rejecting Grants'
+        condition: grants_rejected
+        data:
+          - refId: grants_rejected
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(increase(tau_git_grants_rejected_total{app=~".*storage.*",service_name="tau-storage"}[10m])) > 10
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: grants_rejected
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: 'tau-storage refused more than 10 storage grants in 10 min (W14 OB4, review FR3/FR5): a key rotation out of order, clock skew or a forged grant.'
+        labels:
+          severity: warning
+          service: tau-storage
+          component: git
+      - uid: storage-receipts-failing
+        title: 'P1: Push Receipts Failing'
+        condition: receipts_failing
+        data:
+          - refId: receipts_failing
+            queryType: ''
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(increase(tau_git_receipts_total{app=~".*",service_name="tau-api",outcome=~"rejected|manifest_mismatch"}[30m]))) or vector(0)) / clamp_min(sum(increase(tau_git_receipts_total{app=~".*",service_name="tau-api"}[30m])), 1e-10) > 0.01) and (sum(increase(tau_git_receipts_total{app=~".*",service_name="tau-api"}[30m])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: receipts_failing
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: 'More than 1% of storage receipts were rejected or did not match the manifest over 30 min, with at least 20 receipts: derived state is left to repair.'
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-freeze-stuck
+        title: 'P1: Repository Frozen Longer Than 60 s'
+        condition: freeze_stuck
+        data:
+          - refId: freeze_stuck
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_git_route_frozen_oldest{app=~".*",service_name="tau-api"}) > 60
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: freeze_stuck
+        noDataState: OK
+        execErrState: OK
+        for: 2m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-maintenance.md
+          summary: A freeze has held for more than 60 s; a migration freeze is a 20 s lease, so a migrator likely died holding it.
+        labels:
+          severity: warning
+          service: tau-api
+          component: migration
+      - uid: storage-freeze-timeouts
+        title: 'P1: Freeze Holds Timing Out'
+        condition: freeze_timeouts
+        data:
+          - refId: freeze_timeouts
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(increase(tau_git_route_holds_total{app=~".*",service_name="tau-api",outcome="timed_out"}[15m])) > 10
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: freeze_timeouts
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-maintenance.md
+          summary: More than 10 git requests timed out waiting for a frozen repository in 15 min.
+        labels:
+          severity: warning
+          service: tau-api
+          component: migration
+      - uid: storage-b2-lag
+        title: 'P1: B2 Second Copy Over 15 min Behind'
+        condition: b2_lag
+        data:
+          - refId: b2_lag
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_mirror_copy_lag_seconds{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) > 900
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: b2_lag
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: The second copy's recovery point is more than 15 min behind (W13 B5 warning line, SLO-6).
+        labels:
+          severity: warning
+          service: tau-mirror
+          component: mirror
+      - uid: storage-mirror-failure-rate
+        title: 'P1: B2 Copy Rounds Failing'
+        condition: mirror_failure_rate
+        data:
+          - refId: mirror_failure_rate
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(increase(tau_mirror_rounds_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2",outcome="failed"}[15m]))) or vector(0)) / clamp_min(sum(increase(tau_mirror_rounds_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}[15m])), 1e-10) > 0.05) and (sum(increase(tau_mirror_rounds_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}[15m])) > 10)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: mirror_failure_rate
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: More than 5% of copy rounds failed over 15 min, with at least 10 rounds.
+        labels:
+          severity: warning
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-dest-down
+        title: 'P1: B2 Unreachable'
+        condition: b2_dest_down
+        data:
+          - refId: b2_dest_down
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_mirror_destination_up{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) == 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: b2_dest_down
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: The copier's probe of the B2 destination has failed for 10 min; pages at 60 min.
+        labels:
+          severity: warning
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-recon-stale
+        title: 'P1: B2 Reconciler Stale'
+        condition: recon_stale
+        data:
+          - refId: recon_stale
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: time() - max(tau_mirror_reconcile_last_success_timestamp_seconds{app=~".*mirror.*",service_name="tau-mirror",destination="b2",scope="active"}) > 129600
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: recon_stale
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: The active-repository reconcile has not completed for 36 h.
+        labels:
+          severity: warning
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-recon-missing
+        title: 'P1: B2 Missing Objects Across Two Reconciles'
+        condition: recon_missing
+        data:
+          - refId: recon_missing
+            queryType: ''
+            relativeTimeRange:
+              from: 93600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: min_over_time(sum(tau_mirror_reconcile_missing_objects{app=~".*mirror.*",service_name="tau-mirror",destination="b2"})[26h:10m]) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: recon_missing
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: Objects R2 holds and the second copy lacks were found at two consecutive daily reconciles.
+        labels:
+          severity: warning
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-retention-failing
+        title: 'P1: B2 Retention Extensions Failing'
+        condition: retention_failing
+        data:
+          - refId: retention_failing
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(increase(tau_mirror_retention_extensions_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2",outcome="failed"}[1h]))) or vector(0)) / clamp_min(sum(increase(tau_mirror_retention_extensions_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}[1h])), 1e-10) > 0.01) and (sum(increase(tau_mirror_retention_extensions_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}[1h])) > 5)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: retention_failing
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: More than 1% of Object Lock extensions failed in the last hour, with at least 5 attempted (W13 B6).
+        labels:
+          severity: warning
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-lock-floor
+        title: 'P1: B2 Lock Headroom Below 10 Days'
+        condition: lock_floor
+        data:
+          - refId: lock_floor
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: min(tau_mirror_retention_min_remaining_seconds{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) < 864000
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: lock_floor
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: 'The newest snapshot of some live repository is locked for less than 10 more days: the daily retention sweep is not running (W13 B6).'
+        labels:
+          severity: warning
+          service: tau-mirror
+          component: mirror
+      - uid: storage-b2-drill-stale
+        title: 'P1: B2 Restore Drill Older Than 8 Days'
+        condition: drill_stale
+        data:
+          - refId: drill_stale
+            queryType: ''
+            relativeTimeRange:
+              from: 777600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (time() - max(max_over_time(tau_mirror_drill_last_success_timestamp_seconds{app=~".*mirror.*",service_name="tau-mirror"}[9d])) > 691200) or (count(tau_mirror_rounds_total{app=~".*mirror.*",service_name="tau-mirror",destination="b2"}) unless on() count(last_over_time(tau_mirror_drill_last_success_timestamp_seconds{app=~".*mirror.*",service_name="tau-mirror"}[9d])))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: drill_stale
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/system/services/second-copy-b2.md
+          summary: No second-copy drill has passed in 8 days, or a live copier has exported no passing drill in 9 days (D23, STO-1). Written without absent() so an environment with no copier is silent.
+        labels:
+          severity: warning
+          service: tau-mirror
+          component: mirror
+      - uid: storage-accounting-stale
+        title: 'P1: Storage Accounting Task Stale'
+        condition: accounting_stale
+        data:
+          - refId: accounting_stale
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: time() - max by (tau_storage_accounting_task) (tau_storage_accounting_last_success{app=~".*",service_name="tau-api"}) > 7200 unless on (tau_storage_accounting_task) (sum by (tau_storage_accounting_task) (increase(tau_storage_accounting_passes_total{app=~".*",service_name="tau-api",outcome="skipped"}[2h])) > 0)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: accounting_stale
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/observe/signals.md
+          summary: A storage accounting task (usage, R2 analytics, Postgres connections, hot projects, route) has not succeeded for 2 h, so its gauges are stale (OB3). A task its configuration skips (R2 analytics without the Cloudflare analytics token) is not stale.
+        labels:
+          severity: warning
+          service: tau-api
+          component: storage
+      - uid: storage-r2-request-spike
+        title: 'P1: R2 Class A Requests Spike'
+        condition: r2_request_spike
+        data:
+          - refId: r2_request_spike
+            queryType: ''
+            relativeTimeRange:
+              from: 691200
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (sum(max by (tau_r2_bucket, tau_r2_class, tau_r2_action, tau_r2_status, tau_r2_window) (tau_r2_requests{app=~".*",service_name="tau-api",tau_r2_window="hour",tau_r2_class="A"})) > 3 * avg_over_time(sum(max by (tau_r2_bucket, tau_r2_class, tau_r2_action, tau_r2_status, tau_r2_window) (tau_r2_requests{app=~".*",service_name="tau-api",tau_r2_window="hour",tau_r2_class="A"}))[7d:1h])) and (sum(max by (tau_r2_bucket, tau_r2_class, tau_r2_action, tau_r2_status, tau_r2_window) (tau_r2_requests{app=~".*",service_name="tau-api",tau_r2_window="hour",tau_r2_class="A"})) > 100000)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: r2_request_spike
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: "The last hour's R2 Class A requests are more than 3x the 7-day hourly mean and above 100k (Z8): a cost or amplification regression."
+        labels:
+          severity: warning
+          service: tau-api
+          component: r2
+      - uid: storage-repository-at-ceiling
+        title: 'P1: Repositories at 95% of 1 GiB'
+        condition: repository_at_ceiling
+        data:
+          - refId: repository_at_ceiling
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_git_repository_ceiling_proximity{app=~".*",service_name="tau-api",threshold="0.95"}) > 0
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: repository_at_ceiling
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/storage-failure.md
+          summary: At least one repository is at 95% of D20's 1 GiB ceiling; its next large push will be refused GIT_REPOSITORY_CEILING_EXCEEDED.
+        labels:
+          severity: warning
+          service: tau-api
+          component: git
+      - uid: storage-db-connections-high
+        title: 'P1: Postgres Connections Above 80% of Pooler'
+        condition: db_connections_high
+        data:
+          - refId: db_connections_high
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(max by (tau_db_application, state) (tau_db_connections{app=~".*",service_name="tau-api"})) / max(tau_db_connection_budget{app=~".*",service_name="tau-api"}) > 0.8
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: db_connections_high
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/postgres-saturation.md
+          summary: Postgres connections on the write path are above 80% of the pooler budget (OB3).
+        labels:
+          severity: warning
+          service: tau-api
+          component: storage
+  - orgId: 1
+    name: tau-storage-triggers
+    folder: Tau Alerts
+    interval: 300s
+    rules:
+      - uid: trigger-stage2-project-commit-ceiling
+        title: 'Trigger S2-1: Project at 50% of Commit Ceiling'
+        condition: project_commit_ceiling
+        data:
+          - refId: project_commit_ceiling
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_git_hot_project_commit_rate{app=~".*",service_name="tau-api",rank="1"} or tau_git_hot_project_commit_rate{app=~".*storage.*",service_name="tau-storage",rank="1"}) * (histogram_quantile(0.5, sum by (le) (rate(tau_git_commit_duration_bucket{app=~".*",service_name="tau-api",tau_git_commit_phase="manifest_read"}[1h]) or rate(tau_git_commit_duration_bucket{app=~".*storage.*",service_name="tau-storage",tau_git_commit_phase="manifest_read"}[1h]))) + histogram_quantile(0.5, sum by (le) (rate(tau_git_commit_duration_bucket{app=~".*",service_name="tau-api",tau_git_commit_phase="manifest_write"}[1h]) or rate(tau_git_commit_duration_bucket{app=~".*storage.*",service_name="tau-storage",tau_git_commit_phase="manifest_write"}[1h])))) > 0.5
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: project_commit_ceiling
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: The hottest project's commit rate is above half the measured per-project ceiling, 1 / (p50 manifest read + p50 manifest write). Charter DS1.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S2-1
+          package: DS1
+      - uid: trigger-da5-race-lost
+        title: 'Trigger DA5: Lost Races Above 1% of Pushes (24 h)'
+        condition: da5_race_lost
+        data:
+          - refId: da5_race_lost
+            queryType: ''
+            relativeTimeRange:
+              from: 86400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(increase(tau_git_commit_attempts_total{app=~".*",service_name="tau-api",outcome="lost_race"}[1d]) or increase(tau_git_commit_attempts_total{app=~".*storage.*",service_name="tau-storage",outcome="lost_race"}[1d]))) or vector(0)) / clamp_min(sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[1d])), 1e-10) > 0.01) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[1d])) > 200)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: da5_race_lost
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: Lost manifest races are above 1% of pushes over 24 h, with at least 200 pushes (W6 X3's proposed DA5 threshold).
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: DA5
+          package: DA5
+      - uid: trigger-stage2-race-lost
+        title: 'Trigger S2-2: Lost Races Above 1% After DA5'
+        condition: stage2_race_lost
+        data:
+          - refId: stage2_race_lost
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(increase(tau_git_commit_attempts_total{app=~".*",service_name="tau-api",outcome="lost_race"}[1h]) or increase(tau_git_commit_attempts_total{app=~".*storage.*",service_name="tau-storage",outcome="lost_race"}[1h]))) or vector(0)) / clamp_min(sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[1h])), 1e-10) > 0.01) and (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[1h])) > 100)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: stage2_race_lost
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: Lost manifest races are above 1% of pushes over 1 h, with at least 100 pushes. Charter DS1.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S2-2
+          package: DS1
+      - uid: trigger-stage2-concurrent-writers
+        title: 'Trigger S2-3: More Than 20 Writers on One Project'
+        condition: concurrent_writers
+        data:
+          - refId: concurrent_writers
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (max(tau_git_hot_project_writers{app=~".*",service_name="tau-api",rank="1"} or tau_git_hot_project_writers{app=~".*storage.*",service_name="tau-storage",rank="1"}) > 20) and on() (max(tau_git_hot_project_commit_rate{app=~".*",service_name="tau-api",rank="1"} or tau_git_hot_project_commit_rate{app=~".*storage.*",service_name="tau-storage",rank="1"}) >= 1 / 60)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: concurrent_writers
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: More than 20 distinct writers committed to the busiest project by writers in a minute, while the busiest project by commits commits at least once a minute (a mean push interval under 60 s). The two ranks can name different projects; read the git.hot_projects log line before chartering DS1. No per-project push-interval gauge exists, so the commit rate stands in for it.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S2-3
+          package: DS1
+      - uid: trigger-stage2-commit-bound-latency
+        title: 'Trigger S2-4: Push p95 Over 2 s With Idle Workers'
+        condition: commit_bound_latency
+        data:
+          - refId: commit_bound_latency
+            queryType: ''
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (histogram_quantile(0.95, sum by (le) (rate(tau_sync_operation_duration_bucket{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome!~"unauthorized|quota_refused"}[15m]))) > 2) and on() (avg(1 - (sum by (instance) (rate(fly_instance_cpu{app=~".*storage.*",mode="idle"}[15m])) / sum by (instance) (rate(fly_instance_cpu{app=~".*storage.*"}[15m])))) < 0.5) and on() (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push"}[15m])) > 20)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: commit_bound_latency
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: 'Push p95 is above 2 s while tau-storage CPU averages under 50%: latency is commit-bound, not compute-bound. Charter DS1.'
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S2-4
+          package: DS1
+      - uid: trigger-stage2-fleet-size
+        title: 'Trigger S2-5: Fleet Over 50 Writes/s or 24 Workers'
+        condition: stage2_fleet_size
+        data:
+          - refId: stage2_fleet_size
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="ok"}[1h])) > 50) or (sum(fly_instance_up{app=~".*storage.*"}) > 24)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: stage2_fleet_size
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: Acknowledged pushes above 50/s over an hour, or more than 24 tau-storage Machines up. Charter DS1.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S2-5
+          package: DS1
+      - uid: trigger-stage3-fleet-size
+        title: 'Trigger S3-1: Fleet Over 2,000 Writes/s or 200 Workers'
+        condition: stage3_fleet_size
+        data:
+          - refId: stage3_fleet_size
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (sum(rate(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="ok"}[1h])) > 2000) or (sum(fly_instance_up{app=~".*storage.*"}) > 200)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: stage3_fleet_size
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: Acknowledged pushes above 2,000/s over an hour, or more than 200 tau-storage Machines up. Charter DL1.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S3-1
+          package: DL1
+      - uid: trigger-stage3-r2-push-cost
+        title: 'Trigger S3-2: Projected R2 Class A Over US$50k a Month'
+        condition: r2_push_cost
+        data:
+          - refId: r2_push_cost
+            queryType: ''
+            relativeTimeRange:
+              from: 86400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (sum(max by (tau_r2_bucket, tau_r2_class, tau_r2_action, tau_r2_status, tau_r2_window) (tau_r2_requests{app=~".*",service_name="tau-api",tau_r2_window="hour",tau_r2_class="A"})) * 720 * 4.5e-06 > 50000) and on() (sum(increase(tau_storage_operation_duration_count{app=~".*storage.*",service_name="tau-storage",tau_storage_operation=~"PutObject|CopyObject|ListObjects|ListObjectsV2|CreateMultipartUpload|UploadPart|UploadPartCopy|CompleteMultipartUpload|ListMultipartUploads|ListParts"}[1d])) / clamp_min(sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="ok"}[1d])), 1) > 3.9)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: r2_push_cost
+        noDataState: OK
+        execErrState: OK
+        for: 6h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: The last hour's Class A requests project above US$50k a month while tau-storage makes more than 3.9 Class A calls per acknowledged push. Calls, not attempts, until tau_storage_attempts_total exists. Charter DL1.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S3-2
+          package: DL1
+      - uid: trigger-stage3-push-cpu-share
+        title: 'Trigger S3-4: Git CPU Over 50% of Fleet CPU'
+        condition: push_cpu_share
+        data:
+          - refId: push_cpu_share
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(rate(fly_instance_cpu{app=~".*storage.*",mode!="idle"}[1h])) / (sum(rate(fly_instance_cpu{app=~".*storage.*",mode!="idle"}[1h])) + sum(rate(fly_instance_cpu{app=~".*",mode!="idle"}[1h]))) > 0.5
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: push_cpu_share
+        noDataState: OK
+        execErrState: OK
+        for: 24h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: tau-storage's busy CPU is more than half of tau-api plus tau-storage busy CPU for a day (one query per app). Charter DL1.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S3-4
+          package: DL1
+      - uid: trigger-stage3-db-pooler
+        title: 'Trigger S3-5: Postgres Connections Over 60% of Pooler'
+        condition: db_pooler
+        data:
+          - refId: db_pooler
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: sum(max by (tau_db_application, state) (tau_db_connections{app=~".*",service_name="tau-api"})) / max(tau_db_connection_budget{app=~".*",service_name="tau-api"}) > 0.6
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: db_pooler
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: Postgres connections are above 60% of the pooler budget for an hour (OB3). Charter DL1.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: S3-5
+          package: DL1
+      - uid: trigger-c3-cache-fallbacks
+        title: 'Trigger DD1: Full-Hydrate Fallbacks Dominate'
+        condition: cache_fallbacks
+        data:
+          - refId: cache_fallbacks
+            queryType: ''
+            relativeTimeRange:
+              from: 86400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (((sum(increase(tau_git_cache_fallbacks_total{app=~".*storage.*",service_name="tau-storage"}[1d]))) or vector(0)) / clamp_min(sum(increase(tau_git_hydrate_bytes_count{app=~".*storage.*",service_name="tau-storage"}[1d])), 1e-10) > 0.5) and (sum(increase(tau_git_hydrate_bytes_count{app=~".*storage.*",service_name="tau-storage"}[1d])) > 100)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: cache_fallbacks
+        noDataState: OK
+        execErrState: OK
+        for: 6h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: More than half of tau-storage hydrates fell back to the object store over a day, with at least 100 hydrates (W6 C3). Charter DD1.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: C3-b
+          package: DD1
+      - uid: trigger-k8s-t1-spill-skew
+        title: 'Trigger T1: Spill or Worker Skew Fly Cannot Fix'
+        condition: t1_spill_skew
+        data:
+          - refId: t1_spill_skew
+            queryType: ''
+            relativeTimeRange:
+              from: 86400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: ((((sum(increase(tau_git_spills_total{app=~".*",service_name="tau-api"}[1d]))) or vector(0)) / clamp_min(sum(increase(tau_sync_operation_duration_count{app=~".*",service_name="tau-api",tau_git_execution="forwarded"}[1d])), 1e-10) > 0.05) and (sum(increase(tau_sync_operation_duration_count{app=~".*",service_name="tau-api",tau_git_execution="forwarded"}[1d])) > 100)) or (max(sum by (instance) (tau_git_leases_active{app=~".*storage.*",service_name="tau-storage"})) > 3 * clamp_min(avg(sum by (instance) (tau_git_leases_active{app=~".*storage.*",service_name="tau-storage"})), 1))
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: t1_spill_skew
+        noDataState: OK
+        execErrState: OK
+        for: 24h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: Daily spill above 5% of forwarded requests (at least 100), or the busiest tau-storage Machine holding more than 3x the mean leases, for a day. Leases stand in for tau_git_rpcs_inflight until OB4. Review for W9 Z7.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: T1
+          package: Z7 review
+      - uid: trigger-k8s-t5-worker-vcpu
+        title: 'Trigger T5: More Than 150 Sustained Worker vCPUs'
+        condition: t5_worker_vcpu
+        data:
+          - refId: t5_worker_vcpu
+            queryType: ''
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: count(count by (instance, cpu_id) (fly_instance_cpu{app=~".*storage.*"})) > 150
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: t5_worker_vcpu
+        noDataState: OK
+        execErrState: OK
+        for: 168h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: tau-storage has run more than 150 vCPUs for 7 days (W9 T5). Review for W9 Z7.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: T5
+          package: Z7 review
+      - uid: trigger-class-a-per-push
+        title: 'Trigger Z8: Class A Calls per Push Above 4.5'
+        condition: class_a_per_push
+        data:
+          - refId: class_a_per_push
+            queryType: ''
+            relativeTimeRange:
+              from: 86400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (sum(increase(tau_storage_operation_duration_count{app=~".*storage.*",service_name="tau-storage",tau_storage_operation=~"PutObject|CopyObject|ListObjects|ListObjectsV2|CreateMultipartUpload|UploadPart|UploadPartCopy|CompleteMultipartUpload|ListMultipartUploads|ListParts"}[1d])) / clamp_min(sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="ok"}[1d])), 1) > 4.5) and on() (sum(increase(tau_sync_operations_total{app=~".*",service_name="tau-api",tau_sync_operation="push",outcome="ok"}[1d])) > 50)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: class_a_per_push
+        noDataState: OK
+        execErrState: OK
+        for: 24h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: tau-storage made more than 4.5 Class A S3 calls per acknowledged push over a day, with at least 50 pushes. Calls, not attempts, until tau_storage_attempts_total exists. Review Z8 coalescing (STO-16).
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: Z8
+          package: Z8 coalescing review
+      - uid: trigger-repository-near-ceiling
+        title: 'Trigger X6: Repositories Above 80% of 1 GiB'
+        condition: near_ceiling
+        data:
+          - refId: near_ceiling
+            queryType: ''
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: max(tau_git_repository_ceiling_proximity{app=~".*",service_name="tau-api",threshold="0.8"}) > 10
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: near_ceiling
+        noDataState: OK
+        execErrState: OK
+        for: 24h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: More than 10 repositories are at 80% of D20's 1 GiB ceiling for a day (OB3). Review X6 / D20.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: X6
+          package: X6 / D20 review
+      - uid: trigger-quota-pressure
+        title: 'Trigger Q: Owners Over 95% of Storage Quota Growing'
+        condition: quota_pressure
+        data:
+          - refId: quota_pressure
+            queryType: ''
+            relativeTimeRange:
+              from: 691200
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (sum(max by (tau_plan, band) (tau_storage_quota_owners{app=~".*",service_name="tau-api",band=~"95_100|over"})) > 1.5 * sum(max by (tau_plan, band) (tau_storage_quota_owners{app=~".*",service_name="tau-api",band=~"95_100|over"} offset 7d))) and (sum(max by (tau_plan, band) (tau_storage_quota_owners{app=~".*",service_name="tau-api",band=~"95_100|over"})) > 10)
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: quota_pressure
+        noDataState: OK
+        execErrState: OK
+        for: 24h
+        annotations:
+          runbook_url: docs/handbooks/cloud/operate/storage-triggers.md
+          summary: Owners at or over 95% of their plan's storage allowance grew more than 50% in 7 days, with more than 10 such owners (OB3). Review plans and pricing.
+        labels:
+          severity: info
+          service: tau-api
+          component: storage
+          kind: trigger
+          trigger: Q-1
+          package: plan and pricing review
+  - orgId: 1
+    name: tau-storage-integrity
+    folder: Tau Alerts
+    interval: 60s
+    rules:
+      - uid: storage-dependency-deleted
+        title: 'P0: Dependency Object Deleted'
+        condition: dependency_deleted_threshold
+        data:
+          - refId: dependency_deleted_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({service_name="tau-r2-audit"} | json | event="r2_audit.dependency_deleted" [10m]))
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: dependency_deleted_logs
+          - refId: dependency_deleted_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: dependency_deleted_logs
+              refId: dependency_deleted_reduce
+          - refId: dependency_deleted_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: dependency_deleted_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: dependency_deleted_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/object-integrity.md
+          summary: An R2 event notification reported an object-delete (DeleteObject or LifecycleDeletion) on the locked dependency bucket in the last 10 minutes, so the bucket lock failed or was removed. The line names the bucket, key and eTag; notifications carry no actor, so read the Data Access Logs (r2 dataset) for who.
+        labels:
+          severity: critical
+          service: tau-r2-audit
+          component: dependencies
+      - uid: storage-dependency-overwritten
+        title: 'P0: Dependency Object Overwritten'
+        condition: dependency_overwritten_threshold
+        data:
+          - refId: dependency_overwritten_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({service_name="tau-r2-audit"} | json | event=~"r2_audit.dependency_overwritten|r2_audit.dependency_layout_breach" [10m]))
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: dependency_overwritten_logs
+          - refId: dependency_overwritten_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: dependency_overwritten_logs
+              refId: dependency_overwritten_reduce
+          - refId: dependency_overwritten_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: dependency_overwritten_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: dependency_overwritten_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/object-integrity.md
+          summary: An R2 event notification reported an object-create on the dependency bucket for a key the audit Worker had already recorded (an overwrite the lock should refuse; previousEtag is the first eTag), or for a key outside blobs/sha256/<64 hex> (a layout breach), in the last 10 minutes.
+        labels:
+          severity: critical
+          service: tau-r2-audit
+          component: dependencies
+      - uid: storage-dependency-bulk-delete
+        title: 'P0: Dependency Bulk Delete Attempted'
+        condition: dependency_bulk_delete_threshold
+        data:
+          - refId: dependency_bulk_delete_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({service_name="tau-r2-audit"} | json | event="r2_audit.dependency_delete_attempt" [10m]))
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: dependency_bulk_delete_logs
+          - refId: dependency_bulk_delete_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: dependency_bulk_delete_logs
+              refId: dependency_bulk_delete_reduce
+          - refId: dependency_bulk_delete_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: dependency_bulk_delete_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: dependency_bulk_delete_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/object-integrity.md
+          summary: R2 Data Access Logs show DeleteObjects or DeleteObjectsByPrefix on the dependency bucket. The lock refuses each key inside a 200 response, so the attempt is logged where a refused single delete (409) is not; the line names the actor's accessKeyId, interface and scriptName.
+        labels:
+          severity: critical
+          service: tau-r2-audit
+          component: dependencies
+      - uid: storage-unexpected-writer
+        title: 'P0: Unexpected R2 Writer'
+        condition: unexpected_writer_threshold
+        data:
+          - refId: unexpected_writer_logs
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({service_name="tau-r2-audit"} | json | event="r2_audit.unexpected_writer" [10m]))
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: unexpected_writer_logs
+          - refId: unexpected_writer_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: unexpected_writer_logs
+              refId: unexpected_writer_reduce
+          - refId: unexpected_writer_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: unexpected_writer_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+                  operator:
+                    type: and
+              refId: unexpected_writer_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/object-integrity.md
+          summary: R2 Data Access Logs show a write or delete (PutObject, CopyObject, CompleteMultipartUpload, DeleteObject, DeleteObjects, DeleteObjectsByPrefix) whose accessKeyId, interface or scriptName is not in the bucket's expected writers (AUDIT_EXPECTED_WRITERS), or any interface = API write. reason is api-interface, unknown-bucket or unknown-actor.
+        labels:
+          severity: critical
+          service: tau-r2-audit
+          component: r2
+      - uid: storage-audit-silent
+        title: R2 Audit Worker Silent
+        condition: audit_silent_threshold
+        data:
+          - refId: audit_silent_logs
+            queryType: range
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({service_name="tau-r2-audit"} | json | event="r2_audit.heartbeat" | pass="scheduled" [15m]))
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: audit_silent_logs
+          - refId: audit_silent_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: audit_silent_logs
+              refId: audit_silent_reduce
+          - refId: audit_silent_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: audit_silent_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: lt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+              refId: audit_silent_threshold
+        noDataState: Alerting
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/object-integrity.md
+          summary: "No scheduled heartbeat from the tau-r2-audit Worker for 15 minutes (it writes one every 5). The write alarms are blind: check the Worker, its cron trigger and the Workers Observability OTLP logs destination. A heartbeat with poll=skipped means the Data Access Log poll has no query token; poll=failed carries pollDetail. Paused in local Grafana, which has no audit Worker; Tau Cloud's rule policy sets the hosted pause state."
+        labels:
+          severity: warning
+          service: tau-r2-audit
+          component: r2
+        isPaused: true
+      - uid: storage-audit-degraded
+        title: 'R2 Audit Worker Degraded'
+        condition: audit_degraded_threshold
+        data:
+          - refId: audit_degraded_logs
+            queryType: range
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({service_name="tau-r2-audit"} | json | event="r2_audit.heartbeat" | pass="scheduled" | poll!="ok" or truncated="true" or expectedWritersValid="false" or foreignBucketsValid="false" [15m]))
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: audit_degraded_logs
+          - refId: audit_degraded_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: audit_degraded_logs
+              refId: audit_degraded_reduce
+          - refId: audit_degraded_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: audit_degraded_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+              refId: audit_degraded_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/object-integrity.md
+          summary: 'More than one scheduled heartbeat of the tau-r2-audit Worker in 15 minutes reported a degraded pass: poll skipped (no query token) or failed (pollDetail says why), truncated=true (the Data Access Log page was full, so events past it were not checked), or expectedWritersValid=false or foreignBucketsValid=false (AUDIT_EXPECTED_WRITERS or AUDIT_FOREIGN_BUCKETS did not parse). Heartbeats still arrive, so storage-audit-silent stays green while storage-unexpected-writer and storage-dependency-bulk-delete are blind or wrong. One failed poll does not fire.'
+        labels:
+          severity: warning
+          service: tau-r2-audit
+          component: r2
+      - uid: storage-audit-no-events
+        title: 'R2 Audit Logs Deliver Nothing'
+        condition: audit_no_events_threshold
+        data:
+          - refId: audit_no_events_logs
+            queryType: range
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: sum(sum_over_time({service_name="tau-r2-audit"} | json | event="r2_audit.heartbeat" | pass="scheduled" | poll="ok" | unwrap eventsSeen [1h]))
+              intervalMs: 15000
+              maxDataPoints: 43200
+              queryType: range
+              refId: audit_no_events_logs
+          - refId: audit_no_events_reduce
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              reducer: last
+              expression: audit_no_events_logs
+              refId: audit_no_events_reduce
+          - refId: audit_no_events_threshold
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: audit_no_events_reduce
+              conditions:
+                - type: query
+                  evaluator:
+                    type: lt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+              refId: audit_no_events_threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/object-integrity.md
+          summary: "Scheduled heartbeats of the tau-r2-audit Worker with poll=ok saw no write or delete event in the R2 Data Access Logs for an hour. eventsSeen is account-wide and has never been near zero (hourly sum at least 423 in the six days to 2026-11-15), so the poll works but logging delivers nothing: Data Access Logs were turned off or stopped for the account, and storage-unexpected-writer is blind. It does not detect one bucket's toggle; the 90-day settings read does. No data (no ok heartbeat) is storage-audit-degraded's or storage-audit-silent's case."
+        labels:
+          severity: warning
+          service: tau-r2-audit
+          component: r2
+      - uid: storage-public-objects-dropped
+        title: Public Bucket Objects Dropped
+        condition: public_objects_dropped
+        data:
+          - refId: public_objects_dropped
+            queryType: ''
+            relativeTimeRange:
+              from: 86400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              instant: true
+              range: false
+              expr: (1 - max by (app) (tau_r2_objects{app=~".*",service_name="tau-api",tau_r2_bucket="public"}) / max by (app) (max_over_time(tau_r2_objects{app=~".*",service_name="tau-api",tau_r2_bucket="public"}[24h])) > 0.2) and max by (app) (max_over_time(tau_r2_objects{app=~".*",service_name="tau-api",tau_r2_bucket="public"}[24h])) - max by (app) (tau_r2_objects{app=~".*",service_name="tau-api",tau_r2_bucket="public"}) > 20
+              intervalMs: 15000
+              maxDataPoints: 20
+              refId: public_objects_dropped
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          runbook_url: docs/handbooks/cloud/playbooks/object-integrity.md
+          summary: "The public R2 bucket (tau_r2_objects, tau_r2_bucket=public, from the API's hourly storage accounting) holds more than 20% and more than 20 objects fewer than its own 24-hour maximum; it stays firing until that maximum leaves the window. Publication blobs are deleted by the API and the maintenance credential, which the per-event write alarms expect, so this aggregate is the only alarm on a mass delete by an expected writer. A mass unpublish followed by collect-blobs also fires it: read the maintenance log first. The trailing 20 is the threshold Tau Cloud's rule policy can override."
+        labels:
+          severity: warning
+          service: tau-api
+          component: r2

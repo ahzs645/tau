@@ -1,0 +1,1414 @@
+import { cadReferencesSchema } from '@taucad/chat/references';
+import { z } from 'zod';
+import type { ProviderMetadata, UIMessageChunk } from 'ai';
+import type { AgentLiveEvent, AgentLogEvent, KnownProjectionEvent, ProviderMessageMetadata } from '@taucad/agent-host';
+import { userProviderMessageSchema } from '@taucad/agent-host';
+import {
+  externalAgentStopSchema,
+  providerPermissionSchema,
+  providerPermissionResolutionSchema,
+} from '@taucad/agent-host/wire';
+import type { ProviderPermission } from '@taucad/agent-host/wire';
+import type { AcpSessionData, BillingInvocationStatus, MyUIMessage, ShellApprovalPayload } from '@taucad/chat';
+import {
+  acpActivityDataSchema,
+  acpSessionDataSchema,
+  billingInvocationStatusSchema,
+  shellApprovalPayloadSchema,
+  usageDataSchema,
+} from '@taucad/chat';
+import { errorCategoryTitles, httpStatusToCategory } from '@taucad/chat/utils';
+import { errorCategory } from '@taucad/types/constants';
+import type { TurnConflictedEvent, TurnFailedEvent, TurnFinalizedEvent } from '@taucad/revisions/revision-effects';
+import { isRecord } from '@taucad/utils/schema';
+import { externalToolOutputText } from '#utils/external-tool-output.js';
+import { isAttachmentUrl } from '#utils/attachment.utils.js';
+import { isRecordedOnHost } from '#utils/chat-execution.js';
+import { normalizedErrorCategoryOf } from '#utils/chat-error-card.js';
+
+/** Presentation consumes canonical rows or distinct validated compact events. */
+type PresentationEvent = AgentLogEvent | KnownProjectionEvent;
+
+type ProviderMessage = Extract<AgentLogEvent, { readonly type: 'message.appended' }>['message'];
+type AssistantProviderMessage = Extract<ProviderMessage, { readonly role: 'assistant' }>;
+type UserProviderMessage = Extract<ProviderMessage, { readonly role: 'user' }>;
+type JsonValue = ProviderMessage['content'];
+
+/**
+ * What a failed external call printed, as the person would read it: a shell
+ * call's captured output and exit code, or an MCP result's text blocks.
+ * Without this the error card showed `{"formatted_output":…,"exit_code":1}`.
+ *
+ * @param value - The failed row's content.
+ * @returns The text, or `undefined` when the content has neither shape.
+ */
+const failedOutputText = (value: unknown): string | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const decoded = externalToolOutputText(value);
+  const output = decoded?.trim() ? decoded : typeof value['error'] === 'string' ? value['error'] : undefined;
+  const result =
+    isRecord(value['result']) && Array.isArray(value['result']['content']) ? value['result']['content'] : [];
+  const resultText = result
+    .flatMap((block: unknown) => (isRecord(block) && typeof block['text'] === 'string' ? [block['text']] : []))
+    .join('\n');
+  const exitCode = typeof value['exit_code'] === 'number' ? `Exit code ${String(value['exit_code'])}` : undefined;
+  const parts = [output ?? (resultText === '' ? undefined : resultText), exitCode].filter(
+    (part): part is string => part !== undefined,
+  );
+  return parts.length === 0 ? undefined : parts.join('\n\n');
+};
+
+const errorText = (value: unknown, fallback: string): string => {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (isRecord(value) && typeof value['message'] === 'string') {
+    const { code, status, details } = value;
+    if (typeof value['errorCode'] === 'string') {
+      return JSON.stringify(value);
+    }
+    // A coded refusal is a card, not prose: the code is what the card's copy is
+    // keyed on, and a host refusal such as `NO_EVICTABLE_HISTORY` carries
+    // neither an HTTP status nor structured fields.
+    if (typeof code === 'string') {
+      // The gateway code is authoritative; the status is only the fallback for
+      // codes that name no category of their own.
+      const category =
+        normalizedErrorCategoryOf(code) ??
+        (typeof status === 'number'
+          ? httpStatusToCategory(status)
+          : /* `rateLimit` is the external agent's *stop* card, and that card is
+             * keyed on the stop details. A limit refused before the adapter
+             * classified anything carries the code alone, and claiming the
+             * category without the details it needs dropped the person onto a
+             * card with no "Try again" (R3-F4). */
+            code === 'EXTERNAL_AGENT_LIMIT_REACHED' && externalAgentStopSchema.safeParse(details).success
+            ? errorCategory.rateLimit
+            : errorCategory.generic);
+      return JSON.stringify({
+        category,
+        title: errorCategoryTitles[category],
+        message: value['message'],
+        code,
+        ...(typeof status === 'number' ? { httpStatus: status } : {}),
+        // A denial's structured fields (an `INSUFFICIENT_CREDIT` shortfall, say)
+        // ride the same JSON so the card can name the amount it is short.
+        ...(isRecord(details) ? { details } : {}),
+      });
+    }
+    return value['message'];
+  }
+  return failedOutputText(value) ?? (value === undefined ? fallback : JSON.stringify(value));
+};
+
+/**
+ * What a failed run's terminal row says, as the chat's error and its row's reason read it.
+ *
+ * @param detail - The `failed` row's detail.
+ * @returns The failure's text.
+ * @public
+ */
+export const runFailureText = (detail: unknown): string => errorText(detail, 'The agent host failed.');
+
+const blockKey = (runId: string, messageId: string, contentIndex: number): string =>
+  JSON.stringify([runId, messageId, contentIndex]);
+
+const blockId = (type: 'text' | 'thinking', messageId: string, contentIndex: number): string =>
+  `${messageId}:${type}:${String(contentIndex)}`;
+
+/** Run-scoped blocks, including closed identities to fence late live frames. */
+export type AgentHostLiveBlocks = Map<
+  string,
+  | {
+      readonly type: 'text' | 'thinking';
+      content: string;
+      closed: boolean;
+      startedAtMs?: number | undefined;
+      /** A text block whose last applied frame was a durable checkpoint: open, but nothing is arriving. */
+      resting?: boolean;
+      phase?: string | undefined;
+      reasoningSummary?: string | undefined;
+    }
+  | {
+      readonly type: 'tool';
+      content: '';
+      closed: boolean;
+      input: 'started' | 'available';
+      toolMetadata?: ToolChunkMetadata | undefined;
+    }
+>;
+
+/**
+ * The rest fact a text part carries (chat activity indicator resting block R1).
+ *
+ * `streaming` is block identity, not motion: an ACP host keeps a named text
+ * block open across the whole turn, so the reducer's state cannot say whether
+ * bytes are still arriving. The checkpoint row is the host's own signal that
+ * they stopped; the next live delta with bytes is the signal that they resumed.
+ */
+const textStreamState = (
+  streamState: 'checkpoint' | 'live' | undefined,
+  phase?: string,
+): { providerMetadata?: ProviderMetadata } =>
+  streamState === undefined && phase === undefined
+    ? {}
+    : {
+        providerMetadata: {
+          common: {
+            ...(streamState === undefined ? {} : { streamState }),
+            ...(phase === undefined ? {} : { messagePhase: phase }),
+          },
+        },
+      };
+
+/**
+ * The run-scoped identity for a tool call's input and settled-output fence.
+ * Durable and live rows travel on independent subscriptions, so a live `tool-input-*` row can land after the
+ * call's durable `tool-output`; projecting it would rewind the settled part and
+ * drop its output, after which the finalize pass marks a successful call as
+ * orphaned ("File edits failed", lane H5).
+ */
+const toolKey = (runId: string, toolCallId: string): string => JSON.stringify([runId, 'tool', toolCallId]);
+
+/**
+ * Whether this run has a text or reasoning block still open.
+ *
+ * The SDK reducer forgets its active text and reasoning parts on `finish-step`
+ * without closing them, and rejects their next delta. The host makes a step's
+ * tool results durable before the next request starts, but the page reads the
+ * durable log and the live preview on separate subscriptions, so the next
+ * step's live block can already be open when those results are folded
+ * (`specs/live-overlay/LiveOverlay.tla`, `GuardBoundary`).
+ */
+const hasOpenStreamBlock = (runId: string, streamedBlocks: AgentHostLiveBlocks | undefined): boolean => {
+  const prefix = `[${JSON.stringify(runId)},`;
+  for (const [key, block] of streamedBlocks ?? []) {
+    if (block.type !== 'tool' && !block.closed && key.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const reasoningMetadata = (
+  summary?: string,
+  startedAt?: number,
+  endedAt?: number,
+): { providerMetadata?: ProviderMetadata } =>
+  summary === undefined && startedAt === undefined && endedAt === undefined
+    ? {}
+    : {
+        providerMetadata: {
+          common: {
+            ...(summary === undefined ? {} : { reasoningSummary: summary }),
+            ...(startedAt === undefined ? {} : { reasoningStartedAtMs: startedAt }),
+            ...(endedAt === undefined ? {} : { reasoningEndedAtMs: endedAt }),
+          },
+        },
+      };
+
+const reasoningTiming = (
+  metadata: ProviderMessageMetadata | undefined,
+  contentIndex: number,
+): { startedAt: number; endedAt?: number | undefined } | undefined => {
+  const timings = metadata?.['reasoningTimings'];
+  if (!Array.isArray(timings)) {
+    return undefined;
+  }
+  const timing: unknown = timings.find((value) => isRecord(value) && value['contentIndex'] === contentIndex);
+  if (!isRecord(timing) || typeof timing['startedAtMs'] !== 'number') {
+    return undefined;
+  }
+  return {
+    startedAt: timing['startedAtMs'],
+    ...(typeof timing['endedAtMs'] === 'number' ? { endedAt: timing['endedAtMs'] } : {}),
+  };
+};
+
+/**
+ * The funded-operation identity the harness stamped on a Tau turn.
+ *
+ * `usage.cost.*` is deliberately not read: it is the catalog price the local
+ * model row quotes, and a charge is whatever the account's own receipt says it
+ * was. Carrying the identity instead lets the reader ask the authority (B4 R2).
+ *
+ * @param tauInternal - The durable `tauInternal` metadata marker, when present.
+ * @returns The billing fields of the `data-usage` part, or none.
+ */
+const billingIdentity = (
+  tauInternal: Record<string, unknown> | undefined,
+): { operationId?: string; attemptId?: string; billingStatus?: BillingInvocationStatus } => {
+  if (tauInternal?.['kind'] !== 'billing-invocation') {
+    return {};
+  }
+  const { operationId, attemptId, status } = tauInternal;
+  const billingStatus = billingInvocationStatusSchema.safeParse(status).data;
+  return {
+    ...(typeof operationId === 'string' ? { operationId } : {}),
+    ...(typeof attemptId === 'string' ? { attemptId } : {}),
+    ...(billingStatus === undefined ? {} : { billingStatus }),
+  };
+};
+
+const usageChunks = (message: AssistantProviderMessage): UIMessageChunk[] => {
+  const { metadata } = message;
+  const usage = metadata?.usage;
+  if (!usage) {
+    return [];
+  }
+  const id = `${message.id}:usage`;
+  /* Who produced these tokens, from the durable marker rather than from
+   * whatever the composer is selected on now (V6). An external turn carries no
+   * Tau operation — Tau did not sell it — so the reader needs the agent's name
+   * to know that the missing charge is a fact and not a gap. */
+  const tauInternal = isRecord(metadata.tauInternal) ? metadata.tauInternal : undefined;
+  const agent = tauInternal?.['origin'] === 'external' ? tauInternal['agentId'] : undefined;
+  const vendorReport =
+    typeof agent === 'string'
+      ? usageDataSchema.shape.vendorReport.safeParse(tauInternal?.['vendorPromptUsage']).data
+      : undefined;
+  return [
+    {
+      type: 'data-usage',
+      id,
+      data: {
+        type: 'usage',
+        id,
+        ...(typeof agent === 'string' ? { agent } : {}),
+        ...billingIdentity(tauInternal),
+        ...(vendorReport === undefined ? {} : { vendorReport }),
+        model: metadata.responseModel ?? metadata.model ?? 'unknown',
+        inputTokens: usage.input,
+        outputTokens: usage.output,
+        ...(usage.reasoning === undefined ? {} : { reasoningTokens: usage.reasoning }),
+        cacheReadTokens: usage.cacheRead,
+        cacheWriteTokens: usage.cacheWrite,
+      },
+    },
+  ];
+};
+
+const assistantChunks = (
+  message: AssistantProviderMessage,
+  runId: string,
+  streamedBlocks?: AgentHostLiveBlocks,
+): UIMessageChunk[] => {
+  const { content: messageContent } = message;
+  const tauInternal = isRecord(message.metadata?.tauInternal) ? message.metadata.tauInternal : undefined;
+  const streamCheckpoint = tauInternal?.['streamState'] === 'checkpoint';
+  const content: readonly JsonValue[] = Array.isArray(messageContent)
+    ? messageContent
+    : typeof messageContent === 'string'
+      ? [{ type: 'text', text: messageContent }]
+      : [messageContent];
+  const chunks: UIMessageChunk[] = [];
+  let hasToolCall = false;
+  for (const [index, value] of content.entries()) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    if (value['type'] === 'toolCall') {
+      hasToolCall = true;
+      continue;
+    }
+    if (value['type'] === 'text' && typeof value['text'] === 'string') {
+      const id = `${message.id}:text:${String(index)}`;
+      const key = blockKey(runId, message.id, index);
+      let streamed = streamedBlocks?.get(key);
+      const phase = typeof message.metadata?.phase === 'string' ? message.metadata.phase : undefined;
+      const metadata = textStreamState(
+        streamCheckpoint && streamedBlocks !== undefined ? 'checkpoint' : undefined,
+        phase ?? (streamed?.type === 'text' ? streamed.phase : undefined),
+      );
+      if (streamed?.type === 'text') {
+        if (!streamed.closed) {
+          streamed = { ...streamed, ...(phase === undefined ? {} : { phase }) };
+          streamedBlocks?.set(key, streamed);
+          const suffix = value['text'].startsWith(streamed.content) ? value['text'].slice(streamed.content.length) : '';
+          if (streamCheckpoint) {
+            // An empty delta still carries the rest fact: the reducer appends '' and assigns the metadata.
+            chunks.push({ type: 'text-delta', id, delta: suffix, ...metadata });
+            streamed.resting = true;
+          } else if (suffix) {
+            chunks.push({ type: 'text-delta', id, delta: suffix, ...metadata });
+          }
+          if (value['text'].startsWith(streamed.content)) {
+            streamed.content = value['text'];
+          }
+          if (!streamCheckpoint) {
+            chunks.push({ type: 'text-end', id, ...metadata });
+            streamed.closed = true;
+          }
+        }
+      } else {
+        const resting = streamCheckpoint && streamedBlocks !== undefined;
+        chunks.push(
+          { type: 'text-start', id, ...textStreamState(undefined, phase) },
+          { type: 'text-delta', id, delta: value['text'], ...metadata },
+        );
+        streamedBlocks?.set(key, { type: 'text', content: value['text'], closed: !streamCheckpoint, resting, phase });
+        if (!resting) {
+          chunks.push({ type: 'text-end', id, ...metadata });
+        }
+      }
+      continue;
+    }
+    if (value['type'] === 'thinking' && typeof value['thinking'] === 'string') {
+      const id = `${message.id}:thinking:${String(index)}`;
+      const key = blockKey(runId, message.id, index);
+      let streamed = streamedBlocks?.get(key);
+      const timing = reasoningTiming(message.metadata, index);
+      const summary = message.metadata?.reasoningSummary;
+      if (streamed?.type === 'thinking') {
+        if (!streamed.closed) {
+          streamed = { ...streamed };
+          streamedBlocks?.set(key, streamed);
+          // A checkpoint behind the live stream must not rewind its summary.
+          if (value['thinking'].startsWith(streamed.content)) {
+            const suffix = value['thinking'].slice(streamed.content.length);
+            const summaryChanged = summary !== undefined && summary !== streamed.reasoningSummary;
+            streamed.reasoningSummary = summary ?? streamed.reasoningSummary;
+            if (suffix || summaryChanged) {
+              chunks.push({
+                type: 'reasoning-delta',
+                id,
+                delta: suffix,
+                ...reasoningMetadata(streamed.reasoningSummary),
+              });
+            }
+            streamed.content = value['thinking'];
+          }
+          if (!streamCheckpoint) {
+            chunks.push({
+              type: 'reasoning-end',
+              id,
+              ...reasoningMetadata(
+                streamed.reasoningSummary,
+                timing?.startedAt ?? streamed.startedAtMs,
+                timing?.endedAt,
+              ),
+            });
+            streamed.closed = true;
+          }
+        }
+      } else {
+        const metadata = reasoningMetadata(summary, timing?.startedAt);
+        chunks.push(
+          { type: 'reasoning-start', id, ...metadata },
+          { type: 'reasoning-delta', id, delta: value['thinking'], ...metadata },
+        );
+        streamedBlocks?.set(key, {
+          type: 'thinking',
+          content: value['thinking'],
+          closed: !streamCheckpoint,
+          ...(timing === undefined ? {} : { startedAtMs: timing.startedAt }),
+          ...(summary === undefined ? {} : { reasoningSummary: summary }),
+        });
+        if (!streamCheckpoint || !streamedBlocks) {
+          chunks.push({ type: 'reasoning-end', id, ...reasoningMetadata(summary, timing?.startedAt, timing?.endedAt) });
+        }
+      }
+      continue;
+    }
+    /* An agent's media: an image or document by attachment reference (as the
+     * host now records it), or inline — the legacy image and any audio. */
+    const file = userFilePart(value);
+    if (file) {
+      chunks.push({ type: 'file', mediaType: file.mediaType, url: file.url });
+      continue;
+    }
+    if (value['type'] === 'audio' && typeof value['mimeType'] === 'string' && typeof value['data'] === 'string') {
+      chunks.push({
+        type: 'file',
+        mediaType: value['mimeType'],
+        url: `data:${value['mimeType']};base64,${value['data']}`,
+      });
+      continue;
+    }
+    if (value['type'] === 'resource_link' && typeof value['uri'] === 'string' && typeof value['name'] === 'string') {
+      chunks.push({
+        type: 'source-url',
+        sourceId: `${message.id}:source:${String(index)}`,
+        url: value['uri'],
+        title: typeof value['title'] === 'string' ? value['title'] : value['name'],
+      });
+      continue;
+    }
+    const embedded = value['type'] === 'resource' && isRecord(value['resource']) ? value['resource'] : undefined;
+    if (embedded && typeof embedded['uri'] === 'string') {
+      chunks.push({
+        type: 'source-document',
+        sourceId: `${message.id}:source:${String(index)}`,
+        mediaType: typeof embedded['mimeType'] === 'string' ? embedded['mimeType'] : 'application/octet-stream',
+        title: embedded['uri'],
+        filename: embedded['uri'],
+      });
+      continue;
+    }
+    if (
+      value['type'] === 'provider-permission-observation' &&
+      tauInternal?.['kind'] === 'provider-permission-observation'
+    ) {
+      const parsed = providerPermissionResolutionSchema.safeParse(value['resolution']);
+      if (parsed.success && typeof value['interruptId'] === 'string' && value['interruptId'] !== '') {
+        chunks.push({ type: 'tool-output-available', toolCallId: value['interruptId'], output: parsed.data });
+      }
+      continue;
+    }
+    if (value['type'] === 'acp-session') {
+      const id = `${message.id}:acp-session:${String(index)}`;
+      const parsed = acpSessionDataSchema.safeParse({ ...value, id });
+      if (parsed.success) {
+        chunks.push({ type: 'data-acp-session', id, data: parsed.data });
+      }
+    }
+    if (value['type'] === 'acp-activity') {
+      const id = `${message.id}:acp-activity:${String(index)}`;
+      const parsed = acpActivityDataSchema.safeParse({ ...value, id });
+      if (parsed.success) {
+        chunks.push({ type: 'data-acp-activity', id, data: parsed.data });
+      }
+    }
+    // Tool-call blocks are projected from their explicit tool-input log row.
+  }
+  chunks.push(...usageChunks(message));
+  // ACP message identities span tool calls; it does not report model step boundaries.
+  if (
+    message.metadata?.tauInternal?.['origin'] !== 'external' &&
+    !streamCheckpoint &&
+    !hasToolCall &&
+    chunks.some((chunk) => chunk.type !== 'data-acp-session')
+  ) {
+    chunks.push({ type: 'finish-step' });
+  }
+  return chunks;
+};
+
+type ToolProviderMessage = Extract<ProviderMessage, { readonly role: 'tool-input' | 'tool-output' }>;
+
+/** The SDK's own JSON-object shape for a tool part's metadata; `ai` does not export the alias. */
+type ToolChunkMetadata = NonNullable<Extract<UIMessageChunk, { type: 'tool-input-available' }>['toolMetadata']>;
+
+/**
+ * The emitter's own tool-call facts, in the shape the AI SDK carries them.
+ *
+ * ACP is the boundary vocabulary (V3): every external call becomes a
+ * `dynamic-tool` part, including a host-normalized Tau MCP call. This keeps one
+ * SDK part when a native identity arrives after the sparse initial call; the
+ * renderer applies the qualified native porcelain without changing identity.
+ * `call` rides along as the part's `toolMetadata`
+ * under one `tau` namespace — Tau's own dispatch records the same field, so a
+ * renderer reads one shape for both emitters.
+ *
+ * @param message - The durable tool row.
+ * @param previous - Facts from the same run and tool identity.
+ * @returns Chunk fields shared by the input and output chunks.
+ */
+const toolChunkFacts = (
+  message: ToolProviderMessage,
+  previous?: ToolChunkMetadata,
+): { dynamic?: true; title?: string; toolMetadata?: ToolChunkMetadata } => {
+  const tauInternal = isRecord(message.metadata?.tauInternal) ? message.metadata.tauInternal : undefined;
+  const external = tauInternal?.['origin'] === 'external';
+  const { call } = message;
+  const agentId = tauInternal?.['agentId'];
+  const presentation = tauInternal?.['presentation'];
+  /* The SDK replaces tool metadata when an output chunk supplies it. Carry
+   * earlier run-scoped facts forward, with explicitly supplied fields replacing
+   * them, so sparse results cannot erase captured content or terminal updates.
+   * Omit transient status while preserving the final ACP facts.
+   *
+   * The durable log's JSON and the SDK's `JSONValue` describe the same bytes and
+   * differ only in array readonly-ness, so this asserts rather than re-copies. */
+  const { status: _status, ...facts } = call ?? {};
+  const durable = {
+    ...(isRecord(previous?.['tau']) ? previous['tau'] : {}),
+    ...facts,
+    ...(call?.status === 'completed' || call?.status === 'failed' ? { status: call.status } : {}),
+    ...(external ? { origin: 'external' } : {}),
+    ...(typeof agentId === 'string' ? { agentId } : {}),
+    /* A Tau MCP row's own tool name is the canonical Tau name for every adapter;
+     * `call.nativeName` is the adapter's spelling (Claude's `mcp__tau__test_model`,
+     * nothing for Grok) and older durable rows still carry it. */
+    ...(presentation === 'tau-mcp' ? { presentation, nativeName: message.toolName } : {}),
+  };
+  const tau = durable as ToolChunkMetadata;
+  return {
+    ...(external ? { dynamic: true } : {}),
+    ...(call?.title === undefined ? {} : { title: call.title }),
+    ...(Object.keys(tau).length === 0 ? {} : { toolMetadata: { tau } }),
+  };
+};
+
+const messageChunks = (
+  message: ProviderMessage,
+  runId: string,
+  streamedBlocks?: AgentHostLiveBlocks,
+): UIMessageChunk[] => {
+  switch (message.role) {
+    case 'user': {
+      return [];
+    }
+    case 'assistant': {
+      return assistantChunks(message, runId, streamedBlocks);
+    }
+    case 'tool-input': {
+      const key = toolKey(runId, message.toolCallId);
+      const current = streamedBlocks?.get(key);
+      if (current?.closed) {
+        return [];
+      }
+      const facts = toolChunkFacts(message, current?.type === 'tool' ? current.toolMetadata : undefined);
+      streamedBlocks?.set(key, {
+        type: 'tool',
+        content: '',
+        closed: false,
+        input: 'available',
+        toolMetadata: facts.toolMetadata,
+      });
+      return [
+        {
+          type: 'tool-input-available',
+          toolCallId: message.toolCallId,
+          toolName: message.toolName,
+          input: message.content,
+          ...facts,
+        },
+      ];
+    }
+    case 'tool-output': {
+      const key = toolKey(runId, message.toolCallId);
+      const current = streamedBlocks?.get(key);
+      const { title: _title, ...facts } = toolChunkFacts(
+        message,
+        current?.type === 'tool' ? current.toolMetadata : undefined,
+      );
+      streamedBlocks?.set(key, {
+        type: 'tool',
+        content: '',
+        closed: true,
+        input: 'available',
+        toolMetadata: facts.toolMetadata,
+      });
+      const output: UIMessageChunk = message.isError
+        ? {
+            type: 'tool-output-error',
+            toolCallId: message.toolCallId,
+            errorText: errorText(message.content, `${message.toolName} failed`),
+            ...facts,
+          }
+        : { type: 'tool-output-available', toolCallId: message.toolCallId, output: message.content, ...facts };
+      /* A result read after the next step's live block opened concludes its call without ending that block's step. */
+      return facts.dynamic === true || hasOpenStreamBlock(runId, streamedBlocks)
+        ? [output]
+        : [output, { type: 'finish-step' }, { type: 'start-step' }];
+    }
+  }
+};
+
+/** Read the latest ACP session record for the selected agent and placement from durable UI messages. @public */
+export const latestAcpSessionData = (
+  messages: readonly MyUIMessage[],
+  agentId: string,
+  hostId?: string,
+): AcpSessionData | undefined => {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+    const parts = messages[messageIndex]?.parts ?? [];
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
+      const part = parts[partIndex];
+      if (
+        part?.type === 'data-acp-session' &&
+        part.data.agentId === agentId &&
+        (hostId === undefined || isRecordedOnHost(part.data.hostId, hostId))
+      ) {
+        return part.data;
+      }
+    }
+  }
+  return undefined;
+};
+
+type UserFilePart = Extract<MyUIMessage['parts'][number], { type: 'file' }>;
+
+/**
+ * Project one durable attachment block onto the file part a transcript renders.
+ *
+ * Two arms (D14): a `file-ref` keeps the relative `attachments/…` path so the
+ * renderer resolves the bytes against the chat's own directory, and the legacy
+ * inline `image` block is still re-synthesized as a `data:` URL. A block whose
+ * path is not a resolvable attachment is dropped rather than rendered as a
+ * broken source — the rest of the turn still reads.
+ *
+ * @param value - One durable content block from a user message.
+ * @returns The file part, or none when the block is not a renderable attachment.
+ */
+const userFilePart = (value: Record<string, unknown>): UserFilePart | undefined => {
+  if (value['type'] === 'file-ref') {
+    const { path, mimeType, filename, byteLength } = value;
+    if (typeof path !== 'string' || !isAttachmentUrl(path) || typeof mimeType !== 'string') {
+      return undefined;
+    }
+    return {
+      type: 'file',
+      mediaType: mimeType,
+      url: path,
+      ...(typeof filename === 'string' ? { filename } : {}),
+      // `FileUIPart` has no size field; `common` is where Tau's own part facts ride.
+      ...(typeof byteLength === 'number' ? { providerMetadata: { common: { byteLength } } } : {}),
+    };
+  }
+  if (value['type'] === 'image' && typeof value['mimeType'] === 'string' && typeof value['data'] === 'string') {
+    return { type: 'file', mediaType: value['mimeType'], url: `data:${value['mimeType']};base64,${value['data']}` };
+  }
+  return undefined;
+};
+
+/** Reconstruct one canonical user row without routing it through assistant stream chunks. */
+export const projectAgentHostUserMessage = (message: UserProviderMessage, recordedAt?: string): MyUIMessage => {
+  const values: readonly JsonValue[] = Array.isArray(message.content) ? message.content : [message.content];
+  const parts: MyUIMessage['parts'] = [];
+  for (const value of values) {
+    if (typeof value === 'string') {
+      parts.push({ type: 'text', text: value });
+      continue;
+    }
+    if (!isRecord(value)) {
+      continue;
+    }
+    if (value['type'] === 'text' && typeof value['text'] === 'string') {
+      parts.push({ type: 'text', text: value['text'] });
+      continue;
+    }
+    const file = userFilePart(value);
+    if (file) {
+      parts.push(file);
+    }
+  }
+  /** Milliseconds. */
+  const recordedTimestamp = recordedAt === undefined ? undefined : Date.parse(recordedAt);
+  const createdAt =
+    message.metadata?.timestamp ??
+    (recordedTimestamp !== undefined && Number.isFinite(recordedTimestamp) ? recordedTimestamp : undefined);
+  const references = cadReferencesSchema.safeParse(message.metadata?.['references']);
+  return {
+    id: message.id,
+    role: 'user',
+    parts,
+    metadata: {
+      status: 'success',
+      ...(createdAt === undefined ? {} : { createdAt }),
+      ...(references.success && references.data.length > 0 ? { references: references.data } : {}),
+    },
+  };
+};
+
+/** One host-attested turn outcome. @public */
+export type ProjectedTurnSettlement = TurnConflictedEvent | TurnFailedEvent | TurnFinalizedEvent;
+
+/**
+ * Read back the turn settlement a *host* attested.
+ *
+ * One schema on every host: the browser's revision root emits exactly this
+ * shape from the same `turn.machine`, and a Node host writes it into the chat's
+ * own durable log, so the revision card is projected from one shape wherever
+ * the turn ran. The card's `Rev N` is not here — it is the first-parent ordinal
+ * on the selected branch, derived from the graph at read time (I3).
+ *
+ * @param event - One durable log record.
+ * @returns The settlement, or `undefined` for every other record.
+ * @public
+ */
+export const projectTurnSettlement = (event: PresentationEvent): ProjectedTurnSettlement | undefined => {
+  switch (event.type) {
+    case 'turn.finalized': {
+      return {
+        type: 'turn.finalized',
+        turnId: event.turnId,
+        runId: event.runId,
+        chatId: event.chatId,
+        projectId: event.projectId,
+        checkoutId: event.checkoutId,
+        ...(event.revisionId === undefined ? {} : { revisionId: event.revisionId }),
+        ...(event.branch === undefined ? {} : { branch: event.branch }),
+        changedPaths: event.changedPaths,
+        ...(event.treeId === undefined ? {} : { treeId: event.treeId }),
+        trigger: 'turn',
+        runIds: event.runIds,
+      };
+    }
+    case 'turn.conflicted': {
+      return {
+        type: 'turn.conflicted',
+        turnId: event.turnId,
+        runId: event.runId,
+        chatId: event.chatId,
+        checkoutId: event.checkoutId,
+      };
+    }
+    case 'turn.failed': {
+      return {
+        type: 'turn.failed',
+        turnId: event.turnId,
+        runId: event.runId,
+        chatId: event.chatId,
+        checkoutId: event.checkoutId,
+        reason: event.reason,
+        ...(event.code === undefined ? {} : { code: event.code }),
+      };
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+/** Read the finalized member used by revision cards. @public */
+export const projectTurnFinalized = (event: PresentationEvent): TurnFinalizedEvent | undefined => {
+  const settlement = projectTurnSettlement(event);
+  return settlement?.type === 'turn.finalized' ? settlement : undefined;
+};
+
+/** Extract an authoritative admitted user, canonical user row, or authentic steering input. */
+export const projectAgentHostUserTurn = (event: PresentationEvent): MyUIMessage | undefined => {
+  if (event.type === 'run.lifecycle' && event.state === 'admitted' && 'admission' in event) {
+    const admission = isRecord(event.admission) ? event.admission : undefined;
+    const message = userProviderMessageSchema.safeParse(admission?.message);
+    if (
+      (admission?.kind === 'tau' || admission?.kind === 'external') &&
+      message.success &&
+      admission.turnId === message.data.id
+    ) {
+      return projectAgentHostUserMessage(message.data, event.recordedAt);
+    }
+  }
+  if (event.type === 'message.appended' && event.message.role === 'user') {
+    const internal = event.message.metadata?.tauInternal;
+    /* A copy of an abandoned turn (XD3) is another run's words said as data, an external agent's keeping its marker. */
+    if (internal !== undefined && (internal['kind'] !== 'external-agent' || internal['abandoned'] === true)) {
+      return undefined;
+    }
+    if (event.message.id.startsWith('tau:')) {
+      return undefined;
+    }
+    return projectAgentHostUserMessage(event.message, event.recordedAt);
+  }
+  if (event.type === 'turn.history-projection-committed') {
+    return projectAgentHostUserMessage(event.message, event.recordedAt);
+  }
+  return undefined;
+};
+
+/** Project one non-durable model delta while retaining its open content block. */
+type PresentationLiveEvent = AgentLiveEvent extends infer Event
+  ? Event extends AgentLiveEvent
+    ? Omit<Event, 'chatId'> & { readonly chatId?: string }
+    : never
+  : never;
+
+export const projectAgentHostLiveEvent = (
+  event: PresentationLiveEvent,
+  streamedBlocks: AgentHostLiveBlocks,
+): readonly UIMessageChunk[] => {
+  const tool = 'toolCallId' in event ? streamedBlocks.get(toolKey(event.runId, event.toolCallId)) : undefined;
+  if (tool?.closed) {
+    return [];
+  }
+  if (event.type === 'tool-input-start') {
+    if (tool !== undefined) {
+      return [];
+    }
+    streamedBlocks.set(toolKey(event.runId, event.toolCallId), {
+      type: 'tool',
+      content: '',
+      closed: false,
+      input: 'started',
+    });
+    return [{ type: 'tool-input-start', toolCallId: event.toolCallId, toolName: event.toolName }];
+  }
+  if (event.type === 'tool-input-delta') {
+    if (tool?.type !== 'tool' || tool.input !== 'started') {
+      return [];
+    }
+    return [{ type: 'tool-input-delta', toolCallId: event.toolCallId, inputTextDelta: event.delta }];
+  }
+  if (event.type === 'tool-input-end') {
+    if (tool?.type !== 'tool' || tool.input !== 'started') {
+      return [];
+    }
+    streamedBlocks.set(toolKey(event.runId, event.toolCallId), { ...tool, input: 'available' });
+    return [
+      {
+        type: 'tool-input-available',
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+      },
+    ];
+  }
+  if (event.type === 'tool-output-update') {
+    if (tool?.type !== 'tool' || tool.input !== 'available') {
+      return [];
+    }
+    return [
+      event.isError
+        ? {
+            type: 'tool-output-error',
+            toolCallId: event.toolCallId,
+            errorText: errorText(event.output, `${event.toolName} failed`),
+          }
+        : {
+            type: 'tool-output-available',
+            toolCallId: event.toolCallId,
+            output: event.output,
+            preliminary: true,
+          },
+    ];
+  }
+  const key = blockKey(event.runId, event.messageId, event.contentIndex);
+  const type = event.type.startsWith('text-') ? 'text' : 'thinking';
+  const id = blockId(type, event.messageId, event.contentIndex);
+  const current = streamedBlocks.get(key);
+  if (current?.type === 'tool') {
+    return [];
+  }
+  if (current?.closed) {
+    return [];
+  }
+  if (event.type === 'text-start' || event.type === 'thinking-start') {
+    if (current) {
+      return [];
+    }
+    streamedBlocks.set(key, {
+      type,
+      content: '',
+      closed: false,
+      ...(event.type === 'text-start' && event.phase !== undefined ? { phase: event.phase } : {}),
+      ...(event.type === 'thinking-start' && event.timestamp !== undefined ? { startedAtMs: event.timestamp } : {}),
+      ...(event.type === 'thinking-start' && event.reasoningSummary !== undefined
+        ? { reasoningSummary: event.reasoningSummary }
+        : {}),
+    });
+    return [
+      {
+        type: type === 'text' ? 'text-start' : 'reasoning-start',
+        id,
+        ...(event.type === 'text-start' ? textStreamState(undefined, event.phase) : {}),
+        ...(event.type === 'thinking-start' ? reasoningMetadata(event.reasoningSummary, event.timestamp) : {}),
+      },
+    ];
+  }
+  const start: UIMessageChunk[] = current ? [] : [{ type: type === 'text' ? 'text-start' : 'reasoning-start', id }];
+  const block: NonNullable<typeof current> =
+    current === undefined ? { type, content: '', closed: false } : { ...current };
+  if ((event.type === 'text-delta' || event.type === 'text-end') && event.phase !== undefined) {
+    block.phase = event.phase;
+  }
+  if (event.type === 'text-delta' || event.type === 'thinking-delta') {
+    // Durable checkpoints and live deltas travel on independent subscriptions.
+    // A missing prefix is recovered by the next checkpoint/end, never guessed.
+    const offset = event.offset ?? block.content.length;
+    if (offset > block.content.length) {
+      return [];
+    }
+    const delta = event.delta.slice(block.content.length - offset);
+    if (delta && event.type === 'thinking-delta' && event.reasoningSummary !== undefined) {
+      block.reasoningSummary = event.reasoningSummary;
+    }
+    block.content += delta;
+    const resumed = delta !== '' && block.resting === true;
+    if (resumed) {
+      block.resting = false;
+    }
+    streamedBlocks.set(key, block);
+    return delta
+      ? [
+          ...start,
+          {
+            type: type === 'text' ? 'text-delta' : 'reasoning-delta',
+            id,
+            delta,
+            ...(event.type === 'text-delta'
+              ? textStreamState(resumed ? 'live' : undefined, block.phase)
+              : reasoningMetadata(block.reasoningSummary)),
+          },
+        ]
+      : start;
+  }
+  const { content } = event;
+  if (event.type === 'thinking-end' && event.reasoningSummary !== undefined) {
+    block.reasoningSummary = event.reasoningSummary;
+  }
+  const suffix = content.startsWith(block.content) ? content.slice(block.content.length) : '';
+  block.content = content;
+  block.closed = true;
+  streamedBlocks.set(key, block);
+  const chunks: UIMessageChunk[] = [...start];
+  if (suffix) {
+    chunks.push({ type: type === 'text' ? 'text-delta' : 'reasoning-delta', id, delta: suffix });
+  }
+  chunks.push({
+    type: type === 'text' ? 'text-end' : 'reasoning-end',
+    id,
+    ...(event.type === 'text-end' ? textStreamState(undefined, block.phase) : {}),
+    ...(event.type === 'thinking-end'
+      ? reasoningMetadata(block.reasoningSummary, block.startedAtMs, event.timestamp)
+      : {}),
+  });
+  return chunks;
+};
+
+/** Whether this run has open parts that must survive an approval pause in the same SDK step. */
+const hasOpenBlock = (runId: string, streamedBlocks: AgentHostLiveBlocks | undefined): boolean => {
+  const prefix = `[${JSON.stringify(runId)},`;
+  for (const [key, block] of streamedBlocks ?? []) {
+    if (!block.closed && key.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const lifecycleChunks = (
+  event: Extract<PresentationEvent, { readonly type: 'run.lifecycle' }>,
+  streamedBlocks: AgentHostLiveBlocks | undefined,
+): readonly UIMessageChunk[] => {
+  const { state } = event;
+  switch (state) {
+    case 'admitted': {
+      return [
+        {
+          type: 'start',
+          messageId: event.runId,
+          messageMetadata: { createdAt: Date.parse(event.recordedAt), status: 'pending' },
+        },
+      ];
+    }
+    case 'running': {
+      // Input refinements are step-scoped in the SDK; a resumed call must not become a second tool part.
+      return hasOpenBlock(event.runId, streamedBlocks) ? [] : [{ type: 'start-step' }];
+    }
+    case 'paused': {
+      /* The reducer forgets its active parts on `finish-step` without closing
+       * them. Keep the step open until its text and tools settle, so resume
+       * continues those same parts. */
+      return hasOpenBlock(event.runId, streamedBlocks) ? [] : [{ type: 'finish-step' }];
+    }
+    case 'completed': {
+      return [{ type: 'finish', finishReason: 'stop', messageMetadata: { status: 'success' } }];
+    }
+    case 'failed': {
+      return [{ type: 'error', errorText: runFailureText(event.detail) }];
+    }
+    case 'cancelled': {
+      return [{ type: 'abort', reason: errorText(event.detail, 'cancelled') }];
+    }
+  }
+};
+
+/**
+ * Dynamic tool name every durable interrupt is projected onto.
+ *
+ * A host's interrupt inbox is not a tool call — it is its own durable record —
+ * but the UI SDK's only per-message approval vocabulary hangs off a tool part,
+ * so the interrupt gets a part of its own keyed by `interruptId`. Keying it on
+ * the *interrupt* rather than joining it to whatever tool provoked it is what
+ * makes the projection total: an external agent's `session/request_permission`
+ * names a tool call in the agent's own id space (`packages/host/src/acp/session.ts`
+ * mints separate Tau-side call ids), a safeguard names no tool at all, and the
+ * SDK throws `No tool invocation found` for an approval addressed to a part
+ * that does not exist.
+ *
+ * @public
+ */
+export const agentApprovalToolName = 'tau_agent_approval';
+
+/** One choice the host recorded beside a pending interrupt. @public */
+export type AgentHostApprovalOption = {
+  readonly optionId: string;
+  readonly name: string;
+  readonly kind?: string | undefined;
+};
+
+/** The pending interrupt a presenter renders, projected from `interrupt.recorded`. @public */
+export type AgentHostApproval = {
+  readonly interruptId: string;
+  readonly kind: 'approval' | 'operator' | 'safeguard';
+  readonly prompt: string;
+  readonly options: readonly AgentHostApprovalOption[];
+  /** Provider-requested scope; recording an answer does not verify provider policy persistence. */
+  readonly providerPermission?: ProviderPermission | undefined;
+  /**
+   * External agent that raised this interrupt, when one did.
+   *
+   * Durable, so a banner rendered after a reload — or while the composer has
+   * moved on to another agent — still names who is actually waiting (V6).
+   */
+  readonly agentId?: string | undefined;
+  /**
+   * A sign-in the agent is waiting on, when that is what this interrupt is.
+   *
+   * Present, the interrupt is not a decision at all — nothing here is approved
+   * or denied. It is what the *user* has to do somewhere else: open a
+   * verification URL, or run a command in their own terminal (V11). Tau never
+   * performs it, so a presenter renders the facts and no action of its own.
+   */
+  readonly login?: AgentHostLogin | undefined;
+  /**
+   * The durable record this interrupt gates, when the tool named one.
+   *
+   * A job request writes `{ jobId, machineId, fileName }` and a machine action
+   * `{ machineId, componentId, action, operationId, label, intent }`, so the Print pane
+   * can answer the same interrupt the banner shows; other tools may write nothing.
+   */
+  readonly context?: AgentHostApprovalContext | undefined;
+  /**
+   * The exact `shell` request the person approves, when a Tau `shell` call asked: the presenter renders its authority
+   * from these fields, never from the prompt text, and labels `access.reason` as the agent's words (A12).
+   */
+  readonly shell?: ShellApprovalPayload | undefined;
+  /** Structured request facts retained for compact presentation and Debug inspection. */
+  readonly request?: { readonly title?: string | undefined; readonly input?: unknown } | undefined;
+};
+
+/** Ledger correlation a tool attaches to the interrupt it raises. @public */
+export type AgentHostApprovalContext = {
+  readonly jobId?: string | undefined;
+  readonly machineId?: string | undefined;
+  readonly fileName?: string | undefined;
+  /** For a machine action: the component, the action id, the operation it will send and its label. */
+  readonly componentId?: string | undefined;
+  readonly action?: string | undefined;
+  readonly operationId?: string | undefined;
+  readonly label?: string | undefined;
+  /** For a machine action: the parameters of the exact intent the person approves, from the tool's `intent`. */
+  readonly parameters?: Readonly<Record<string, unknown>> | undefined;
+  /** For a machine action: the action version of that intent, which the host's approval record names (R15). */
+  readonly version?: number | undefined;
+  /**
+   * For a machine action: the run the agent saw when it asked, `null` for none. The person approves the action for
+   * this run only (R16).
+   */
+  // oxlint-disable-next-line typescript/no-restricted-types -- null is the agent's statement that it saw no run.
+  readonly expectedRunId?: string | null | undefined;
+};
+
+/** One sign-in method an external agent offered. @public */
+export type AgentHostLoginMethod = {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+  /** A command line the user runs themselves; Tau never runs it (X6). */
+  readonly terminalCommand?: string | undefined;
+};
+
+/** The sign-in an external agent is waiting on. @public */
+export type AgentHostLogin = {
+  readonly agentId: string;
+  readonly methods: readonly AgentHostLoginMethod[];
+  /** Where the user completes a device-code login. */
+  readonly url?: string | undefined;
+  /** The code that page asks for. */
+  readonly code?: string | undefined;
+};
+
+/*
+ * `interrupt.recorded.payload` is `JsonValue` on the wire. The launcher writes
+ * `{ kind, prompt, context }` and `context` is whatever the runner handed it —
+ * an ACP permission request puts its `toolCall` and its `options` there, a
+ * channel `interrupt` command may put nothing. Parsed, never cast (CL11), and
+ * loose because a richer context from a newer host must not blank the banner.
+ */
+const approvalOptionSchema = z.looseObject({
+  optionId: z.string().min(1),
+  name: z.string().optional(),
+  kind: z.string().optional(),
+});
+
+const interruptRequestSchema = z.looseObject({
+  kind: z.enum(['approval', 'operator', 'safeguard']).optional(),
+  prompt: z.string().optional(),
+  agentId: z.string().optional(),
+  context: z
+    .looseObject({
+      toolCall: z.looseObject({ title: z.string().optional(), rawInput: z.json().optional() }).optional(),
+      options: z.array(approvalOptionSchema).optional(),
+      providerPermission: z.unknown().optional(),
+      input: z.json().optional(),
+      requestId: z.string().min(1).optional(),
+      jobId: z.string().min(1).optional(),
+      machineId: z.string().min(1).optional(),
+      fileName: z.string().min(1).optional(),
+      componentId: z.string().min(1).optional(),
+      action: z.string().min(1).optional(),
+      operationId: z.string().min(1).optional(),
+      label: z.string().min(1).optional(),
+      intent: z
+        .looseObject({
+          parameters: z.record(z.string(), z.unknown()).optional(),
+          version: z.number().int().optional(),
+          expectedRunId: z.string().min(1).nullable().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
+const agentHostApprovalContextSchema = z.object({
+  jobId: z.string().min(1).optional(),
+  machineId: z.string().min(1).optional(),
+  fileName: z.string().min(1).optional(),
+  componentId: z.string().min(1).optional(),
+  action: z.string().min(1).optional(),
+  operationId: z.string().min(1).optional(),
+  label: z.string().min(1).optional(),
+  parameters: z.record(z.string(), z.unknown()).optional(),
+  version: z.number().int().optional(),
+  expectedRunId: z.string().min(1).nullable().optional(),
+});
+
+/**
+ * The ledger correlation one interrupt context carries, if it carries any.
+ *
+ * @param context - The parsed `context` of the interrupt payload.
+ * @returns Only the correlation keys present, or `undefined` when none are.
+ */
+const approvalContextOf = (
+  context:
+    | (AgentHostApprovalContext & {
+        readonly requestId?: string | undefined;
+        readonly intent?:
+          | {
+              readonly parameters?: Readonly<Record<string, unknown>> | undefined;
+              readonly version?: number | undefined;
+              // oxlint-disable-next-line typescript/no-restricted-types -- null is the agent's statement that it saw no run.
+              readonly expectedRunId?: string | null | undefined;
+            }
+          | undefined;
+      })
+    | undefined,
+): AgentHostApprovalContext | undefined => {
+  if (!context) {
+    return undefined;
+  }
+  // ponytail: a host from before jobs names the job `requestId`; drop the alias once every host writes `jobId`.
+  const jobId = context.jobId ?? context.requestId;
+  const picked: AgentHostApprovalContext = Object.fromEntries(
+    Object.entries({
+      jobId,
+      machineId: context.machineId,
+      fileName: context.fileName,
+      componentId: context.componentId,
+      action: context.action,
+      operationId: context.operationId,
+      label: context.label,
+      parameters: context.intent?.parameters,
+      version: context.intent?.version,
+      expectedRunId: context.intent?.expectedRunId,
+    }).filter(([, value]) => value !== undefined),
+  );
+  return Object.keys(picked).length === 0 ? undefined : picked;
+};
+
+/* `externalAgentLoginSchema` in `agent-wire.ts` is the writer's own shape; this
+ * is the reader's, loose for the same reason as the rest of the payload. */
+const loginPayloadSchema = z.looseObject({
+  kind: z.literal('external-agent-login'),
+  agentId: z.string().min(1),
+  authMethods: z
+    .array(
+      z.looseObject({
+        id: z.string().min(1),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        terminalCommand: z.string().optional(),
+      }),
+    )
+    .optional(),
+  url: z.string().optional(),
+  code: z.string().optional(),
+});
+
+const loginMethodSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  description: z.string().optional(),
+  terminalCommand: z.string().optional(),
+});
+
+const agentHostLoginSchema = z.object({
+  agentId: z.string().min(1),
+  methods: z.array(loginMethodSchema),
+  url: z.string().optional(),
+  code: z.string().optional(),
+});
+
+/**
+ * The sign-in one interrupt payload describes, if it describes one.
+ *
+ * @param payload - The durable `interrupt.recorded` payload.
+ * @returns The login facts a presenter renders, or `undefined`.
+ */
+const loginOf = (payload: unknown): AgentHostLogin | undefined => {
+  const parsed = loginPayloadSchema.safeParse(payload).data;
+  if (!parsed) {
+    return undefined;
+  }
+  return {
+    agentId: parsed.agentId,
+    methods: (parsed.authMethods ?? []).map((method) => ({
+      id: method.id,
+      name: method.name ?? method.id,
+      ...(method.description === undefined ? {} : { description: method.description }),
+      ...(method.terminalCommand === undefined ? {} : { terminalCommand: method.terminalCommand }),
+    })),
+    ...(parsed.url === undefined ? {} : { url: parsed.url }),
+    ...(parsed.code === undefined ? {} : { code: parsed.code }),
+  };
+};
+
+const interruptResolutionSchema = z.looseObject({
+  outcome: z.enum(['approved', 'denied', 'cancelled']).optional(),
+  optionId: z.string().min(1).max(512).optional(),
+});
+
+const agentHostApprovalSchema = z.object({
+  interruptId: z.string().min(1),
+  kind: z.enum(['approval', 'operator', 'safeguard']),
+  prompt: z.string(),
+  options: z.array(z.object({ optionId: z.string().min(1), name: z.string(), kind: z.string().optional() })),
+  providerPermission: providerPermissionSchema.optional(),
+  agentId: z.string().optional(),
+  login: agentHostLoginSchema.optional(),
+  context: agentHostApprovalContextSchema.optional(),
+  shell: shellApprovalPayloadSchema.optional(),
+  request: z.object({ title: z.string().optional(), input: z.json().optional() }).optional(),
+});
+
+/**
+ * Read back the approval a presenter renders from its projected tool part.
+ *
+ * The part round-trips through the chat's own persistence before a reload
+ * re-renders it, so the presenter parses rather than trusts (CL11).
+ *
+ * @param input - The dynamic tool part's `input`.
+ * @returns The approval, or `undefined` when the part is not one.
+ * @public
+ */
+export const parseAgentHostApproval = (input: unknown): AgentHostApproval | undefined =>
+  agentHostApprovalSchema.safeParse(input).data;
+
+const approvalChunks = (
+  event: Extract<PresentationEvent, { readonly type: 'interrupt.recorded' }>,
+): readonly UIMessageChunk[] => {
+  if (event.phase === 'resolved') {
+    // `reason` carries the outcome verbatim on every host that writes one.
+    const resolution = interruptResolutionSchema.safeParse(event.payload).data;
+    const outcome = resolution?.outcome ?? event.reason;
+    return [
+      {
+        type: 'tool-output-available',
+        toolCallId: event.interruptId,
+        output: { outcome, ...(resolution?.optionId === undefined ? {} : { optionId: resolution.optionId }) },
+      },
+    ];
+  }
+  const request = interruptRequestSchema.safeParse(event.payload).data;
+  const providerPermission = providerPermissionSchema.safeParse(request?.context?.providerPermission).data;
+  const login = loginOf(event.payload);
+  const context = approvalContextOf(request?.context);
+  const shell = shellApprovalPayloadSchema.safeParse(request?.context).data;
+  const content = request?.context?.toolCall?.['content'];
+  const description = Array.isArray(content)
+    ? content
+        .flatMap((block: unknown) =>
+          isRecord(block) && isRecord(block['content']) && typeof block['content']['text'] === 'string'
+            ? [block['content']['text']]
+            : [],
+        )
+        .join('\n')
+    : undefined;
+  const input: AgentHostApproval = {
+    interruptId: event.interruptId,
+    kind: request?.kind ?? 'approval',
+    prompt: request?.prompt ?? request?.context?.toolCall?.title ?? event.reason,
+    options: (request?.context?.options ?? []).map((option) => ({
+      optionId: option.optionId,
+      name: option.name ?? option.optionId,
+      ...(option.kind === undefined ? {} : { kind: option.kind }),
+    })),
+    ...(request?.agentId === undefined ? {} : { agentId: request.agentId }),
+    ...(providerPermission === undefined ? {} : { providerPermission }),
+    ...(login === undefined ? {} : { login }),
+    ...(context === undefined ? {} : { context }),
+    ...(shell === undefined ? {} : { shell }),
+    ...(request?.context?.toolCall === undefined && request?.context?.input === undefined
+      ? {}
+      : {
+          request: {
+            title: request.context.toolCall?.title ?? (description === '' ? undefined : description),
+            input: request.context.input ?? request.context.toolCall?.rawInput,
+          },
+        }),
+  };
+  return [
+    {
+      type: 'tool-input-available',
+      toolCallId: event.interruptId,
+      toolName: agentApprovalToolName,
+      dynamic: true,
+      input,
+    },
+    { type: 'tool-approval-request', approvalId: event.interruptId, toolCallId: event.interruptId },
+  ];
+};
+
+/** Convert one durable browser-host event into the UI SDK chunk vocabulary used by API chat. */
+export const projectAgentHostEvent = (
+  event: PresentationEvent,
+  streamedBlocks?: AgentHostLiveBlocks,
+): readonly UIMessageChunk[] => {
+  switch (event.type) {
+    case 'message.appended': {
+      return messageChunks(event.message, event.runId, streamedBlocks);
+    }
+    case 'run.lifecycle': {
+      return lifecycleChunks(event, streamedBlocks);
+    }
+    case 'message.envelope-replaced': {
+      return messageChunks(event.replacement, event.runId, streamedBlocks);
+    }
+    case 'history.rewound':
+    case 'history.compacted':
+    case 'snapshot-context.refreshed':
+    case 'safeguard.recorded':
+    case 'model.invocation-prepared':
+    case 'model.invocation-bound':
+    case 'model.invocation-settled':
+    case 'approval.spent':
+    case 'turn.changed':
+    case 'turn.finalized':
+    case 'turn.conflicted':
+    case 'turn.failed':
+    case 'turn.history-projection-committed':
+    case 'run.heartbeat': {
+      /* The three turn settlements are facts about the project's revision
+       * graph, not about the transcript: they are read by
+       * `projectTurnFinalized` and render no chunk of their own. A heartbeat
+       * only says the run is alive, for the cross-device fence (XD3). */
+      return [];
+    }
+    case 'interrupt.recorded': {
+      return approvalChunks(event);
+    }
+    default: {
+      /* D14: the log preserves records this reader does not know (a newer
+       * daemon, a cached older bundle); they project to nothing rather than
+       * aborting the chat stream. A *known* type without a case is still a
+       * compile error. */
+      event satisfies never;
+      return [];
+    }
+  }
+};

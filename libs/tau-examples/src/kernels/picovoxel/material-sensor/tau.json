@@ -1,0 +1,9 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "PicoVoxel Material Sensor",
+  "description": "A painted sensor enclosure with an encoded stripe map, transmitting glass lens and anisotropic metal connector.",
+  "tags": ["picovoxel", "typescript", "materials", "pbr", "textures"],
+  "assets": {
+    "main": { "entryPath": "main.ts", "thumbnail": "thumbnail.webp" }
+  }
+}

@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+/** Purpose: Reject fork, source, workflow and artifact provenance substitutions. */
+import assert from 'node:assert/strict';
+import {
+  desktopArtifactKinds,
+  desktopArtifactName,
+  desktopReleaseIdentity,
+  parseDesktopArtifactManifest,
+} from '#shared/desktop-release.js';
+// oxlint-disable-next-line no-restricted-imports -- Test provenance admission itself.
+import { fetchDesktopQualifiedReceipts, verifyDesktopReceiptProvenance } from './desktop-receipt-provenance.mjs';
+const tag = 'desktop-staging@0.1.0-staging.102';
+const identity = desktopReleaseIdentity(tag);
+const { platform: _platform, ...definition } = desktopArtifactKinds['windows-nsis'];
+const manifest = parseDesktopArtifactManifest({
+  schemaVersion: 1,
+  tag,
+  ...identity,
+  sourceCommit: 'a'.repeat(40),
+  artifacts: [
+    {
+      kind: 'windows-nsis',
+      target: 'win32-x64',
+      name: desktopArtifactName({ ...identity, kind: 'windows-nsis', arch: 'x64' }),
+      ...definition,
+      size: 10,
+      sha256: 'b'.repeat(64),
+      sha512: Buffer.alloc(64).toString('base64'),
+    },
+  ],
+});
+const run = {
+  id: 123,
+  event: 'workflow_dispatch',
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  head_branch: 'main',
+  status: 'completed',
+  conclusion: 'success',
+  path: '.github/workflows/desktop-route-qualification.yml',
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  head_sha: manifest.sourceCommit,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  repository: { full_name: 'taucad/tau' },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  head_repository: { full_name: 'taucad/tau' },
+};
+const artifact = {
+  id: 456,
+  name: 'desktop-route-ci-receipts',
+  expired: false,
+  digest: `sha256:${'c'.repeat(64)}`,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  workflow_run: { id: 123, head_sha: manifest.sourceCommit },
+};
+assert.equal(verifyDesktopReceiptProvenance(run, artifact, { environment: 'ci', manifest }).id, 456);
+for (const difference of [
+  { event: 'pull_request' },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { head_branch: 'unprotected' },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { head_repository: { full_name: 'fork/tau' } },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { repository: { full_name: 'fork/tau' } },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { head_sha: 'd'.repeat(40) },
+  { path: '.github/workflows/desktop-packaging.yml' },
+  { conclusion: 'failure' },
+]) {
+  assert.throws(() =>
+    verifyDesktopReceiptProvenance({ ...run, ...difference }, artifact, { environment: 'ci', manifest }),
+  );
+}
+for (const difference of [
+  { expired: true },
+  { name: 'arbitrary' },
+  { name: 'desktop-linux-ci-receipts' },
+  { digest: undefined },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { workflow_run: { id: 999, head_sha: manifest.sourceCommit } },
+]) {
+  assert.throws(() =>
+    verifyDesktopReceiptProvenance(run, { ...artifact, ...difference }, { environment: 'ci', manifest }),
+  );
+}
+assert.throws(() => verifyDesktopReceiptProvenance(run, artifact, { environment: 'vm', manifest }));
+// The Mac-only scope keeps the same trusted workflows and same-source admission under its own artifact names.
+const macCi = { ...artifact, name: 'desktop-macos-ci-receipts' };
+assert.equal(verifyDesktopReceiptProvenance(run, macCi, { environment: 'ci', manifest, scope: 'macos' }).id, 456);
+for (const name of ['desktop-route-ci-receipts', 'desktop-linux-ci-receipts', 'desktop-macos-vm-receipts']) {
+  assert.throws(() =>
+    verifyDesktopReceiptProvenance(run, { ...artifact, name }, { environment: 'ci', manifest, scope: 'macos' }),
+  );
+}
+assert.throws(() => verifyDesktopReceiptProvenance(run, macCi, { environment: 'ci', manifest }));
+const vmRun = { ...run, path: '.github/workflows/desktop-route-vm-acceptance.yml' };
+const macVm = { ...artifact, name: 'desktop-macos-vm-receipts' };
+assert.equal(verifyDesktopReceiptProvenance(vmRun, macVm, { environment: 'vm', manifest, scope: 'macos' }).id, 456);
+// A receipt artifact forged by another producer workflow, a fork, another source or another run is refused.
+assert.throws(() => verifyDesktopReceiptProvenance(run, macVm, { environment: 'vm', manifest, scope: 'macos' }));
+assert.throws(() => verifyDesktopReceiptProvenance(vmRun, macCi, { environment: 'ci', manifest, scope: 'macos' }));
+for (const difference of [
+  { path: '.github/workflows/desktop-installer-candidate.yml' },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { head_sha: 'd'.repeat(40) },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { head_repository: { full_name: 'fork/tau' } },
+  { event: 'push' },
+  { event: 'workflow_run' },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { head_branch: 'claude/vm-acceptance' },
+  { status: 'in_progress' },
+  { conclusion: 'failure' },
+  { path: '.github/workflows/qualify-desktop-macos.yml' },
+  { path: '.github/workflows/local-macos.yml' },
+]) {
+  assert.throws(() =>
+    verifyDesktopReceiptProvenance({ ...vmRun, ...difference }, macVm, { environment: 'vm', manifest, scope: 'macos' }),
+  );
+}
+for (const difference of [
+  { expired: true },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { workflow_run: { id: 999, head_sha: manifest.sourceCommit } },
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+  { workflow_run: { id: 123, head_sha: 'd'.repeat(40) } },
+  { digest: 'sha256:short' },
+]) {
+  assert.throws(() =>
+    verifyDesktopReceiptProvenance(vmRun, { ...macVm, ...difference }, { environment: 'vm', manifest, scope: 'macos' }),
+  );
+}
+// Per-row, all-platform and CI artifacts are never admitted as the Mac clean-host receipt set.
+for (const name of ['desktop-route-row-macos-dmg-arm64', 'desktop-route-vm-receipts', 'desktop-macos-ci-receipts']) {
+  assert.throws(() =>
+    verifyDesktopReceiptProvenance(vmRun, { ...macVm, name }, { environment: 'vm', manifest, scope: 'macos' }),
+  );
+}
+// Bound platform scopes (Mac, Windows and Linux, staging and production) admit a descendant qualification head, which the
+// mandatory sidecar then binds by S≤K≤H≤P; the all-platform scope keeps exact source on both channels.
+const descendant = 'e'.repeat(40);
+const productionCopy: typeof manifest = { ...manifest, channel: 'production' };
+for (const candidate of [manifest, productionCopy]) {
+  for (const [scope, environment, name, path] of [
+    ['linux', 'ci', 'desktop-linux-ci-receipts', run.path],
+    ['linux', 'vm', 'desktop-linux-vm-receipts', vmRun.path],
+    ['macos', 'ci', 'desktop-macos-ci-receipts', run.path],
+    ['macos', 'vm', 'desktop-macos-vm-receipts', vmRun.path],
+    ['windows', 'ci', 'desktop-windows-ci-receipts', run.path],
+    ['windows', 'vm', 'desktop-windows-vm-receipts', vmRun.path],
+  ] as const) {
+    const admitted = verifyDesktopReceiptProvenance(
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+      { ...run, path, head_sha: descendant },
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+      { ...artifact, name, workflow_run: { id: 123, head_sha: descendant } },
+      { environment, manifest: candidate, scope },
+    );
+    assert.equal(admitted.workflowCommit, descendant);
+  }
+  assert.throws(() =>
+    verifyDesktopReceiptProvenance(
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+      { ...run, head_sha: descendant },
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the external GitHub/AWS wire field exactly.
+      { ...artifact, workflow_run: { id: 123, head_sha: descendant } },
+      { environment: 'ci', manifest: candidate, scope: 'all' },
+    ),
+  );
+}
+// Only a Mac-only or Windows-only publication (either channel) may omit the clean-host VM run; every other omission
+// fails before any fetch.
+// The guard reads only the channel, so a production-labelled copy suffices without five-route fixtures.
+const production: typeof manifest = { ...manifest, channel: 'production' };
+for (const [candidate, scope] of [
+  [manifest, 'all'],
+  [manifest, undefined],
+  [manifest, 'linux'],
+  [production, 'all'],
+  [production, 'linux'],
+] as const) {
+  // oxlint-disable-next-line no-await-in-loop -- Each refusal is independent and must not reach the GitHub API.
+  await assert.rejects(
+    fetchDesktopQualifiedReceipts(candidate, '/nonexistent', { ci: '1', vm: undefined, ...(scope ? { scope } : {}) }),
+    /Clean-host VM acceptance run is required/u,
+  );
+}
+console.log('Trusted workflow and artifact provenance checks passed');
+
+// oxlint-disable-next-line no-restricted-imports -- Include the producer-to-publisher regression in this existing Nx target.
+await import('./qualification-binding.test.mjs');

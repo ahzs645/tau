@@ -4,15 +4,18 @@ import { useAuth, useResetPassword } from '@better-auth-ui/react';
 import { Eye, EyeOff } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { SyntheticEvent } from 'react';
+import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent, CardHeader, CardTitle } from '#components/ui/card.js';
-import { Field, FieldDescription, FieldError, FieldGroup } from '#components/ui/field.js';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '#components/ui/input-group.js';
-import { Spinner } from '#components/ui/spinner.js';
-import { cn } from '#utils/ui.utils.js';
-import { Label } from '#components/ui/label.js';
+import { Button } from '@taucad/ui/components/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@taucad/ui/components/card';
+import { Field, FieldDescription, FieldError, FieldGroup } from '@taucad/ui/components/field';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@taucad/ui/components/input-group';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
+import { cn } from '@taucad/ui/utils/cn';
+import { Label } from '@taucad/ui/components/label';
+import { passwordResetSignInState } from '#components/auth/sign-in.js';
+import { isDesktopTarget } from '#lib/build-target.js';
 
 export type ResetPasswordProps = {
   className?: string;
@@ -25,13 +28,25 @@ export type ResetPasswordProps = {
  *
  * @returns The password reset form UI ready to be mounted in the app layout.
  */
-export function ResetPassword({ className }: ResetPasswordProps) {
+export function ResetPassword({ className }: ResetPasswordProps): React.JSX.Element {
   const { authClient, basePaths, emailAndPassword, localization, viewPaths, navigate, Link } = useAuth();
+
+  const routerNavigate = useNavigate();
 
   const { mutate: resetPassword, isPending } = useResetPassword(authClient, {
     onSuccess: () => {
-      toast.success(localization.auth.passwordResetSuccess);
-      navigate({ to: `${basePaths.auth}/${viewPaths.auth.signIn}` });
+      const signInPath = `${basePaths.auth}/${viewPaths.auth.signIn}`;
+
+      // The desktop shell owns its sign-in, so a toast is the only confirmation that survives the hand-off.
+      if (isDesktopTarget()) {
+        toast.success(localization.auth.passwordResetSuccess);
+        navigate({ to: signInPath });
+        return;
+      }
+
+      // In the browser the sign-in view shows a lasting notice instead of a toast that is gone before the form is read.
+      // Replace the spent reset link so Back does not return to it.
+      void routerNavigate(signInPath, { replace: true, state: passwordResetSignInState });
     },
   });
 
@@ -53,8 +68,8 @@ export function ResetPassword({ className }: ResetPasswordProps) {
     }
   }, [basePaths.auth, localization.auth.invalidResetPasswordToken, viewPaths.auth.signIn, navigate]);
 
-  function handleSubmit(e: SyntheticEvent<HTMLFormElement>) {
-    e.preventDefault();
+  function handleSubmit(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
 
     const searchParams = new URLSearchParams(globalThis.location.search);
     const token = searchParams.get('token')!;
@@ -65,11 +80,11 @@ export function ResetPassword({ className }: ResetPasswordProps) {
       return;
     }
 
-    const formData = new FormData(e.currentTarget);
+    const formData = new FormData(event.currentTarget);
     const password = formData.get('password') as string;
     const confirmPassword = formData.get('confirmPassword') as string;
 
-    if (emailAndPassword?.confirmPassword && password !== confirmPassword) {
+    if (emailAndPassword.confirmPassword && password !== confirmPassword) {
       toast.error(localization.auth.passwordsDoNotMatch);
       return;
     }
@@ -80,7 +95,9 @@ export function ResetPassword({ className }: ResetPasswordProps) {
   return (
     <Card className={cn('w-full max-w-sm', className)}>
       <CardHeader>
-        <CardTitle className='text-xl font-semibold'>{localization.auth.resetPassword}</CardTitle>
+        <CardTitle level={1} variant='title'>
+          {localization.auth.resetPassword}
+        </CardTitle>
       </CardHeader>
 
       <CardContent>
@@ -97,8 +114,8 @@ export function ResetPassword({ className }: ResetPasswordProps) {
                   autoComplete='new-password'
                   placeholder={localization.auth.newPasswordPlaceholder}
                   required
-                  minLength={emailAndPassword?.minPasswordLength}
-                  maxLength={emailAndPassword?.maxPasswordLength}
+                  minLength={emailAndPassword.minPasswordLength}
+                  maxLength={emailAndPassword.maxPasswordLength}
                   disabled={isPending}
                   onChange={() => {
                     setFieldErrors((previous) => ({
@@ -106,12 +123,12 @@ export function ResetPassword({ className }: ResetPasswordProps) {
                       password: undefined,
                     }));
                   }}
-                  onInvalid={(e) => {
-                    e.preventDefault();
+                  onInvalid={(event) => {
+                    event.preventDefault();
 
                     setFieldErrors((previous) => ({
                       ...previous,
-                      password: (e.target as HTMLInputElement).validationMessage,
+                      password: (event.target as HTMLInputElement).validationMessage,
                     }));
                   }}
                   aria-invalid={Boolean(fieldErrors.password)}
@@ -133,7 +150,7 @@ export function ResetPassword({ className }: ResetPasswordProps) {
               <FieldError>{fieldErrors.password}</FieldError>
             </Field>
 
-            {emailAndPassword?.confirmPassword && (
+            {emailAndPassword.confirmPassword && (
               <Field data-invalid={Boolean(fieldErrors.confirmPassword)}>
                 <Label htmlFor='confirmPassword'>{localization.auth.confirmPassword}</Label>
 
@@ -145,8 +162,8 @@ export function ResetPassword({ className }: ResetPasswordProps) {
                     autoComplete='new-password'
                     placeholder={localization.auth.confirmPasswordPlaceholder}
                     required
-                    minLength={emailAndPassword?.minPasswordLength}
-                    maxLength={emailAndPassword?.maxPasswordLength}
+                    minLength={emailAndPassword.minPasswordLength}
+                    maxLength={emailAndPassword.maxPasswordLength}
                     disabled={isPending}
                     onChange={() => {
                       setFieldErrors((previous) => ({
@@ -154,12 +171,12 @@ export function ResetPassword({ className }: ResetPasswordProps) {
                         confirmPassword: undefined,
                       }));
                     }}
-                    onInvalid={(e) => {
-                      e.preventDefault();
+                    onInvalid={(event) => {
+                      event.preventDefault();
 
                       setFieldErrors((previous) => ({
                         ...previous,
-                        confirmPassword: (e.target as HTMLInputElement).validationMessage,
+                        confirmPassword: (event.target as HTMLInputElement).validationMessage,
                       }));
                     }}
                     aria-invalid={Boolean(fieldErrors.confirmPassword)}

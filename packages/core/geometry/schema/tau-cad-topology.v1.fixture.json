@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "id": "component:cover",
+      "name": "Cover",
+      "kind": "part",
+      "selector": "node/0",
+      "nodeIndex": 0,
+      "meshIndex": 0,
+      "primitiveRefs": [
+        { "nodeIndex": 0, "meshIndex": 0, "primitiveIndex": 0 },
+        { "nodeIndex": 0, "meshIndex": 0, "primitiveIndex": 1 }
+      ],
+      "faceGroups": [{ "start": 0, "count": 3, "faceId": 1 }],
+      "edgeGroups": [{ "start": 0, "count": 2, "edgeId": 1 }],
+      "capabilities": {
+        "hasPreciseTopology": true,
+        "exports": [{ "fidelity": "brep", "formats": ["step", "stp"], "available": true }]
+      }
+    },
+    {
+      "id": "component:lid",
+      "name": "Lid",
+      "kind": "part",
+      "selector": "node/1",
+      "nodeIndex": 1
+    }
+  ],
+  "mechanism": {
+    "schemaVersion": 1,
+    "units": { "length": "m", "angle": "deg" },
+    "root": "cover",
+    "links": {
+      "cover": { "components": ["component:cover"] },
+      "lid": { "components": ["component:lid"] }
+    },
+    "joints": {
+      "hinge": {
+        "type": "revolute",
+        "name": "Lid hinge",
+        "parent": "cover",
+        "child": "lid",
+        "origin": [0, 0.02, 0],
+        "axis": [1, 0, 0]
+      }
+    }
+  }
+}

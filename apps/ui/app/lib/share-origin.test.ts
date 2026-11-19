@@ -1,0 +1,64 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { authReturnOrigin, shareOrigin } from '#lib/share-origin.js';
+
+const clientEnvironment = globalThis.window.ENV;
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  globalThis.window.ENV = clientEnvironment;
+});
+
+describe('shareOrigin', () => {
+  it('should stay on the document origin on the web', () => {
+    expect(shareOrigin()).toBe(globalThis.location.origin);
+  });
+
+  it('should answer the web origin on desktop, where the document is app://tau', () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    globalThis.window.ENV = {
+      ...clientEnvironment,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- `window.ENV`'s keys are the deployment's own environment variable names.
+      TAU_FRONTEND_URL: 'https://tau.new/',
+    };
+
+    /* Nobody outside the app can open `app://tau/...`, which is what every
+       `location.origin`-derived link minted on desktop
+       (`docs/research/desktop-share-links-blueprint.md`, Finding 2). */
+    expect(shareOrigin()).toBe('https://tau.new');
+    expect(shareOrigin().startsWith('app://')).toBe(false);
+  });
+});
+
+describe('authReturnOrigin', () => {
+  it('should return to the page origin on the web, whatever TAU_FRONTEND_URL names', () => {
+    globalThis.window.ENV = {
+      ...clientEnvironment,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- `window.ENV`'s keys are the deployment's own environment variable names.
+      TAU_FRONTEND_URL: 'https://tau.new/',
+    };
+
+    expect(authReturnOrigin()).toBe(globalThis.location.origin);
+  });
+
+  it('should return to the web origin on desktop, where the document is app://tau', () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    globalThis.window.ENV = {
+      ...clientEnvironment,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- `window.ENV`'s keys are the deployment's own environment variable names.
+      TAU_FRONTEND_URL: 'https://tau.new/',
+    };
+
+    expect(authReturnOrigin()).toBe('https://tau.new');
+  });
+
+  it('should pass an unparseable frontend URL through on a server render instead of throwing', () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    globalThis.window.ENV = {
+      ...clientEnvironment,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- `window.ENV`'s keys are the deployment's own environment variable names.
+      TAU_FRONTEND_URL: '',
+    };
+
+    expect(authReturnOrigin()).toBe('');
+  });
+});

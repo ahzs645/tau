@@ -1,32 +1,49 @@
-import type { DynamicStructuredTool } from '@langchain/core/tools';
+import type { z } from 'zod';
+import type { toolExecutionErrorSchema } from '#schemas/tool-error.schema.js';
+import type { ArrangeWorkbenchInput, ArrangeWorkbenchOutput } from '#schemas/tools/arrange-workbench.tool.schema.js';
 import type { InferUITools, Tool as AiTool, UIToolInvocation } from 'ai';
 import type { toolName, toolMode } from '#constants/tool.constants.js';
 import type { EditFileInput, EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
-import type { TestModelOutput } from '@taucad/testing';
-import type { TestModelInput, EditTestsInput, EditTestsOutput } from '#schemas/tools/test-model.tool.schema.js';
+import type { TestModelInput, TestModelOutput } from '#schemas/tools/test-model.tool.schema.js';
 import type { WebBrowserInput, WebBrowserOutput } from '#schemas/tools/web-browser.tool.schema.js';
 import type { WebSearchInput, WebSearchOutput } from '#schemas/tools/web-search.tool.schema.js';
 import type { ReadFileInput, ReadFileOutput } from '#schemas/tools/read-file.tool.schema.js';
+import type { UseSkillInput, UseSkillOutput } from '#schemas/tools/use-skill.tool.schema.js';
 import type { ListDirectoryInput, ListDirectoryOutput } from '#schemas/tools/list-directory.tool.schema.js';
 import type { CreateFileInput, CreateFileOutput } from '#schemas/tools/create-file.tool.schema.js';
 import type { DeleteFileInput, DeleteFileOutput } from '#schemas/tools/delete-file.tool.schema.js';
 import type { GrepInput, GrepOutput } from '#schemas/tools/grep.tool.schema.js';
 import type { GlobSearchInput, GlobSearchOutput } from '#schemas/tools/glob-search.tool.schema.js';
-import type { GetKernelResultInput, GetKernelResultOutput } from '#schemas/tools/get-kernel-result.tool.schema.js';
-import type { ExportGeometryInput, ExportGeometryOutput } from '#schemas/tools/export-geometry.tool.schema.js';
+import type { EvaluateModelInput, EvaluateModelOutput } from '#schemas/tools/evaluate-model.tool.schema.js';
+import type { ExportModelInput, ExportModelOutput } from '#schemas/tools/export-model.tool.schema.js';
 import type { ScreenshotInput, ScreenshotOutput } from '#schemas/tools/screenshot.tool.schema.js';
+import type { RevisionsInput, RevisionsOutput } from '#schemas/tools/revisions.tool.schema.js';
+import type { UpdateTodosInput, UpdateTodosOutput } from '#schemas/tools/update-todos.tool.schema.js';
+import type { InstallPackagesInput, InstallPackagesOutput } from '#schemas/tools/install-packages.tool.schema.js';
+import type { AskQuestionsInput, AskQuestionsOutput } from '#schemas/tools/ask-questions.tool.schema.js';
 import type {
-  TransferToCadExpertInput,
-  TransferToCadExpertOutput,
-} from '#schemas/tools/transfer-to-cad-expert.tool.schema.js';
+  CheckJobInput,
+  CheckJobOutput,
+  GetMachineInput,
+  GetMachineOutput,
+  GetPrintProfilesInput,
+  GetPrintProfilesOutput,
+  ListMachinesInput,
+  ListMachinesOutput,
+  MachineActionInput,
+  MachineActionOutput,
+  RequestJobInput,
+  RequestJobOutput,
+  StopMachineInput,
+  StopMachineOutput,
+} from '#schemas/tools/machine.tool.schema.js';
+import type { ShellInput, ShellOutput } from '#schemas/tools/shell.tool.schema.js';
 import type {
-  TransferToResearchExpertInput,
-  TransferToResearchExpertOutput,
-} from '#schemas/tools/transfer-to-research-expert.tool.schema.js';
-import type {
-  TransferBackToSupervisorInput,
-  TransferBackToSupervisorOutput,
-} from '#schemas/tools/transfer-back-to-supervisor.tool.schema.js';
+  ApplyParameterOperationInput,
+  ApplyParameterOperationOutput,
+  GetParametersInput,
+  GetParametersOutput,
+} from '#schemas/tools/parameter.tool.schema.js';
 
 // =============================================================================
 // Tool Error Types
@@ -36,62 +53,33 @@ import type {
  * Structured error returned to LLM when tool execution times out.
  * @public
  */
-export type ToolTimeoutError = {
-  errorCode: 'TOOL_EXECUTION_TIMEOUT';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
+export type ToolTimeoutError = Extract<ToolExecutionError, { errorCode: 'TOOL_EXECUTION_TIMEOUT' }>;
 
 /**
  * Structured error returned to LLM when client disconnects during tool execution.
  * @public
  */
-export type ToolDisconnectedError = {
-  errorCode: 'CLIENT_DISCONNECTED';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
+export type ToolDisconnectedError = Extract<ToolExecutionError, { errorCode: 'CLIENT_DISCONNECTED' }>;
 
 /**
  * Structured error returned to LLM when no client is connected.
  * @public
  */
-export type ToolNoConnectionError = {
-  errorCode: 'NO_CLIENT_CONNECTION';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
+export type ToolNoConnectionError = Extract<ToolExecutionError, { errorCode: 'NO_CLIENT_CONNECTION' }>;
 
 /**
  * Structured validation error returned to LLM when tool input validation fails.
  * The LLM can use this information to understand what went wrong and potentially retry.
  * @public
  */
-export type ToolInputValidationError = {
-  errorCode: 'TOOL_INPUT_VALIDATION_FAILED';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-  validationErrors: Array<{ path: string; message: string }>;
-  rawOutput: unknown;
-};
+export type ToolInputValidationError = Extract<ToolExecutionError, { errorCode: 'TOOL_INPUT_VALIDATION_FAILED' }>;
 
 /**
  * Structured validation error returned to LLM when tool output validation fails.
  * The LLM can use this information to understand what went wrong and potentially retry.
  * @public
  */
-export type ToolOutputValidationError = {
-  errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-  validationErrors: Array<{ path: string; message: string }>;
-  rawOutput: unknown;
-};
+export type ToolOutputValidationError = Extract<ToolExecutionError, { errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED' }>;
 
 /**
  * Combined validation error type for both input and output validation failures.
@@ -104,36 +92,28 @@ export type ToolValidationError = ToolInputValidationError | ToolOutputValidatio
  * Used when a tool throws an error that doesn't fit other categories.
  * @public
  */
-export type ToolGenericExecutionError = {
-  errorCode: 'TOOL_EXECUTION_ERROR';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
+export type ToolGenericExecutionError = Extract<ToolExecutionError, { errorCode: 'TOOL_EXECUTION_ERROR' }>;
 
 /**
  * Structured error for when the user interrupts a tool mid-execution.
  * Used on both client (finalizeInterruptedToolParts) and server (orphaned tool call sanitizer).
  * @public
  */
-export type ToolUserInterruptedError = {
-  errorCode: 'USER_INTERRUPTED';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
+export type ToolUserInterruptedError = Extract<ToolExecutionError, { errorCode: 'USER_INTERRUPTED' }>;
 
 /**
  * Chat SSE/stream ended before the tool invocation could complete (non-transport
  * structured API failure). Distinct from {@link ToolDisconnectedError} (transport).
  * @public
  */
-export type ToolStreamError = {
-  errorCode: 'STREAM_ERROR';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
+export type ToolStreamError = Extract<ToolExecutionError, { errorCode: 'STREAM_ERROR' }>;
+
+/**
+ * Structured error for a streamed tool call whose input reached the UI but whose
+ * provider turn ended without a matching tool output.
+ * @public
+ */
+export type ToolOrphanedToolCallError = Extract<ToolExecutionError, { errorCode: 'ORPHANED_TOOL_CALL' }>;
 
 /**
  * Structured error for when a tool completes successfully but returns no results.
@@ -141,27 +121,14 @@ export type ToolStreamError = {
  * Treated as a recoverable, expected case rather than a failure.
  * @public
  */
-export type ToolNoResultsError = {
-  errorCode: 'TOOL_NO_RESULTS';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
+export type ToolNoResultsError = Extract<ToolExecutionError, { errorCode: 'TOOL_NO_RESULTS' }>;
 
 /**
  * All possible structured tool errors including validation errors.
  * These are returned to the LLM so it can reason about errors.
  * @public
  */
-export type ToolExecutionError =
-  | ToolTimeoutError
-  | ToolDisconnectedError
-  | ToolNoConnectionError
-  | ToolValidationError
-  | ToolGenericExecutionError
-  | ToolUserInterruptedError
-  | ToolStreamError
-  | ToolNoResultsError;
+export type ToolExecutionError = z.infer<typeof toolExecutionErrorSchema>;
 
 // =============================================================================
 // Tool Name Types
@@ -189,22 +156,34 @@ export type ToolSelection = ToolMode | ToolName[];
 /** @public */
 export type MyTools = InferUITools<{
   [toolName.editFile]: AiTool<EditFileInput, EditFileOutput>;
+  [toolName.arrangeWorkbench]: AiTool<ArrangeWorkbenchInput, ArrangeWorkbenchOutput>;
   [toolName.testModel]: AiTool<TestModelInput, TestModelOutput>;
-  [toolName.editTests]: AiTool<EditTestsInput, EditTestsOutput>;
   [toolName.webBrowser]: AiTool<WebBrowserInput, WebBrowserOutput>;
   [toolName.webSearch]: AiTool<WebSearchInput, WebSearchOutput>;
+  [toolName.useSkill]: AiTool<UseSkillInput, UseSkillOutput>;
   [toolName.readFile]: AiTool<ReadFileInput, ReadFileOutput>;
   [toolName.listDirectory]: AiTool<ListDirectoryInput, ListDirectoryOutput>;
   [toolName.createFile]: AiTool<CreateFileInput, CreateFileOutput>;
   [toolName.deleteFile]: AiTool<DeleteFileInput, DeleteFileOutput>;
   [toolName.grep]: AiTool<GrepInput, GrepOutput>;
   [toolName.globSearch]: AiTool<GlobSearchInput, GlobSearchOutput>;
-  [toolName.getKernelResult]: AiTool<GetKernelResultInput, GetKernelResultOutput>;
-  [toolName.exportGeometry]: AiTool<ExportGeometryInput, ExportGeometryOutput>;
+  [toolName.evaluateModel]: AiTool<EvaluateModelInput, EvaluateModelOutput>;
+  [toolName.exportModel]: AiTool<ExportModelInput, ExportModelOutput>;
   [toolName.screenshot]: AiTool<ScreenshotInput, ScreenshotOutput>;
-  [toolName.transferToCadExpert]: AiTool<TransferToCadExpertInput, TransferToCadExpertOutput>;
-  [toolName.transferToResearchExpert]: AiTool<TransferToResearchExpertInput, TransferToResearchExpertOutput>;
-  [toolName.transferBackToSupervisor]: AiTool<TransferBackToSupervisorInput, TransferBackToSupervisorOutput>;
+  [toolName.history]: AiTool<RevisionsInput, RevisionsOutput>;
+  [toolName.getParameters]: AiTool<GetParametersInput, GetParametersOutput>;
+  [toolName.applyParameterOperation]: AiTool<ApplyParameterOperationInput, ApplyParameterOperationOutput>;
+  [toolName.updateTodos]: AiTool<UpdateTodosInput, UpdateTodosOutput>;
+  [toolName.askQuestions]: AiTool<AskQuestionsInput, AskQuestionsOutput>;
+  [toolName.installPackages]: AiTool<InstallPackagesInput, InstallPackagesOutput>;
+  [toolName.listMachines]: AiTool<ListMachinesInput, ListMachinesOutput>;
+  [toolName.getMachine]: AiTool<GetMachineInput, GetMachineOutput>;
+  [toolName.machineAction]: AiTool<MachineActionInput, MachineActionOutput>;
+  [toolName.stopMachine]: AiTool<StopMachineInput, StopMachineOutput>;
+  [toolName.getPrintProfiles]: AiTool<GetPrintProfilesInput, GetPrintProfilesOutput>;
+  [toolName.requestJob]: AiTool<RequestJobInput, RequestJobOutput>;
+  [toolName.checkJob]: AiTool<CheckJobInput, CheckJobOutput>;
+  [toolName.shell]: AiTool<ShellInput, ShellOutput>;
 }>;
 
 /**
@@ -215,35 +194,3 @@ export type MyTools = InferUITools<{
  * @public
  */
 export type ToolInvocation<T extends keyof MyTools> = UIToolInvocation<MyTools[T]>;
-
-/**
- * A LangChain DynamicStructuredTool that can return either the success output
- * or a ToolExecutionError. This is used for all chat tools that communicate
- * with the client via WebSocket, where errors can occur during execution.
- *
- * @public
- * @template SchemaT - The Zod schema type for the tool input
- * @template SchemaOutputT - The parsed output type from the schema (usually z.infer<SchemaT>)
- * @template SchemaInputT - The input type to the schema (usually same as SchemaOutputT)
- * @template SuccessOutputT - The success output type of the tool
- * @template NameT - The literal string type of the tool name
- *
- * @example <caption>Defining a typed tool</caption>
- * ```typescript
- * import type { ChatTool } from '@taucad/chat';
- * import { z } from 'zod';
- *
- * const schema = z.object({ file: z.string() });
- * type Input = z.infer<typeof schema>;
- * type Output = { content: string };
- *
- * type MyTool = ChatTool<typeof schema, Input, Output, 'my_tool'>;
- * ```
- */
-export type ChatTool<
-  SchemaT,
-  SchemaOutputT,
-  SuccessOutputT,
-  NameT extends string,
-  SchemaInputT = SchemaOutputT,
-> = DynamicStructuredTool<SchemaT, SchemaOutputT, SchemaInputT, SuccessOutputT | ToolExecutionError, unknown, NameT>;

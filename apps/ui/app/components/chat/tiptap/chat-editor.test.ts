@@ -5,8 +5,11 @@ import { Paragraph } from '@tiptap/extension-paragraph';
 import { Text } from '@tiptap/extension-text';
 import { HardBreak } from '@tiptap/extension-hard-break';
 import { ContextChipNode } from '#components/chat/tiptap/context-chip-node.js';
-import { SubmitOnEnter } from '#components/chat/tiptap/submit-on-enter.js';
-import { SlashCommand } from '#components/chat/tiptap/slash-command-suggestion.js';
+import { SubmitOnEnter } from '@taucad/chat-ui/components/tiptap/submit-on-enter';
+import {
+  SlashCommand,
+  shouldAllowSlashCommandTrigger,
+} from '@taucad/chat-ui/components/tiptap/slash-command-suggestion';
 import { extractContent } from '#components/chat/tiptap/use-chat-editor.js';
 
 import type { Extensions } from '@tiptap/core';
@@ -52,10 +55,10 @@ describe('extractContent', () => {
             {
               type: 'contextChip',
               attrs: {
-                id: '/main.scad',
+                id: 'main.scad',
                 label: 'main.scad',
                 chipType: 'file',
-                path: '/main.scad',
+                path: 'main.scad',
               },
             },
           ],
@@ -65,10 +68,8 @@ describe('extractContent', () => {
 
     const result = extractContent(editor);
 
-    expect(result.text).toBe('@/main.scad');
-    expect(result.contextChips).toEqual([
-      { id: '/main.scad', label: 'main.scad', chipType: 'file', path: '/main.scad' },
-    ]);
+    expect(result.text).toBe('@main.scad');
+    expect(result.contextChips).toEqual([{ id: 'main.scad', label: 'main.scad', chipType: 'file', path: 'main.scad' }]);
 
     editor.destroy();
   });
@@ -84,7 +85,7 @@ describe('extractContent', () => {
             { type: 'text', text: 'Fix the bug in ' },
             {
               type: 'contextChip',
-              attrs: { id: '/src/app.ts', label: 'app.ts', chipType: 'file', path: '/src/app.ts' },
+              attrs: { id: 'src/app.ts', label: 'app.ts', chipType: 'file', path: 'src/app.ts' },
             },
             { type: 'text', text: ' please' },
           ],
@@ -94,13 +95,13 @@ describe('extractContent', () => {
 
     const result = extractContent(editor);
 
-    expect(result.text).toBe('Fix the bug in @/src/app.ts please');
+    expect(result.text).toBe('Fix the bug in @src/app.ts please');
     expect(result.contextChips).toHaveLength(1);
     expect(result.contextChips[0]).toEqual({
-      id: '/src/app.ts',
+      id: 'src/app.ts',
       label: 'app.ts',
       chipType: 'file',
-      path: '/src/app.ts',
+      path: 'src/app.ts',
     });
 
     editor.destroy();
@@ -122,7 +123,7 @@ describe('extractContent', () => {
             { type: 'text', text: ' and ' },
             {
               type: 'contextChip',
-              attrs: { id: '/src', label: 'src', chipType: 'folder', path: '/src' },
+              attrs: { id: 'src', label: 'src', chipType: 'folder', path: 'src' },
             },
           ],
         },
@@ -131,7 +132,7 @@ describe('extractContent', () => {
 
     const result = extractContent(editor);
 
-    expect(result.text).toBe('Look at Previous chat and @/src');
+    expect(result.text).toBe('Look at Previous chat and @src');
     expect(result.contextChips).toHaveLength(2);
     expect(result.contextChips[0]?.chipType).toBe('chat');
     expect(result.contextChips[1]?.chipType).toBe('folder');
@@ -202,10 +203,10 @@ describe('ContextChipNode serialization', () => {
             {
               type: 'contextChip',
               attrs: {
-                id: '/src/utils.ts',
+                id: 'src/utils.ts',
                 label: 'utils.ts',
                 chipType: 'file',
-                path: '/src/utils.ts',
+                path: 'src/utils.ts',
               },
             },
           ],
@@ -216,7 +217,7 @@ describe('ContextChipNode serialization', () => {
     const html = editor.getHTML();
     expect(html).toContain('data-type="context-chip"');
     expect(html).toContain('data-label="utils.ts"');
-    expect(html).toContain('data-id="/src/utils.ts"');
+    expect(html).toContain('data-id="src/utils.ts"');
 
     const editor2 = createTestEditor();
     editor2.commands.setContent(html);
@@ -224,10 +225,10 @@ describe('ContextChipNode serialization', () => {
     const result = extractContent(editor2);
     expect(result.contextChips).toHaveLength(1);
     expect(result.contextChips[0]).toEqual({
-      id: '/src/utils.ts',
+      id: 'src/utils.ts',
       label: 'utils.ts',
       chipType: 'file',
-      path: '/src/utils.ts',
+      path: 'src/utils.ts',
     });
 
     editor.destroy();
@@ -434,5 +435,33 @@ describe('skill chip insertion', () => {
 
     editor.destroy();
     editor2.destroy();
+  });
+});
+
+describe('slash command trigger boundaries', () => {
+  function expectSlashTrigger(content: string, expected: boolean) {
+    const editor = createTestEditor();
+    editor.commands.setContent(`<p>${content}</p>`);
+    const slashIndex = content.lastIndexOf('/');
+
+    expect(slashIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      shouldAllowSlashCommandTrigger({
+        state: editor.state,
+        range: { from: slashIndex + 1 },
+      }),
+    ).toBe(expected);
+
+    editor.destroy();
+  }
+
+  it('should allow slash commands at paragraph start and after whitespace', () => {
+    expectSlashTrigger('/', true);
+    expectSlashTrigger('design this /', true);
+  });
+
+  it('should not trigger slash command suggestions inside paths or words', () => {
+    expectSlashTrigger('src/foo/', false);
+    expectSlashTrigger('open/http/', false);
   });
 });

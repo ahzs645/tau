@@ -1,19 +1,21 @@
-import { supportedExportFormats } from '@taucad/converter/formats';
-import type { SupportedExportFormat } from '@taucad/converter/formats';
-import { Checkbox } from '#components/ui/checkbox.js';
-import { Label } from '#components/ui/label.js';
-import { Button } from '#components/ui/button.js';
+import { Heading } from '@taucad/ui/components/heading';
+import { Checkbox } from '@taucad/ui/components/checkbox';
+import { Label } from '@taucad/ui/components/label';
+import { Button } from '@taucad/ui/components/button';
 import { formatDisplayName } from '#components/geometry/converter/converter-utils.js';
+import type { ConverterExportFormat } from '@taucad/converter/runtime';
 
 type FormatSelectorProperties = {
-  readonly selectedFormats: SupportedExportFormat[];
-  readonly onFormatToggle: (format: SupportedExportFormat) => void;
+  readonly formats: readonly ConverterExportFormat[];
+  readonly selectedFormats: ConverterExportFormat[];
+  readonly onFormatToggle: (format: ConverterExportFormat) => void;
   readonly onClearSelection: () => void;
   readonly headingText?: string;
   readonly clearButtonText?: string;
 };
 
 export function FormatSelector({
+  formats,
   selectedFormats,
   onFormatToggle,
   onClearSelection,
@@ -23,7 +25,9 @@ export function FormatSelector({
   return (
     <div className='space-y-3'>
       <div className='flex min-h-7 flex-row items-center justify-between'>
-        <h3 className='text-sm font-medium'>{headingText}</h3>
+        <Heading level={3} variant='label'>
+          {headingText}
+        </Heading>
         {selectedFormats.length > 0 ? (
           <Button variant='ghost' size='xs' onClick={onClearSelection}>
             {clearButtonText}
@@ -31,7 +35,7 @@ export function FormatSelector({
         ) : undefined}
       </div>
       <div className='space-y-2'>
-        {supportedExportFormats.map((format) => {
+        {formats.map((format) => {
           const isChecked = selectedFormats.includes(format);
           const formatId = `format-${format}`;
 
@@ -46,7 +50,7 @@ export function FormatSelector({
               />
               <Label
                 htmlFor={formatId}
-                className='cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
+                className='cursor-action rounded-sm text-sm leading-none font-normal transition-colors peer-disabled:cursor-not-allowed peer-disabled:opacity-70 hover:bg-accent'
               >
                 {formatDisplayName(format)}
               </Label>

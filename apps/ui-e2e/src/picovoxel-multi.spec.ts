@@ -1,0 +1,87 @@
+/* oxlint-disable no-restricted-imports -- the exact-pin helper is the one runtime-e2e hashes with, and `apps/ui-e2e` has no manifest or path mapping to reach `@taucad/tau-examples` through, so its import is relative. */
+import { expect, inject, test } from 'vitest';
+import { page as selectors, server } from 'vitest/browser';
+import { base64ToUint8Array } from 'uint8array-extras';
+import * as target from '#support/external-target.js';
+// eslint-disable-next-line @nx/enforce-module-boundaries -- see the file header
+import { exactPinOf } from '../../../libs/tau-examples/src/exact-pin.ts';
+
+/*
+ * PicoVoxel in the browser (T2.9). With COOP/COEP the 'auto' wasm option serves the
+ * fast lane from the multi-threaded build, whose pthreads show up as `pico-multi`
+ * workers; without them it degrades to the serial build and says why. Either way
+ * the exact STL and GLB exports replay on the serial build and equal the DP18 pins.
+ */
+const fixtureRoute = '/__e2e/example-fixture?locator=picovoxel.sphere-minus-beams';
+const isolated = inject('crossOriginIsolation');
+
+const openCommand = async (name: string): Promise<void> => {
+  await target.click(selectors.getByRole('button', { name: 'Search', exact: true }));
+  await target.fill(selectors.getByPlaceholder('Search projects, chats, and actions…'), name);
+  await target.click(selectors.getByRole('option', { name: new RegExp(`^${name}(?:\\s|$)`, 'u') }));
+};
+
+test('renders PicoVoxel on the variant its isolation allows and exports the pinned exact STL and GLB', async () => {
+  const headers = await target.navigate(fixtureRoute);
+  if (isolated) {
+    expect(headers['cross-origin-opener-policy']).toBe('same-origin');
+    expect(headers['cross-origin-embedder-policy']).toBe('require-corp');
+    expect(headers['cross-origin-resource-policy']).toBe('same-origin');
+  }
+  expect(await target.evaluate(() => globalThis.crossOriginIsolated)).toBe(isolated);
+
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+/u, 60_000);
+  await target.expectVisible(selectors.getByTestId('cad-viewer-canvas-region').getByCss('canvas').first(), 120_000);
+  await target.click(selectors.getByRole('button', { name: /^decline$/iu }), { timeout: 5000 }).catch(() => undefined);
+  await target.expectGeometryFramed();
+
+  const variant = isolated ? 'multi' : 'serial';
+  await openCommand('Open console');
+  const log = selectors.getByRole('log', { name: 'Console logs for main.ts' });
+  await target.expectVisible(log, 60_000);
+  await target.expectVisible(log.getByText(`PicoVoxel fast-lane WASM variant: ${variant}`, { exact: false }), 60_000);
+  if (!isolated) {
+    await target.expectVisible(log.getByText('Cross-origin isolation degraded', { exact: false }), 60_000);
+  }
+  await target.expectCount(log.getByText('PICO_WASM_INIT_FAILED', { exact: false }), 0);
+
+  // Only Chromium reports the kernel worker's nested pthread workers to Playwright.
+  if (server.browser === 'chromium') {
+    const pthreads = await target.workers('pico-multi');
+    if (isolated) {
+      expect(pthreads.length).toBeGreaterThan(1);
+    } else {
+      expect(pthreads).toHaveLength(0);
+    }
+  }
+
+  await openCommand('Export');
+  const panel = selectors.getByCss('[data-slot="export-panel-body"]');
+  await target.expectVisible(panel, 15_000);
+  // One format at a time since a2045069e (#1700): pick it in the format combobox, then export that file.
+  const exportExact = async (format: 'stl' | 'glb'): Promise<ReturnType<typeof base64ToUint8Array>> => {
+    const picker = panel.getByRole('button', { name: 'Export format' });
+    await target.expectVisible(picker, 15_000);
+    await target.click(picker);
+    await target.click(selectors.getByCss(`[cmdk-item][data-value="${format}"]`));
+    const file = await target.download(panel.getByRole('button', { name: new RegExp(`^Export ${format}$`, 'iu') }));
+    expect(file.suggestedFilename).toMatch(new RegExp(`\\.${format}$`, 'u'));
+    return base64ToUint8Array(file.base64);
+  };
+  // The helper runtime-e2e hashes with too: a GLB's generator version is normalized out of its pin.
+  const pinOf = async (format: 'stl' | 'glb', bytes: ReturnType<typeof base64ToUint8Array>) => {
+    const pin = await exactPinOf(format, bytes);
+    await target.writeArtifact(`picovoxel-exact-${format}-${server.browser}.sha256`, `${pin.sha256}  ${pin.bytes}\n`);
+    return pin;
+  };
+  const pins = inject('picovoxelExactPins');
+
+  const stl = await exportExact('stl');
+  const header = new TextDecoder().decode(stl.subarray(0, 80)).replace(/[\0 ]+$/u, '');
+  expect(header).toBe('PicoGK UNITS=mm');
+  // DP18: the exact bytes are the serial build's in every host, so they equal the pins a Node
+  // serial export of the same example asserts in runtime-e2e. The GLB adds normals computed in
+  // JavaScript with the correctly rounded `Math.sqrt`, so they match across engines too.
+  expect(await pinOf('stl', stl)).toEqual(pins.stl);
+  expect(await pinOf('glb', await exportExact('glb'))).toEqual(pins.glb);
+});

@@ -1,0 +1,47 @@
+import { expectTypeOf, it, describe } from 'vitest';
+import type { ExportFile, FileStat, FileStatEntry, FileTreeEntry, StatContentMetadata } from '#types/file.types.js';
+import type { MediaType, MimeType } from '#types/mime-types.types.js';
+
+describe('open export media types', () => {
+  it('retains known MIME literals while admitting new media types', () => {
+    expectTypeOf<MimeType>().toExtend<MediaType>();
+    expectTypeOf<'model/gltf-binary'>().toExtend<MediaType>();
+    expectTypeOf<'application/vnd.example.cad'>().toExtend<MediaType>();
+    const file: ExportFile = {
+      name: 'part.cad',
+      bytes: new Uint8Array(),
+      mimeType: 'application/vnd.example.cad',
+    };
+    expectTypeOf(file.mimeType).toEqualTypeOf<MediaType>();
+  });
+});
+
+describe('FileStat', () => {
+  it('is a readonly object type for stat results', () => {
+    expectTypeOf<FileStat['type']>().toEqualTypeOf<'file' | 'dir'>();
+    expectTypeOf<FileStat['size']>().toEqualTypeOf<number>();
+    expectTypeOf<FileStat['mtimeMs']>().toEqualTypeOf<number>();
+  });
+
+  it('carries content facts only when known (I3)', () => {
+    expectTypeOf<{ type: 'file'; size: 1; mtimeMs: 0 }>().toExtend<FileStat>();
+    expectTypeOf<Extract<FileStat, { type: 'file' }>['lineCount']>().toEqualTypeOf<number | undefined>();
+  });
+
+  it('forbids line counts for binary file stats', () => {
+    expectTypeOf<Extract<FileStat, { type: 'file'; contentKind: 'binary' }>['lineCount']>().toEqualTypeOf<undefined>();
+  });
+});
+
+describe('FileStatEntry', () => {
+  it('extends FileStat with path and name', () => {
+    expectTypeOf<FileStatEntry>().toExtend<FileStat & { path: string; name: string }>();
+  });
+});
+
+describe('FileTreeEntry', () => {
+  it('carries a classification and line count only when known (I3)', () => {
+    expectTypeOf<Extract<FileTreeEntry, { type: 'file' }>>().toExtend<StatContentMetadata>();
+    expectTypeOf<{ path: string; name: string; type: 'file'; size: number }>().toExtend<FileTreeEntry>();
+  });
+});

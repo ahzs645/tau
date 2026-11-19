@@ -1,125 +1,89 @@
+import { useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import type { SetURLSearchParams } from 'react-router';
-
-export type SettingsSection =
-  | 'general'
-  | 'filesystem'
-  | 'account'
-  | 'security'
-  | 'api-keys'
-  | 'billing'
-  | 'models'
-  | 'agents'
-  | 'experimental';
-
-const validSections = new Set<string>([
-  'general',
-  'filesystem',
-  'account',
-  'security',
-  'api-keys',
-  'billing',
-  'models',
-  'agents',
-  'experimental',
-]);
-
-type SettingsDialogState = {
-  readonly isOpen: boolean;
-  readonly section: SettingsSection;
-};
+import { z } from 'zod';
+import { useDeploymentMode } from '#cloud/use-deployment-mode.js';
+import type { SettingId } from '@taucad/settings-ui/components/settings/settings-catalogue';
+import { settingsSectionSchema } from '@taucad/settings-ui/components/settings/settings-section';
+import type { SettingsSection } from '@taucad/settings-ui/components/settings/settings-section';
+import { searchParameterName } from '@taucad/ui-core/constants/search-parameter.constants';
+import { enumParameter, stringParameter } from '@taucad/ui-core/utils/search-parameter.codecs';
 
 const defaultSection: SettingsSection = 'general';
 
 /**
- * Module-level reference to the latest `setSearchParams` from React Router.
- * Updated on every render of `useSettingsDialog()` so that imperative
- * functions (`openSettingsDialog`, `closeSettingsDialog`, etc.) can
- * manipulate the URL outside of React component context.
+ * `''` is the closed dialog. The codec's fallback is the absent parameter, so
+ * the closed state has to be a value that is *not* a section — otherwise
+ * `open('general')` would serialize to the fallback and delete the parameter it
+ * just wrote.
  */
-let setSearchParametersRef: SetURLSearchParams | undefined;
+const settingsParameter = enumParameter<SettingsSection | ''>(z.union([settingsSectionSchema, z.literal('')]), '');
+const targetParameter = stringParameter();
 
-function isValidSection(value: string): value is SettingsSection {
-  return validSections.has(value);
-}
+type SettingsDialogState = {
+  readonly isOpen: boolean;
+  readonly section: SettingsSection;
+  /** The setting the dialog should reveal in `section`, when one was asked for. */
+  readonly target: string | undefined;
+  /** Opens the dialog, on `section` when given, revealing the `target` setting when given. */
+  readonly open: (section?: SettingsSection, target?: SettingId) => void;
+  /** Closes the dialog by deleting its parameters. */
+  readonly close: () => void;
+};
 
 /**
- * Opens the settings dialog, optionally navigating to a specific section.
- * Safe to call from event handlers outside React components.
- */
-export function openSettingsDialog(section?: SettingsSection): void {
-  if (!setSearchParametersRef) {
-    return;
-  }
-
-  setSearchParametersRef(
-    (previous) => {
-      const next = new URLSearchParams(previous);
-      next.set('settings', section ?? defaultSection);
-      return next;
-    },
-    { replace: true },
-  );
-}
-
-/**
- * Closes the settings dialog by removing the `?settings` param.
- * Safe to call from event handlers outside React components.
- */
-export function closeSettingsDialog(): void {
-  if (!setSearchParametersRef) {
-    return;
-  }
-
-  setSearchParametersRef(
-    (previous) => {
-      const next = new URLSearchParams(previous);
-      next.delete('settings');
-      return next;
-    },
-    { replace: true },
-  );
-}
-
-/**
- * Sets the active section within the settings dialog.
- * Safe to call from event handlers outside React components.
- */
-export function setSettingsSection(section: SettingsSection): void {
-  if (!setSearchParametersRef) {
-    return;
-  }
-
-  setSearchParametersRef(
-    (previous) => {
-      const next = new URLSearchParams(previous);
-      next.set('settings', section);
-      return next;
-    },
-    { replace: true },
-  );
-}
-
-/**
- * Hook to observe the settings dialog state, derived from the
- * `?settings=<section>` URL search parameter.
+ * Settings dialog state, held in `?settings=<section>` and, for a deep link to
+ * one control, `&setting=<id>`.
  *
- * Must be rendered inside a React Router context. Stores the
- * `setSearchParams` reference for imperative access by the
- * exported helper functions.
+ * Must be called inside a React Router context. It replaces rather than pushes:
+ * Back should leave the surface behind the dialog, not step through sections.
+ * Both parameters are written in one `setSearchParams`, since two setters in
+ * the same tick would overwrite each other.
+ *
+ * @returns Whether the dialog is open, its section and target, and the open/close writers.
  */
 export function useSettingsDialog(): SettingsDialogState {
   const [searchParameters, setSearchParameters] = useSearchParams();
-
-  // Keep the module-level ref in sync so imperative callers work
-  setSearchParametersRef = setSearchParameters;
-
-  const rawSection = searchParameters.get('settings');
-
-  if (rawSection === null) {
-    return { isOpen: false, section: defaultSection };
-  }
-
-  const section = isValidSection(rawSection) ? rawSection : defaultSection;
-  return { isOpen: true, section };
+  const value = settingsParameter.parse(searchParameters.get(searchParameterName.settings) ?? undefined);
+  const target = targetParameter.parse(searchParameters.get(searchParameterName.settingsTarget) ?? undefined);
+  const mode = useDeploymentMode();
+  /* One object per setter identity. React Router renews `setSearchParams` on
+   * every URL change, so these are stable between navigations but not across
+   * them — fine for handlers, not for an effect that must outlive its write. */
+  const actions = useMemo(() => {
+    const write = (section: SettingsSection | '', nextTarget: string): void => {
+      setSearchParameters(
+        (previous) => {
+          const next = new URLSearchParams(previous);
+          for (const [name, serialized] of [
+            [searchParameterName.settings, settingsParameter.serialize(section)],
+            [searchParameterName.settingsTarget, targetParameter.serialize(nextTarget)],
+          ] as const) {
+            if (serialized === undefined) {
+              next.delete(name);
+            } else {
+              next.set(name, serialized);
+            }
+          }
+          return next;
+        },
+        { replace: true },
+      );
+    };
+    return {
+      open: (next?: SettingsSection, nextTarget?: SettingId): void => {
+        write(next ?? defaultSection, nextTarget ?? '');
+      },
+      close: (): void => {
+        write('', '');
+      },
+    };
+  }, [setSearchParameters]);
+  return {
+    isOpen: value !== '',
+    /* `?settings=billing` falls back only once the mode is known unfunded; while it is unknown the link keeps Billing,
+     * whose content says it is checking (adaptive app deployment mode BA19). */
+    section: value === '' || (value === 'billing' && mode.state === 'unfunded') ? defaultSection : value,
+    target: value === '' || target === '' ? undefined : target,
+    ...actions,
+  };
 }

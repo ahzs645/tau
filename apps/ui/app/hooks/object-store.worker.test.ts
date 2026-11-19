@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat } from '@taucad/chat';
+import { defaultPanelState } from '@taucad/ui-core/constants/editor.constants';
 import { pickDuplicatedFocusedChatId } from '#hooks/object-store.worker.js';
+import { mergePanelState } from '@taucad/ui-core/utils/panel-state.utils';
 
 function makeChat(overrides: Partial<Chat> & { id: string; updatedAt: number }): Chat {
   return {
@@ -16,8 +18,8 @@ describe('pickDuplicatedFocusedChatId', () => {
   it('returns undefined when no chats were cloned (caller skips the editor-state write)', () => {
     expect(
       pickDuplicatedFocusedChatId({
-        sourceFocusedChatId: 'chat_source',
-        chatIdMapping: { chat_source: 'chat_clone' },
+        sourceFocusedChatId: 'chatSource',
+        chatIdMapping: { chatSource: 'chat_clone' },
         clonedChats: [],
       }),
     ).toBeUndefined();
@@ -30,18 +32,18 @@ describe('pickDuplicatedFocusedChatId', () => {
     ];
     expect(
       pickDuplicatedFocusedChatId({
-        sourceFocusedChatId: 'chat_a_source',
-        chatIdMapping: { chat_a_source: 'chat_a_clone', chat_b_source: 'chat_b_clone' },
+        sourceFocusedChatId: 'sourceChatOne',
+        chatIdMapping: { sourceChatOne: 'chat_a_clone', sourceChatTwo: 'chat_b_clone' },
         clonedChats,
       }),
     ).toBe('chat_a_clone');
   });
 
-  it('falls back to the most-recently-updated cloned chat when source has no focused chat', () => {
+  it('falls back to the most-recently-active cloned chat when source has no focused chat', () => {
     const clonedChats = [
-      makeChat({ id: 'chat_old', updatedAt: 1 }),
-      makeChat({ id: 'chat_recent', updatedAt: 999 }),
-      makeChat({ id: 'chat_mid', updatedAt: 500 }),
+      makeChat({ id: 'chat_old', updatedAt: 999, recencyAt: 1 }),
+      makeChat({ id: 'chat_recent', updatedAt: 1, recencyAt: 999 }),
+      makeChat({ id: 'chat_mid', updatedAt: 500, recencyAt: 500 }),
     ];
     expect(
       pickDuplicatedFocusedChatId({
@@ -64,9 +66,28 @@ describe('pickDuplicatedFocusedChatId', () => {
     expect(
       pickDuplicatedFocusedChatId({
         sourceFocusedChatId: 'chat_already_deleted',
-        chatIdMapping: { chat_other: 'chat_first_clone' },
+        chatIdMapping: { chatOther: 'chat_first_clone' },
         clonedChats,
       }),
     ).toBe('chat_last_clone');
+  });
+});
+
+describe('mergePanelState', () => {
+  it('adds Paneview defaults to older state while preserving supplied entries', () => {
+    expect(
+      mergePanelState(defaultPanelState, {
+        kernelPaneview: { main: { isExpanded: false, size: 120 } },
+        modelPaneview: { helper: { isExpanded: true, size: 200 } },
+        consolePaneview: { main: { isExpanded: true, size: 160 } },
+      }),
+    ).toMatchObject({
+      kernelPaneview: { main: { isExpanded: false, size: 120 } },
+      modelPaneview: { helper: { isExpanded: true, size: 200 } },
+      parametersPaneview: {},
+      consolePaneview: { main: { isExpanded: true, size: 160 } },
+    });
+
+    expect(mergePanelState(defaultPanelState, { kernelPaneview: {} })).toMatchObject({ modelPaneview: {} });
   });
 });

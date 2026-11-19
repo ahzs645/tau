@@ -1,0 +1,126 @@
+/**
+ * @typedef {import('eslint').Rule.RuleModule} RuleModule
+ */
+
+/**
+ * Revisions policy Rule 1 bans checkout, lease, backend, worktree, ref and HEAD as product
+ * vocabulary.
+ *
+ * The History, Versions and Branch Graph blueprint (C8, M4) adds remote, head in any case, line,
+ * linked and host: a toast says GitHub, branch, or "Git host", never the model underneath.
+ * "Git host" is the one product phrase that keeps "host" (copy table, Backup).
+ *
+ * The always-on sync charter retired a second list (W14): the detached checkout's words
+ * (`detached`, `Return to latest`, `Viewing Rev N`, `viewing an older revision`), the four
+ * phrasings `Needs your decision` replaced (`Needs resolution`, `Changes need review`), raw
+ * `conflicts/…` and `sync/<remote>` line names, raw actor ids (`user_…`, `anon:`, a bare
+ * `agent`) and the op log's `ops`.
+ *
+ * UX policy Rule 13 names the cloud as a thing, not a product: product copy says "the cloud" and
+ * "Cloud link", never "Tau Cloud" (cloud and account naming blueprint, N2).
+ */
+const BANNED_PATTERNS = [
+  /\b(?:checkouts?|lease[sd]?|backends?|worktrees?|refs?)\b/iu,
+  /\bheads?\b/iu,
+  /\bremotes?\b/iu,
+  /\blines?\b/iu,
+  /\blinked\b/iu,
+  /\b(?<!git )hosts?\b/iu,
+  /\bdetached\b/iu,
+  /\breturn to latest\b/iu,
+  /\bviewing (?:rev \d+|an older revision)/iu,
+  /\bneeds resolution\b/iu,
+  /\bchanges need review\b/iu,
+  /\b(?:conflicts|sync)\/[\w.-]+/u,
+  /\buser_\w+/u,
+  /\banon:/u,
+  /\bops\b/iu,
+  /\bTau Cloud\b/u,
+];
+
+/** Property names inside a toast options object that a person reads. */
+const COPY_PROPERTIES = new Set(['title', 'description']);
+
+const bannedWord = (text) => {
+  /* A raw actor id `agent` is the whole string; "Tau agent" and "agent turn" are product words. */
+  if (text.trim() === 'agent') {
+    return 'agent';
+  }
+  for (const pattern of BANNED_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match !== null) {
+      return match[0];
+    }
+  }
+  return undefined;
+};
+
+/** `toast.error(…)` and the bare `toast(…)` the repo also uses. */
+const isToastCall = (node) =>
+  (node.callee.type === 'Identifier' && node.callee.name === 'toast') ||
+  (node.callee.type === 'MemberExpression' &&
+    node.callee.object.type === 'Identifier' &&
+    node.callee.object.name === 'toast');
+
+const propertyName = (node) => {
+  if (node.key.type === 'Identifier' && !node.computed) {
+    return node.key.name;
+  }
+  return node.key.type === 'Literal' && typeof node.key.value === 'string' ? node.key.value : undefined;
+};
+
+/** @type {RuleModule} */
+export const noEngineeringVocabularyInCopyRule = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description: 'Flag revisions-policy Rule 1 engineering vocabulary in user-facing toast copy.',
+    },
+    messages: {
+      violation:
+        '"{{word}}" is engineering vocabulary. Revisions policy Rule 1 bans checkout, lease, backend, worktree, ref, head, remote, line, linked and host in product copy, and the always-on sync charter retired detached, Return to latest, Viewing Rev N, Needs resolution, Changes need review, raw line names, actor ids and ops; UX policy Rule 13 retired "Tau Cloud" in product copy — say History, Branch, Current, Restore, Switch, Merge, Close, Back up, GitHub, Git host, the cloud or Needs your decision instead.',
+    },
+    schema: [],
+  },
+  create(context) {
+    /*
+     * Only literal copy authored at the toast call site is checkable here; a message that arrives
+     * as a variable is a refusal `code` phrased by the page's code → copy table (P4), not a string
+     * this rule can trace.
+     */
+    const checkCopy = (node) => {
+      /** One report per authored string: the first banned word is enough to send it back. */
+      let text;
+      if (node.type === 'Literal' && typeof node.value === 'string') {
+        text = node.value;
+      } else if (node.type === 'TemplateLiteral') {
+        text = node.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join(' ');
+      } else {
+        return;
+      }
+      const word = bannedWord(text);
+      if (word !== undefined) {
+        context.report({ node, messageId: 'violation', data: { word } });
+      }
+    };
+
+    return {
+      CallExpression(node) {
+        if (!isToastCall(node)) {
+          return;
+        }
+        for (const argument of node.arguments) {
+          if (argument.type === 'ObjectExpression') {
+            for (const property of argument.properties) {
+              if (property.type === 'Property' && COPY_PROPERTIES.has(propertyName(property))) {
+                checkCopy(property.value);
+              }
+            }
+            continue;
+          }
+          checkCopy(argument);
+        }
+      },
+    };
+  },
+};

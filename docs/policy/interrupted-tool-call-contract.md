@@ -1,145 +1,94 @@
 ---
 title: 'Interrupted Tool-Call Contract Policy'
-description: 'Schema and provider-adapter rules for tool parts left in output-error after a user interrupt'
+description: 'Durable rules for partial, interrupted, denied, and disconnected tool calls across UI messages and portable agent events'
 status: active
 created: '2026-04-23'
-updated: '2026-04-23'
+updated: '2026-09-28'
 related:
   - docs/research/interrupted-tool-call-validation-failure.md
+  - docs/research/google-cancel-followup-stale-tool-part-validation.md
+  - docs/research/ui-message-schema-type-safety.md
   - docs/policy/testing-policy.md
   - docs/policy/cross-provider-content-contract.md
 ---
 
 # Interrupted Tool-Call Contract Policy
 
-Internal reference for how the API must model, validate, and downstream-adapt tool calls that the user interrupted before the tool's `input` finished streaming.
-
-## Rationale
-
-When a user clicks "Stop" mid-stream, the AI SDK leaves the open tool part in `output-error` with the partially-streamed `input` it managed to assemble. Treating that partial value as if it satisfied the tool's strict input schema cascades into a class of bugs we've hit in prod: `Validation failed: messages.N.parts.M: Invalid input` on every resubmission, the chat is permanently wedged, and the user has no way out except deleting the chat. The investigation in `docs/research/interrupted-tool-call-validation-failure.md` traced the failure to two seams the API owns: (a) the wire-level Zod schema that gates `/v1/chat`, and (b) the provider-adapter pipeline that pairs orphaned tool calls with synthetic tool results. This policy codifies the contract both seams must honor so the failure mode cannot recur.
-
-The fix is intentionally API-only. The client-side persistence shape is whatever the AI SDK produces — the API must accept any shape the SDK can emit and downstream-adapt it for every supported provider. No client-side healing is required because (1) the `output-error` UI render path reads only `errorText`, never `input`, so partial / forensic local state is harmless to display, and (2) the API healing covers IndexedDB-resident chats, future Tau clients (CLI, SDKs), and any third-party caller equally. Pushing healing into the client would re-implement the API's responsibility in every consumer.
+Tau represents a tool call as durable lifecycle evidence. A stopped UI stream or disconnected host must settle every historical call before another model turn, while preserving enough input and identity to audit or safely retry the work.
 
 ## Rules
 
-### 1. `output-error` Tool Parts Are Forensic
+### 1. Normalize persisted UI history at the trust boundary
 
-A tool part in `state: 'output-error'` carries diagnostic context, not a contractually valid tool invocation. The strict per-tool input schema does not apply to it.
+Use `uiMessagesSchema` in `libs/chat/src/schemas/message.schema.ts` for untrusted or persisted UI messages. An assistant tool part in `input-streaming` or `input-available` becomes a historical interruption only when a later user message proves it is no longer the live tail.
 
-**Why**: A user interrupt by definition prevents the LLM from completing the input — locking it to the strict schema converts every interrupt into an unrecoverable validation failure.
+Canonicalize that historical part to `output-error` with structured `USER_INTERRUPTED` metadata before strict static-tool validation. A current tail may remain in progress.
 
-CORRECT:
+### 2. Validate input according to lifecycle state
 
-```typescript
-z.object({
-  type: z.literal('tool-read_file'),
-  toolCallId: z.string(),
-  state: z.literal('output-error'),
-  input: z.unknown().optional(),
-  rawInput: z.unknown().optional(),
-  errorText: z.string(),
-});
-```
+For registered static tools:
 
-INCORRECT:
+- `input-streaming` accepts partial typed input or no input;
+- `input-available`, approval states, `output-available`, and `output-denied` require complete typed input;
+- `output-error` may preserve malformed or partial input in `rawInput` while clearing canonical `input`.
 
-```typescript
-z.object({
-  type: z.literal('tool-read_file'),
-  toolCallId: z.string(),
-  state: z.literal('output-error'),
-  input: readFileInputSchema,
-  errorText: z.string(),
-});
-```
+Dynamic-tool input remains unknown. Never apply the static registry to dynamic parts. Approval input that no longer satisfies its schema must fail validation; do not erase the input and thereby change the approval meaning.
 
-### 2. `rawInput` Is the Canonical Field for Partial / Forensic Arguments
+### 3. Preserve forensic input and stable identity
 
-`rawInput: z.unknown().optional()` is present on every tool state (not only `output-error`) so future SDK upgrades that surface forensics in other states do not require another schema change. Server-side adapters (`convertToModelMessages`, `toBaseMessages`) fall back to `rawInput` when the model needs to see what was attempted.
+Use `rawInput` as the lossless channel for partial, malformed, or provider-native arguments. Keep the tool-call ID and tool name stable through validation, interruption, persistence, transport, and replay.
 
-**Why**: Splitting forensic data into a dedicated field keeps `input` bound to the strict per-tool contract everywhere it is contractually meaningful, and matches the upstream AI SDK's `output-error` model.
+Do not turn a partial call into a new call merely to make validation pass.
 
-### 3. Heal Inbound Payloads in `z.preprocess`
+### 4. Finalize only the interrupted UI tail
 
-`uiMessagesSchema` wraps the strict per-part schema in a `z.preprocess` (`healInterruptedToolParts`) that walks every `output-error` tool part, runs its `input` against the static tool-input registry, and (only on `safeParse` failure) demotes the offending value to `rawInput` before validation continues.
+`finalizeInterruptedToolParts` in `apps/ui/app/utils/chat.utils.ts` may settle in-progress parts only on the interrupted assistant tail. For a live UI tail, consult `RpcLedger` before assigning an error; for a transcript rebuilt from a terminal host log, use that log's input and output rows as authority. Preserve an output already recorded by either source.
 
-**Why**: Persisted IndexedDB chats authored before this contract existed must keep loading. Healing inside `z.preprocess` recovers them without bypassing schema discipline downstream. Because healing runs at the API boundary, it covers every caller (web client, CLI, future SDKs, third-party integrations) without requiring each to ship its own sanitizer.
+Map stop, preemption, disconnect, and failure causes to their explicit structured termination code. Derive the finalized display tail from the host log; never persist a second UI-message transcript. A follow-up that depends on a tool outcome waits for the host's durable recovery or settlement.
 
-CORRECT:
+### 5. Treat the host event log as durable authority
 
-```typescript
-const healInterruptedToolParts = (input: unknown): unknown => {
-  // walk parts, demote invalid `input` to `rawInput`
-};
-export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z.preprocess(healInterruptedToolParts, rawUiMessagesSchema);
-```
+Portable-host tool input and output events form the canonical execution pair. On reattach or resume, derive pending calls from the whole event log rather than the currently rendered UI suffix.
 
-INCORRECT — applying the demotion via a transform on a strict schema runs validation first, so the legacy payload still 400s:
+When a client disconnect leaves an input without output, `TauAgentHost` must append exactly one synthetic `CLIENT_DISCONNECTED` output for that call before continuing. Repeated recovery must be idempotent.
 
-```typescript
-export const uiMessagesSchema = rawUiMessagesSchema.transform(healInterruptedToolParts);
-```
+### 6. Remind the model to verify uncertain side effects
 
-### 4. Tool-Input Schema Registry Is the Single Source of Truth
+After synthesizing disconnected outputs, inject the stable one-time recovery reminder from `packages/agent-host/src/harness/interrupt-recovery.ts`. The reminder must tell the model that a tool may have completed and that state should be verified before retrying a side effect.
 
-`libs/chat/src/schemas/tool-input.registry.ts` exports a `Record<`tool-${ToolName}`, z.ZodType>` keyed by static tool part type. The healing preprocess looks up each part's schema there. Adding a new tool means adding an entry; the `Record` shape produces a TypeScript error until exhaustive.
+Do not claim that an interrupted tool definitely did or did not execute when the host lacks evidence.
 
-**Why**: An inline switch inside `message.schema.ts` would silently drift the moment a new tool is added. The compile-time exhaustiveness check makes drift impossible.
+### 7. Preserve approval and denial as first-class outcomes
 
-### 5. Provider Adapters Must Accept Synthetic Tool Results
+Approval requests, approval responses, denials, aborts, and transport loss are distinct records. Do not flatten them into generic error text. Resume only from a durable approval or interruption record that matches the original tool-call ID.
 
-The Anthropic, Vertex, and OpenAI wire formats all require every `tool_use` / `functionCall` / `tool_calls` to be followed by a corresponding tool result. `messageContentSanitizerMiddleware` is the only authority that synthesises a `ToolMessage` for orphaned tool calls; the synthetic message must include:
+### 8. Keep display repair separate from execution replay
 
-- `tool_call_id` matching the original call
-- `name` set to the tool name
-- `status: 'error'`
-- A JSON `content` body of `{ errorCode, toolName, toolCallId, message }`
+UI finalization repairs presentation and persisted UI-message compatibility. Host recovery repairs the portable execution log. Neither layer may invoke the tool as a side effect of normalization.
 
-**Why**: Skipping this pairing causes the provider to 400 with "tool call without matching tool result", which is the wire-level failure mode the original investigation surfaced.
+### 9. Test boundary and recovery behavior
 
-### 6. Mirror the Full AI SDK Tool-Part Lifecycle
+Tests must cover active-tail acceptance, historical canonicalization, invalid static approval input, dynamic input, settled-ledger preservation, disconnect output synthesis, idempotent recovery, and the one-time verification reminder.
 
-`uiMessagesSchema` accepts every state the upstream `validateUIMessages` schema accepts, including `approval-requested`, `approval-responded`, and `output-denied`, for both static and dynamic tool parts.
+Assert typed structures and stable IDs. Do not rely only on display strings or snapshots.
 
-**Why**: Drifting from the upstream contract means any future tool that opts into approval UI re-introduces the same class of "valid AI SDK message blocked at our schema" wedge.
+### 10. Recall a native approval by its key (D5)
 
-### 7. Append, Never Overwrite, on Schema Evolution
+A Tau host's tool that asks for approval pauses the run on a native `interrupt.recorded` request. The asking call's output records the pause, not the answer, and the continued attempt's model issues a new call. Rule 7 applies with these bounds:
 
-When a new tool state, error metadata field, or wire-level field appears in the AI SDK or a provider, it is added to `uiMessagesSchema` as a new branch or `.optional()` field. Never narrow an existing field, never split a state into multiple incompatible branches without a healer, and never ship a schema change that would 400 a chat that previously parsed.
+- The request's context carries the tool's approval key, its tool name and the asking call ID. The continued call recalls the answer by that key through `HostToolApproval.recall` in `packages/agent-host/src/host/tau-agent-host.ts`. The output row that uses an answer records `metadata.approval.interruptId`, which spends it, so a later call under the same key asks again.
+- The continued attempt receives an approval-answer reminder (`tauInternal.kind: 'approval-answer'`). It names each answer given since the attempt last ran, with its prompt, the asking call ID and the tool.
+- A denial or a Stop ends the run with no attempt left to tell. The chat's next run receives the same reminder for the ended run's untold answers, before the person's new message, and says that its calls ask again. An answer is therefore never conveyed only through the aborted call's error text.
+- The host hands each answer to the tool registry's idempotent `answerApproval`, so what the tool guards follows the answer whether or not the run continues. An answer or a Stop hands over only the requests its own command resolved. An applied resume reconciles every answer of its run.
+- Recall is at-least-once for a generic tool. A call that recalled an answer and then threw releases it, and a crash before the output row lets the next call recall it again. A tool that guards a side effect keys that effect idempotently, as `request_job` keys its job by the asking call.
 
-**Why**: IndexedDB chat persistence is the user's work. A schema regression that rejects previously-parseable chats cannot be recovered from outside the API.
+## Ownership
 
-## Decision Table — Where Each Concern Lives
-
-| Concern                                          | Location                                                                          |
-| ------------------------------------------------ | --------------------------------------------------------------------------------- |
-| Wire-level Zod schema for chat messages          | `libs/chat/src/schemas/message.schema.ts` (`uiMessagesSchema`)                    |
-| Strict per-tool input schemas                    | `libs/chat/src/schemas/message.schema.ts` (`createToolSchemas`)                   |
-| Static tool-input schema lookup                  | `libs/chat/src/schemas/tool-input.registry.ts`                                    |
-| Heal legacy / interrupted payloads on inbound    | `libs/chat/src/schemas/message.schema.ts` (`healInterruptedToolParts` preprocess) |
-| Synthetic tool-result pairing for provider wires | `apps/api/app/api/chat/middleware/message-content-sanitizer.middleware.ts`        |
-| Server validation error code                     | `apps/api/app/api/chat/chat-exception.filter.ts` (`VALIDATION_ERROR`)             |
-
-## Anti-Patterns
-
-- Tightening the `output-error` `input` schema to "match the success path" — this is the original regression, do not reintroduce it.
-- Adding client-side sanitisers that duplicate the API's healing — every new client would have to re-implement the same logic, and the API still has to heal anyway for non-Tau callers, so the duplication is pure cost.
-- Putting partial / forensic data on `input` instead of `rawInput`.
-- Skipping the synthetic tool-result pairing because "the provider usually tolerates it" — at least one provider (Anthropic) consistently 400s.
-- Adding a per-tool special case to `messageContentSanitizerMiddleware` — middleware is provider-agnostic and tool-agnostic by contract.
-
-## Summary Checklist
-
-- [ ] `output-error` schema accepts `input: z.unknown().optional()` and `rawInput: z.unknown().optional()`
-- [ ] `rawInput: z.unknown().optional()` is present on every tool state (not just `output-error`)
-- [ ] `uiMessagesSchema` is wrapped in `z.preprocess(healInterruptedToolParts, …)`
-- [ ] `tool-input.registry.ts` is exhaustive over `ToolName` (compile-time enforced)
-- [ ] Sanitizer middleware emits a `ToolMessage` with `tool_call_id`, `name`, `status: 'error'`, and JSON content for every orphaned tool call
-- [ ] Schema accepts `approval-requested` / `approval-responded` / `output-denied` for static and dynamic tool parts
-- [ ] Round-trip integration test (`apps/api/app/api/chat/interrupted-tool-roundtrip.test.ts`) and provider integration tests still pass
-
-## References
-
-- Research: `docs/research/interrupted-tool-call-validation-failure.md`
-- Related: `docs/policy/testing-policy.md`
-- Upstream: `node_modules/ai/src/ui/validate-ui-messages.ts`
+- UI-message normalization: `libs/chat/src/schemas/message.schema.ts`
+- UI lifecycle helpers: `libs/chat/src/utils/tool-part.utils.ts`
+- Tail finalization: `apps/ui/app/utils/chat.utils.ts`
+- Settled-call ledger: `apps/libs/chat-ui/src/services/rpc-ledger.ts`
+- UI transcript projection: `apps/ui/app/machines/chat-projection.logic.ts`
+- Refused-command persistence: `apps/ui/app/services/chat-session-store.ts`
+- Portable recovery: `packages/agent-host/src/harness/interrupt-recovery.ts`
+- Resume orchestration: `packages/agent-host/src/host/tau-agent-host.ts`

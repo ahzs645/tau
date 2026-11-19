@@ -1,0 +1,397 @@
+import type { DeliveryScope, DrainStop, EvidenceOutbox, OutboxCounts } from '#delivery.js';
+import type { ProjectedRun, ProjectionContext } from '#projection.js';
+import { projectRun } from '#projection.js';
+import type { DesignReader } from '#host-content.js';
+
+/*
+ * Host evidence reporting (blueprint T10/T11).
+ *
+ * The one piece every host composes: it asks the server what this account may
+ * report for this project, binds the outbox to that answer, projects the runs
+ * the host hands it, and drains. Nothing is cached across answers: each report
+ * reads the grant again, a withdrawn grant purges what was held under it, and
+ * a grant this reporter has not seen yet starts its own clock, so nothing that
+ * happened before the reporter knew of it is ever sent.
+ */
+
+/** The server's current answer for one account and project: the scope to report summaries under. @public */
+export type ReportingGrant = DeliveryScope &
+  Readonly<{
+    protection: ProjectionContext['protection'];
+    /** When the account's allowing decision was taken, as the server answers it; absent from an older server. */
+    allowedSince?: number | undefined;
+    /**
+     * Present when the same answer allows `content` too (LW6, rule 5): the server answers it only where the capture
+     * mode permits the account. `allowedSince` is when content was allowed, on the host's clock.
+     */
+    content?: Readonly<{ allowedSince?: number }> | undefined;
+  }>;
+
+/** The parts of the server's effective-purposes answer a host reads. @public */
+export type EffectivePurposesAnswer = Readonly<{
+  epoch: string;
+  projectId?: string | undefined;
+  purposes: ReadonlyArray<Readonly<{ purpose: string; allowed: boolean; allowedSince?: number | undefined }>>;
+  /** The server's clock when it answered; with the host's receipt time it puts `allowedSince` on the host's clock. */
+  answeredAt?: number | undefined;
+  /** The protection the server reads for the account now; a host without it claims `unknown`. */
+  protection?: string | undefined;
+}>;
+
+/** A purpose a host reports under; each is its own plane and grant. @public */
+export type ReportingPurpose = 'summary' | 'feedback';
+
+const isProtection = (value: string | undefined): value is ReportingGrant['protection'] =>
+  value === 'free' || value === 'pro' || value === 'unknown';
+
+/* A protection the server named, or `unknown` for an answer from a server that names none. */
+const protectionOf = (value: string | undefined): ReportingGrant['protection'] =>
+  isProtection(value) ? value : 'unknown';
+
+const isTime = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+/*
+ * The allowing decision's time on the host's clock. The server's decision time and the host's fact times come from
+ * different clocks, so the decision is shifted by how far the host's clock read ahead of the server's when the answer
+ * arrived. The answer was sent before it was received, so the shift errs late by the response's transit time, never
+ * early: a fact from before the decision is never let through by skew. Without the server's answer time or the
+ * receipt time there is no shift to apply, and the host falls back to when it first saw the grant.
+ */
+const hostClockSince = (
+  since: unknown,
+  answeredAt: unknown,
+  receivedAt: number | undefined,
+): Readonly<{ allowedSince?: number }> =>
+  isTime(since) && isTime(answeredAt) && receivedAt !== undefined && isTime(receivedAt)
+    ? { allowedSince: Math.max(0, since + (receivedAt - answeredAt)) }
+    : {};
+
+/**
+ * The grant an effective-purposes answer gives for one purpose, if any. Only
+ * an answer scoped to this very project that allows that purpose grants;
+ * anything else, including an answer for the account alone, grants nothing.
+ *
+ * @param answer - The server's answer, as received.
+ * @param subject - The signed-in account, the project the host serves, and when the answer arrived on its clock.
+ * @param purpose - The purpose asked about; one never answers for another.
+ * @returns The grant, or `undefined`.
+ * @public
+ */
+export const purposeGrantOf = (
+  answer: EffectivePurposesAnswer,
+  subject: Readonly<{ principal: string; project: string; receivedAt?: number | undefined }>,
+  purpose: ReportingPurpose,
+): ReportingGrant | undefined => {
+  const state = answer.purposes.find((candidate) => candidate.purpose === purpose);
+  if (answer.projectId !== subject.project || state?.allowed !== true || answer.epoch === '') {
+    return undefined;
+  }
+  /* Content rides on the summary grant: the same scope and epoch, and only what summaries already report gains it. */
+  const content =
+    purpose === 'summary'
+      ? answer.purposes.find((candidate) => candidate.purpose === 'content' && candidate.allowed)
+      : undefined;
+  /* The server's own reading of the account's protection, or `unknown`, the strictest claim; the API only tightens it. */
+  return {
+    principal: subject.principal,
+    project: subject.project,
+    policyEpoch: answer.epoch,
+    protection: protectionOf(answer.protection),
+    ...hostClockSince(state.allowedSince, answer.answeredAt, subject.receivedAt),
+    ...(content === undefined
+      ? {}
+      : { content: hostClockSince(content.allowedSince, answer.answeredAt, subject.receivedAt) }),
+  };
+};
+
+/**
+ * The summary grant an effective-purposes answer gives, if any.
+ *
+ * @param answer - The server's answer, as received.
+ * @param subject - The signed-in account and the project the host serves.
+ * @returns The grant, or `undefined`.
+ * @public
+ */
+export const summaryGrantOf = (
+  answer: EffectivePurposesAnswer,
+  subject: Readonly<{ principal: string; project: string }>,
+): ReportingGrant | undefined => purposeGrantOf(answer, subject, 'summary');
+
+/** What the reporter held back or could not do, counted by reason, beside its outbox's counts. @public */
+export type ReporterCoverage = Readonly<{
+  /** Envelopes handed to the outbox. */
+  projected: number;
+  /** Facts another device led; that device reports them. */
+  foreign: number;
+  /** Runs still unended here whose newest rows another device wrote: a gap this device cannot fill. */
+  openForeignTails: number;
+  /** Facts that happened before the account granted (or, from an older server, before this reporter saw it); never backfilled. */
+  beforeGrant: number;
+  /** Facts not yet settled when last seen. */
+  pending: number;
+  /** Runs seen while the server granted nothing. */
+  ungranted: number;
+  /** Runs seen while the grant could not be read; none of them was projected. */
+  unknownGrant: number;
+  /** Where the last drain stopped. */
+  stop: DrainStop | undefined;
+  outbox: OutboxCounts;
+}>;
+
+/** What a reporter is built from. @public */
+export type EvidenceReporterOptions = Readonly<{
+  outbox: EvidenceOutbox;
+  /** The server's current answer; rejects when it cannot be read. Never a cached or local default. */
+  grant: () => Promise<ReportingGrant | undefined>;
+  /** This host's uploader id. */
+  uploader: string;
+  hostBuild: string | undefined;
+  now: () => number;
+  toolClass?: ProjectionContext['toolClass'];
+  /** Reads a run's changed model files at its final revision, for its root's content (LW6). */
+  design?: DesignReader | undefined;
+  /** What kind of host this is, written on each outcome. */
+  host?: ProjectionContext['host'];
+  /** The purpose `grant` answers for, and so the plane projected; `summary` when absent. */
+  purpose?: ReportingPurpose;
+  /** Run `callback` after `milliseconds`; answers its cancel. `setTimeout` when absent. */
+  schedule?: (callback: () => void, milliseconds: number) => () => void;
+}>;
+
+/** A host's evidence reporter. @public */
+export type EvidenceReporter = Readonly<{
+  /** Read the grant and bind to it, without projecting anything: what a host does when it starts. */
+  refresh: () => Promise<void>;
+  /**
+   * Report a chat's runs as its committed rows say they are now. Reporting
+   * the same rows again writes the same envelopes, which the outbox and the
+   * API count once.
+   */
+  report: (runs: readonly ProjectedRun[], ownsEpoch: (leaderEpoch: string) => boolean) => Promise<void>;
+  coverage: () => ReporterCoverage;
+  /** Stop: cancel a scheduled retry and refuse further reports. What is held stays held for the next host. */
+  close: () => void;
+}>;
+
+const sameScope = (left: DeliveryScope | undefined, right: DeliveryScope | undefined): boolean =>
+  left?.principal === right?.principal && left?.project === right?.project && left?.policyEpoch === right?.policyEpoch;
+
+/** How many settled runs a reporter remembers; one it forgot is projected again and the API counts it once. */
+const settledLimit = 4096;
+
+/*
+ * A run is settled at its ending row, not for good: a resumed run keeps its id, and the later attempt's ending row
+ * (the highest attempt's terminal) makes it a new report, so its outcome and tools are sent too (LU14).
+ */
+const settledKey = (run: ProjectedRun): string =>
+  [run.chatId, run.runId, run.ending?.source.leaderEpoch ?? '', String(run.ending?.source.sequence ?? '')].join(
+    '\u0000',
+  );
+
+const defaultSchedule = (callback: () => void, milliseconds: number): (() => void) => {
+  const handle = setTimeout(callback, milliseconds);
+  return () => {
+    clearTimeout(handle);
+  };
+};
+
+/**
+ * Create a host's evidence reporter.
+ *
+ * - The grant is read on every report and refresh. A changed account, project
+ *   or epoch rebinds the outbox, which purges what was held under the old one.
+ * - No grant unbinds and purges. An unreadable grant projects nothing and
+ *   sends nothing, and keeps what is held: the server rechecks before any send.
+ * - A drain that is told to retry is tried again once, after the server's wait.
+ *
+ * @param options - Its outbox, grant source, identity and clock.
+ * @returns The reporter.
+ * @public
+ */
+export const createEvidenceReporter = (options: EvidenceReporterOptions): EvidenceReporter => {
+  const { outbox, now } = options;
+  const schedule = options.schedule ?? defaultSchedule;
+  const counts = {
+    projected: 0,
+    foreign: 0,
+    openForeignTails: 0,
+    beforeGrant: 0,
+    pending: 0,
+    ungranted: 0,
+    unknownGrant: 0,
+  };
+  /*
+   * `grantedAt` is when the account's allowing decision was taken, as the server answers it: never earlier than the
+   * grant itself, and the same however late this host first read it. A project the API registered after its first run
+   * began, or a host that restarted mid-run, would otherwise drop the facts in between. A server that does not say
+   * falls back to when this reporter first saw the grant. A time the server puts ahead of this clock is capped at now.
+   */
+  let bound: (ReportingGrant & Readonly<{ grantedAt: number }>) | undefined;
+  /* When this reporter's scope first had content allowed, on its clock; dropped the moment an answer withholds it. */
+  let contentSince: number | undefined;
+  let stop: DrainStop | undefined;
+  let cancelRetry: (() => void) | undefined;
+  let closed = false;
+  /* Runs reported whole under the bound scope, oldest first: a report of the same rows sends nothing again. */
+  const settled = new Set<string>();
+  /* Reports run one at a time: each reads the grant the one before it may have changed. */
+  let chain: Promise<unknown> = Promise.resolve();
+
+  /** Read the grant and bind to it; answers the binding, or `'unknown'` when the grant could not be read. */
+  const bind = async (): Promise<typeof bound | 'unknown'> => {
+    let grant: ReportingGrant | undefined;
+    try {
+      grant = await options.grant();
+    } catch {
+      return 'unknown';
+    }
+    if (closed) {
+      return 'unknown';
+    }
+    if (grant === undefined) {
+      /* Also on a host's first answer: what an earlier session held under a grant now gone is purged. */
+      bound = undefined;
+      contentSince = undefined;
+      await outbox.bind(undefined);
+      return undefined;
+    }
+    if (!sameScope(bound, grant)) {
+      contentSince = undefined;
+    }
+    /* Like the summary grant, content counts from the account's decision, never later than now (LW6). */
+    contentSince =
+      grant.content === undefined
+        ? undefined
+        : Math.min(contentSince ?? Number.POSITIVE_INFINITY, grant.content.allowedSince ?? now(), now());
+    if (!sameScope(bound, grant)) {
+      bound = { ...grant, grantedAt: Math.min(grant.allowedSince ?? Number.POSITIVE_INFINITY, now()) };
+      settled.clear();
+      await outbox.bind(grant);
+    } else if (bound !== undefined) {
+      /* A first read that could not date the grant is replaced by one that can, and its runs are projected again. */
+      if (bound.allowedSince === undefined && grant.allowedSince !== undefined) {
+        bound = {
+          ...bound,
+          allowedSince: grant.allowedSince,
+          grantedAt: Math.min(grant.allowedSince, bound.grantedAt),
+        };
+        settled.clear();
+      }
+      if (bound.protection !== grant.protection) {
+        bound = { ...bound, protection: grant.protection };
+      }
+    }
+    return bound;
+  };
+
+  const queued = async (step: () => Promise<void>): Promise<void> => {
+    const previous = chain;
+    const next = (async () => {
+      await previous;
+      if (!closed) {
+        await step();
+      }
+    })();
+    chain = (async () => {
+      try {
+        await next;
+      } catch {
+        /* The step's caller is told; the next step runs all the same. */
+      }
+    })();
+    return next;
+  };
+
+  const remember = (key: string): void => {
+    settled.add(key);
+    if (settled.size > settledLimit) {
+      settled.delete(settled.values().next().value!);
+    }
+  };
+
+  const drain = async (): Promise<void> => {
+    cancelRetry?.();
+    cancelRetry = undefined;
+    const result = await outbox.drain();
+    stop = result.stop;
+    if (result.stop === 'retry' && !closed) {
+      cancelRetry = schedule(() => {
+        cancelRetry = undefined;
+        void retry();
+      }, result.retryAfterMilliseconds ?? 30_000);
+    }
+  };
+
+  /* A failed retry is not retried again here: the next report or refresh drains. */
+  const retry = async (): Promise<void> => {
+    try {
+      await queued(drain);
+    } catch {
+      stop = undefined;
+    }
+  };
+
+  const reportNow = async (
+    runs: readonly ProjectedRun[],
+    ownsEpoch: (leaderEpoch: string) => boolean,
+  ): Promise<void> => {
+    const scope = await bind();
+    if (scope === 'unknown') {
+      counts.unknownGrant += runs.length;
+      return;
+    }
+    if (scope === undefined) {
+      counts.ungranted += runs.length;
+      return;
+    }
+    const context: ProjectionContext = {
+      principal: scope.principal,
+      project: scope.project,
+      policyEpoch: scope.policyEpoch,
+      protection: scope.protection,
+      uploader: options.uploader,
+      ownsEpoch,
+      grantedAt: scope.grantedAt,
+      hostBuild: options.hostBuild,
+      ...(options.toolClass === undefined ? {} : { toolClass: options.toolClass }),
+      plane: options.purpose ?? 'summary',
+      ...(contentSince === undefined ? {} : { content: { since: contentSince, design: options.design } }),
+      ...(options.host === undefined ? {} : { host: options.host }),
+    };
+    const unsettled = runs.filter((run) => !settled.has(settledKey(run)));
+    const projections = await Promise.all(unsettled.map(async (run) => projectRun(run, context)));
+    for (const projection of projections) {
+      counts.projected += projection.evidence.length;
+      counts.foreign += projection.foreign;
+      counts.beforeGrant += projection.beforeGrant;
+      counts.pending += projection.pending;
+      counts.openForeignTails += projection.foreignTails.filter((tail) => tail.open).length;
+    }
+    await outbox.enqueue(projections.flatMap((projection) => projection.evidence));
+    /* Only once held: a run whose evidence could not be queued is projected again next time. */
+    for (const [index, projection] of projections.entries()) {
+      if (projection.pending === 0 && !projection.foreignTails.some((tail) => tail.open)) {
+        remember(settledKey(unsettled[index]!));
+      }
+    }
+    await drain();
+  };
+
+  return {
+    refresh: async () =>
+      queued(async () => {
+        const scope = await bind();
+        if (scope !== undefined && scope !== 'unknown') {
+          await drain();
+        }
+      }),
+    report: async (runs, ownsEpoch) => queued(async () => reportNow(runs, ownsEpoch)),
+    coverage: () => ({ ...counts, stop, outbox: outbox.report() }),
+    close: () => {
+      closed = true;
+      cancelRetry?.();
+      cancelRetry = undefined;
+    },
+  };
+};

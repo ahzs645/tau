@@ -1,0 +1,12 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "Gridfinity Box",
+  "description": "The ultimate modular storage solution. This Gridfinity-compatible box features accurate socket geometry, optional magnet and screw holes, and clean shelling for a professional finish. Customize size, height, and features to create a perfectly organized workspace that scales with your needs.",
+  "tags": ["3d-printing", "parametric", "replicad"],
+  "assets": {
+    "main": {
+      "entryPath": "main.ts",
+      "thumbnail": "thumbnail.webp"
+    }
+  }
+}

@@ -1,0 +1,108 @@
+---
+title: Handle Errors
+description: Distinguish model issues, normal supersession, cancellation, deadlines, and transport termination.
+docType: how-to
+icon: lucide:triangle-alert
+---
+
+Document/view operations distinguish model failures from operational rejection. Inspect structured issue codes and realm-safe error guards; messages are display text.
+
+## Prerequisites
+
+Complete the [Quick Start](../getting-started/quick-start) and read the [Client API](../api/client) result shapes.
+
+## Steps
+
+### 1. Inspect operation results
+
+`evaluation()` and view `rendering()` return an outcome with `superseded`. Check it before narrowing the nested result with `success`. Document exports directly return `ExportResult`: success carries `files`, failure carries issues. Plugin hooks use `KernelResult<T>` with `data`; consumer document results have their own fields.
+
+```typescript
+import type { RuntimeDocument } from '@taucad/runtime/client';
+
+export async function inspectDocument(document: RuntimeDocument): Promise<void> {
+  const outcome = await document.evaluation();
+  if (outcome.superseded) {
+    return;
+  }
+  for (const issue of outcome.evaluation.issues) {
+    console.warn(issue.code, issue.severity, issue.message);
+  }
+  if (!outcome.evaluation.success) {
+    return;
+  }
+  if (outcome.evaluation.views.length === 0) {
+    console.log('This model offers no display view.');
+  }
+}
+```
+
+A successful result may still carry error-severity findings, warnings, or information. Treat it as clean only after checking all issues. Failed evaluations do not silently keep an older committed export source.
+
+### 2. Use issue codes and locations
+
+`KernelIssue` includes required `message`, `code` (`KernelIssueCode`), and `severity`; optional `type`, `location` (`ErrorLocation`), `stack`, `stackFrames` (`KernelStackFrame[]`), and `details` enrich diagnostics. Use locations for editor markers and codes for branching. Preserve the producer's issues even when another projection fails.
+
+`VIEW_UNKNOWN` means the requested ID was never declared. `VIEW_UNAVAILABLE` means it is declared but not offered by this evaluation. Recovery should preserve the person's saved choice until they select a replacement.
+
+`KERNEL_REALM_CONFLICT` means this JavaScript realm cannot hold a realm-shared backend a kernel asked for; `details.producer` names the refusing kernel and `details.reason` the case:
+
+| `details.reason` | Cause                                                                                                                               | Recovery                                                                                                         |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `build`          | The realm holds another build (`heldKey`) of `group` than the `requestedKey`.                                                       | Use one build per realm, or give the second client its own worker (`nodeWorkerTransport` or a Web Worker).       |
+| `declaration`    | A second declaration of `group`, usually a duplicate copy of the kernel package, already holds it.                                  | Deduplicate the kernel package, or host it in its own worker.                                                    |
+| `runtime`        | The group token or the realm's shared state comes from an `@taucad/runtime` copy of another plugin ABI (`heldAbi`, `requestedAbi`). | Install one `@taucad/runtime` version (a peer dependency of every kernel), or host the kernel in its own worker. |
+
+`KERNEL_NOT_PREPARED` means a native kernel handles the file but its runtime closure (an interpreter and wheels, or a .NET runtime) is not in this machine's dependency store. Nothing was downloaded. `details` names the `kernel`, its `package`, the file's `extension`, the `byteLength` that preparing downloads, and `prepare`, the exact call that fixes it: `{ tool: 'prepare_kernel', input: { kernel } }` over MCP, or `tau prepare <kernel>` in a terminal. Evaluate again once it is prepared.
+
+`LIBRARY_VERSION_MISMATCH` is a warning on a successful evaluation: the project's own manifest pins a library at a version other than the one the native kernel runs, so the project would run a different library outside Tau. `details.manifest` names the file (`pyproject.toml` or the `.csproj`), `details.library` the library, `details.declared` the pinned version and `details.runs` the kernel's version, and `location` points at the pin. Set the pin to `details.runs`.
+
+### 3. Handle operational rejection
+
+```typescript
+import {
+  isOperationAbortedError,
+  isOperationTimeoutError,
+  isRuntimeTerminatedError,
+  type RuntimeDocument,
+} from '@taucad/runtime/client';
+
+export async function evaluateSafely(document: RuntimeDocument): Promise<void> {
+  try {
+    await document.evaluation();
+  } catch (error) {
+    if (isOperationTimeoutError(error)) {
+      console.warn(error.code, error.phase);
+    } else if (isOperationAbortedError(error)) {
+      console.warn(error.code);
+    } else if (isRuntimeTerminatedError(error)) {
+      console.warn('Recreate the client before retrying.');
+    } else {
+      throw error;
+    }
+  }
+}
+```
+
+| Error                    | Code                        | Guard                      |
+| ------------------------ | --------------------------- | -------------------------- |
+| `OperationAbortedError`  | `RUNTIME_OPERATION_ABORTED` | `isOperationAbortedError`  |
+| `OperationTimeoutError`  | `RUNTIME_OPERATION_TIMEOUT` | `isOperationTimeoutError`  |
+| `RuntimeTerminatedError` | `RUNTIME_TERMINATED`        | `isRuntimeTerminatedError` |
+
+Transport loss rejects pending operations. A closed document/view read rejects; displaced update work can resolve as superseded. Noncooperative isolated work may terminate its host after a timeout. Explicitly retry using a fresh client; do not confuse termination with a requested document close.
+
+### 4. Return structured kernel failures
+
+Kernel authors return issues through the hook's `KernelResult`. Include a stable code, severity, producer identity where appropriate, and source location when known. Keep error extraction in the owning kernel; host code should not regex-match engine messages.
+
+## Variations
+
+Retain the last successful picture while replacement work is pending or fails, but label its state. Clear stale artifacts after successful empty results. Subscribe to document and view status separately; global transport status cannot identify a pane's projection failure.
+
+## Related
+
+- [Core Types](../api/types)
+- [Live Rendering](./live-rendering)
+- [Configure Render Timeouts](./render-timeouts)
+- [Render Lifecycle](../concepts/render-lifecycle)

@@ -1,18 +1,24 @@
-import { useMemo } from 'react';
-import { Upload } from 'lucide-react';
-import { Button } from '#components/ui/button.js';
-import { FileSelector, createStaticDataSource } from '#components/files/file-selector.js';
-import { SvgIcon } from '#components/icons/svg-icon.js';
+import { Heading } from '@taucad/ui/components/heading';
+import { PageContent } from '#components/layout/page-content.js';
+import { PageHeader } from '#components/layout/page-header.js';
+import { useId, useMemo } from 'react';
+import { Button } from '@taucad/ui/components/button';
+import { createStaticDataSource } from '@taucad/workbench-panes/files/file-selector';
+import { FileSelector } from '#components/files/file-selector.js';
 import { ImportViewer } from '#routes/import.$/import-viewer.js';
-import type { FileMap } from '#utils/file-reader.utils.js';
+import { formatFileSize } from '#components/geometry/converter/converter-utils.js';
+import { isMainFileCandidate } from '#routes/import.$/import.utils.js';
+import type { ImportPreviewLoader } from '#routes/import.$/import-viewer.js';
 
 type ImportMainFileViewProperties = {
   readonly title: string;
   readonly subtitle: string;
   readonly requestedMainFileWarning?: string;
-  readonly files: FileMap;
+  /** Every imported path and its size: what the review needs, without the bytes. */
+  readonly files: ReadonlyArray<Readonly<{ path: string; size: number }>>;
+  /** The bytes the preview renders, read on request. */
+  readonly loadPreview: ImportPreviewLoader;
   readonly selectedMainFile: string | undefined;
-  readonly variant: 'github' | 'disk';
   readonly owner?: string;
   readonly repo?: string;
   readonly onSelectMainFile: (file: string) => void;
@@ -28,76 +34,94 @@ export function ImportMainFileView({
   subtitle,
   requestedMainFileWarning,
   files,
+  loadPreview,
   selectedMainFile,
-  variant,
   owner = '',
   repo = '',
   onSelectMainFile,
   onConfirm,
   onCancel,
 }: ImportMainFileViewProperties): React.JSX.Element {
-  const fileNames = [...files.keys()];
-  const dataSource = useMemo(() => createStaticDataSource(fileNames.map((path) => ({ path }))), [fileNames]);
+  const mainFileLabelId = useId();
+  const fileNames = useMemo(() => files.map(({ path }) => path), [files]);
+  const cadSources = useMemo(() => fileNames.filter((path) => isMainFileCandidate(path)), [fileNames]);
+  /*
+   * The preview asks for the CAD sources first, then every other file a model
+   * may read beside them (a mesh, a data file), all within the loader's byte
+   * budget; the viewer puts the main file ahead of both. Stable while the listing is.
+   */
+  const previewPaths = useMemo(() => {
+    const cad = new Set(cadSources);
+    return [...cadSources, ...fileNames.filter((path) => !cad.has(path))];
+  }, [cadSources, fileNames]);
+  const cadSourceCount = cadSources.length;
+  const byteLength = files.reduce((sum, { size }) => sum + size, 0);
+  const dataSource = useMemo(() => createStaticDataSource(files.map(({ path }) => ({ path }))), [files]);
 
   return (
-    <div className='flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8'>
-      <div className='w-full max-w-5xl space-y-6'>
-        <div className='flex flex-col items-center gap-4'>
-          <div className='flex size-16 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10'>
-            {variant === 'github' ? (
-              <SvgIcon id='github' className='size-8 text-primary' />
-            ) : (
-              <Upload className='size-8 text-primary' />
-            )}
+    <PageContent className='space-y-6'>
+      <PageHeader title='Import' />
+      <div className='space-y-4 border-t pt-6'>
+        <div className='flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1'>
+          <div className='space-y-1'>
+            <Heading level={2} variant='item'>
+              {title}
+            </Heading>
+            <p className='font-mono text-sm break-all text-muted-foreground'>{subtitle}</p>
           </div>
-
-          <div className='text-center'>
-            <h1 className='text-2xl font-semibold'>{title}</h1>
-            <p className='text-sm text-muted-foreground'>{subtitle}</p>
-            {requestedMainFileWarning ? (
-              <p className='mt-2 text-sm text-warning'>{requestedMainFileWarning}</p>
-            ) : undefined}
-          </div>
+          <p className='text-xs text-muted-foreground tabular-nums'>
+            {files.length} {files.length === 1 ? 'file' : 'files'} · {cadSourceCount}{' '}
+            {cadSourceCount === 1 ? 'CAD source' : 'CAD sources'} · {formatFileSize(byteLength)}
+          </p>
+          {requestedMainFileWarning ? (
+            <p role='alert' className='pt-2 text-sm'>
+              {requestedMainFileWarning}
+            </p>
+          ) : undefined}
         </div>
-
-        <div className='flex flex-col gap-6 md:flex-row'>
+        <div className='grid gap-6 md:grid-cols-[minmax(0,1fr)_16rem]'>
           {/* Left: CAD Preview */}
-          <div className='h-[60vh] flex-1 overflow-hidden rounded-lg border bg-sidebar'>
-            <ImportViewer files={files} mainFile={selectedMainFile} owner={owner} repo={repo} />
+          <div className='h-[60vh] min-h-0 min-w-0 overflow-hidden rounded-lg border bg-muted'>
+            <ImportViewer
+              paths={previewPaths}
+              loadPreview={loadPreview}
+              mainFile={selectedMainFile}
+              owner={owner}
+              repo={repo}
+            />
           </div>
 
-          {/* Right: Main File Selection */}
-          <div className='flex w-full flex-col justify-start gap-4 md:w-64'>
-            <div className='space-y-3'>
-              <h2 className='text-sm font-medium'>Main File</h2>
+          {/* Right: Main file Selection */}
+          <div className='flex min-w-0 flex-col gap-4'>
+            <div role='group' aria-labelledby={mainFileLabelId} className='space-y-2'>
+              <span id={mainFileLabelId} className='block text-sm font-medium'>
+                Main file
+              </span>
               <FileSelector
                 dataSource={dataSource}
                 selectedFile={selectedMainFile}
-                placeholder='Select main file...'
-                title='Select Main File'
-                description='Choose the main entry file for your project'
+                placeholder='Select main file…'
+                title='Select main file'
+                description='Choose the main entry path for your project'
                 emptyMessage='No files found'
                 onSelect={onSelectMainFile}
               />
+              {selectedMainFile ? (
+                <p className='font-mono text-xs break-all text-muted-foreground'>{selectedMainFile}</p>
+              ) : undefined}
             </div>
 
-            {selectedMainFile ? (
-              <div className='rounded-md bg-muted/50 p-3 text-xs'>
-                <div className='font-medium'>Selected:</div>
-                <div className='mt-1 break-all text-muted-foreground'>{selectedMainFile}</div>
-              </div>
-            ) : undefined}
-
             <Button className='w-full' disabled={!selectedMainFile} onClick={onConfirm}>
-              Import Project
+              Import project
             </Button>
 
             <Button variant='outline' className='w-full' onClick={onCancel}>
               Cancel
             </Button>
+            <p className='text-xs text-muted-foreground'>A copy is added to your projects.</p>
           </div>
         </div>
       </div>
-    </div>
+    </PageContent>
   );
 }

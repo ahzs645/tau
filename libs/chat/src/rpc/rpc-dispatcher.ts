@@ -1,28 +1,34 @@
 import type { RpcCall, RpcInput, RpcResult, RpcSchemasRegistry } from '#schemas/rpc.schema.js';
-import { rpcName } from '#constants/rpc.constants.js';
+import { mutatingRpcNames, rpcName } from '#constants/rpc.constants.js';
 import type { RpcName } from '#types/rpc.types.js';
-import type { RpcDependencies } from '#rpc/rpc-dependencies.js';
+import type { RpcDependencies, RpcInvocationContext } from '#rpc/rpc-dependencies.js';
 import { handleReadFile } from '#rpc/handlers/handle-read-file.js';
 import { handleCreateFile } from '#rpc/handlers/handle-create-file.js';
 import { handleDeleteFile } from '#rpc/handlers/handle-delete-file.js';
 import { handleListDirectory } from '#rpc/handlers/handle-list-directory.js';
 import { handleGrep } from '#rpc/handlers/handle-grep.js';
 import { handleGlobSearch } from '#rpc/handlers/handle-glob-search.js';
-import { handleGetKernelResult } from '#rpc/handlers/handle-get-kernel-result.js';
-import { handleCaptureObservations } from '#rpc/handlers/handle-capture-observations.js';
-import { handleFetchGeometry } from '#rpc/handlers/handle-fetch-geometry.js';
-import { handleExportGeometry } from '#rpc/handlers/handle-export-geometry.js';
-import { handleCaptureScreenshot } from '#rpc/handlers/handle-capture-screenshot.js';
+import { handleEvaluateModel } from '#rpc/handlers/handle-evaluate-model.js';
+import { handleCaptureImages } from '#rpc/handlers/handle-capture-images.js';
+import { handleRunGeoSpecTests } from '#rpc/handlers/handle-run-geospec-tests.js';
+import { handleExportModel } from '#rpc/handlers/handle-export-model.js';
 import { handleAppendFile } from '#rpc/handlers/handle-append-file.js';
 import { handleEditFile } from '#rpc/handlers/handle-edit-file.js';
+import { handleResolveSkill } from '#rpc/handlers/handle-resolve-skill.js';
+import { handleReadRevisions } from '#rpc/handlers/handle-read-revisions.js';
+import { handleApplyParameterOperation, handleGetParameters } from '#rpc/handlers/handle-parameters.js';
+import { handleWriteTodos } from '#rpc/handlers/handle-write-todos.js';
+import { handleInstallPackages } from '#rpc/handlers/handle-install-packages.js';
+import { handleAskQuestions } from '#rpc/handlers/handle-ask-questions.js';
+import { handleArrangeWorkbench } from '#rpc/handlers/handle-arrange-workbench.js';
 
 type RpcHandlerMap = {
-  [K in RpcName]: (args: RpcInput<K>) => Promise<RpcResult<K>>;
+  [K in RpcName]: (args: RpcInput<K>, context?: RpcInvocationContext) => Promise<RpcResult<K>>;
 };
 
 /** @public */
 export type RpcDispatcher = {
-  dispatch<K extends keyof RpcSchemasRegistry>(call: RpcCall<K>): Promise<RpcResult<K>>;
+  dispatch<K extends keyof RpcSchemasRegistry>(call: RpcCall<K>, context?: RpcInvocationContext): Promise<RpcResult<K>>;
 };
 
 /**
@@ -44,19 +50,38 @@ export function createRpcDispatcher(deps: RpcDependencies): RpcDispatcher {
     [rpcName.listDirectory]: async (args) => handleListDirectory(args, deps.fileSystem),
     [rpcName.grep]: async (args) => handleGrep(args, deps.fileSystem),
     [rpcName.globSearch]: async (args) => handleGlobSearch(args, deps.fileSystem),
-    [rpcName.getKernelResult]: async (args) => handleGetKernelResult(args, deps.kernelClient),
-    [rpcName.captureObservations]: async (args) => handleCaptureObservations(args, deps.graphics),
-    [rpcName.fetchGeometry]: async (args) => handleFetchGeometry(args, deps.graphics, deps.fileSystem),
-    [rpcName.exportGeometry]: async (args) => handleExportGeometry(args, deps.graphics, deps.fileSystem),
-    [rpcName.captureScreenshot]: async (args) => handleCaptureScreenshot(args, deps.graphics),
+    [rpcName.evaluateModel]: async (args, context) => handleEvaluateModel(args, deps.kernelClient, context),
+    [rpcName.captureImages]: async (args, context) =>
+      handleCaptureImages(args, { images: deps.images, fileSystem: deps.fileSystem }, context),
+    [rpcName.runGeoSpecTests]: async (args, context) => handleRunGeoSpecTests(args, deps.geospec, context),
+    [rpcName.exportModel]: async (args, context) =>
+      handleExportModel(args, { graphics: deps.graphics, fileSystem: deps.fileSystem }, context),
     [rpcName.appendFile]: async (args) => handleAppendFile(args, deps.fileSystem),
     [rpcName.editFile]: async (args) => handleEditFile(args, deps.fileSystem),
+    [rpcName.resolveSkill]: async (args) => handleResolveSkill(args, deps.skillResolver),
+    [rpcName.readHistory]: async (args) => handleReadRevisions(args, deps.revisions),
+    [rpcName.getParameters]: async (args, context) => handleGetParameters(args, deps.parameters, context),
+    [rpcName.applyParameterOperation]: async (args, context) =>
+      handleApplyParameterOperation(args, deps.parameters, context),
+    [rpcName.writeTodos]: async (args) => handleWriteTodos(args, deps.fileSystem),
+    [rpcName.askQuestions]: async (args, context) => handleAskQuestions(args, deps.fileSystem, context?.signal),
+    [rpcName.arrangeWorkbench]: async (args) => handleArrangeWorkbench(args, deps.fileSystem, deps.workbench),
+    [rpcName.installPackages]: async (args, context) =>
+      handleInstallPackages(args, deps.fileSystem, { signal: context?.signal, acquisition: deps.acquisition }),
   };
 
-  const dispatch = async <K extends keyof RpcSchemasRegistry>(call: RpcCall<K>): Promise<RpcResult<K>> => {
+  const dispatch = async <K extends keyof RpcSchemasRegistry>(
+    call: RpcCall<K>,
+    context?: RpcInvocationContext,
+  ): Promise<RpcResult<K>> => {
+    context?.signal?.throwIfAborted();
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- tsgo widens indexed handler; `K` pins rpcName ↔ args on RpcCall<K>
-    const run = handlers[call.rpcName] as (args: RpcInput<K>) => Promise<RpcResult<K>>;
-    return run(call.args);
+    const run = handlers[call.rpcName] as (args: RpcInput<K>, context?: RpcInvocationContext) => Promise<RpcResult<K>>;
+    const result = await run(call.args, context);
+    if (!mutatingRpcNames.has(call.rpcName)) {
+      context?.signal?.throwIfAborted();
+    }
+    return result;
   };
 
   return { dispatch };

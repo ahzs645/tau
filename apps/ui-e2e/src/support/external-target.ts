@@ -1,0 +1,1052 @@
+/* oxlint-disable max-params, tau-lint/no-bare-time-identifier, typescript/consistent-type-definitions, typescript/no-restricted-types, typescript/promise-function-async, unicorn/no-await-expression-member, unicorn/prefer-ternary -- This thin pass-through adapter mirrors stable Vitest selector and external browser evidence fields without inventing replacement shapes or redundant async frames. */
+import { base64ToUint8Array, uint8ArrayToBase64 } from 'uint8array-extras';
+import { expect, inject } from 'vitest';
+import type { Locator } from 'vitest/browser';
+import { locators, server as vitestServer } from 'vitest/browser';
+import type { ProjectionFixtureProof, ProjectionDirectoryReceipt } from '#support/projection-fixture-validation.js';
+import type { GatewayScriptTurn, GatewayTurnCount } from '#support/agent-host-gateway-script.js';
+import type { LinkedGithubFixtureDescription, LinkedGithubFixtureState } from '#support/linked-github-fixture.js';
+import type { FlagStateName } from '#support/flag-state.js';
+import type { SectionViewTestPresentedTier } from '@taucad/app/test-bridges/section-view';
+
+/** The GitHub-linked project's far side, as a spec names it (R15). */
+export type TargetLinkedGithub = LinkedGithubFixtureDescription;
+/** What reached the linked repository, for the assertions a page cannot make. */
+export type TargetLinkedGithubState = LinkedGithubFixtureState;
+/** A GitHub test identity: the first is connected first, the second is the one *Add account* adds. */
+export type TargetGithubIdentity = 'first' | 'second';
+/** What GitHub's authorize request carried, read off the wire rather than the page. */
+export type TargetGithubAuthorization = {
+  /** The authorize request's `prompt`, when it carried one. */
+  readonly prompt?: string;
+};
+
+export type TargetSurface = 'primary' | 'secondary';
+/** Bounded actual byte work for the fixture import's single opaque control file. */
+export type ProjectionImportWork = {
+  syncAccessCalls: number;
+  syncWriteCalls: number;
+  syncWriteBytes: number;
+  writableCalls: number;
+  getFileCalls: number;
+  snapshotBytes: number;
+  arrayBufferCalls: number;
+  arrayBufferBytes: number;
+  streamCalls: number;
+  streamRequestedBytes: number;
+};
+
+export type TargetWorkerFlowEvidence = {
+  readonly url: string;
+  readonly available: boolean;
+  readonly streams: ReadonlyArray<{
+    readonly id: string;
+    readonly chatId: string;
+    fa: number;
+    fw: number;
+    su: number;
+    lb: number;
+    credits: number;
+    sn: number;
+    sc: number;
+    se: number;
+    lastIncomingAt?: number;
+    lastOutgoingAt?: number;
+    lastCursor?: number;
+  }>;
+};
+
+export type TargetSelector = Locator | string;
+/** Safe-area insets in CSS pixels, as `env(safe-area-inset-*)` reports them. */
+export type TargetSafeAreaInsets = {
+  readonly top?: number;
+  readonly right?: number;
+  readonly bottom?: number;
+  readonly left?: number;
+};
+export type TargetViewport = {
+  readonly height: number;
+  readonly width: number;
+};
+export type TargetClickOptions = {
+  readonly button?: 'left' | 'middle' | 'right';
+  /** `2` for a double-click; passed straight to Playwright's `locator.click`. */
+  readonly clickCount?: number;
+  readonly force?: boolean;
+  readonly position?: { readonly x: number; readonly y: number };
+  readonly touch?: boolean;
+  readonly timeout?: number;
+};
+export type TargetMouseOptions = { readonly steps?: number };
+export type TargetCookie = {
+  readonly domain?: string;
+  readonly expires?: number;
+  readonly httpOnly?: boolean;
+  readonly name: string;
+  readonly path?: string;
+  readonly sameSite?: 'Lax' | 'None' | 'Strict';
+  readonly secure?: boolean;
+  readonly url?: string;
+  readonly value: string;
+};
+/** Where one gateway request is parked, and the turn it asks for. */
+export type TargetGatewayGate = {
+  readonly kind: 'request' | 'stream';
+  readonly turn: string;
+};
+
+/** What the agent-host gateway fixture holds and has been asked, right now. */
+export type TargetGatewayState = {
+  /** Bounded actual SSE writes, for correlating held provider output with channel delivery. */
+  readonly emitted: ReadonlyArray<{
+    readonly request: number;
+    readonly turn: string;
+    readonly event: string;
+    readonly at: number;
+    readonly text?: string;
+  }>;
+  /** Every request parked at a gate, oldest first. Its length is the pending count. */
+  readonly parked: readonly TargetGatewayGate[];
+  /** Per-turn provider-call counts, in the order the turns were first asked. */
+  readonly turns: readonly GatewayTurnCount[];
+};
+
+export type TargetReadOptions = { readonly attributes?: readonly string[] };
+export type TargetState = {
+  readonly attributes: Readonly<Record<string, string | null>>;
+  readonly boundingBox?: {
+    readonly height: number;
+    readonly width: number;
+    readonly x: number;
+    readonly y: number;
+  };
+  readonly className: string;
+  readonly count: number;
+  readonly focused: boolean;
+  readonly text: string | null;
+  readonly value?: string;
+  readonly visible: boolean;
+};
+export type TargetWorker = Readonly<{ identity: string; url: string }>;
+/** A request the page made that failed in the network or answered 4xx/5xx. */
+export type TargetRequestFailure = Readonly<{ url: string; resourceType: string; failure: string }>;
+export type TargetDiagnostics = {
+  readonly geospecFault?: { readonly kind: 'missing' | 'corrupt'; readonly url: string; readonly requests: number };
+  readonly geospecWasm?: {
+    readonly url: string;
+    readonly status: number;
+    readonly byteLength: number;
+    readonly sha256: string;
+    readonly sourceSha256: string;
+    readonly sourceByteLength: number;
+    readonly expectedSha256?: string;
+    readonly expectedByteLength?: number;
+  };
+  readonly consoleMessages: ReadonlyArray<{
+    readonly text: string;
+    readonly type: string;
+    /** The source the message names: the script that logged it, or the resource a network error is about. */
+    readonly url?: string;
+  }>;
+  readonly pageErrors: readonly string[];
+  readonly screenshot?: string;
+  readonly tracePath?: string;
+  readonly url: string;
+};
+export type TargetDownload = {
+  readonly base64: string;
+  readonly suggestedFilename: string;
+};
+export type TargetTauTestAccount = {
+  readonly creditAtoms?: string;
+  readonly email: string;
+  readonly name: string;
+  readonly password: string;
+};
+export type TargetTauBillingOperation = {
+  readonly customerState: string;
+  readonly executionStatus: string | null;
+  readonly meteringStatus: string | null;
+  readonly operationId: string;
+  readonly outputTokens: string | null;
+  readonly reasoningTokens: string | null;
+  readonly terminalRevision: string | null;
+};
+export type TargetWebGpuProfile = 'disabled' | 'hardware' | 'software';
+/** What the scripted gateway fixture needs beyond its turn script. */
+export type AgentHostGatewayFixtureOptions = {
+  /** Fail the first ST initialization, including internal fetch retries, until its terminal chat turn. */
+  readonly geospecFault?: 'missing' | 'corrupt';
+  /** Replaces the context window every catalog row advertises, so scripted usage can cross the compaction threshold. */
+  readonly contextWindow?: number;
+  /** Answers the host's compaction summary call (the one request it sends with no tools); `''` fails it. */
+  readonly summary?: string;
+};
+/** The AV-4 daemon fixture: an origin to navigate to, and a directory to read. */
+export type TargetTauServeFixture = {
+  readonly origin: string;
+  readonly workspace: string;
+};
+export type TargetWebGpuQualificationReport = Readonly<{
+  profile: TargetWebGpuProfile;
+  secureContext: boolean;
+  targetUrl: string;
+  browserVersion: string;
+  hostPlatform: string;
+  userAgent: string;
+  hasNavigatorGpu: boolean;
+  adapterAvailable: boolean;
+  adapter?: Readonly<{
+    vendor: string;
+    architecture: string;
+    device: string;
+    description: string;
+    fallback: boolean | undefined;
+  }>;
+  adapterClass: 'ambiguous' | 'hardware' | 'software' | undefined;
+  deviceAvailable: boolean;
+  validShaderErrors: number;
+  invalidShaderErrors: number;
+  expectedValidationError: string | undefined;
+  computeReadback: number | undefined;
+  expectedDeviceLossReason: string | undefined;
+  uncapturedErrors: readonly string[];
+  qualificationErrors: readonly string[];
+  browserGpuDiagnostics: string | undefined;
+  launchFingerprint: string;
+}>;
+
+declare module 'vitest' {
+  export interface ProvidedContext {
+    webGpuProfile: TargetWebGpuProfile;
+    acpLiveEnabled: boolean;
+    /** False when the server was started without COOP/COEP (`TAU_E2E_DISABLE_COI`). */
+    crossOriginIsolation: boolean;
+    /** DP18: the exact STL and GLB of `picovoxel.sphere-minus-beams` every host exports (tau-examples `exact-pins.json`). */
+    picovoxelExactPins: Readonly<Record<'stl' | 'glb', { readonly sha256: string; readonly bytes: number }>>;
+    /**
+     * T15: the prepared PicoGK browser bundle the UI build embedded, and a sample of its files as
+     * its own manifest records them; undefined when no bundle was staged for this run.
+     */
+    picogkBundle:
+      | Readonly<{
+          sha256: string;
+          files: ReadonlyArray<Readonly<{ path: string; sha256: string; byteLength: number }>>;
+        }>
+      | undefined;
+    /**
+     * The variable names each live GitHub row still needs (C10, A4; R17), never
+     * a value; an empty list means the row runs (`#support/github-identity.js`).
+     */
+    liveGithubMissing: Readonly<Record<'c10' | 'a4', readonly string[]>>;
+    /** FL4: the flag state this run opens every target in (`TAU_E2E_FLAG_STATE`, `#support/flag-state.js`). */
+    flagState: FlagStateName;
+  }
+}
+
+declare module 'vitest/browser' {
+  interface LocatorSelectors {
+    getByCss(selector: string): Locator;
+  }
+}
+
+export type UiBrowserCommands = {
+  uiAuthenticateTauTestUser(account: TargetTauTestAccount): Promise<void>;
+  uiAuthorizeGithub(identity: TargetGithubIdentity, trigger: string): Promise<TargetGithubAuthorization>;
+  uiAddCookies(cookies: readonly TargetCookie[]): Promise<void>;
+  uiAddContextInitScript(source: string, argument?: unknown): Promise<void>;
+  uiAddInitScript(source: string, argument?: unknown): Promise<void>;
+  uiCaptureTargetDiagnostics(): Promise<TargetDiagnostics>;
+  uiChooseTargetFile(
+    triggerSelector: string,
+    file: {
+      readonly base64: string;
+      readonly mimeType: string;
+      readonly name: string;
+    },
+  ): Promise<void>;
+  uiClickTarget(selector: string, options?: TargetClickOptions, surface?: TargetSurface): Promise<void>;
+  uiCloseSecondaryTarget(): Promise<void>;
+  uiCloseTarget(): Promise<void>;
+  uiCookies(): Promise<TargetCookie[]>;
+  uiCpuProfile(
+    action: 'start' | 'stop' | 'snapshot',
+    artifactName?: string,
+    surface?: TargetSurface,
+  ): Promise<string | undefined>;
+  uiDragTarget(source: string, target: string, surface?: TargetSurface): Promise<void>;
+  uiDownloadTarget(triggerSelector: string): Promise<TargetDownload>;
+  uiWriteArtifactChunk(name: string, base64: string, offset: number, finalSha256?: string): Promise<void>;
+  uiValidateProjectionFixture(
+    path: string,
+    expected?: { fixtureSha256: string; historySha256: string; turns: number },
+  ): Promise<ProjectionFixtureProof>;
+  uiGenerateProjectionDirectory(
+    seedPath: string,
+    seedSha256: string,
+    turns: number,
+    name: string,
+  ): Promise<{
+    receipt: ProjectionDirectoryReceipt;
+    proof: ProjectionFixtureProof;
+    expected: { fixtureSha256: string; historySha256: string; turns: number };
+  }>;
+  uiValidateProjectionDirectory(
+    path: string,
+    expected: { fixtureSha256: string; historySha256: string; turns: number },
+  ): Promise<ProjectionFixtureProof>;
+  uiReadFixtureChunk(path: string, offset: number): Promise<{ readonly base64: string; readonly eof: boolean }>;
+  uiStartObservedDownloads(): Promise<void>;
+  uiReadObservedDownloads(): Promise<readonly TargetDownload[]>;
+  uiStartObservedWasm(): Promise<void>;
+  uiReadObservedWasm(settle?: boolean): Promise<readonly string[]>;
+  uiStartObservedRequests(): Promise<void>;
+  uiReadObservedRequests(settle?: boolean): Promise<readonly string[]>;
+  uiEmulateColorScheme(colorScheme: 'dark' | 'light' | 'no-preference', surface?: TargetSurface): Promise<void>;
+  uiEmulateContrast(contrast: 'more' | 'no-preference', surface?: TargetSurface): Promise<void>;
+  uiEmulateCpuThrottling(rate: number, surface?: TargetSurface): Promise<void>;
+  uiEmulateForcedColors(forcedColors: 'active' | 'none', surface?: TargetSurface): Promise<void>;
+  uiEmulateReducedMotion(reducedMotion: 'no-preference' | 'reduce', surface?: TargetSurface): Promise<void>;
+  uiEmulateSafeAreaInsets(insets: TargetSafeAreaInsets | null, surface?: TargetSurface): Promise<void>;
+  uiEvaluateTarget(source: string, argument?: unknown, surface?: TargetSurface): Promise<unknown>;
+  uiEvaluateTargetLocator(
+    selector: string,
+    source: string,
+    argument?: unknown,
+    surface?: TargetSurface,
+  ): Promise<unknown>;
+  uiFillTarget(selector: string, value: string, surface?: TargetSurface): Promise<void>;
+  uiFocusTarget(selector: string, surface?: TargetSurface): Promise<void>;
+  uiGrantPermissions(permissions: readonly string[]): Promise<void>;
+  uiHoverTarget(selector: string, surface?: TargetSurface): Promise<void>;
+  uiInstallAgentHostGatewayFixture(
+    script?: readonly GatewayScriptTurn[],
+    options?: AgentHostGatewayFixtureOptions,
+  ): Promise<void>;
+  uiInstallModelCatalogFixture(latency?: number): Promise<void>;
+  uiStartModelCatalogApi(): Promise<{ readonly serverHasCatalog: boolean }>;
+  uiInstallPostHogFixture(apiKey: string): Promise<void>;
+  uiKeyboardPress(key: string, surface?: TargetSurface): Promise<void>;
+  uiMouseClick(x: number, y: number, options?: TargetClickOptions, surface?: TargetSurface): Promise<void>;
+  uiMouseDown(options?: { readonly button?: 'left' | 'middle' | 'right' }, surface?: TargetSurface): Promise<void>;
+  uiMouseMove(x: number, y: number, options?: TargetMouseOptions, surface?: TargetSurface): Promise<void>;
+  uiMouseUp(options?: { readonly button?: 'left' | 'middle' | 'right' }, surface?: TargetSurface): Promise<void>;
+  uiNavigateTarget(path: string, surface?: TargetSurface): Promise<Readonly<Record<string, string>>>;
+  uiOpenSecondaryTarget(path: string): Promise<void>;
+  uiOpenTarget(options?: {
+    readonly deviceScaleFactor?: number;
+    /** A phone's touch input: `(pointer: coarse)` matches and taps work. */
+    readonly hasTouch?: boolean;
+    readonly isMobile?: boolean;
+    /** Show the app's first-visit analytics banner; other specs open with Do Not Track, which hides it. */
+    readonly consentBanner?: boolean;
+    /** Let the web app's service worker register; other specs open with service workers blocked. */
+    readonly serviceWorker?: boolean;
+  }): Promise<void>;
+  uiPressTarget(selector: string, key: string, surface?: TargetSurface): Promise<void>;
+  uiSetFlagState(state: FlagStateName): Promise<void>;
+  uiQualifyWebGpu(profile: TargetWebGpuProfile): Promise<TargetWebGpuQualificationReport>;
+  uiReadTarget(selector: string, options?: TargetReadOptions, surface?: TargetSurface): Promise<TargetState>;
+  uiReadTauVertexOperations(email: string): Promise<TargetTauBillingOperation[]>;
+  uiReadAgentHostApiRequests(): Promise<string[]>;
+  uiReadLinkedGithubFixture(): Promise<TargetLinkedGithubState>;
+  uiReadPostHogEvents(
+    names: readonly string[],
+  ): Promise<ReadonlyArray<Readonly<{ event: string; properties: Readonly<Record<string, unknown>> }>>>;
+  uiReadPostHogSummary(sentinels: readonly string[]): Promise<{
+    readonly events: string[];
+    readonly requests: string[];
+    readonly present: Record<string, boolean>;
+  }>;
+  uiHoldNextAgentHostGatewayRequest(): Promise<void>;
+  uiReadAgentHostGatewayRequests(): Promise<unknown[]>;
+  uiReadAgentHostGatewayState(): Promise<TargetGatewayState>;
+  uiReleaseAgentHostGatewayFixture(turn?: string): Promise<void>;
+  uiReleaseAgentHostGatewayRequest(turn?: string): Promise<void>;
+  uiWaitForAgentHostGatewayGate(
+    match?: { readonly kind?: 'request' | 'stream'; readonly turn?: string },
+    timeoutMilliseconds?: number,
+  ): Promise<TargetGatewayGate>;
+  uiSetAgentHostGatewayFailure(failure?: {
+    readonly status: number;
+    readonly message: string;
+    readonly type?: string;
+  }): Promise<void>;
+  uiCollectGarbage(surface?: TargetSurface): Promise<void>;
+  uiReadTargetEvents(): Promise<{
+    readonly geospecWasm?: TargetDiagnostics['geospecWasm'];
+    readonly geospecFault?: TargetDiagnostics['geospecFault'];
+    readonly consoleMessages: ReadonlyArray<{
+      readonly text: string;
+      readonly type: string;
+      readonly url?: string;
+    }>;
+    readonly pageErrors: readonly string[];
+    readonly requestFailures: readonly TargetRequestFailure[];
+  }>;
+  uiReloadTarget(surface?: TargetSurface): Promise<void>;
+  uiScreenshotTarget(selector?: string | null, artifactName?: string, surface?: TargetSurface): Promise<string>;
+  uiSampleCameraDuringClick(selector: string, frameCount: number): Promise<unknown[]>;
+  uiScrollTarget(selector: string, surface?: TargetSurface): Promise<void>;
+  uiSetTargetOffline(offline: boolean): Promise<void>;
+  uiFailEntryChunk(fail: boolean): Promise<void>;
+  uiSetViewport(viewport: TargetViewport, surface?: TargetSurface): Promise<void>;
+  uiStartHostFixture(): Promise<string>;
+  uiStartLinkedGithubFixture(): Promise<TargetLinkedGithub>;
+  uiStartTauServeFixture(options?: { readonly externalAgents?: boolean | 'codex' }): Promise<TargetTauServeFixture>;
+  uiStopTauServeFixture(): Promise<void>;
+  uiReleaseTauServeGateway(): Promise<void>;
+  uiIsTauServeGatewayHeld(): Promise<boolean>;
+  uiReadTauServeFile(relativePath: string): Promise<string | undefined>;
+  uiListTauServeChats(): Promise<readonly string[]>;
+  uiWorkerCatchUpFlow(install: boolean, surface?: TargetSurface): Promise<readonly TargetWorkerFlowEvidence[]>;
+  uiProjectionImportWork(
+    install: boolean,
+    workerUrl: string,
+  ): Promise<{ worker: ProjectionImportWork; reader: ProjectionImportWork }>;
+  uiTargetWorkers(urlSubstring?: string, surface?: TargetSurface): Promise<readonly TargetWorker[]>;
+  uiAgentHostNestedWorkers(
+    install: boolean,
+    urlSubstring?: string,
+    surface?: TargetSurface,
+  ): Promise<readonly TargetWorker[]>;
+  uiTypeTarget(selector: string, value: string, surface?: TargetSurface): Promise<void>;
+  uiWaitForTarget(source: string, argument?: unknown, timeout?: number, surface?: TargetSurface): Promise<void>;
+};
+
+locators.extend({
+  getByCss(selector: string) {
+    return `css=${selector}`;
+  },
+});
+
+const server = vitestServer as typeof vitestServer & { readonly commands: UiBrowserCommands };
+const selectorFor = (selector: TargetSelector): string => (typeof selector === 'string' ? selector : selector.selector);
+export const { commands } = server;
+
+export const navigate = (path: string, surface?: TargetSurface): Promise<Readonly<Record<string, string>>> =>
+  server.commands.uiNavigateTarget(path, surface);
+export const reload = (surface?: TargetSurface): Promise<void> => server.commands.uiReloadTarget(surface);
+export const setViewport = (viewport: TargetViewport, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiSetViewport(viewport, surface);
+export const emulateColorScheme = (
+  colorScheme: 'dark' | 'light' | 'no-preference',
+  surface?: TargetSurface,
+): Promise<void> => server.commands.uiEmulateColorScheme(colorScheme, surface);
+export const emulateContrast = (contrast: 'more' | 'no-preference', surface?: TargetSurface): Promise<void> =>
+  server.commands.uiEmulateContrast(contrast, surface);
+/** Slow the page's CPU by `rate`, 1 for none; it holds across reloads (see `uiEmulateCpuThrottling`). */
+export const emulateCpuThrottling = (rate: number, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiEmulateCpuThrottling(rate, surface);
+export const emulateForcedColors = (forcedColors: 'active' | 'none', surface?: TargetSurface): Promise<void> =>
+  server.commands.uiEmulateForcedColors(forcedColors, surface);
+export const emulateReducedMotion = (
+  reducedMotion: 'no-preference' | 'reduce',
+  surface?: TargetSurface,
+): Promise<void> => server.commands.uiEmulateReducedMotion(reducedMotion, surface);
+/** Emulate a notched device's safe-area insets, or clear them with `null` (see `uiEmulateSafeAreaInsets`). */
+export const emulateSafeAreaInsets = (insets: TargetSafeAreaInsets | null, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiEmulateSafeAreaInsets(insets, surface);
+export const click = (selector: TargetSelector, options?: TargetClickOptions, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiClickTarget(selectorFor(selector), options ?? {}, surface);
+export const fill = (selector: TargetSelector, value: string, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiFillTarget(selectorFor(selector), value, surface);
+export const type = (selector: TargetSelector, value: string, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiTypeTarget(selectorFor(selector), value, surface);
+export const press = (selector: TargetSelector, key: string, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiPressTarget(selectorFor(selector), key, surface);
+export const hover = (selector: TargetSelector, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiHoverTarget(selectorFor(selector), surface);
+export const focus = (selector: TargetSelector, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiFocusTarget(selectorFor(selector), surface);
+export const grantPermissions = (permissions: readonly string[]): Promise<void> =>
+  server.commands.uiGrantPermissions(permissions);
+export const scrollIntoView = (selector: TargetSelector, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiScrollTarget(selectorFor(selector), surface);
+export const drag = (source: TargetSelector, destination: TargetSelector, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiDragTarget(selectorFor(source), selectorFor(destination), surface);
+export const download = (trigger: TargetSelector): Promise<TargetDownload> =>
+  server.commands.uiDownloadTarget(selectorFor(trigger));
+export const read = (
+  selector: TargetSelector,
+  options?: TargetReadOptions,
+  surface?: TargetSurface,
+): Promise<TargetState> => server.commands.uiReadTarget(selectorFor(selector), options ?? {}, surface);
+export const textContent = async (selector: TargetSelector, surface?: TargetSurface): Promise<string | null> =>
+  (await read(selector, undefined, surface)).text;
+export const getAttribute = async (
+  selector: TargetSelector,
+  name: string,
+  surface?: TargetSurface,
+): Promise<string | null> => (await read(selector, { attributes: [name] }, surface)).attributes[name] ?? null;
+export const boundingBox = async (
+  selector: TargetSelector,
+  surface?: TargetSurface,
+): Promise<TargetState['boundingBox']> => (await read(selector, undefined, surface)).boundingBox;
+export const isVisible = async (selector: TargetSelector, surface?: TargetSurface): Promise<boolean> =>
+  (await read(selector, undefined, surface)).visible;
+export const evaluate = async <Result, Argument = undefined>(
+  callback: (argument: Argument) => Result | Promise<Result>,
+  argument?: Argument,
+  surface?: TargetSurface,
+): Promise<Result> =>
+  server.commands.uiEvaluateTarget(
+    callback.toString(),
+    argument ?? (surface ? null : undefined),
+    surface,
+  ) as Promise<Result>;
+export const evaluateLocator = async <Result, Argument = undefined>(
+  selector: TargetSelector,
+  callback: (element: Element, argument: Argument) => Result | Promise<Result>,
+  argument?: Argument,
+  surface?: TargetSurface,
+): Promise<Result> =>
+  server.commands.uiEvaluateTargetLocator(
+    selectorFor(selector),
+    callback.toString(),
+    argument ?? (surface ? null : undefined),
+    surface,
+  ) as Promise<Result>;
+export const addInitScript = <Argument>(
+  callback: (argument: Argument) => unknown,
+  argument?: Argument,
+): Promise<void> => server.commands.uiAddInitScript(callback.toString(), argument);
+export const waitFor = <Argument>(
+  callback: (argument: Argument) => unknown,
+  argument?: Argument,
+  options?: { readonly surface?: TargetSurface; readonly timeout?: number },
+): Promise<void> =>
+  server.commands.uiWaitForTarget(
+    callback.toString(),
+    // The command transport drops `undefined` positions, so a later option needs a `null` placeholder.
+    argument ?? (options?.timeout === undefined && !options?.surface ? undefined : null),
+    options?.timeout,
+    options?.surface,
+  );
+export const keyboardPress = (key: string, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiKeyboardPress(key, surface);
+export const mouseMove = (x: number, y: number, options?: TargetMouseOptions, surface?: TargetSurface): Promise<void> =>
+  server.commands.uiMouseMove(x, y, options ?? {}, surface);
+export const mouseDown = (
+  options?: { readonly button?: 'left' | 'middle' | 'right' },
+  surface?: TargetSurface,
+): Promise<void> => server.commands.uiMouseDown(options ?? {}, surface);
+export const mouseUp = (
+  options?: { readonly button?: 'left' | 'middle' | 'right' },
+  surface?: TargetSurface,
+): Promise<void> => server.commands.uiMouseUp(options ?? {}, surface);
+export const mouseClick = (
+  x: number,
+  y: number,
+  options?: TargetClickOptions,
+  surface?: TargetSurface,
+): Promise<void> => server.commands.uiMouseClick(x, y, options, surface);
+export const screenshot = (
+  selector?: TargetSelector,
+  artifactName?: string,
+  surface?: TargetSurface,
+): Promise<string> =>
+  server.commands.uiScreenshotTarget(
+    // The command transport drops `undefined` positions, so a page screenshot with a name sends `null`.
+    selector ? selectorFor(selector) : artifactName === undefined && surface === undefined ? undefined : null,
+    artifactName ?? (surface ? '' : undefined),
+    surface,
+  );
+export const sampleCameraDuringClick = <Camera>(selector: TargetSelector, frameCount: number): Promise<Camera[]> =>
+  server.commands.uiSampleCameraDuringClick(selectorFor(selector), frameCount) as Promise<Camera[]>;
+export const openSecondary = (path: string): Promise<void> => server.commands.uiOpenSecondaryTarget(path);
+export const closeSecondary = (): Promise<void> => server.commands.uiCloseSecondaryTarget();
+/** Install or read bounded catch-up flow evidence from page-visible resident agent-host workers. */
+export const workerCatchUpFlow = (
+  install: boolean,
+  surface?: TargetSurface,
+): Promise<readonly TargetWorkerFlowEvidence[]> => server.commands.uiWorkerCatchUpFlow(install, surface);
+
+/** Run a full garbage collection in the page, so weak references read next reach only what it still holds. */
+export const collectGarbage = (surface?: TargetSurface): Promise<void> => server.commands.uiCollectGarbage(surface);
+/** The dedicated workers the page is running, by stable instance identity and script URL (V21). */
+export const workers = (urlSubstring?: string, surface?: TargetSurface): Promise<readonly TargetWorker[]> =>
+  server.commands.uiTargetWorkers(urlSubstring, surface);
+/**
+ * The live workers the resident agent-host workers started, observed in every engine (WebKit lists none of them).
+ * Install before the host starts any; a read throws unless every agent-host worker carries the probe.
+ */
+export const agentHostNestedWorkers = (
+  install: boolean,
+  urlSubstring?: string,
+  surface?: TargetSurface,
+): Promise<readonly TargetWorker[]> => server.commands.uiAgentHostNestedWorkers(install, urlSubstring, surface);
+export const cookies = (): Promise<TargetCookie[]> => server.commands.uiCookies();
+/** Save intrusive diagnostic heap snapshots through the active page/worker profiler sessions. */
+export const snapshotProjectionHeap = async (artifactName: string, surface?: TargetSurface): Promise<string> =>
+  (await server.commands.uiCpuProfile('snapshot', artifactName, surface)) ?? artifactName;
+
+/** Begin a CPU profile of one page; see {@link stopCpuProfile}. */
+export const startCpuProfile = async (surface?: TargetSurface): Promise<void> => {
+  await server.commands.uiCpuProfile('start', undefined, surface);
+};
+/** End the page's CPU profile and write it as `artifactName`; resolves to its path. */
+export const stopCpuProfile = async (artifactName: string, surface?: TargetSurface): Promise<string> =>
+  (await server.commands.uiCpuProfile('stop', artifactName, surface)) ?? artifactName;
+export const addCookies = (values: readonly TargetCookie[]): Promise<void> => server.commands.uiAddCookies(values);
+export const authenticateTauTestUser = (account: TargetTauTestAccount): Promise<void> =>
+  server.commands.uiAuthenticateTauTestUser(account);
+export const readTauVertexOperations = (email: string): Promise<TargetTauBillingOperation[]> =>
+  server.commands.uiReadTauVertexOperations(email);
+export const chooseFile = (
+  trigger: TargetSelector,
+  file: {
+    readonly base64: string;
+    readonly mimeType: string;
+    readonly name: string;
+  },
+): Promise<void> => server.commands.uiChooseTargetFile(selectorFor(trigger), file);
+export const events = (): Promise<
+  Pick<TargetDiagnostics, 'consoleMessages' | 'pageErrors' | 'geospecWasm' | 'geospecFault'> & {
+    readonly requestFailures: readonly TargetRequestFailure[];
+  }
+> => server.commands.uiReadTargetEvents();
+export const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+export const writeArtifact = async (name: string, content: string): Promise<void> => {
+  const bytes = new TextEncoder().encode(content);
+  const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  for (let offset = 0; offset < bytes.length || offset === 0; offset += 65_536) {
+    const chunk = bytes.subarray(offset, offset + 65_536);
+    // oxlint-disable-next-line no-await-in-loop -- Exact binary chunks must arrive in physical file order.
+    await server.commands.uiWriteArtifactChunk(
+      name,
+      uint8ArrayToBase64(chunk),
+      offset,
+      offset + chunk.length === bytes.length ? sha256 : undefined,
+    );
+  }
+};
+
+export const validateProjectionFixture = (
+  path: string,
+  expected?: { fixtureSha256: string; historySha256: string; turns: number },
+): Promise<ProjectionFixtureProof> => server.commands.uiValidateProjectionFixture(path, expected);
+
+/** Produce a raw directory fixture without transporting expanded history through the browser. */
+export const generateProjectionDirectory = (
+  seedPath: string,
+  seedSha256: string,
+  turns: number,
+  name: string,
+): ReturnType<UiBrowserCommands['uiGenerateProjectionDirectory']> =>
+  server.commands.uiGenerateProjectionDirectory(seedPath, seedSha256, turns, name);
+
+/** Independently reopen raw physical bytes and validate the anchored receipt. */
+export const validateProjectionDirectory = (
+  path: string,
+  expected: { fixtureSha256: string; historySha256: string; turns: number },
+): Promise<ProjectionFixtureProof> => server.commands.uiValidateProjectionDirectory(path, expected);
+
+/** Read exact immutable fixture UTF8 through bounded binary replies. */
+export const readFixtureText = async (path: string): Promise<string> => {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const parts: string[] = [];
+  let offset = 0;
+  for (;;) {
+    // oxlint-disable-next-line no-await-in-loop -- Decode exact ordered chunks across multibyte character boundaries.
+    const chunk = await server.commands.uiReadFixtureChunk(path, offset);
+    const bytes = base64ToUint8Array(chunk.base64);
+    parts.push(decoder.decode(bytes, { stream: !chunk.eof }));
+    offset += bytes.length;
+    if (chunk.eof) {
+      return parts.join('');
+    }
+    if (bytes.length === 0) {
+      throw new Error('Fixture read made no progress.');
+    }
+  }
+};
+export const currentUrl = (): Promise<string> => evaluate(() => location.href);
+export const currentWebGpuProfile = (): TargetWebGpuProfile => inject('webGpuProfile');
+export const qualifyWebGpu = (profile = currentWebGpuProfile()): Promise<TargetWebGpuQualificationReport> =>
+  server.commands.uiQualifyWebGpu(profile);
+/**
+ * The backend a viewport canvas presents on when it asks for `requested` in this run's WebGPU profile. Chromium on the
+ * software adapter (SwiftShader) cannot allocate a WebGPU canvas swap chain: the browser destroys the device at the first
+ * presented frame, so a WebGPU viewport there starts on WebGL, as it would for a user on that browser. Offscreen WebGPU
+ * (thumbnails, headless capture) still works there and is not affected.
+ */
+export const presentedGraphicsBackend = (requested: 'webgl' | 'webgpu'): 'webgl' | 'webgpu' =>
+  requested === 'webgpu' && currentWebGpuProfile() === 'software' ? 'webgl' : requested;
+/** How long a viewport may take to present a canvas incarnation, a WebGL remount after a WebGPU canvas loss included. */
+const presentationTimeout = 10_000;
+/**
+ * The render tier the viewport's current canvas incarnation presents on, once it has presented. The section-view bridge
+ * answers for its own incarnation, and a WebGPU canvas the browser destroys remounts on WebGL with a new bridge, so the
+ * page waits, within {@link presentationTimeout}, for an incarnation that has presented and still draws. Playwright's
+ * `waitForFunction` takes a returned promise as an answer without awaiting it, so the wait runs in the page.
+ *
+ * @param backend - When given, wait for an incarnation that presents on this backend, as a fallback remount does.
+ * @returns The tier and its renderer generation.
+ */
+export const presentedRenderTier = async (backend?: 'webgl' | 'webgpu'): Promise<SectionViewTestPresentedTier> => {
+  const presented = await evaluate(
+    async ({ expected, timeout }) => {
+      const deadline = performance.now() + timeout;
+      const nextFrame = async (): Promise<void> =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      while (performance.now() < deadline) {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+        const presentation = bridge
+          ? Promise.race([
+              bridge.whenPresented(),
+              new Promise<undefined>((resolve) => {
+                setTimeout(resolve, Math.max(0, deadline - performance.now()));
+              }),
+            ])
+          : undefined;
+        // oxlint-disable-next-line no-await-in-loop -- Each incarnation is awaited in turn until one presents and holds.
+        const current = await presentation;
+        if (current && (expected === null || current.tier.backend === expected)) {
+          return current;
+        }
+        // oxlint-disable-next-line no-await-in-loop -- A replaced or missing bridge is looked up again next frame.
+        await nextFrame();
+      }
+      return undefined;
+    },
+    { expected: backend ?? null, timeout: presentationTimeout },
+  );
+  if (!presented) {
+    const observed = await evaluate(() => {
+      const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+      return bridge
+        ? {
+            backend: bridge.getGraphicsBackend(),
+            rendererGeneration: bridge.getRendererGeneration(),
+            fallbackReason: bridge.getWebGpuFallbackReason(),
+          }
+        : 'no section-view bridge is mounted';
+    });
+    throw new Error(
+      `No viewport canvas presented${backend ? ` on ${backend}` : ''} within ${presentationTimeout} ms; the page answers ${JSON.stringify(observed)}`,
+    );
+  }
+  return presented;
+};
+export const expectGraphicsBackend = async (backend: 'webgl' | 'webgpu'): Promise<SectionViewTestPresentedTier> => {
+  const presented = await presentedRenderTier(backend);
+  expect(presented.tier.backend).toBe(backend);
+  return presented;
+};
+/**
+ * Expect a viewport canvas that asked for `requested` to present on {@link presentedGraphicsBackend}. Where that is
+ * WebGL in place of WebGPU, the page must have fallen back for the one expected reason, a WebGPU canvas that could not
+ * present (`canvas-loss`): a WebGPU start failing any other way is a regression, not the software adapter's limit.
+ */
+export const expectPresentedGraphicsBackend = async (requested: 'webgl' | 'webgpu'): Promise<void> => {
+  const presented = presentedGraphicsBackend(requested);
+  const { tier } = await expectGraphicsBackend(presented);
+  if (presented !== requested) {
+    expect(tier.fallbackReason, 'WebGPU fell back to WebGL for an unexpected reason').toBe('canvas-loss');
+  }
+};
+/** The presented viewport's renderer generation: it changes whenever the viewport's renderer is replaced. */
+export const rendererGeneration = async (): Promise<number> => (await presentedRenderTier()).rendererGeneration;
+/**
+ * Every mounted viewport has presented and framed its geometry. Each bridge answers for its own canvas incarnation, so
+ * a bridge whose canvas has not presented yet keeps the wait open.
+ */
+export const expectGeometryFramed = async (): Promise<void> => {
+  try {
+    await expect
+      .poll(
+        async () =>
+          evaluate(async () => {
+            const bridges = globalThis.__TAU_SECTION_VIEW_TEST_BRIDGES__;
+            if (!bridges || bridges.length === 0) {
+              return false;
+            }
+            // A bridge whose canvas has not presented keeps the wait open; one that never will answers `undefined`.
+            const presented = await Promise.race([
+              Promise.all(bridges.map(async (bridge) => bridge.whenPresented())),
+              new Promise<undefined>((resolve) => {
+                setTimeout(resolve, 1000);
+              }),
+            ]);
+            return Boolean(presented?.every(Boolean)) && bridges.every((bridge) => bridge.isGeometryFramed());
+          }),
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+  } catch (error) {
+    const [diagnostics, targetEvents] = await Promise.all([
+      evaluate(() =>
+        globalThis.__TAU_SECTION_VIEW_TEST_BRIDGES__?.map((bridge) => ({
+          actorError: bridge.getCamera().actorError,
+          actorStatus: bridge.getCamera().actorStatus,
+          backend: bridge.getGraphicsBackend(),
+          isGeometryFramed: bridge.isGeometryFramed(),
+        })),
+      ),
+      events(),
+    ]);
+    throw new Error(`Geometry did not reach a framed camera state: ${JSON.stringify({ diagnostics, targetEvents })}`, {
+      cause: error,
+    });
+  }
+};
+export const startHostFixture = (): Promise<string> => server.commands.uiStartHostFixture();
+
+/** AV-4 (rung 1): a real `tau serve` daemon serving the real serve-mode SPA. */
+export const startTauServeFixture = (
+  options: { readonly externalAgents?: boolean | 'codex' } = {},
+): Promise<TargetTauServeFixture> => server.commands.uiStartTauServeFixture(options);
+export const stopTauServeFixture = (): Promise<void> => server.commands.uiStopTauServeFixture();
+export const releaseTauServeGateway = (): Promise<void> => server.commands.uiReleaseTauServeGateway();
+export const isTauServeGatewayHeld = (): Promise<boolean> => server.commands.uiIsTauServeGatewayHeld();
+export const readTauServeFile = (relativePath: string): Promise<string | undefined> =>
+  server.commands.uiReadTauServeFile(relativePath);
+export const listTauServeChats = (): Promise<readonly string[]> => server.commands.uiListTauServeChats();
+/** Installs the Anthropic-wire gateway fixture; omit `script` for the default browser-host script. */
+export const installAgentHostGatewayFixture = (
+  script?: readonly GatewayScriptTurn[],
+  options?: AgentHostGatewayFixtureOptions,
+): Promise<void> => server.commands.uiInstallAgentHostGatewayFixture(script, options);
+/**
+ * Answers the page's `/v1/models` with the API's real catalog rows, each after `latency` milliseconds; the UI
+ * server's own prefetch is untouched.
+ */
+export const installModelCatalogFixture = (latency?: number): Promise<void> =>
+  server.commands.uiInstallModelCatalogFixture(latency);
+/**
+ * Serves the API's real catalog on the API origin, so the UI server's own prefetch finds it as in production, and
+ * waits until that server renders with it; closes with the target (see `uiStartModelCatalogApi`).
+ */
+export const startModelCatalogApi = (): Promise<{ readonly serverHasCatalog: boolean }> =>
+  server.commands.uiStartModelCatalogApi();
+export const readAgentHostGatewayRequests = (): Promise<unknown[]> => server.commands.uiReadAgentHostGatewayRequests();
+/** Releases a response parked mid-stream; omit `turn` for the newest gate. */
+export const releaseAgentHostGatewayFixture = (turn?: string): Promise<void> =>
+  server.commands.uiReleaseAgentHostGatewayFixture(turn);
+/** Holds the next provider request at its entry — the turn stays in `queued.dispatched` (F1). */
+export const holdNextAgentHostGatewayRequest = (): Promise<void> => server.commands.uiHoldNextAgentHostGatewayRequest();
+/** Releases a request parked at its entry; omit `turn` for the newest gate. */
+export const releaseAgentHostGatewayRequest = (turn?: string): Promise<void> =>
+  server.commands.uiReleaseAgentHostGatewayRequest(turn);
+/** What the gateway holds and what it has been asked: parked gates and per-turn call counts (F5). */
+export const readAgentHostGatewayState = (): Promise<TargetGatewayState> =>
+  server.commands.uiReadAgentHostGatewayState();
+/** Waits until a request is parked at a matching gate, and answers which one (F2). */
+export const waitForAgentHostGatewayGate = (
+  match?: { readonly kind?: 'request' | 'stream'; readonly turn?: string },
+  timeoutMilliseconds?: number,
+): Promise<TargetGatewayGate> => server.commands.uiWaitForAgentHostGatewayGate(match, timeoutMilliseconds);
+/** Every `/v1/chat/...` path the page asked the (absent) API for since the fixture was installed. */
+export const readAgentHostApiRequests = (): Promise<string[]> => server.commands.uiReadAgentHostApiRequests();
+/** Intercepts first-party PostHog requests and serves the installed recorder locally. */
+export const installPostHogFixture = (apiKey: string): Promise<void> => server.commands.uiInstallPostHogFixture(apiKey);
+export const readPostHogSummary = (
+  sentinels: readonly string[],
+): Promise<{
+  readonly events: string[];
+  readonly requests: string[];
+  readonly present: Record<string, boolean>;
+}> => server.commands.uiReadPostHogSummary(sentinels);
+
+/** The captured PostHog events with these names, in order, each with the properties it carried. */
+export const readPostHogEvents = (
+  names: readonly string[],
+): Promise<ReadonlyArray<Readonly<{ event: string; properties: Readonly<Record<string, unknown>> }>>> =>
+  server.commands.uiReadPostHogEvents(names);
+
+/** The two points a row can park a chat's turn at; see {@link holdChatTurn}. */
+export type ChatTurnHold = 'admission' | 'settlement';
+
+/**
+ * Park this chat's next admission or settlement.
+ *
+ * The gateway fixture cannot hold either: `run.queued.admitting` is over before
+ * a provider call exists, and `run.finishing.settling` runs after the stream
+ * the row is watching has closed. The page's own `TAU_DEBUG` probe holds them
+ * (`apps/ui/app/chat-clients/debug-probes.tsx`, mounted by `focused-chat-gate.tsx`
+ * only under `ENV.TAU_DEBUG`, which `global-setup.ts` sets for this suite).
+ *
+ * Waits for the probe rather than racing the focused chat's mount. Arming twice
+ * is a no-op, and the probe releases both holds when it unmounts.
+ *
+ * @param hold - Which point to park at.
+ * @returns Nothing.
+ */
+export const holdChatTurn = async (hold: ChatTurnHold): Promise<void> => {
+  await expect
+    .poll(
+      async () => evaluate(() => typeof (globalThis as Record<string, unknown>)['__tauHoldChatTurn'] === 'function'),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  await evaluate((which: ChatTurnHold) => {
+    (globalThis as unknown as { __tauHoldChatTurn: (value: ChatTurnHold) => void }).__tauHoldChatTurn(which);
+  }, hold);
+};
+
+/**
+ * Let a parked admission or settlement carry on; releasing an unarmed hold is a no-op.
+ *
+ * @param hold - The point to release.
+ * @returns Nothing.
+ */
+export const releaseChatTurn = async (hold: ChatTurnHold): Promise<void> => {
+  await evaluate((which: ChatTurnHold) => {
+    (globalThis as unknown as { __tauReleaseChatTurn?: (value: ChatTurnHold) => void }).__tauReleaseChatTurn?.(which);
+  }, hold);
+};
+/**
+ * Arms (or disarms, with no argument) a provider refusal on the gateway fixture.
+ *
+ * `type` is the wire error type and is what decides whether the refused run can
+ * be continued: omit it and the fixture answers the upstream provider's own
+ * `api_error`, which the gateway maps to `UNKNOWN_GATEWAY_ERROR` — a failure no
+ * resume can continue, so the card reads *Try again* and re-admits. Name one of
+ * the gateway's own codes (`INVALID_REQUEST`, `INSUFFICIENT_CREDIT`, …) for the
+ * refusal a resume *can* continue under the same run.
+ */
+export const setAgentHostGatewayFailure = (failure?: {
+  readonly status: number;
+  readonly message: string;
+  readonly type?: string;
+}): Promise<void> => server.commands.uiSetAgentHostGatewayFailure(failure);
+
+export const expectVisible = async (
+  selector: TargetSelector,
+  timeout = 10_000,
+  surface?: TargetSurface,
+): Promise<void> => {
+  await expect
+    .poll(async () => (await read(selector, undefined, surface)).visible, {
+      timeout,
+    })
+    .toBe(true);
+};
+export const expectHidden = async (
+  selector: TargetSelector,
+  timeout = 10_000,
+  surface?: TargetSurface,
+): Promise<void> => {
+  await expect
+    .poll(async () => (await read(selector, undefined, surface)).visible, {
+      timeout,
+    })
+    .toBe(false);
+};
+export const expectCount = async (
+  selector: TargetSelector,
+  count: number,
+  timeout = 10_000,
+  surface?: TargetSurface,
+): Promise<void> => {
+  await expect
+    .poll(async () => (await read(selector, undefined, surface)).count, {
+      timeout,
+    })
+    .toBe(count);
+};
+export const expectText = async (
+  selector: TargetSelector,
+  expected: string | RegExp,
+  timeout = 10_000,
+): Promise<void> => {
+  const assertion = expect.poll(async () => (await read(selector)).text, {
+    timeout,
+  });
+  if (typeof expected === 'string') {
+    await assertion.toBe(expected);
+  } else {
+    await assertion.toMatch(expected);
+  }
+};
+export const expectContainingText = async (
+  selector: TargetSelector,
+  expected: string,
+  timeout = 10_000,
+): Promise<void> => {
+  await expect.poll(async () => (await read(selector)).text, { timeout }).toContain(expected);
+};
+export const expectAttribute = async (
+  selector: TargetSelector,
+  name: string,
+  expected: string | RegExp,
+  timeout = 10_000,
+): Promise<void> => {
+  const assertion = expect.poll(async () => getAttribute(selector, name), {
+    timeout,
+  });
+  if (typeof expected === 'string') {
+    await assertion.toBe(expected);
+  } else {
+    await assertion.toMatch(expected);
+  }
+};
+/**
+ * Expect the element's accessible description (its `aria-describedby` references, read even when hidden, as assistive
+ * technology reads them) to be `expected`.
+ */
+export const expectAccessibleDescription = async (
+  selector: TargetSelector,
+  expected: string,
+  timeout = 10_000,
+): Promise<void> => {
+  await expect
+    .poll(
+      async () =>
+        (await read(selector)).count === 0
+          ? undefined
+          : evaluateLocator(selector, (element) =>
+              (element.getAttribute('aria-describedby') ?? '')
+                .split(/\s+/u)
+                .filter(Boolean)
+                .map((id) => element.ownerDocument.querySelector(`#${CSS.escape(id)}`)?.textContent.trim() ?? '')
+                .filter(Boolean)
+                .join(' '),
+            ),
+      { timeout },
+    )
+    .toBe(expected);
+};
+export const expectClass = async (selector: TargetSelector, expected: RegExp, timeout = 10_000): Promise<void> => {
+  await expect.poll(async () => (await read(selector)).className, { timeout }).toMatch(expected);
+};
+export const expectFocused = async (selector: TargetSelector, timeout = 10_000): Promise<void> => {
+  await expect.poll(async () => (await read(selector)).focused, { timeout }).toBe(true);
+};
+export const expectValue = async (selector: TargetSelector, expected: string, timeout = 10_000): Promise<void> => {
+  await expect.poll(async () => (await read(selector)).value, { timeout }).toBe(expected);
+};
+export const expectUrl = async (expected: string | RegExp, timeout = 10_000): Promise<void> => {
+  const assertion = expect.poll(currentUrl, { timeout });
+  if (typeof expected === 'string') {
+    await assertion.toBe(expected);
+  } else {
+    await assertion.toMatch(expected);
+  }
+};
+
+/** Start passive per-page download capture before the Principal's product gestures. */
+export const startObservedDownloads = (): Promise<void> => server.commands.uiStartObservedDownloads();
+/** Read exact bytes of actual operator-triggered downloads without a product click. */
+export const readObservedDownloads = (): Promise<readonly TargetDownload[]> =>
+  server.commands.uiReadObservedDownloads();
+/** Start recording every WASM transfer of the target, its frames and their workers. */
+export const startObservedWasm = (): Promise<void> => server.commands.uiStartObservedWasm();
+/** Drain the WASM URLs the target transferred since the last read, by default after its network settles. */
+export const readObservedWasm = (settle?: boolean): Promise<readonly string[]> =>
+  server.commands.uiReadObservedWasm(settle);
+/** Start recording the path of every request of the target, its frames and their workers. */
+export const startObservedRequests = (): Promise<void> => server.commands.uiStartObservedRequests();
+/** Drain the request paths the target started since the last read, by default after its network settles. */
+export const readObservedRequests = (settle?: boolean): Promise<readonly string[]> =>
+  server.commands.uiReadObservedRequests(settle);

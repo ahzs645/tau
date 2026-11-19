@@ -1,10 +1,11 @@
 import type { IDockviewPanelHeaderProps } from 'dockview-react';
-import { ContextMenu, ContextMenuTrigger, ContextMenuContent } from '#components/ui/context-menu.js';
+import { ContextMenu, ContextMenuTrigger, ContextMenuContent } from '@taucad/ui/components/context-menu';
 import { DockviewTab } from '#components/panes/dockview-tab.js';
-import type { DockviewTabProps } from '#components/panes/dockview-tab.js';
+import type { DockviewTabIconRenderer, DockviewTabProps } from '#components/panes/dockview-tab.js';
 
 export type WithTabContextMenuOptions = {
   readonly leadingIcon?: DockviewTabProps['leadingIcon'];
+  readonly getIcon?: DockviewTabIconRenderer;
 };
 
 /**
@@ -26,7 +27,7 @@ export function withTabContextMenu(
     return (
       <ContextMenu>
         <ContextMenuTrigger className='contents'>
-          <DockviewTab {...properties} leadingIcon={leadingIcon} />
+          <DockviewTab {...properties} leadingIcon={leadingIcon} icon={options?.getIcon?.(properties)} />
         </ContextMenuTrigger>
         <ContextMenuContent>
           <MenuContent {...properties} />

@@ -1,8 +1,6 @@
 import { defineConfig } from 'vitest/config';
-import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 export default defineConfig({
-  plugins: [nxViteTsPaths()],
   test: {
     environment: 'node',
     typecheck: {
@@ -14,7 +12,7 @@ export default defineConfig({
     reporters: ['verbose'],
     coverage: {
       provider: 'v8',
-      reportsDirectory: '../../coverage/packages/filesystem',
+      reportsDirectory: '../../out/reports/coverage/packages/filesystem',
       include: ['src/**/*'],
       exclude: ['src/**/*.{test,spec}.ts'],
       thresholds: {

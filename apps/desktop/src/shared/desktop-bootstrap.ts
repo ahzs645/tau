@@ -1,0 +1,197 @@
+/**
+ * The two names main and preload must agree on, in the one module both may
+ * import: preload runs `contextBridge` at load, so main cannot import it, and
+ * a duplicated string literal across a process boundary is how relays go quiet.
+ *
+ * The page needs the relay tag too, but `apps/ui` may not import from here
+ * (ruling D3), so preload re-exposes it on `window.tau` rather than letting the
+ * renderer repeat the literal.
+ */
+
+/** Argument prefix main uses to hand the preload its bootstrap payload. */
+export const bootstrapArgumentPrefix = '--tau-bootstrap=';
+
+/** Relay tag shared by main's `ipcMain` channel and the page-side listener. */
+export const servicesPortRelayTag = 'tau:services-port';
+
+/** Project-session ownership calls for launcher 2. */
+export const agentHostSessionChannels = {
+  retain: 'tau:agent-host:retain',
+  release: 'tau:agent-host:release',
+} as const;
+
+/** The account's rating of a run in the desktop app, which main relays to the project host that ran it (LW8). */
+export const agentHostRatingChannel = 'tau:agent-host:rated';
+
+/** Open a granted directory in the operating system's file manager. */
+export const openDirectoryChannel = 'tau:open-directory';
+
+/** Select a granted file or directory in the operating system's file manager. */
+export const revealPathChannel = 'tau:reveal-path';
+
+/** Native workspace grants; changes invalidate every renderer's filesystem topology. */
+export const directoryGrantChannels = {
+  list: 'tau:directories:list',
+  disconnect: 'tau:directories:disconnect',
+  changed: 'tau:directories:changed',
+  /** A granted folder's `.tau/workspace.json`, read so a reset database adopts the folder's id (R7). */
+  marker: 'tau:directories:marker',
+} as const;
+
+/** Theme notification shared by main and preload for the native app icon. */
+export const appIconThemeChannel = 'tau:app-icon-theme';
+
+/** The renderer's resolved runtime-telemetry consent, sent to main on every change (AR-W4-03c). */
+export const telemetryConsentChannel = 'telemetry:consent';
+
+/** Main's native window fullscreen state, sent on transitions and renderer loads. */
+export const windowFullscreenChannel = 'tau:window-fullscreen';
+
+/**
+ * The renderer's half of the quit hold (D31, P49).
+ *
+ * `ask` is main telling the page to run every session's closing; `quiesced` is
+ * the page saying it is done — by finishing, or because the person pressed
+ * *Quit anyway*. The accompanying boolean lets main distinguish a completed
+ * close from that explicit bypass before it quiesces the services utility.
+ */
+export const quitChannels = {
+  ask: 'tau:quit:ask',
+  navigate: 'tau:machines:navigate',
+  quiesced: 'tau:quit:quiesced',
+} as const;
+
+/**
+ * A served daemon handed to this app by `tau open --desktop` (ruling X54): main sends `{ origin, code }` from a
+ * `tau://host/<loopback origin>?code=<code>` link it admitted, and the page redeems the code at that daemon.
+ */
+export const hostHandOffChannel = 'tau:host:hand-off';
+
+/**
+ * The external ACP agents launcher 2 can start (W4-ACP).
+ *
+ * A call rather than a bootstrap value (D17): resolving them runs a CLI probe
+ * and a real vendor model session on a 5 s clock, and freezing the answer into
+ * `additionalArguments` made the window's *existence* wait on both. Main
+ * answers when discovery settles, which is before any chat surface asks.
+ */
+export const externalAgentsChannel = 'tau:external-agents';
+
+/**
+ * The native half of the machine binding ceremony (blueprint D9, D10).
+ *
+ * `beginBinding` travels over the brokered `machines` port and answers with a
+ * ceremony id; the secret that completes it never rides that channel. The
+ * renderer posts it here, main forwards it to the services utility, and the
+ * utility saves it in the host's vault, keyed by the printer, once the
+ * printer accepts it. An omitted code reuses the saved one.
+ */
+export const machinesChannels = {
+  completeBinding: 'tau:machines:complete-binding',
+} as const;
+
+/**
+ * What `completeBinding` resolves when the ceremony fails: the host's typed `code`, when it has one, beside its
+ * message. A failure resolves as data rather than rejecting, because an error crossing the context bridge keeps only
+ * its message.
+ */
+export type DesktopMachineBindingFailure = Readonly<{ status: 'failed'; code?: string; message: string }>;
+
+/**
+ * Read-only Bambu Studio presets and settings for the Print pane (blueprint D12).
+ *
+ * Request/response only: the slice itself runs in the kernel utility on the
+ * export route, never over these channels.
+ */
+export const slicersChannels = {
+  bambuStudio: {
+    status: 'tau:slicers:bambu-studio:status',
+    catalog: 'tau:slicers:bambu-studio:catalog',
+    resolveSelection: 'tau:slicers:bambu-studio:resolve-selection',
+    settings: 'tau:slicers:bambu-studio:settings',
+  },
+} as const;
+
+/** IPC methods for bounded compute-store authority controls. */
+export const computeControlChannels = {
+  inspect: 'tau:compute:inspect',
+  clear: 'tau:compute:clear',
+  collect: 'tau:compute:collect',
+} as const;
+
+/**
+ * The renderer's two boot stages (D0, R12): `shell-mounted` and `home-ready`, sent from the app's trusted main frame to
+ * main's boot-health ledger and watchdog. Exposed to the page as `tau.boot.report`.
+ */
+export const bootChannels = {
+  stage: 'tau:boot:stage',
+} as const;
+
+/** The stages the renderer may report on {@link bootChannels}. */
+export const rendererBootStages = ['shell-mounted', 'home-ready'] as const;
+export type RendererBootStage = (typeof rendererBootStages)[number];
+
+/**
+ * The recovery surfaces' channels (D0, D6, R12). `state` returns the launch's mode, the ledger summary, the updater's
+ * snapshot and the pending resets; `changed` is main telling the recovery window that one of them changed; `action`
+ * runs one recovery action (`recovery-window.ts` names them and who may send each).
+ */
+export const recoveryChannels = {
+  state: 'tau:recovery:state',
+  changed: 'tau:recovery:changed',
+  action: 'tau:recovery:action',
+} as const;
+
+/** The switch that starts one launch in safe mode (D0). Never stored, and dropped from every relaunch. */
+export const safeModeSwitch = '--safe-mode';
+
+/** Why a launch started in safe mode: the switch, or the ledger's count of unhealthy launches. */
+export type SafeModeReason = 'requested' | 'unhealthy-launches';
+
+/** The two native app-icon variants. */
+export type AppIconTheme = 'light' | 'dark';
+
+/** What main puts behind {@link bootstrapArgumentPrefix}. */
+export type DesktopBootstrap = {
+  /** The `window.ENV` allowlist, resolved in main. */
+  readonly env: Record<string, string | boolean>;
+  /** `app.getPath('userData')/home` — known at preload time, per L2's contract. */
+  readonly homeRoot: string;
+  /** Capability advertisement used by the shared renderer's product catalog. */
+  readonly runtimeKernelIds: readonly string[];
+  /**
+   * The install's first run: no window-state file at startup and no `tau://` link or file in the launch. Only
+   * the setup offer reads it, and only the first window of that launch carries it.
+   */
+  readonly firstRun: boolean;
+  /** Present only when this launch started in safe mode (D0). Safe mode is a property of one launch, never a setting. */
+  readonly safeMode?: { readonly reason: SafeModeReason };
+};
+
+/**
+ * Read the bootstrap payload from `webPreferences.additionalArguments`.
+ *
+ * @param argv - The renderer process's arguments.
+ * @returns The payload, or empty defaults when main sent none.
+ */
+export const readBootstrap = (argv: readonly string[]): DesktopBootstrap => {
+  const argument = argv.find((entry) => entry.startsWith(bootstrapArgumentPrefix));
+  if (!argument) {
+    return { env: {}, homeRoot: '', runtimeKernelIds: [], firstRun: false };
+  }
+  try {
+    const parsed = JSON.parse(argument.slice(bootstrapArgumentPrefix.length)) as Partial<DesktopBootstrap>;
+    const reason = parsed.safeMode?.reason;
+    return {
+      env: parsed.env ?? {},
+      homeRoot: parsed.homeRoot ?? '',
+      runtimeKernelIds: parsed.runtimeKernelIds ?? [],
+      firstRun: parsed.firstRun === true,
+      ...(reason === 'requested' || reason === 'unhealthy-launches' ? { safeMode: { reason } } : {}),
+    };
+  } catch {
+    /* A malformed payload is a shell bug, not a renderer input; boot with
+     * nothing so the renderer's own `Missing TAU_API_URL` names the failure. */
+    return { env: {}, homeRoot: '', runtimeKernelIds: [], firstRun: false };
+  }
+};

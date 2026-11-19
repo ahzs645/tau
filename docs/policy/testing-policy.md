@@ -3,10 +3,11 @@ title: 'Testing Policy'
 description: 'Writing high-quality tests across the Tau monorepo. Assert observable behavior, error assertions, resource cleanup, mock factories, and async patterns. Covers Vitest, kernel tests, and API tests.'
 status: active
 created: '2026-03-09'
-updated: '2026-04-21'
+updated: '2026-09-30'
 related:
   - docs/policy/react-testing-policy.md
   - docs/policy/typescript-policy.md
+  - docs/policy/geospec-policy.md
   - docs/research/typescript-overloads.md
   - docs/research/mesh-continuity-test-semantics.md
 ---
@@ -208,8 +209,7 @@ Prior art for adopting an RBV container via `stack.use(...)`:
 
 ## 5. Type-Safe Mocks with `mock<T>()`
 
-Use `mock<T>()` from `vitest-mock-extended` (already installed) to create typed
-test doubles. Never use `as unknown as T` to cast partial objects to full types.
+Use `mock<T>()` from `vitest-mock-extended` where the package already depends on it to create typed test doubles. Never use `as unknown as T` to cast partial objects to full types. A dedicated testing package may instead expose an explicit, Vitest-backed object literal when doing so removes `vitest-mock-extended` from the production package's dependency surface; keep the one necessary interface assertion inside that shared factory.
 
 **Why**: `as unknown as` bypasses the compiler entirely. `mock<T>()` returns a
 deep Proxy that satisfies the full interface, auto-stubbing methods with
@@ -239,7 +239,7 @@ const mockResult = mockDeep<StreamTextResult>();
 For domain objects with sensible defaults, use shared factory functions:
 
 ```typescript
-import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
+import { createMockFileSystem } from '@taucad/runtime-testing';
 
 const filesystem = createMockFileSystem();
 filesystem.mocks.exists.mockResolvedValue(true);
@@ -377,12 +377,47 @@ const options = {} as unknown as RuntimeClientOptions;
 
 ## 12. Geometry-Test Surface
 
-The agent-facing geometry-test surface (`test.json` requirements consumed by `test_model`) is a **deliberately consolidated 3-check vocabulary**: `boundingBox`, `connectedComponents`, and `watertight`. Treat this list as closed.
+The agent-facing geometry-test surface is GeoSpec: Vitest-style `*.geospec.ts` / `*.geospec.js` files executed by `test_model` through the browser-connected Tau runner or the standalone GeoSpec CLI. Agent-facing checks must remain semantically non-overlapping and produce spatially useful diagnostics.
 
-1. **The 3-check rule.** Every agent-facing check must answer a question none of the other two can. `boundingBox` answers size/position; `connectedComponents` answers spatial-chunk count; `watertight` answers per-geometry-unit closed-manifold. Adding a new check requires demonstrating, in writing in the proposal, that no existing check (with reasonable parameter tuning) can answer the new question.
-2. **`watertight` is the canonical "single fused solid" assertion.** Assert `watertight` per geometry unit (e.g. `lib/<part>.ts`) — the boolean fuse welded iff the surface is closed-manifold. Do **not** use `connectedComponents: 1` for that intent: `connectedComponents` answers "how many spatial chunks," not "did the boolean fuse weld."
-3. **Pure-GLB only.** All agent-facing geometry checks must operate purely on the GLB output. No kernel `extras`, no per-kernel metadata propagation, no scene-level cooperation. Future kernels emit valid glTF and the checks work; if a check needs more than the GLB tells it, redesign the algorithm (see [`mesh-continuity-test-semantics.md`](../research/mesh-continuity-test-semantics.md) for the AABB-clustering rewrite of `connectedComponents`).
-4. **Kernel-author surface stays separate.** Raw mesh-count / vertex-count assertions remain available to kernel authors via `expectMeshCount` / `expectVertexCount` in `@taucad/runtime/testing` for Vitest-based kernel tests. The two surfaces intentionally do not share a vocabulary; do not mirror low-level helpers back into the agent surface.
+1. **Non-overlap rule.** Every agent-facing check must answer a question no existing check can. `boundingBox` answers size/position; `connectedComponents` answers spatial-chunk count; `watertight` answers per-geometry-unit closed-manifold; measurement checks answer physical scalar/center properties; BRep feature checks require exact feature evidence. Adding a new check requires demonstrating, in writing in the proposal, that no existing check (with reasonable parameter tuning) can answer the new question.
+2. **Closed-manifold evidence does not prove a Boolean fuse.** Assert `watertight` per geometry unit (e.g. `lib/<part>.ts`) to test surface closure, not a single material-connected solid or successful Boolean welding. Multiple disjoint solids and separated nested boundaries can be closed. `connectedComponents` retains its spatial-material/contact proposition; an AABB cluster count is not sufficient proof either. Retain a failing regression and an explicit unsupported qualification when the required connectivity evidence is unavailable; never substitute surface closure or weaken the proposition.
+3. **Strict topology, not slicer acceptance.** A mesh is `watertight` only when every spatially welded mesh edge has exactly two incident triangles (`irregularEdges === 0`). `openBoundaryEdges` identify holes; `nonManifoldEdges` identify over-adjacent/coincident surfaces. Slicers may still repair or print non-manifold meshes, but that belongs in a separately named printable/slicer-tolerant check, not `watertight`.
+4. **Geometry evidence only.** Mesh checks must operate purely on geometry files/bytes such as GLB/glTF. No kernel `extras`, no per-kernel metadata propagation, no scene-level cooperation. BRep/topology checks must consume explicit BRep/STEP evidence and return typed unsupported diagnostics when that evidence is unavailable. Future kernels emit valid geometry evidence and the checks work; if a check needs more than the evidence tells it, redesign the algorithm (see [`mesh-continuity-test-semantics.md`](../research/mesh-continuity-test-semantics.md) for the AABB-clustering rewrite of `connectedComponents`).
+5. **AABB is broad-phase only for relationships.** Axis-aligned bounding boxes may prune candidates, assert explicit envelopes, and enrich diagnostics, but they must not decide production contact, clearance, containment, mate, shaft/bore, fastener, port, or manufacturability relationships. Return an unsupported-evidence diagnostic when relationship-grade evidence is unavailable.
+6. **Adversarial false-positive fixtures are mandatory.** Every new geometric matcher must include a fixture where the tempting broad-phase or approximate shortcut would pass while the real relationship fails, such as overlapping AABBs with separated mating faces or aligned envelopes with misaligned analytic axes. Relationship matcher tests must assert the diagnostic evidence type, not only pass/fail status.
+7. **Keep kernel-author assertions out of production packages.** Raw mesh-count / vertex-count assertions remain available to kernel authors via `expectMeshCount` / `expectVertexCount` in `@taucad/runtime-testing` alongside runtime harnesses and mocks. Production packages expose no testing subpath. The kernel-author and agent-facing surfaces intentionally do not share a vocabulary; do not mirror low-level helpers into the agent surface.
+
+## 13. Cross-Layer Contract Changes
+
+A change that crosses a public operation, plugin authoring contract, worker RPC, cache identity, generated artifact, or durable migration is not covered by one unit-test layer. Its plan must name and run the applicable gates:
+
+- runtime unit tests for normalization, capability composition, route selection, participant identity, and failure behavior;
+- `.test-d.ts` positive and negative tests for exact public inference;
+- first-party provider/kernel conformance tests for every migrated implementation;
+- integration tests across middleware/transcoder routes and cache hits/misses;
+- failure-injection and restart tests for durable or cross-store migrations;
+- deterministic generator checks for checked-in artifacts;
+- browser/renderer tests when the result depends on workers, WebGPU, codecs, or pixels.
+
+Omitting a layer requires an explicit reason tied to the change's observable boundary. `bytes.length > 0` is insufficient when semantic, round-trip, byte-equality, or pixel evidence is available.
+
+## 14. Re-Home Provider Coverage Before Deleting Its Owner
+
+Replacing an execution plane, provider adapter, or transport deletes the tests that lived there. Before that deletion lands, inventory the checks that protect opaque provider replay metadata — signatures, continuation tokens, cache handles, any value the provider requires back byte-exactly — and name their successor in the new plane. A generic codec that compiles against the new plane does not prove it carries a provider-specific field the old adapter handled deliberately.
+
+Credentialed provider coverage and deterministic simulated coverage are separate claims. Completion evidence states which one it has. A simulated fixture proves the field survives Tau's own boundaries; only a credentialed run against the provider proves the provider accepts the replay.
+
+## 15. Preserve Meaningful Regression Evidence
+
+For a non-trivial behavior fix, establish the smallest failing semantic check before its correction. Preserve applicable existing regression tests; remove tests only when their behavior is deliberately retired, not to hide a failure. Tests for a non-shipping feature are deleted or completed with that feature rather than permanently skipped. A reversible prose-only change does not need a new test.
+
+Run the affected project typecheck for TypeScript changes. Verify changed UI behavior visually and changed runtime behavior through execution before claiming success; report unavailable checks as unverified. For an exact cross-pipeline byte contract, make the parity regression fail before changing the pipeline. Converter round trips compare the re-imported geometry to the declared reference model and investigate deviations instead of accepting format-specific drift.
+
+Streaming tests assert provider-neutral state and lifecycle outcomes. Do not lock shared tests to one provider's usage counts or incidental preamble ordering. Public typing changes need positive consumer fixtures and negative `@ts-expect-error` cases whose unexpected acceptance fails the typecheck. Upstream regression tests use parsed/structural assertions instead of regexes over source text.
+
+Byte-locked file snapshots stay formatter-exempt. A serializer is appropriate only if its representation remains stable at the configured formatter width. Geometry export checks verify the declared exact-byte contract or export/re-import/re-mesh semantics; non-empty output alone does not establish correctness.
+
+Run coverage explicitly when validating coverage thresholds. A normal passing test target does not exercise them. Investigate denominator exclusions or generated-code distortion before changing a threshold, and keep dated measurements in evidence rather than permanent policy.
 
 ## Summary Checklist
 

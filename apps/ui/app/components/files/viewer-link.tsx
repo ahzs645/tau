@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { Box } from 'lucide-react';
 import { Slot as SlotPrimitive } from 'radix-ui';
 import { useProject } from '#hooks/use-project.js';
-import { cn } from '#utils/ui.utils.js';
+import { cn } from '@taucad/ui/utils/cn';
 
 type ViewerLinkProps = {
   readonly path: string;
@@ -54,9 +54,9 @@ type ViewerLinkProps = {
  *    `SlotPrimitive.Slottable`. Slot finds the `<Slottable>` among ViewerLink's
  *    rendered children, treats its children as the consumer's element, and
  *    splices the other (non-Slottable) children into the consumer's element as
- *    siblings of the consumer's original content. Net effect: a chip wrapper
- *    like `GeometryArtifactBadge` no longer needs to render its own `<Box />`
- *    — it cannot accidentally duplicate the icon either.
+ *    siblings of the consumer's original content. Net effect: an `asChild`
+ *    consumer does not need to render its own `<Box />` and cannot duplicate
+ *    the icon accidentally.
  *
  * @example <caption>basic usage — renders as an inline span with cube + button semantics</caption>
  * ```tsx
@@ -80,7 +80,7 @@ export function ViewerLink({ path, className, children, asChild = false }: Viewe
       return;
     }
 
-    project.projectRef.send({ type: 'openInViewer', entryFile: path });
+    project.projectRef.send({ type: 'openInViewer', entryPath: path });
   }, [project, path]);
 
   const handleClick = useCallback(
@@ -118,7 +118,7 @@ export function ViewerLink({ path, className, children, asChild = false }: Viewe
         // dependent on Tailwind's CSS source order. See {@link FileLink} for
         // the full rationale.
         !asChild && 'inline',
-        'cursor-pointer decoration-current underline-offset-2 hover:text-foreground hover:underline',
+        'cursor-action decoration-current underline-offset-2 hover:text-foreground hover:underline',
         className,
       )}
       onClick={handleClick}

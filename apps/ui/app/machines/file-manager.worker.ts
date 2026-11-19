@@ -3,30 +3,135 @@
  *
  * Single entry point for all filesystem access. Every connection (main thread,
  * kernel workers, git) receives a MessagePort that is served by the same
- * WorkspaceFileService instance. Writes to the same file are serialized via a per-file
- * ResourceQueue (VS Code pattern); writes to different files run in parallel.
+ * WorkspaceFileService instance. Mutations serialize on their logical and physical
+ * conflict paths; independent authority subtrees can still run in parallel.
  */
 
-import { exposeFileSystem, workerReadyMessageType } from '@taucad/runtime/transport-internals';
+/* oxlint-disable tau-lint/no-direct-indexeddb -- This worker is the browser compute-store authority. */
 
-import { FileSystemAccessProvider } from '@taucad/filesystem/backend';
+import { computeEventRelay, exposeFileSystem, workerReadyMessageType, workspaceBridgeService } from '@taucad/fs-bridge';
+import { composeView } from '@taucad/filesystem/composed-view';
+import { withReadContentOps } from '@taucad/filesystem/content-ops';
+import { tauPathPolicy } from '@taucad/filesystem/path-registry';
 import {
+  createGitRemoteTransport,
+  createIsomorphicGitRevisionPort,
+  createRevisionHttpClient,
+  recordLastPush,
+  sendKeepalivePush,
+  tauCatalogueUrl,
+} from '@taucad/revisions';
+import type { PushRecorder } from '@taucad/revisions';
+import { serveTurnPlacementChannel } from '@taucad/agent-host/channel-client';
+import { createIndexedDbComputeEngine, exposeComputeStoreChannel, MachineSettingsOwner } from '@taucad/runtime/host';
+import { slicingPreferences } from '@taucad/slicer/preferences';
+import { providerSettingsDefinitions } from '#machines/machine-settings-definitions.js';
+import {
+  RootedFileSystemError,
   ChangeEventBus,
   EventCoalescer,
   MountTable,
   ProviderRegistry,
   ResourceQueue,
-  ThrottledWorker,
+  reservedIndexPaths,
   WorkspaceFileService,
+  workerTimings,
 } from '@taucad/filesystem';
-import { SharedPool } from '@taucad/memory';
+import type { MountEntry, RootedFileSystem, WorkspaceScope } from '@taucad/filesystem';
+import type { MachineSettingsService } from '@taucad/types';
+
+import type { kernelTypePackageMaps as KernelTypePackageMaps } from '@taucad/api-extractor/kernel-types';
+import type { authoringTypeMaps as AuthoringTypeMaps } from '@taucad/api-extractor/authoring-types';
 import type { SyncFsWorkspaceAdapter } from '@taucad/lsp-fs/sync';
 import { attachSyncFsServer } from '@taucad/lsp-fs/sync';
 import { metaConfig } from '#constants/meta.constants.js';
+import { populateBundledTypesMount } from '@taucad/editor-ui/lib/bundled-types-mount';
+import type { BundledTypesMountEntry, BundledTypesRoot } from '@taucad/editor-ui/lib/bundled-types-mount';
+import { ensureBundledTypesMount } from '@taucad/editor-ui/lib/bundled-types-sentinel';
+import { createLazyBundledTypesReads } from '@taucad/editor-ui/lib/bundled-types-lazy';
+import { homeBackendFromWorkerName } from '@taucad/files-ui/machines/file-manager-worker-name';
+import { listWorkspaceDirectories } from '@taucad/files-ui/machines/file-manager-sync-fs-adapter';
+import {
+  createCheckoutRoutes,
+  createPendingObjectSource,
+  createWorkerRevisionRegistry,
+  versionedChangePaths,
+} from '#machines/file-manager.worker.revisions.js';
+import { dependencyMountRoot } from '@taucad/ui-core/lib/bundled-types-tree.constants';
+import { readBuildIdentity } from '#lib/build-identity.js';
+import { isDesktopTarget } from '#lib/build-target.js';
+import { createRevisionLoadReporter } from '#machines/revision-load-telemetry.js';
+import { summarizeLast, withPendingGauge, workerSpanTotals } from '@taucad/ui-core/lib/worker-timing-report';
+import { createProjectOpenTimer, markProjectOpen } from '@taucad/project-workspace/utils/project-open-timer';
+import type { ProjectOpenTimer } from '@taucad/project-workspace/utils/project-open-timer';
+import { createRevisionCompute } from '@taucad/revisions-ui/machines/revision-compute';
+import { linkedImportPort, stageLinkedImport } from '@taucad/ui-core/machines/import-linked';
+import { importConnectMessageType, serveImportChannel } from '@taucad/ui-core/machines/import-staging';
+import { systemSkillsOverlay } from '@taucad/ui-core/workers/system-skills-overlay';
+import {
+  createNodeFsPortBroker,
+  servicesUnavailableCode,
+} from '@taucad/files-ui/machines/file-manager-worker-node-port';
 
-const providerRegistry = new ProviderRegistry({ databasePrefix: metaConfig.databasePrefix });
-const resourceQueue = new ResourceQueue();
+/**
+ * Handshake for the node filesystem backend (desktop only).
+ *
+ * The shell brokers one `MessageChannelMain` to the provider host in the
+ * services utility; main relays this end through the preload and the FM
+ * machine, which posts it as `{ type: 'nodeFsPort' }` right after constructing
+ * this worker. The listener is installed here — before the `/` root mount's
+ * top-level await — because a node-backed Home cannot mount without it.
+ */
+const nodeFsPorts = createNodeFsPortBroker({
+  request: () => {
+    self.postMessage({ type: 'nodeFsPortRequest' });
+  },
+});
+const nodeFsHomeRoot = Promise.withResolvers<string>();
+self.addEventListener(
+  'message',
+  (event: MessageEvent<{ type?: string; port?: unknown; homeRoot?: unknown; message?: unknown }>) => {
+    const { data } = event;
+    if (data.type === 'nodeFsPort' && data.port instanceof MessagePort && typeof data.homeRoot === 'string') {
+      nodeFsHomeRoot.resolve(data.homeRoot);
+      nodeFsPorts.deliver(data.port);
+    } else if (data.type === 'nodeFsPortError' && typeof data.message === 'string') {
+      nodeFsPorts.fail(data.message);
+    }
+  },
+);
+
+const providerRegistry = new ProviderRegistry({
+  databasePrefix: metaConfig.databasePrefix,
+  // The previous channel died (the registry evicts on close and calls back here), or none arrived yet. The shell
+  // forks a fresh services utility on the next `connect()`; the broker backs off between requests and gives up with
+  // `SERVICES_UNAVAILABLE`, which it tells the file manager so the start can say so (B7).
+  createNodeFsPort: async () => {
+    try {
+      return await nodeFsPorts.createNodeFsPort();
+    } catch (error) {
+      if ((error as { code?: unknown }).code === servicesUnavailableCode) {
+        self.postMessage({ type: 'nodeFsUnavailable', code: servicesUnavailableCode });
+      }
+      throw error;
+    }
+  },
+});
+/* Each mutation's wait for its claims and its time holding them, for the open's worker timings. */
+const resourceQueue = new ResourceQueue({ timings: workerTimings });
 const eventBus = new ChangeEventBus();
+/*
+ * The compute worker's news for every rooted connection's event channel
+ * (charter D14, W10). The revision compute worker's one supervisor (W5's
+ * `createSupervisedComputeWorker`) owns restarts; it reports each death to
+ * `computeEvents.onCrash`, and the bridge only relays it.
+ */
+const computeEvents = computeEventRelay();
+/** One compute worker for every revision store this worker opens (charter D7), started on first use. */
+const revisionCompute = createRevisionCompute(computeEvents.onCrash);
+eventBus.subscribe(() => {
+  workerTimings.count('events.change');
+});
 const mountTable = new MountTable();
 
 /**
@@ -103,65 +208,497 @@ self.addEventListener('unhandledrejection', (event) => {
   self.postMessage(envelope);
 });
 
-async function createNodeModulesMount(): Promise<void> {
-  if (!('storage' in navigator) || !('getDirectory' in navigator.storage)) {
-    console.debug('[FM-Worker] OPFS not available, /node_modules falls through to root mount');
-    return;
-  }
+/**
+ * Mount `/node_modules` and capture it as the typing feature's own writable
+ * handle. The route is read-only to every consumer — the authority refuses an
+ * authority-global mutation into it with `BUNDLED_TYPES_WORKSPACE` — so this
+ * composition site is the only place a writer for it exists (charter D15).
+ *
+ * @returns The rooted handle, or `undefined` when the mount is unavailable and
+ *   there is nowhere to install declarations.
+ */
+async function createNodeModulesMount(): Promise<BundledTypesRoot | undefined> {
   try {
-    const opfsRoot = await navigator.storage.getDirectory();
-    const nodeModulesHandle = await opfsRoot.getDirectoryHandle('tau-node-modules', { create: true });
-    const nodeModulesProvider = new FileSystemAccessProvider(nodeModulesHandle);
-    // Worker-internal OPFS-backed mount — no workspaceId because the
-    // backing storage isn't user-pickable. The discriminated
-    // `MountConfig` accepts `backend: 'opfs'` without the webaccess
-    // identity fields.
-    mountTable.mount('/node_modules', nodeModulesProvider, { backend: 'opfs' });
+    await fileService.mount('/node_modules', {
+      backend: 'opfs',
+      providerBasePath: 'tau-node-modules',
+      class: 'derived',
+    });
     console.debug('[FM-Worker] /node_modules mounted on OPFS');
+    return fileService.createRootedFileSystem('/node_modules');
   } catch (error) {
-    console.warn('[FM-Worker] Failed to mount OPFS /node_modules, falling through to root', error);
+    console.warn('[FM-Worker] Failed to mount OPFS /node_modules; bundled types are unavailable', error);
+    return undefined;
   }
 }
+
+const buildBundledTypesPayload = (
+  kernelTypePackageMaps: typeof KernelTypePackageMaps,
+  authoringTypeMaps: typeof AuthoringTypeMaps,
+): readonly BundledTypesMountEntry[] =>
+  [...kernelTypePackageMaps, ...authoringTypeMaps].flatMap((typesMap) =>
+    Object.entries(typesMap).map(
+      ([packageName, entry]): BundledTypesMountEntry => ({
+        packageName,
+        content: entry.content,
+        files: entry.files,
+        packageJson: entry.packageJson,
+      }),
+    ),
+  );
 
 const fileService = new WorkspaceFileService({
   providerRegistry,
   resourceQueue,
   eventBus,
   mountTable,
+  policy: tauPathPolicy,
 });
 
 const t0 = performance.now();
 console.debug(`[FM-Worker] module evaluated in ${t0.toFixed(1)}ms`);
 
+/**
+ * Physical engine of the system-owned Home workspace, pinned per browser
+ * profile and handed over by the FM machine as this worker's name (see
+ * `file-manager-worker-name.ts`). The pin itself is owned by main-thread-only
+ * `handle-store.ts`, and the root mount below runs during module evaluation,
+ * so the name is the only channel that is both authoritative and readable in
+ * time.
+ */
+const homeStorageBackend = homeBackendFromWorkerName(self.name);
+
+// `/` is Home's workspace root: everything the app persists outside a
+// configured mount (`/projects/<id>` routes, `/previews/<instance>`,
+// `/node_modules`) lands here, so it must follow the same engine pin that
+// project discovery scans — otherwise an OPFS-pinned profile would keep
+// writing Home-level state (`/.agents/…`) into IndexedDB where nothing looks
+// for it.
+/**
+ * Home's root scope. A node-backed Home blocks here until the shell hands over
+ * the brokered port and the absolute `userData/home` path with it.
+ */
+const resolveHomeRootScope = async (): Promise<WorkspaceScope> => {
+  if (homeStorageBackend !== 'node') {
+    return { backend: homeStorageBackend };
+  }
+  return { backend: 'node', path: await nodeFsHomeRoot.promise };
+};
+
 try {
-  await fileService.mount('/', { backend: 'indexeddb' });
+  const rootScope = await resolveHomeRootScope();
+  const rootProvider = await providerRegistry.getProvider(rootScope);
+  mountTable.mount('/', rootProvider, {
+    backend: homeStorageBackend,
+    storageRootKey: providerRegistry.resolveStorageRootKey(rootScope),
+    class: 'authored',
+  });
 } catch (error) {
-  postWorkerInitError("mount('/', 'indexeddb')", error);
+  postWorkerInitError(`mount root ${homeStorageBackend} provider`, error);
   throw error;
 }
 
-try {
-  await createNodeModulesMount();
-} catch (error) {
-  postWorkerInitError('createNodeModulesMount', error);
-  throw error;
-}
+// Fail-soft by contract: the route is either mounted and writable, or absent.
+const nodeModules = await createNodeModulesMount();
 
-exposeFileSystem(fileService, {
-  watchHandler: {
-    watch(request, handler, ownerId) {
-      return fileService.watch(request, handler, ownerId);
+const installBundledTypes = async (): Promise<void> => {
+  if (nodeModules === undefined) {
+    return;
+  }
+  const [{ kernelTypePackageMaps }, { authoringTypeMaps }] = await Promise.all([
+    import('@taucad/api-extractor/kernel-types'),
+    import('@taucad/api-extractor/authoring-types'),
+  ]);
+  const outcome = await ensureBundledTypesMount(
+    fileService,
+    buildBundledTypesPayload(kernelTypePackageMaps, authoringTypeMaps),
+    {
+      populate: async (payload) => populateBundledTypesMount(nodeModules, payload),
+      buildIdentity: readBuildIdentity(),
     },
-    cleanupWatches(ownerId) {
-      fileService.cleanupWatches(ownerId);
+  );
+  console.debug(`[FM-Worker] bundled types ${outcome} +${(performance.now() - t0).toFixed(1)}ms`);
+};
+const withLazyBundledTypesReads = createLazyBundledTypesReads(installBundledTypes);
+
+/* The exact mount entry is the authority generation; a replaced route never reuses this cache. */
+const settingsOwners = new Map<MountEntry, Map<string, MachineSettingsOwner>>();
+const settingsForRoot = (root: string, policy: typeof tauPathPolicy): MachineSettingsService => {
+  for (const [generation, roots] of settingsOwners) {
+    if (mountTable.resolve(generation.prefix).entry !== generation) {
+      for (const owner of roots.values()) {
+        owner.dispose();
+      }
+      settingsOwners.delete(generation);
+    }
+  }
+  const { entry } = mountTable.resolve(root);
+  if (!entry) {
+    throw new Error('Machine settings root has no admitted mount.');
+  }
+  let roots = settingsOwners.get(entry);
+  if (!roots) {
+    roots = new Map();
+    settingsOwners.set(entry, roots);
+  }
+  const key = root;
+  let owner = roots.get(key);
+  if (!owner) {
+    const filesystem = fileService.createRootedFileSystem(root, {
+      originClientId: `machine-settings:${key}`,
+    });
+    // Settings are authored, read-write paths for every consumer, with no overlays.
+    // One least-privilege agent view owns their bytes across UI and agent connections.
+    const view = composeView({ filesystem }, { consumer: 'agent', policy });
+    owner = new MachineSettingsOwner({
+      filesystem: view,
+      definitions: [...providerSettingsDefinitions, slicingPreferences],
+    });
+    roots.set(key, owner);
+  }
+  const captured = owner;
+  return {
+    readMachineSettings: async (typeId) => {
+      if (mountTable.resolve(root).entry !== entry) {
+        throw new RootedFileSystemError('ESTALE');
+      }
+      return captured.read({ typeId });
     },
+    editMachineSettings: async (input) => {
+      if (mountTable.resolve(root).entry !== entry) {
+        throw new RootedFileSystemError('ESTALE');
+      }
+      return captured.edit(input);
+    },
+    machineSettingsSettlement: async (operationId) => captured.settlement(operationId),
+  };
+};
+
+/**
+ * The root's index as the language worker's mirror reads it: whole once, then
+ * its changes after each change set. A rooted surface without an index offers
+ * none, and the worker's slot answers every probe.
+ */
+const languageIndexSource = (
+  rooted: RootedFileSystem,
+  root: string,
+): Partial<Pick<SyncFsWorkspaceAdapter, 'index'>> => {
+  if (rooted.changedSince === undefined || rooted.statTree === undefined || rooted.watchChangeSets === undefined) {
+    return {};
+  }
+  const base = root.endsWith('/') ? root : `${root}/`;
+  return {
+    index: {
+      changedSince: async (since, options) => rooted.changedSince!(since, options),
+      statTree: async (path) => rooted.statTree!(path),
+      watch: (onChange) => rooted.watchChangeSets!({ paths: [''], recursive: true }, onChange),
+      /* What the index never holds besides the policy's unwatched rows: its reserved paths and each nested mount (I9). */
+      excluded: () => [
+        ...reservedIndexPaths,
+        ...mountTable.prefixes.filter((prefix) => prefix.startsWith(base)).map((prefix) => prefix.slice(base.length)),
+      ],
+    },
+  };
+};
+
+exposeFileSystem(withPendingGauge(workspaceBridgeService(fileService)), {
+  /*
+   * Every rooted connection names the surface it reads (architecture L4, W2):
+   * `'user'` and `'agent'` get that consumer's composed view, `'working-copy'`
+   * gets the checkout itself, because the host's own capture, apply and language
+   * planes must read the working copy and never the overlays composed above it
+   * (V6). A connection that names neither never reaches here (CI2).
+   *
+   * Only `'user'` composes the system skills overlay. The page's `'agent'`
+   * connections are executors of project code — the editor's kernel runtime
+   * (`cad.machine.ts`) and the file manager's runtime bridge
+   * (`use-file-manager.tsx`) — and an executor never sees `.agents/skills`
+   * (I1). The agent's tools open `'working-copy'` and compose their own overlay
+   * above it, as `agent-host.impl.ts` does.
+   */
+  // oxlint-disable-next-line max-params -- RootedFileSystemHandlerFactory's own arity.
+  handlerForRoot: (root, context, consumer, policy) => {
+    const filesystem = fileService.createRootedFileSystem(root, context);
+    /* A skill bundle belongs to a checkout, not to the dependency mount: the
+     * mount is opened as its own root since W11, and composing the overlay there
+     * would grow an `.agents` row inside `node_modules`. */
+    const overlays = consumer === 'user' && root !== dependencyMountRoot ? [systemSkillsOverlay()] : [];
+    const view = consumer === 'working-copy' ? filesystem : composeView({ filesystem }, { consumer, overlays, policy });
+    /*
+     * The read content operations run here, over the view the connection asked
+     * for (charter D2); `search` and `statTree` are already on it, answered from
+     * the root's index and masked by the view itself (D3), and so is the
+     * mutating porcelain — `copyTree`, `duplicate`, `move`, `bulkMove`,
+     * `writeFiles` and the four preflights — which the pipeline executes as one
+     * batch and the view mask-checks before any provider I/O (D4).
+     */
+    const handlers = withReadContentOps(view, policy);
+    return withPendingGauge(
+      root === dependencyMountRoot
+        ? withLazyBundledTypesReads(handlers)
+        : Object.assign(handlers, settingsForRoot(root, policy)),
+    );
   },
+  /* The same layout the views above enforce, so a masked connection is not told
+   * about a path it may not read (CI1). */
+  policy: tauPathPolicy,
   changeEventBus: eventBus,
-  createCoalescer: (deliver, coalescingWindow) => new EventCoalescer(deliver, { coalescingWindow }),
-  createThrottledWorker: (handler) => new ThrottledWorker(handler),
+  rootStatusEvents: { subscribe: (handler) => fileService.onRootStatusChange(handler) },
+  createCoalescer: (deliver, coalescingWindow, onOverflow) =>
+    new EventCoalescer(deliver, { coalescingWindow, onOverflow }),
+  computeEvents: computeEvents.source,
 });
 
+/**
+ * One revision root per opened project (A38).
+ *
+ * The page opens a `MessagePort` per project route and reads the
+ * `RevisionStatus` projection over it; the tree itself — `projectRevisionsMachine`
+ * and its children over `createIsomorphicGitRevisionPort` — runs here, where the
+ * mount table can give each checkout route its own rooted provider and where
+ * every content change is already observed.
+ *
+ * No lease is swept by epoch (W8 TS-S7): the resident agent host reconciles
+ * the leases it finds through its placement session, which this registry
+ * serves on the port the page brokers (`placementConnect`, TS-S5).
+ */
+/* One place a linked checkout's files live, for the port that creates them
+ * (W7 review R2/P24). Without it `capabilities.checkouts` is false and no
+ * browser project can hold a second branch at all. */
+const checkoutRoutes = createCheckoutRoutes({ mountTable, fileService });
+/*
+ * The last push each project made, kept so `pagehide` can offer it again under
+ * `keepalive` (W13, A32). The recorder wraps the *client*, so it is built here
+ * beside the client and read back by project id.
+ */
+const pushRecorders = new Map<string, PushRecorder>();
+/* STO-25: each open project's open, timed from its root opening to its first usable view. */
+const projectOpenTimers = new Map<string, ProjectOpenTimer>();
+const revisionRegistry = createWorkerRevisionRegistry({
+  /*
+   * P31: one project, one store.
+   *
+   * On a host-served project the Node host serves the filesystem *and* owns the
+   * revisions actor system over the project's own `.git/`. A browser revision
+   * port here would open a second writer onto that same `.git/` (D29 gave both
+   * legs one repository name), recording the same bytes twice and agreeing with
+   * neither side —
+   * the two-store ceiling W5 §9 recorded. The session injects the host kind at
+   * `revisionsConnect`; a host-served project gets no port at all, and its
+   * `RevisionStatus` projection comes from the Node side.
+   */
+  hostServesRevisions: (projectId) => hostServedProjects.has(projectId),
+  createPort: (projectId, credential, telemetryConsent) => {
+    const recorder = recordLastPush(
+      createRevisionHttpClient({ credentials: 'include', ...createGitRemoteTransport(credential) }),
+    );
+    pushRecorders.set(projectId, recorder);
+    /* PR-7 follow-up (AR-W6-02): the project's load entries under the page's resolved consent, read per entry. */
+    const reportLoad = createRevisionLoadReporter({
+      apiBaseUrl: () => credential()?.apiBaseUrl,
+      telemetryConsent,
+      isDesktop: isDesktopTarget,
+    });
+    const openTimer = createProjectOpenTimer({
+      report: ({ durationMilliseconds, ...detail }) => {
+        reportLoad('observability.projectOpen', durationMilliseconds, {
+          ...detail,
+          spans: workerSpanTotals(summarizeLast(durationMilliseconds)),
+        });
+      },
+    });
+    projectOpenTimers.set(projectId, openTimer);
+    return createIsomorphicGitRevisionPort({
+      filesystem: fileService.createRootedFileSystem(`/projects/${projectId}`, undefined, { placeholders: 'raw' }),
+      checkouts: checkoutRoutes(projectId),
+      compute: revisionCompute,
+      /*
+       * D8: a Tau project's first open reads its hosted catalogue (heads by
+       * listing, objects by Range through stored indexes) instead of one
+       * `upload-pack` of the whole history. The catalogue request carries the
+       * session cookie and the files links carry their own signature; where
+       * the catalogue does not answer, the open goes over smart HTTP as before.
+       */
+      catalogue: { url: (remoteUrl) => tauCatalogueUrl(credential()?.apiBaseUrl, remoteUrl) },
+      /* The page's session is a cookie on the API's origin, so `include` is the
+       * whole of "this browser is signed in" (I8, S24). The worker never holds
+       * a token and never puts one in a URL. A *third-party* remote is reached
+       * through the API's git proxy instead, carrying that remote's own
+       * credential and never the Tau session — which is the whole of
+       * `createGitRemoteTransport` (S34, P17, W12). */
+      http: recorder.client,
+      /* Load-path audit: the open's hydrate settles after the pull attempt is reported, so it is reported on its own. */
+      onLfsFetch: ({ durationMilliseconds, ...detail }) => {
+        openTimer.fetchedFromNetwork(detail.transport);
+        reportLoad('observability.lfsFetch', durationMilliseconds, {
+          ...detail,
+          placement: 'browser',
+          spans: workerSpanTotals(summarizeLast(durationMilliseconds)),
+        });
+      },
+    });
+  },
+  createCandidatePort: (projectId, credential, signal) =>
+    createIsomorphicGitRevisionPort({
+      filesystem: fileService.createRootedFileSystem(`/projects/${projectId}`, undefined, { placeholders: 'raw' }),
+      checkouts: checkoutRoutes(projectId),
+      compute: revisionCompute,
+      http: createRevisionHttpClient({
+        credentials: 'include',
+        ...createGitRemoteTransport(credential),
+        signal,
+      }),
+    }),
+  /* The same credential rules as any push: the session cookie for Tau's own
+   * origin, and nothing at all for a remote the page never credited. */
+  keepalive: async (projectId) => sendKeepalivePush(pushRecorders.get(projectId)?.last(), { credentials: 'include' }),
+  /* Which POST the re-send above may carry: the history set's, marked by the
+   * scheduler at the moment it pushes it (W13 review 2 R3/P35). */
+  recordHistoryPush: (projectId) => pushRecorders.get(projectId)?.record,
+  /* A recorded pack is as big as the push was; it goes when the project does. */
+  released: (projectId) => {
+    pushRecorders.delete(projectId);
+    projectOpenTimers.delete(projectId);
+  },
+  /* STO-25: the applied checkout stands for `first_view` when the page has not
+   * said it showed one earlier, and is where the open's cache is known;
+   * `fully_fetched` once its background large-object fill has written the last
+   * placeholder. */
+  observeStatus: (projectId, status) => {
+    const timer = projectOpenTimers.get(projectId);
+    if (timer !== undefined) {
+      markProjectOpen(timer, status);
+    }
+  },
+  /* STO-25: the page says when a Tau Cloud open's route shows its first view; that is `first_view`. */
+  firstViewShown: (projectId) => {
+    projectOpenTimers.get(projectId)?.firstView();
+  },
+  /* The revision layer owns the pointers: its views read placeholders as they are (slice a). */
+  filesystem: (root) => fileService.createRootedFileSystem(root, undefined, { placeholders: 'raw' }),
+  /* Every write in this worker raises its change event inside the write, so a
+   * cut can capture only the paths the bus named (E1). */
+  completeChanges: true,
+  observe: (root, onChanged) =>
+    eventBus.subscribe((event) => {
+      const paths = versionedChangePaths(event, root);
+      if (paths.length > 0) {
+        onChanged(paths);
+      }
+    }),
+  /* W8 TS-S5: the agent channel's own transport, injected so the registry holds no rpc (R3). */
+  servePlacement: ({ port, projectId, session }) => serveTurnPlacementChannel({ port, projectId, session }),
+});
+/* Slice (a): the authority's reads of a pending entry go through to its object, by oid. */
+fileService.setPendingObjectSource(createPendingObjectSource(revisionRegistry.roots));
+
 let languageFsSyncDispose: { dispose(): void } | undefined;
+let computeStore: ReturnType<typeof createIndexedDbComputeEngine> | undefined;
+/*
+ * Compute admission is per **live project**, not per active route (S44).
+ *
+ * Several projects run agents at once, so one admitted id was the bug: opening
+ * B disposed A's channels while A's turn was still computing. The session
+ * admits its project on `open` and releases it on `close`, and a project's
+ * channels are disposed only by its own release.
+ */
+const admittedComputeProjectIds = new Set<string>();
+const computeChannels = new Map<string, Set<ReturnType<typeof exposeComputeStoreChannel>>>();
+/** Projects whose filesystem is served by a host that owns their revisions (P31). */
+const hostServedProjects = new Set<string>();
+
+const disposeComputeChannels = (projectId: string, reason: string): void => {
+  for (const channel of computeChannels.get(projectId) ?? []) {
+    channel.dispose(reason);
+  }
+  computeChannels.delete(projectId);
+};
+
+const rejectComputePort = (port: MessagePort, message: string): void => {
+  port.postMessage({ error: message });
+  port.close();
+};
+
+const openComputeChannel = async (port: MessagePort, projectId: unknown): Promise<void> => {
+  try {
+    if (typeof projectId !== 'string' || projectId.length === 0) {
+      throw new Error('Compute project identity is required.');
+    }
+    if (!admittedComputeProjectIds.has(projectId)) {
+      throw new Error('Compute store project authority does not match a live project.');
+    }
+    computeStore ??= createIndexedDbComputeEngine({ factory: globalThis.indexedDB });
+    const control = await computeStore.control({ workspace: projectId });
+    if (!admittedComputeProjectIds.has(projectId)) {
+      throw new Error('Compute store project authority changed while opening the channel.');
+    }
+    const channel = exposeComputeStoreChannel({
+      port,
+      engine: computeStore.engine,
+      workspace: projectId,
+      generation: async () => {
+        const report = await control.inspect({});
+        return report.generation;
+      },
+    });
+    const channels = computeChannels.get(projectId) ?? new Set();
+    channels.add(channel);
+    computeChannels.set(projectId, channels);
+    channel.onClose(() => channels.delete(channel));
+  } catch (error) {
+    rejectComputePort(port, error instanceof Error ? error.message : String(error));
+  }
+};
+
+const runComputeControl = async (data: {
+  port: MessagePort;
+  projectId: unknown;
+  action: unknown;
+  budget?: unknown;
+  cursor?: unknown;
+}): Promise<void> => {
+  try {
+    if (typeof data.projectId !== 'string' || data.projectId.length === 0) {
+      throw new Error('Compute project identity is required.');
+    }
+    if (!admittedComputeProjectIds.has(data.projectId)) {
+      throw new Error('Compute control project authority does not match a live project.');
+    }
+    if (data.action !== 'inspect' && data.action !== 'clear' && data.action !== 'collect') {
+      throw new Error('Compute control action is invalid.');
+    }
+    if (
+      data.action === 'collect' &&
+      (typeof data.budget !== 'number' || !Number.isSafeInteger(data.budget) || data.budget < 1 || data.budget > 1000)
+    ) {
+      throw new Error('Compute collection budget must be a safe integer from 1 to 1000.');
+    }
+    if (data.cursor !== undefined && (typeof data.cursor !== 'string' || data.cursor.length > 1024)) {
+      throw new Error('Compute collection cursor is invalid.');
+    }
+    computeStore ??= createIndexedDbComputeEngine({ factory: globalThis.indexedDB });
+    const control = await computeStore.control({ workspace: data.projectId });
+    if (!admittedComputeProjectIds.has(data.projectId)) {
+      throw new Error('Compute control project authority changed while opening the store.');
+    }
+    let result;
+    if (data.action === 'inspect') {
+      result = await control.inspect({});
+    } else if (data.action === 'clear') {
+      result = await control.clear({});
+    } else {
+      result = await control.collect({
+        budget: data.budget as number,
+        ...(data.cursor ? { cursor: data.cursor } : {}),
+      });
+    }
+    data.port.postMessage({ result });
+  } catch (error) {
+    data.port.postMessage({ error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    data.port.close();
+  }
+};
 
 self.addEventListener(
   'message',
@@ -172,12 +709,104 @@ self.addEventListener(
       port?: MessagePort;
       slotSab?: SharedArrayBuffer;
       arenaSab?: SharedArrayBuffer;
+      rootDirectory?: string;
+      projectId?: unknown;
+      hostServesRevisions?: unknown;
+      action?: unknown;
+      budget?: unknown;
+      cursor?: unknown;
     }>,
   ) => {
     const { data } = event;
-    if (data.type === 'filePool' && data.buffer instanceof SharedArrayBuffer) {
-      fileService.setFilePool(new SharedPool(data.buffer));
-      console.debug('[FM-Worker] filePool attached');
+    if (data.type === 'computeStoreAdmission') {
+      if (typeof data.projectId === 'string' && data.projectId.length > 0) {
+        admittedComputeProjectIds.add(data.projectId);
+      }
+      return;
+    }
+    if (data.type === 'computeStoreRelease') {
+      if (typeof data.projectId === 'string' && data.projectId.length > 0) {
+        admittedComputeProjectIds.delete(data.projectId);
+        disposeComputeChannels(data.projectId, 'project closed');
+        for (const [generation, roots] of settingsOwners) {
+          if (generation.routeId === data.projectId) {
+            for (const owner of roots.values()) {
+              owner.dispose();
+            }
+            settingsOwners.delete(generation);
+          }
+        }
+      }
+      return;
+    }
+    if (data.type === 'revisionsConnect' && data.port instanceof MessagePort) {
+      if (typeof data.projectId === 'string' && data.projectId.length > 0) {
+        if (data.hostServesRevisions === true) {
+          hostServedProjects.add(data.projectId);
+        } else {
+          hostServedProjects.delete(data.projectId);
+        }
+        revisionRegistry.connect(data.port, data.projectId);
+      } else {
+        data.port.close();
+      }
+      return;
+    }
+
+    /* W8 TS-S5: the resident agent host's placement session and its `revisions` tool reader, brokered by the page. */
+    if (
+      (data.type === 'placementConnect' || data.type === 'revisionsReaderConnect') &&
+      data.port instanceof MessagePort
+    ) {
+      if (typeof data.projectId !== 'string' || data.projectId.length === 0) {
+        data.port.close();
+      } else if (data.type === 'placementConnect') {
+        revisionRegistry.connectPlacement(data.port, data.projectId);
+      } else {
+        revisionRegistry.connectReader(data.port, data.projectId);
+      }
+      return;
+    }
+
+    /* W7: a streaming import plans, stages and decodes here, off the page (D12). */
+    if (data.type === importConnectMessageType && data.port instanceof MessagePort) {
+      serveImportChannel(data.port, {
+        importStaging: async (scope) => fileService.importStaging(scope),
+        decode: async (request) => revisionCompute.decodeImportEntry(request),
+        /* Each written file's one hash, from its read-back, on the compute worker (EQ6, I2). */
+        measure: async (bytes, expectedSize) => revisionCompute.measureImportBytes(bytes, expectedSize),
+        policy: tauPathPolicy,
+        /* What a person chose on the desktop host is listed and copied by that host, by grant (W7.4, I6). */
+        hostSources: async () => fileService.importSources(),
+        /* A linked repository is fetched here, into the staging, by the revisions authority: `.git` never reaches the page (I6). */
+        stageLinked: async (input) =>
+          stageLinkedImport({
+            ...input,
+            revisions: (gitDirectory) =>
+              linkedImportPort({
+                provider: input.port.provider,
+                gitDirectory,
+                request: input.request,
+                compute: revisionCompute,
+              }),
+          }),
+      });
+      return;
+    }
+
+    if (data.type === 'computeStoreConnect' && data.port instanceof MessagePort) {
+      void openComputeChannel(data.port, data.projectId);
+      return;
+    }
+
+    if (data.type === 'computeStoreControl' && data.port instanceof MessagePort) {
+      void runComputeControl({
+        port: data.port,
+        projectId: data.projectId,
+        action: data.action,
+        budget: data.budget,
+        cursor: data.cursor,
+      });
       return;
     }
 
@@ -185,22 +814,26 @@ self.addEventListener(
       data.type === 'languageFsSyncAttach' &&
       data.port instanceof MessagePort &&
       data.slotSab instanceof SharedArrayBuffer &&
-      data.arenaSab instanceof SharedArrayBuffer
+      data.arenaSab instanceof SharedArrayBuffer &&
+      typeof data.rootDirectory === 'string'
     ) {
       languageFsSyncDispose?.dispose();
+      const rootedFileSystem = fileService.createRootedFileSystem(data.rootDirectory);
       const workspace: SyncFsWorkspaceAdapter = {
         readFileBytes: async (path) => {
-          const bytes = await fileService.readFile(path);
+          const bytes = await rootedFileSystem.readFile(path);
           if (typeof bytes === 'string') {
             return new TextEncoder().encode(bytes);
           }
           return bytes;
         },
         stat: async (path) => {
-          const stat = await fileService.stat(path);
+          const stat = await rootedFileSystem.stat(path);
           return { mtimeMs: stat.mtimeMs, isDirectory: stat.type === 'dir' };
         },
-        readdir: async (path) => fileService.readdir(path),
+        listDirectories: async (path) => listWorkspaceDirectories(rootedFileSystem, path),
+        /* The language worker mirrors this root's index (charter D13): presence and versions never cross back here. */
+        ...languageIndexSource(rootedFileSystem, data.rootDirectory),
       };
       languageFsSyncDispose = attachSyncFsServer({
         port: data.port,

@@ -2,59 +2,41 @@
  * Node-worker transport — client factory.
  *
  * Owns the consumer-facing client handle, the `node:worker_threads.Worker`
- * constructor lookup, the SAB pool allocator, the FS bridge plumbing, and
- * the single `new URL('../worker/node.js', import.meta.url)` literal that
- * tells the bundler to emit the bundled Node worker entry chunk.
- *
- * Per `docs/research/runtime-transport-authoring-simplification.md` (R2):
- * the chunk-emit literal lives **here**, in a file the worker entry never
- * reaches. The host file (`node-worker-host.ts`) is bundled into the
- * worker entry chunk and must remain free of `new URL` literals so
- * Rolldown's chunk planner has no static path back to the chunk-emitter.
+ * constructor lookup, the SAB pool allocator, and FS bridge plumbing. The
+ * consuming application supplies the executable worker URL because only its
+ * build tool knows how the worker entry is materialized.
  *
  * @public
  */
 
 import { Worker as NodeWorker } from 'node:worker_threads';
-import type { Transferable as NodeTransferable } from 'node:worker_threads';
+import type { Transferable as NodeTransferable, WorkerOptions } from 'node:worker_threads';
 
 import { createChannelClient } from '@taucad/rpc';
 import type { Channel, Port } from '@taucad/rpc';
-import { runtimeProtocolSchemas } from '#types/runtime-protocol.schemas.js';
-import type { Geometry } from '@taucad/types';
+import { Topic } from '@taucad/events';
+import { runtimeDocumentProtocolSchemas } from '#types/runtime-document-protocol.schemas.js';
 import type {
   RuntimeInitializeMemoryHandle,
   RuntimeInitializePayload,
+  RuntimeTransportCloseResult,
   RuntimeTransportClient,
   TransportClientReady,
-  TransportDescriptor,
 } from '#transport/runtime-transport.types.js';
-import { runtimeChannelSessionKey } from '#transport/_internal/runtime-worker-dispatcher.js';
+import type { TransportDescriptor } from '#transport/runtime-transport-descriptor.types.js';
+import { runtimeChannelSessionKey } from '#transport/_internal/runtime-channel-bindings.js';
 import { isRuntimeFileSystem } from '#filesystem/runtime-filesystem.js';
 import type { RuntimeFileSystem } from '#filesystem/runtime-filesystem.js';
-import { materialiseGeometry } from '#transport/_internal/geometry-materialiser.js';
-import type { GeometryTransport, RuntimeInitializeResult, RuntimeProtocol } from '#types/runtime-protocol.types.js';
+import { materialiseBinaryContent } from '#transport/_internal/export-materialiser.js';
+import type { RuntimeDocumentProtocol } from '#types/runtime-document-protocol.types.js';
+import type { BinaryContentDelivery, RuntimeInitializeResult } from '#types/runtime-wire.types.js';
 import { allocatePools } from '#transport/_internal/sab-pools.js';
-import { triggerAbort } from '#transport/_internal/abort-channel.js';
-import { buildHelloPayload } from '#transport/_internal/transport-hello.js';
+import { signalDocumentAbort } from '#transport/_internal/abort-channel.js';
 import { buildFileSystemBridge } from '#transport/_internal/file-system-bridge.js';
 import { nodeWorkerId } from '#transport/_internal/node-worker-id.js';
 import type { NodeWorkerId } from '#transport/_internal/node-worker-id.js';
-
-/**
- * Default URL of the bundled node-worker entry. Resolved at module-load
- * via `new URL('../worker/node.js', import.meta.url)` so consumers no
- * longer have to write a `new URL('@taucad/runtime/worker/node', ...)`
- * literal at every callsite.
- *
- * The relative `.js` reference is the form `tsModuleUrlBuildPlugin`
- * handles via its synchronous fast path. Hoisting the URL into the
- * runtime package keeps the only `new URL(...)` instance in source we
- * control.
- *
- * @internal
- */
-const defaultNodeWorkerUrl = new URL('../worker/node.js', import.meta.url);
+import type { ComputeBinding } from '#types/runtime-compute.types.js';
+import { buildComputeStoreBridge } from '#transport/_internal/compute-store-bridge.js';
 
 /**
  * Subset of `node:worker_threads.Worker` the transport depends on.
@@ -64,9 +46,43 @@ const defaultNodeWorkerUrl = new URL('../worker/node.js', import.meta.url);
 export type NodeWorkerLike = {
   postMessage(value: unknown, transferList?: readonly NodeTransferable[]): void;
   on(event: 'message', listener: (data: unknown) => void): NodeWorkerLike;
+  /** The transport settles the client from `'error'` and `'exit'`; a worker that never emits them hangs until the operation timeout. */
+  on(event: 'error', listener: (error: Error) => void): NodeWorkerLike;
+  on(event: 'exit', listener: (exitCode: number) => void): NodeWorkerLike;
   off(event: 'message', listener: (data: unknown) => void): NodeWorkerLike;
+  off(event: 'error', listener: (error: Error) => void): NodeWorkerLike;
+  off(event: 'exit', listener: (exitCode: number) => void): NodeWorkerLike;
   terminate(): Promise<number>;
 };
+
+/**
+ * A value `node:worker_threads` can structured-clone into a worker's
+ * `workerData`: primitives, dates, regular expressions, binary data, and
+ * arrays, maps, sets and plain objects of these. Functions, class instances
+ * with behaviour and symbols cannot cross the thread boundary.
+ *
+ * Declare an object's shape with `type`, not `interface`: an interface has no
+ * implicit index signature, so it is not assignable here even when every
+ * member is cloneable.
+ *
+ * @public
+ */
+export type NodeWorkerData =
+  // oxlint-disable-next-line typescript/no-restricted-types -- `null` is a value a worker can receive; this type describes data, not an API's absence.
+  | null
+  | undefined
+  | boolean
+  | number
+  | bigint
+  | string
+  | Date
+  | RegExp
+  | ArrayBuffer
+  | ArrayBufferView
+  | readonly NodeWorkerData[]
+  | ReadonlyMap<NodeWorkerData, NodeWorkerData>
+  | ReadonlySet<NodeWorkerData>
+  | { readonly [key: string]: NodeWorkerData };
 
 /**
  * Options accepted by {@link nodeWorkerClient}.
@@ -75,20 +91,38 @@ export type NodeWorkerLike = {
  */
 export type NodeWorkerClientOptions = {
   /**
-   * URL of the worker module entry. Optional — when omitted the
-   * transport defaults to the bundled `@taucad/runtime/worker/node`
-   * entry. Override only when hosting a custom Node worker module
-   * that composes `KernelRuntimeWorker` with `nodeWorkerHost`
-   * directly.
+   * URL of the application-owned worker module entry. The entry must host a
+   * configured runtime through `nodeWorkerHost` or an equivalent helper.
    */
-  readonly url?: string | URL;
-  readonly workerCtor?: unknown;
+  readonly url: string | URL;
+  /**
+   * Override for `node:worker_threads.Worker`, called as
+   * `new workerCtor(url, { workerData })` — a tsx-run `.ts` entry, or a fake
+   * worker in a unit test. A custom constructor must forward `options` to
+   * `Worker`, or the entry never receives `workerData`.
+   */
+  readonly workerCtor?: new (url: string | URL, options?: WorkerOptions) => NodeWorkerLike;
+  /**
+   * Structured-cloned into the worker as `workerData` from
+   * `node:worker_threads`, so one application-owned entry can configure the
+   * runtime it hosts (a project root, a plugin list).
+   */
+  readonly workerData?: NodeWorkerData;
   readonly sharedMemory?: { readonly geometry?: { readonly bytes: number } };
   readonly fileSystem?: RuntimeFileSystem;
+  /** Mirror runtime spans into the worker Performance Timeline for DevTools. */
+  readonly devtoolsTelemetry?: boolean;
+  /** Host-compiled WASM modules cloned into the worker during initialization. */
+  readonly compiledWasmModules?: RuntimeInitializeMemoryHandle['compiledWasmModules'];
+  readonly compute?: ComputeBinding;
 };
 
-const wrapNodeWorkerAsPort = (worker: NodeWorkerLike, label: string): Port<unknown> => {
-  const listeners = new Set<(data: unknown) => void>();
+const wrapNodeWorkerAsPort = (worker: NodeWorkerLike): Port<unknown> => {
+  const messages = new Topic<unknown>({ name: 'node-worker-port' });
+  const listener = (data: unknown): void => {
+    messages.emit(data);
+  };
+  let listening = false;
   let closed = false;
   return {
     postMessage(data, transfer) {
@@ -98,14 +132,17 @@ const wrapNodeWorkerAsPort = (worker: NodeWorkerLike, label: string): Port<unkno
       worker.postMessage(data, transfer as NodeTransferable[] | undefined);
     },
     onMessage(handler) {
-      const listener = (data: unknown): void => {
-        handler(data);
-      };
-      worker.on('message', listener);
-      listeners.add(listener);
+      if (!listening) {
+        listening = true;
+        worker.on('message', listener);
+      }
+      const unsubscribe = messages.subscribe(handler);
       return () => {
-        listeners.delete(listener);
-        worker.off('message', listener);
+        unsubscribe();
+        if (messages.size === 0 && listening) {
+          listening = false;
+          worker.off('message', listener);
+        }
       };
     },
     close() {
@@ -113,19 +150,11 @@ const wrapNodeWorkerAsPort = (worker: NodeWorkerLike, label: string): Port<unkno
         return;
       }
       closed = true;
-      for (const listener of listeners) {
+      if (listening) {
         worker.off('message', listener);
       }
-      listeners.clear();
-      const terminated = (async (): Promise<void> => {
-        try {
-          await worker.terminate();
-        } catch (error) {
-          throw new Error(`${label}: terminate failed`, { cause: error });
-        }
-      })();
-      // async-iife: bootstrap — Port#close is sync per the @taucad/rpc contract; terminate is fire-and-forget.
-      void terminated;
+      listening = false;
+      messages.dispose();
     },
   };
 };
@@ -134,13 +163,13 @@ const wrapNodeWorkerAsPort = (worker: NodeWorkerLike, label: string): Port<unkno
  * Pure diagnostic descriptor for Node worker client options.
  *
  * @param options - Same shape as {@link nodeWorkerClient}.
+ * @returns Diagnostic {@link TransportDescriptor} for the node-worker transport.
  * @public
  */
 export const nodeWorkerClientDescribe = (options: NodeWorkerClientOptions): TransportDescriptor<NodeWorkerId> => {
   const fsKind = options.fileSystem ? 'inline' : 'unbound';
   const sabAvailable = typeof SharedArrayBuffer === 'function';
   const geometryDelivery = sabAvailable && options.sharedMemory?.geometry !== undefined ? 'pool' : 'transfer';
-  const fileDelivery = 'transfer';
   const abortSignal = sabAvailable ? 'sab-atomics' : 'wire-notify';
 
   return {
@@ -148,7 +177,6 @@ export const nodeWorkerClientDescribe = (options: NodeWorkerClientOptions): Tran
     wire: 'node-worker',
     memory: {
       geometryDelivery,
-      fileDelivery,
       abortSignal,
     },
     fileSystem: fsKind,
@@ -164,9 +192,9 @@ export const nodeWorkerClientDescribe = (options: NodeWorkerClientOptions): Tran
  */
 export const nodeWorkerClient = (
   options: NodeWorkerClientOptions,
-): RuntimeTransportClient<RuntimeProtocol, Readonly<Record<never, never>>, NodeWorkerId> => {
-  const ctor = (options.workerCtor ?? NodeWorker) as new (url: string | URL) => NodeWorkerLike;
-  if (typeof ctor !== 'function') {
+): RuntimeTransportClient<RuntimeDocumentProtocol, Readonly<Record<never, never>>, NodeWorkerId> => {
+  const workerCtor = options.workerCtor ?? NodeWorker;
+  if (typeof workerCtor !== 'function') {
     throw new TypeError('nodeWorkerTransport: requires `node:worker_threads.Worker` (or `workerCtor` test seam)');
   }
   if (options.fileSystem !== undefined && !isRuntimeFileSystem(options.fileSystem)) {
@@ -182,16 +210,56 @@ export const nodeWorkerClient = (
   };
 
   let bridge: ReturnType<typeof buildFileSystemBridge>;
+  let computeBridge: ReturnType<typeof buildComputeStoreBridge> | undefined;
   let openPromise: Promise<TransportClientReady> | undefined;
   let worker: NodeWorkerLike | undefined;
   let port: Port<unknown> | undefined;
-  let channel: Channel<RuntimeProtocol> | undefined;
+  let channel: Channel<RuntimeDocumentProtocol> | undefined;
+  let removeWorkerFailureListeners: (() => void) | undefined;
   let isClosed = false;
+  /* A worker that dies before its hello failed to start; one that dies after it
+   * died mid-session. Readiness is the only thing that separates them. */
+  let phase: 'boot' | 'session' = 'boot';
 
-  let resolveClosed: (() => void) | undefined;
-  const closed = new Promise<void>((resolve) => {
+  let resolveClosed: ((result: RuntimeTransportCloseResult) => void) | undefined;
+  const closed = new Promise<RuntimeTransportCloseResult>((resolve) => {
     resolveClosed = resolve;
   });
+
+  const finish = async (result: RuntimeTransportCloseResult): Promise<void> => {
+    if (isClosed) {
+      return;
+    }
+    isClosed = true;
+    try {
+      channel?.close(result.cause);
+    } catch {
+      /* Best-effort */
+    }
+    try {
+      port?.close();
+    } catch {
+      /* Best-effort */
+    }
+    removeWorkerFailureListeners?.();
+    removeWorkerFailureListeners = undefined;
+    try {
+      await worker?.terminate();
+    } catch {
+      /* Best-effort */
+    }
+    try {
+      bridge?.dispose();
+    } catch {
+      /* Best-effort */
+    }
+    try {
+      computeBridge?.dispose();
+    } catch {
+      /* Best-effort */
+    }
+    resolveClosed?.(result);
+  };
 
   const open = async (): Promise<TransportClientReady> => {
     if (openPromise) {
@@ -202,24 +270,57 @@ export const nodeWorkerClient = (
         throw new Error('nodeWorkerTransport: client closed before open()');
       }
       void ensurePools();
-      const resolvedUrl = options.url ?? defaultNodeWorkerUrl;
-      worker = Reflect.construct(ctor, [resolvedUrl]);
-      port = wrapNodeWorkerAsPort(worker, `node-worker:${nodeWorkerId}`);
-      channel = createChannelClient<RuntimeProtocol>({
+      // oxlint-disable-next-line new-cap -- the constructor is held in a camel-case variable by naming policy.
+      worker = new workerCtor(
+        options.url,
+        options.workerData === undefined ? undefined : { workerData: options.workerData },
+      );
+      const eventWorker = worker;
+      const onWorkerError = (error: Error): void => {
+        void finish({ cause: 'wire-failure', error });
+      };
+      const onWorkerExit = (exitCode: number): void => {
+        void finish({ cause: 'host-exit', exitCode, phase });
+      };
+      eventWorker.on('error', onWorkerError);
+      eventWorker.on('exit', onWorkerExit);
+      removeWorkerFailureListeners = () => {
+        eventWorker.off('error', onWorkerError);
+        eventWorker.off('exit', onWorkerExit);
+      };
+      port = wrapNodeWorkerAsPort(worker);
+      channel = createChannelClient<RuntimeDocumentProtocol>({
         port,
         sessionKey: runtimeChannelSessionKey,
-        protocolSchemas: runtimeProtocolSchemas,
+        protocolSchemas: runtimeDocumentProtocolSchemas,
       });
-      return {
-        channel,
-        hello: buildHelloPayload(nodeWorkerId),
+      /* `open()` hands the channel back before hello lands, so readiness is
+       * observed separately; a host that never became ready died in boot. */
+      const observeReadiness = async (ready: Promise<unknown>): Promise<void> => {
+        try {
+          await ready;
+          phase = 'session';
+        } catch {
+          /* The phase stays `'boot'`. */
+        }
       };
+      void observeReadiness(channel.ready);
+      return { channel };
     })();
     return openPromise;
   };
 
   return {
     id: nodeWorkerId,
+    signalDocumentAbort(evaluationId, generation, reason) {
+      return signalDocumentAbort(ensurePools().signalBuffer, evaluationId, generation, reason);
+    },
+    operationTimeoutRecovery: {
+      kind: 'terminable',
+      async terminate(): Promise<void> {
+        await finish({ cause: 'operation-timeout' });
+      },
+    },
     describe(): TransportDescriptor<NodeWorkerId> {
       return nodeWorkerClientDescribe(options);
     },
@@ -232,52 +333,44 @@ export const nodeWorkerClient = (
         throw new Error('nodeWorkerTransport: channel unavailable after open()');
       }
       bridge ??= buildFileSystemBridge(options.fileSystem);
+      computeBridge ??= buildComputeStoreBridge(options.compute);
       const pooled = ensurePools();
       const memoryHandle: RuntimeInitializeMemoryHandle = {
         ...(pooled.signalBuffer ? { signalBuffer: pooled.signalBuffer } : {}),
         ...(pooled.geometryPoolBuffer ? { geometryPoolBuffer: pooled.geometryPoolBuffer } : {}),
-        ...(pooled.filePoolBuffer ? { filePoolBuffer: pooled.filePoolBuffer } : {}),
         ...(bridge ? { fileSystemPort: bridge.port } : {}),
+        ...computeBridge.memoryHandle,
+        ...(options.devtoolsTelemetry === true ? { devtoolsTelemetry: true } : {}),
+        ...(options.compiledWasmModules ? { compiledWasmModules: options.compiledWasmModules } : {}),
       };
-      const transferables: Transferable[] = bridge ? [bridge.port] : [];
+      const transferables: Transferable[] = [...(bridge ? [bridge.port] : []), ...computeBridge.transfer];
       const args = { ...input, memoryHandle };
-      return channel.call('initialize', transferables.length > 0 ? { value: args, transferables } : args);
+      try {
+        const result = await channel.call(
+          'initialize',
+          transferables.length > 0 ? { value: args, transferables } : args,
+        );
+        return result;
+      } catch (error) {
+        if (bridge) {
+          try {
+            bridge.dispose();
+          } finally {
+            bridge = undefined;
+          }
+        }
+        computeBridge.dispose();
+        computeBridge = undefined;
+        throw error;
+      }
     },
-    abort(reason): void {
-      if (!channel) {
-        return;
-      }
-      triggerAbort(channel, ensurePools().signalBuffer, reason);
+    async resolveBinary(transport: BinaryContentDelivery): Promise<Uint8Array<ArrayBuffer>> {
+      return materialiseBinaryContent(transport, ensurePools().geometryPool, (key) => {
+        channel?.notify('binaryMaterialised', { key });
+      });
     },
-    async resolveGeometry(transport: GeometryTransport): Promise<Geometry> {
-      return materialiseGeometry(transport, ensurePools().geometryPool);
-    },
-    async close(reason?: string): Promise<void> {
-      if (isClosed) {
-        return;
-      }
-      isClosed = true;
-      try {
-        channel?.close(reason);
-      } catch {
-        /* Best-effort */
-      }
-      try {
-        port?.close();
-      } catch {
-        /* Best-effort */
-      }
-      try {
-        await worker?.terminate();
-      } catch {
-        /* Best-effort */
-      }
-      try {
-        bridge?.dispose();
-      } catch {
-        /* Best-effort */
-      }
-      resolveClosed?.();
+    async close(): Promise<void> {
+      await finish({ cause: 'requested' });
     },
     closed,
   };

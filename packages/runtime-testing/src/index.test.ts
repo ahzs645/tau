@@ -1,0 +1,209 @@
+import { builtinModules } from 'node:module';
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { describe, expect, it, vi } from 'vitest';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { contentDigest, digestAction } from '@taucad/cache-core';
+import type { ActionDigest, ComputeAction } from '@taucad/cache-core';
+import type { ResidentCacheBinding, ResidentExportEntry } from '@taucad/runtime/kernel';
+import type { RenderResult, KernelExportResult } from '@taucad/runtime/types';
+
+import * as entry from '#index.js';
+
+describe('@taucad/runtime-testing', () => {
+  it('has a lightweight non-plugin root', () => {
+    expect(entry).not.toHaveProperty('plugin');
+  });
+
+  it('normalizes relative fixture paths before materializing the memory filesystem', async () => {
+    const client = entry.createTestRuntimeClient({
+      runtime: defineRuntime({}),
+      files: { 'main.ts': 'export default null;' },
+    });
+
+    await client.shutdown();
+  });
+
+  it('provides a document mock with public evaluation, rendering, and event contracts', async () => {
+    const client = entry.createMockRuntimeClient();
+    const fixture = entry.createMockRuntimeDocument();
+    vi.mocked(client.open).mockReturnValue(fixture.document);
+    const document = client.open({ source: { path: 'main.ts' } });
+    const view = document.view('model');
+    const evaluated = vi.fn();
+    const rendered = vi.fn();
+    document.on('evaluated', evaluated);
+    view.on('rendered', rendered);
+
+    await expect(document.evaluation()).resolves.toEqual({ superseded: false, evaluation: fixture.evaluation });
+    await expect(view.rendering()).resolves.toEqual({ superseded: false, rendering: fixture.rendering });
+    fixture.emitEvaluated(fixture.evaluation);
+    fixture.emitRendered(fixture.rendering);
+    expect(evaluated).toHaveBeenCalledExactlyOnceWith(fixture.evaluation);
+    expect(rendered).toHaveBeenCalledExactlyOnceWith(fixture.rendering);
+    expect(fixture.viewSpy).toHaveBeenCalledWith('model', undefined);
+  });
+
+  it('reads actual v2 render and export artifacts through the known-media boundary', () => {
+    const glb = new Uint8Array([1, 2, 3]);
+    const rendered: RenderResult = {
+      success: true,
+      data: { mimeType: 'model/gltf-binary', content: glb },
+      issues: [],
+    };
+    expect(entry.extractGltfFromResult(rendered)).toBe(glb);
+    expect(() =>
+      entry.extractGltfFromResult({ ...rendered, data: { mimeType: 'model/gltf-binary', content: new Uint8Array() } }),
+    ).toThrow(TypeError);
+
+    const written: KernelExportResult = {
+      success: true,
+      data: [{ name: 'model.glb', mimeType: 'model/gltf-binary', bytes: glb }],
+      issues: [],
+    };
+    expect(entry.extractGltfFromExportResult(written)).toEqual(glb);
+  });
+
+  it('preserves the kernel filesystem text and byte read overloads', async () => {
+    const filesystem = entry.createMockFileSystem({ readFileResult: 'fixture', readdirResult: ['main.ts'] });
+
+    await expect(filesystem.readFile('main.ts', 'utf8')).resolves.toBe('fixture');
+    await expect(filesystem.readFile('main.ts')).resolves.toEqual(new TextEncoder().encode('fixture'));
+    await expect(filesystem.readdir('')).resolves.toEqual(['main.ts']);
+  });
+
+  it('reuses a published action across two scopes through the resident binding', async () => {
+    const runtime = entry.createMockKernelRuntime();
+    const computeAction: ComputeAction = {
+      schemaVersion: 1,
+      namespace: 'test',
+      producer: {
+        id: 'fixture',
+        version: '1',
+        implementationAssets: [contentDigest({ value: `sha256:${'1'.repeat(64)}` })],
+      },
+      operation: 'box',
+      inputs: [],
+      arguments: { size: 10 },
+      environment: {},
+      codec: { id: 'bytes', version: '1' },
+    };
+    const digest = await digestAction({ action: computeAction });
+    if (runtime.compute.status !== 'on') {
+      throw new Error('The mock kernel runtime binds compute on.');
+    }
+    const createResident = (native: Map<ActionDigest, Uint8Array<ArrayBuffer>>): ResidentCacheBinding => ({
+      contains: ({ digest: key }) => native.has(key),
+      importEntries: async ({ entries }) => {
+        for (const cached of entries) {
+          native.set(cached.actionDigest, new Uint8Array(cached.bytes));
+        }
+        return { imported: entries.map((cached) => cached.actionDigest), omitted: [] };
+      },
+      exportEntries: async ({ digests }) => ({
+        entries: digests.flatMap((key) => {
+          const bytes = native.get(key);
+          const exported: ResidentExportEntry = {
+            action: computeAction,
+            bytes: bytes ?? new Uint8Array(),
+            mediaType: 'test/bytes',
+            determinism: 'byte-exact',
+          };
+          return bytes ? [exported] : [];
+        }),
+        omitted: [],
+      }),
+      stats: () => ({
+        entries: native.size,
+        logicalBytes: 0,
+        encodedBytes: { status: 'unsupported' },
+        evictions: 0,
+        omissions: 0,
+      }),
+      clear: () => {
+        native.clear();
+      },
+    });
+
+    const producerNative = new Map<ActionDigest, Uint8Array<ArrayBuffer>>([[digest, new Uint8Array([1, 2, 3])]]);
+    const producer = runtime.compute.openScope({
+      namespace: 'test',
+      producer: computeAction.producer,
+      environment: {},
+      resident: createResident(producerNative),
+    });
+    expect(
+      producer.announce({
+        entries: [{ kind: 'action', action: computeAction, digest, computeDuration: 40, estimatedBytes: 3 }],
+      }),
+    ).toMatchObject({
+      admitted: [digest],
+    });
+    await expect(producer.close({ outcome: 'delivered' }).settled).resolves.toMatchObject({
+      status: 'published',
+      published: [digest],
+    });
+
+    const consumerNative = new Map<ActionDigest, Uint8Array<ArrayBuffer>>();
+    const consumer = runtime.compute.openScope({
+      namespace: 'test',
+      producer: computeAction.producer,
+      environment: {},
+      resident: createResident(consumerNative),
+    });
+    await expect(consumer.warm({ digests: [digest] })).resolves.toMatchObject({ imported: [digest] });
+    expect(consumerNative.get(digest)).toStrictEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it('keeps private runtime and host-only payloads out of browser source', () => {
+    const sourceDirectory = dirname(fileURLToPath(import.meta.url));
+    const nodeBuiltins = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
+    const nodeOnlyPackages = new Set([
+      'better-sqlite3',
+      'bufferutil',
+      'canvas',
+      'fs-extra',
+      'node-fetch',
+      'node-gyp-build',
+      'sharp',
+      'utf-8-validate',
+      'ws',
+    ]);
+    const offenders = readdirSync(sourceDirectory, { encoding: 'utf8', recursive: true })
+      // `preparation/` is the Node-only `./preparation` subpath (archives, a loopback mirror, the seed layout); the
+      // browser entry must never reach it, which the next test asserts.
+      .filter((name) => name.endsWith('.ts') && !name.includes('.test') && !name.startsWith('preparation/'))
+      .flatMap((name) => {
+        const source = readFileSync(join(sourceDirectory, name), 'utf8')
+          .replaceAll(/\/\*[\S\s]*?\*\//g, '')
+          .replaceAll(/^\s*\/\/.*$/gm, '')
+          .replaceAll(/^\s*(?:import|export)\s+type\s[^;]*;/gm, '');
+
+        return [...source.matchAll(/(?:from\s+|import\s*\(\s*|import\s+)["']([^"']+)["']/g)]
+          .map((match) => match[1]!)
+          .filter(
+            (specifier) =>
+              nodeBuiltins.has(specifier) ||
+              nodeOnlyPackages.has(specifier) ||
+              specifier.includes('_internal') ||
+              specifier.includes('test/support') ||
+              specifier.includes('-native') ||
+              specifier.includes('-python'),
+          )
+          .map((specifier) => `${name}: ${specifier}`);
+      });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the Node-only preparation subpath out of the browser entry', () => {
+    const sourceDirectory = dirname(fileURLToPath(import.meta.url));
+    const entries = ['index.ts', 'browser/three-renderer-output.ts'].map((name) =>
+      readFileSync(join(sourceDirectory, name), 'utf8'),
+    );
+
+    expect(entries.filter((source) => source.includes('preparation'))).toEqual([]);
+  });
+});

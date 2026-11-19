@@ -1,0 +1,261 @@
+/**
+ * Spawn one ACP adapter, with the daemon's own environment left behind.
+ *
+ * X6 keeps two credential planes apart: the adapter inherits the *user's* CLI
+ * login, and Tau's bearer buys Tau models only. SP-4 showed how that breaks
+ * silently — a leaked `CLAUDE_CODE_MESSAGING_SOCKET` bound the adapter to the
+ * host harness's auth channel instead of the user's keychain, and every turn
+ * then failed with the harness account's billing error.
+ *
+ * So the environment is an **allowlist**, not a blocklist: nothing is passed
+ * that is not named here. An allowlist strictly subsumes the charter's
+ * "drop every `CLAUDE`/`ANTHROPIC`/`CODEX`/`AI_AGENT`/`BAGGAGE`/`OPENAI`/
+ * `TAU_HOST_AGENT_TOKEN` prefix" rule — it also drops `NODE_OPTIONS`, which
+ * would otherwise inject this process's loader hooks into a vendor adapter.
+ * The carve-outs are each adapter's own config-directory variables and the
+ * one variable naming the CLI it must run (`executableEnv`).
+ */
+
+import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { Readable, Writable } from 'node:stream';
+
+import { ndJsonStream } from '@agentclientprotocol/sdk';
+import type { Stream } from '@agentclientprotocol/sdk';
+
+import { resolveAcpAdapterExecutable } from '#acp/locate.js';
+import type { AcpAdapter } from '#acp/registry.js';
+
+/**
+ * Exact variable names every adapter is given.
+ *
+ * The proxy and CA entries are here by operator ruling (2026-09-03): a proxy
+ * URL or a CA bundle path is the *user's own network setting*, not a Tau
+ * credential, and without them an adapter behind a corporate proxy cannot
+ * reach its own vendor at all. The X6 fence is about Tau bearers and vendor
+ * API keys, and neither of those joins this list.
+ *
+ * @public
+ */
+export const acpEnvironmentAllowlist: readonly string[] = [
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'LANG',
+  'LC_ALL',
+  'SHELL',
+  'USER',
+  'TERM',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+];
+
+/** Variable prefixes every adapter is given. @public */
+export const acpEnvironmentPrefixAllowlist: readonly string[] = ['XDG_'];
+
+/** Bytes of adapter stderr retained for a typed failure reason. */
+const stderrRetention = 8192;
+
+/**
+ * The exact environment one adapter is spawned with.
+ *
+ * @param base - Environment to filter, normally `process.env`.
+ * @param adapter - Adapter whose own config variables survive the allowlist.
+ * @returns A fresh environment containing only allowlisted variables.
+ * @public
+ *
+ * @example <caption>Nothing of Tau's own reaches the adapter</caption>
+ * ```typescript
+ * import { acpAdapterEnvironment } from '@taucad/host';
+ *
+ * const env = acpAdapterEnvironment(
+ *   { PATH: '/usr/bin', TAU_HOST_AGENT_TOKEN: 'secret' },
+ *   { configEnv: [] },
+ * );
+ * console.log(env['TAU_HOST_AGENT_TOKEN']); // undefined
+ * ```
+ */
+export const acpAdapterEnvironment = (
+  base: NodeJS.ProcessEnv,
+  adapter: Pick<AcpAdapter, 'configEnv'> & Partial<Pick<AcpAdapter, 'spawnEnv' | 'executableEnv' | 'executablePath'>>,
+): NodeJS.ProcessEnv => {
+  const allowed = new Set([...acpEnvironmentAllowlist, ...adapter.configEnv]);
+  return {
+    ...Object.fromEntries(
+      Object.entries(base).filter(
+        ([name, value]) =>
+          value !== undefined && (allowed.has(name) || acpEnvironmentPrefixAllowlist.some((p) => name.startsWith(p))),
+      ),
+    ),
+    /* The adapter is spawned from `process.execPath`; inside Electron (the desktop
+     * services utility) that is the Tau binary, which only runs a script as Node
+     * when told so. Plain Node ignores the name. */
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- an environment variable name is Electron's, not ours.
+    ...('electron' in process.versions ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+    /* The executable the version probe checked, so the adapter runs that file
+     * and not a vendor copy of its own. */
+    ...(adapter.executableEnv === undefined || adapter.executablePath === undefined
+      ? {}
+      : { [adapter.executableEnv]: adapter.executablePath }),
+    /* After the allowlist, so a pin's own requirement cannot be filtered away. */
+    ...adapter.spawnEnv,
+  };
+};
+
+/** One newline-delimited JSON-RPC frame observed on the adapter's stdio. @public */
+export type AcpWireFrame = {
+  readonly direction: 'client->agent' | 'agent->client';
+  readonly frame: string;
+};
+
+/** A running adapter process and its ACP stream. @public */
+export type SpawnedAcpAdapter = {
+  readonly child: ChildProcessWithoutNullStreams;
+  /** The bidirectional ACP message stream, ready for `ClientSideConnection`. */
+  readonly stream: Stream;
+  /** The adapter's most recent stderr, for a typed failure reason. */
+  stderr(): string;
+  /** Send SIGTERM to the adapter's process group. Idempotent. */
+  close(): void;
+  /**
+   * Signal the adapter's whole process group (W10 EA-R7): the adapter leads its
+   * own group, so SIGKILL also ends the tools it started. On Windows SIGKILL is
+   * `taskkill /T /F` over its tree. Idempotent once the adapter has exited.
+   */
+  signal(signal: 'SIGTERM' | 'SIGKILL'): void;
+};
+
+/**
+ * Spawn one resolved adapter over stdio.
+ *
+ * Run module adapters with **this process's own `node`** rather than the package's shebang: the
+ * adapters ship plain ESM entry modules, and executing them through `node`
+ * sidesteps exec bits, shebang resolution and Windows shims in one step.
+ * Native ACP agents run their installed CLI directly, without a shell.
+ *
+ * A CLI found at a declared fallback is located again first when its file is
+ * gone, because a vendor app bundle keeps it under a version directory that
+ * moves when the app updates (ACP agent policy rule 4).
+ *
+ * @param options - Adapter, working directory, and optional wire tap.
+ * @returns The child, its ACP stream, and a stderr tail.
+ * @throws An error with `code: 'CLI_NOT_FOUND'` when that CLI is no longer anywhere it is searched for.
+ * @public
+ */
+export const spawnAcpAdapter = (options: {
+  readonly adapter: AcpAdapter;
+  /** Absolute cwd — the workspace root in direct mode, a revision checkout in candidate mode (V2, R-W3). */
+  readonly cwd: string;
+  readonly environment?: NodeJS.ProcessEnv | undefined;
+  readonly onFrame?: ((frame: AcpWireFrame) => void) | undefined;
+}): SpawnedAcpAdapter => {
+  const base = options.environment ?? process.env;
+  const adapter = resolveAcpAdapterExecutable(options.adapter, { environment: base });
+  const environment = acpAdapterEnvironment(base, adapter);
+  const [command, args] =
+    adapter.modulePath === undefined
+      ? [adapter.executablePath ?? adapter.cli, [...adapter.args]]
+      : [process.execPath, [adapter.modulePath]];
+  if (command !== process.execPath) {
+    delete environment['ELECTRON_RUN_AS_NODE'];
+  }
+  const child = spawn(command, args, {
+    cwd: options.cwd,
+    env: environment,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    /* A group leader on POSIX, so one signal reaches every process it starts
+     * (EA-R7). It no longer shares the host's group, so a terminal's ^C no
+     * longer reaches it; it ends with its stdin instead (blueprint risk). */
+    detached: process.platform !== 'win32',
+  });
+  let stderr = '';
+  child.on('error', (error) => {
+    stderr = error.message;
+    child.stdout.destroy(error);
+  });
+  child.stderr.on('data', (chunk: Uint8Array<ArrayBuffer>) => {
+    stderr = (stderr + Buffer.from(chunk).toString('utf8')).slice(-stderrRetention);
+  });
+  /* An adapter that dies mid-write leaves an EPIPE on stdin; it is already
+   * reported through the connection's own failure, never as a process crash. */
+  child.stdin.on('error', () => undefined);
+
+  const tap = (
+    direction: AcpWireFrame['direction'],
+  ): TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>> => {
+    let pending = '';
+    return new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
+      transform(chunk, controller) {
+        if (options.onFrame) {
+          const lines = (pending + Buffer.from(chunk).toString('utf8')).split('\n');
+          pending = lines.pop() ?? '';
+          for (const frame of lines) {
+            if (frame.trim() !== '') {
+              options.onFrame({ direction, frame });
+            }
+          }
+        }
+        controller.enqueue(chunk);
+      },
+    });
+  };
+
+  const outbound = tap('client->agent');
+  /* async-iife: bootstrap; the pump ends with the child, and a broken pipe is
+   * already reported through the ACP connection's own failure. */
+  const pump = async (): Promise<void> => {
+    try {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Node's duplex web adapters are typed against the DOM stream declarations.
+      await outbound.readable.pipeTo(Writable.toWeb(child.stdin) as WritableStream<Uint8Array<ArrayBuffer>>);
+    } catch {
+      /* The child went away; the connection reports it. */
+    }
+  };
+  void pump();
+  const inbound =
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Node's duplex web adapters are typed against the DOM stream declarations.
+    (Readable.toWeb(child.stdout) as ReadableStream<Uint8Array<ArrayBuffer>>).pipeThrough(tap('agent->client'));
+
+  const signal = (name: 'SIGTERM' | 'SIGKILL'): void => {
+    const { pid } = child;
+    if (pid === undefined) {
+      return;
+    }
+    if (process.platform === 'win32') {
+      /* A pid is reused once its process exits: signal only a live adapter. */
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+      if (name === 'SIGKILL') {
+        spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      } else {
+        child.kill(name);
+      }
+      return;
+    }
+    try {
+      /* The group outlives its leader when a tool it started is still running,
+       * so the group is signalled even after the adapter itself has exited. */
+      process.kill(-pid, name);
+    } catch {
+      /* ESRCH: the whole group is gone. */
+    }
+  };
+
+  return {
+    child,
+    stream: ndJsonStream(outbound.writable, inbound),
+    stderr: () => stderr,
+    close: () => {
+      signal('SIGTERM');
+    },
+    signal,
+  };
+};

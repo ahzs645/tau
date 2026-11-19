@@ -1,0 +1,1492 @@
+/**
+ * Project directories: discovery, adoption, journal commit and permanent delete.
+ *
+ * Extracted from `WorkspaceFileService` unchanged (charter D5/D14, W7). These
+ * four operations are the project-directory *lifecycle*, not content: they scan
+ * configured storage roots for each project directory's `tau.json`, parse and serialize the
+ * manifest, resolve generated identity through shared actors, and write a journal snapshot or remove a verified directory —
+ * always through a named authority operation holding the logical-project and
+ * canonical-physical locks (authority Rules 5, 8 and 12).
+ *
+ * It is the one module in this library that names `ProjectManifest`: the router
+ * above it routes paths and the mechanism below it moves bytes, so neither
+ * parses the product's manifest (review Finding 6, boundary rule
+ * `project-manifest`).
+ *
+ * Unmasked on purpose. Project-directory lifecycle is one of the three trusted
+ * compositions authority Rule 16 admits to the unmasked authority — it must
+ * read and remove a `tau.json` and everything beside it, including the control
+ * plane a composed view refuses.
+ *
+ * @module
+ */
+
+import { z } from 'zod';
+import { createAsyncLogic, toPromise } from 'xstate';
+import {
+  convertLegacyProjectManifestBytes,
+  createProjectIdentityActor,
+  createProjectIdentityResolver,
+  createProjectManifestConversionActor,
+  parseProjectIdentityBytes,
+  projectIdentityPath,
+  serializeProjectIdentity,
+} from '@taucad/project-core/identity';
+import type {
+  ProjectIdentityRecord,
+  ProjectIdentityResult,
+  ProjectIdentityResolver,
+} from '@taucad/project-core/identity';
+import {
+  parseProjectManifestBytes,
+  projectIdSchema,
+  projectManifestSchemaUrl,
+  projectToManifest,
+  readProjectManifestBytes,
+  serializeProjectManifest,
+} from '@taucad/types';
+import { idPrefix } from '@taucad/types/constants';
+import { generatePrefixedId } from '@taucad/utils/id';
+import type {
+  CheckedFileWriteResult,
+  FileWritePrecondition,
+  FileSystemBackend,
+  ProjectManifest,
+  ProjectManifestParseIssue,
+} from '@taucad/types';
+import { assertRootedPath, isSafeRelativePath, joinRelativePath } from '@taucad/utils/path';
+import type { FileSystemProvider, WorkspaceMutationContext } from '#types.js';
+import type { BatchEntry } from '#changeset.js';
+import type {
+  CommitPendingProjectDirectoryInput,
+  CommitPendingProjectDirectoryResult,
+  PermanentDeleteProjectDirectoryInput,
+  PermanentDeleteProjectDirectoryResult,
+  ProjectLocator,
+  ProjectRootConfiguration,
+  RootState,
+  StorageRootConfig,
+  WorkspaceScope,
+} from '#mount-table.js';
+import type { ProviderRegistry } from '#provider-registry.js';
+import type { ResourceQueue } from '#resource-queue.js';
+import type { CrossTabCoordinator, PhysicalAuthority } from '#cross-tab-coordinator.js';
+import type { MutationPipeline } from '#mutation-pipeline.js';
+import { isProjectDirectoryPath } from '#mutation-pipeline.js';
+import type { ProjectIndexes } from '#project-index/project-indexes.js';
+import { readDirectoryEntries } from '#backend/directory-entries.js';
+import { isDurableScope, projectLocatorFor } from '#backend/scope.js';
+import { isNotFoundError } from '#workspace-errors.js';
+import { projectRoute } from '#project-routes.js';
+import {
+  importStagingDirectory,
+  isTauControlPath,
+  ownsImportTarget,
+  placeStagedControl,
+  readStagedImport,
+  releaseStagedImport,
+} from '#importer/staging.js';
+import type { ImportStagingPort, StagedImport } from '#importer/staging.js';
+import { importFactsPath } from '#importer/facts.js';
+import type { ImportFactsRecord, RecordedImportEntry, StagedImportEntry } from '#importer/facts.js';
+import { isReservedImportPath } from '#importer/path-policy.js';
+import { directoryConcurrency, mapConcurrent } from '#concurrency.js';
+
+/** A provider whose host copies a person's chosen source into it (the desktop node client, W7.4). */
+type HostImportCopier = Readonly<{ copyFromImportGrant: NonNullable<ImportStagingPort['copyHost']> }>;
+
+/** Concurrent `tau.json` probes while scanning a discovery root. */
+const manifestProbeConcurrency = 64;
+
+/** Declaration or generated-identity failure affecting one discovery entry. @public */
+export type ProjectDiscoveryIssue =
+  | ProjectManifestParseIssue
+  | { readonly code: 'identity-invalid'; readonly message: string }
+  | { readonly code: 'identity-unavailable'; readonly message: string }
+  | { readonly code: 'identity-conflict'; readonly expectedProjectId: string; readonly actualProjectId: string };
+
+/** Resolved identity kept separate from the authored declaration. @public */
+export type ResolvedProjectManifest = {
+  readonly projectId: string;
+  readonly manifest: ProjectManifest;
+};
+
+/** Read-only verification of an already installed project binding. @public */
+export type ProjectRouteVerification =
+  | { readonly status: 'verified'; readonly project: ResolvedProjectManifest }
+  | { readonly status: 'discovery-required' }
+  | { readonly status: 'unavailable' }
+  | { readonly status: 'superseded' };
+
+/**
+ * Validated or quarantined result from project discovery.
+ *
+ * An identified entry's optional `issue` marks a degraded manifest: the
+ * identity routes, `manifest` is the normalized strict view, and the bytes
+ * on disk still need an explicit Repair.
+ *
+ * @public
+ */
+export type ProjectDiscoveryEntry =
+  | {
+      readonly status: 'valid';
+      readonly projectId: string;
+      readonly manifest: ProjectManifest;
+      readonly locator: ProjectLocator;
+      readonly issue?: ProjectManifestParseIssue;
+    }
+  | {
+      readonly status: 'duplicate-id';
+      readonly projectId: string;
+      readonly manifest: ProjectManifest;
+      readonly locator: ProjectLocator;
+      readonly issue?: ProjectManifestParseIssue;
+    }
+  | {
+      /**
+       * The project is discoverable here, but its persisted route still points
+       * at a storage root this pass could not observe, so re-pointing would be
+       * unsafe. Synthesized by the UI reconciliation layer — the worker scan
+       * never emits it.
+       */
+      readonly status: 'route-blocked';
+      readonly projectId: string;
+      readonly manifest: ProjectManifest;
+      readonly locator: ProjectLocator;
+      readonly issue?: ProjectManifestParseIssue;
+    }
+  | {
+      readonly status: 'adoption-required';
+      readonly manifest: ProjectManifest;
+      readonly locator: ProjectLocator;
+      readonly issue: ProjectManifestParseIssue;
+    }
+  | {
+      readonly status: 'invalid';
+      readonly locator: ProjectLocator;
+      readonly issue: ProjectDiscoveryIssue;
+    };
+
+/** Completeness of one configured physical-root scan. @public */
+export type ProjectRootDiscoveryStatus =
+  | {
+      readonly status: 'complete';
+      readonly root: StorageRootConfig;
+    }
+  | {
+      readonly status: 'inaccessible';
+      readonly root: StorageRootConfig;
+      readonly reason: string;
+    };
+
+/** Complete project-discovery result. Entries never imply an unreported root was empty. @public */
+export type ProjectDiscoveryResult = {
+  readonly entries: readonly ProjectDiscoveryEntry[];
+  readonly roots: readonly ProjectRootDiscoveryStatus[];
+};
+
+/** One configured discovery root, resolved to the scope and root key its scan uses. @public */
+export type ResolvedDiscoveryRoot = {
+  root: ProjectRootConfiguration['roots'][number];
+  scope: WorkspaceScope;
+  storageRootKey: string;
+};
+
+const directoryHandleSchema = z.custom<FileSystemDirectoryHandle>(
+  (value) => value !== null && typeof value === 'object' && !Array.isArray(value),
+);
+const pendingProjectScopeSchema = z
+  .discriminatedUnion('backend', [
+    z.object({ backend: z.literal('webaccess'), directoryHandle: directoryHandleSchema, workspaceId: z.string() }),
+    z.object({ backend: z.literal('indexeddb') }),
+    z.object({ backend: z.literal('opfs') }),
+    z.object({ backend: z.literal('node'), path: z.string() }),
+    z.object({ backend: z.literal('memory'), storageRootKey: z.string() }),
+  ])
+  .superRefine((scope, context) => {
+    if (!isDurableScope(scope)) {
+      context.addIssue({ code: 'custom', message: 'Pending project commits require durable storage.' });
+    }
+  })
+  .transform((scope): StorageRootConfig => scope as unknown as StorageRootConfig);
+const pendingProjectFileDescriptorSchema = z.object({
+  content: z.instanceof(Uint8Array),
+  mode: z.enum(['100644', '100755']).optional(),
+});
+
+/** Complete runtime boundary for direct and bridged pending-project commits. @public */
+export const pendingProjectCommitInputSchema: z.ZodType<CommitPendingProjectDirectoryInput> = z
+  .object({
+    projectId: projectIdSchema,
+    providerBasePath: z.string(),
+    scope: pendingProjectScopeSchema,
+    files: z.record(z.string(), pendingProjectFileDescriptorSchema),
+    manifest: z.instanceof(Uint8Array),
+    staging: z.object({ operationId: z.string().regex(/^[\w-]{1,128}$/u) }).optional(),
+  })
+  .superRefine((input, context) => {
+    try {
+      if (
+        assertRootedPath(input.providerBasePath) !== input.providerBasePath ||
+        !isProjectDirectoryPath(input.providerBasePath)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['providerBasePath'],
+          message: 'Pending project target must be a canonical project directory',
+        });
+      }
+    } catch {
+      context.addIssue({
+        code: 'custom',
+        path: ['providerBasePath'],
+        message: 'Pending project target must be a canonical project directory',
+      });
+    }
+
+    const treePaths = new Set(['tau.json', projectIdentityPath]);
+    for (const relativePath of Object.keys(input.files)) {
+      if (!isSafeRelativePath(relativePath)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['files', relativePath],
+          message: 'Pending project file path is unsafe',
+        });
+        continue;
+      }
+      try {
+        assertRootedPath(relativePath);
+      } catch {
+        context.addIssue({
+          code: 'custom',
+          path: ['files', relativePath],
+          message: 'Pending project file path must be canonical',
+        });
+        continue;
+      }
+      /* Every spelling a filesystem resolves onto the manifest or the identity (case, trailing dots, streams). */
+      if (isReservedImportPath(relativePath)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['files', relativePath],
+          message: 'Pending project files cannot contain a manifest or generated identity',
+        });
+      }
+      treePaths.add(relativePath);
+    }
+    for (const treePath of treePaths) {
+      let parent = treePath.slice(0, treePath.lastIndexOf('/'));
+      while (parent.length > 0) {
+        if (treePaths.has(parent)) {
+          context.addIssue({
+            code: 'custom',
+            path: ['files', treePath],
+            message: 'Pending project file path collides with an ancestor',
+          });
+          break;
+        }
+        parent = parent.slice(0, parent.lastIndexOf('/'));
+      }
+    }
+  });
+
+/** The last segment of a root-relative directory, clamped to the manifest's name bound. */
+const basenameOf = (directory: string): string => (directory.split('/').at(-1) ?? directory).slice(0, 200);
+
+/** What one immediate child directory of a discovery root holds, as far as project identity goes. */
+type ProjectDirectoryReading =
+  | { readonly kind: 'not-a-project' }
+  | {
+      readonly kind: 'identified';
+      readonly projectId: string;
+      readonly manifest: ProjectManifest;
+      readonly issue?: ProjectManifestParseIssue;
+    }
+  | { readonly kind: 'adoptable'; readonly manifest: ProjectManifest; readonly issue: ProjectManifestParseIssue }
+  | { readonly kind: 'invalid'; readonly issue: ProjectDiscoveryIssue };
+
+type DirectoryAuthority = {
+  readonly provider: FileSystemProvider;
+  readonly directory: string;
+  readonly scope: WorkspaceScope;
+  readonly storageRootKey: string;
+  readonly alreadyLocked?: boolean;
+};
+
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/**
+ * The project-directory lifecycle over the authority's own collaborators.
+ *
+ * @public
+ */
+export class ProjectDirectories {
+  private readonly _registry: ProviderRegistry;
+  private readonly _observedIdentityResolver: ProjectIdentityResolver;
+  private readonly _lifetime = new AbortController();
+  private readonly _resourceQueue: ResourceQueue;
+  private readonly _crossTabCoordinator: CrossTabCoordinator;
+  private readonly _pipeline: MutationPipeline;
+  private readonly _projectIndexes: ProjectIndexes;
+  /** The configured discovery roots, owned by the authority's mount lifecycle. */
+  private readonly _discoveryRoots: () => readonly ResolvedDiscoveryRoot[];
+  /** A root's published state; a root that is not `available` is never scanned (blueprint D1). */
+  private readonly _rootState: (storageRootKey: string) => RootState | 'pending' | undefined;
+  /** Retire one logical project route the authority installed, as a delete must. */
+  private readonly _revokeProjectRoute: (path: string, notifyPeers: boolean) => void;
+
+  /**
+   * Create the project-directory lifecycle over the authority's collaborators.
+   *
+   * @param options - Provider registry, queues, pipeline, index and the two authority-owned accessors the lifecycle reads and revokes through.
+   */
+  public constructor(options: {
+    registry: ProviderRegistry;
+    resourceQueue: ResourceQueue;
+    crossTabCoordinator: CrossTabCoordinator;
+    pipeline: MutationPipeline;
+    projectIndexes: ProjectIndexes;
+    discoveryRoots: () => readonly ResolvedDiscoveryRoot[];
+    /** A root's admission state; `pending` while a non-Home root is still being admitted. */
+    rootState?: (storageRootKey: string) => RootState | 'pending' | undefined;
+    revokeProjectRoute: (path: string, notifyPeers: boolean) => void;
+  }) {
+    this._observedIdentityResolver = createProjectIdentityResolver({
+      capacity: 0,
+      actors: {
+        readIdentity: createAsyncLogic<ProjectIdentityRecord | undefined, { locationKey: string }>({
+          run: async () => {
+            throw new Error('Observed identity resolution requires an already-read record.');
+          },
+        }),
+        mintIdentity: createAsyncLogic<string, { locationKey: string }>({
+          run: async () => {
+            throw new Error('Observed identity resolution never generates identity.');
+          },
+        }),
+        initializeIdentity: createAsyncLogic<ProjectIdentityRecord, { locationKey: string; projectId: string }>({
+          run: async () => {
+            throw new Error('Observed identity resolution never initializes storage.');
+          },
+        }),
+      },
+    });
+    this._observedIdentityResolver.actor.start();
+    this._registry = options.registry;
+    this._resourceQueue = options.resourceQueue;
+    this._crossTabCoordinator = options.crossTabCoordinator;
+    this._pipeline = options.pipeline;
+    this._projectIndexes = options.projectIndexes;
+    this._discoveryRoots = options.discoveryRoots;
+    this._rootState = options.rootState ?? (() => undefined);
+    this._revokeProjectRoute = options.revokeProjectRoute;
+  }
+
+  /** Stop the bounded owner when its filesystem authority is disposed. */
+  public dispose(): void {
+    this._lifetime.abort();
+    this._observedIdentityResolver.actor.stop();
+  }
+
+  /**
+   * Discover physical project manifests. A project is any immediate child
+   * directory of a configured root carrying `tau.json`; dot-prefixed children
+   * hold app state and are never scanned.
+   *
+   * @returns Manifests and per-root completeness from the configured physical roots.
+   */
+  public async listProjectManifests(): Promise<ProjectDiscoveryResult> {
+    const discovered: ProjectDiscoveryEntry[] = [];
+    const roots: ProjectRootDiscoveryStatus[] = [];
+    /* oxlint-disable eslint/no-await-in-loop -- Root scans are deliberately serialized to bound filesystem-handle and IndexedDB pressure. */
+    for (const resolvedRoot of this._discoveryRoots()) {
+      const { root, scope, storageRootKey } = resolvedRoot;
+      /* Home is the first root and is scanned first; a root that is lost, hung
+       * or still being admitted is reported by its state without resolving its
+       * provider, so it cannot hold Home's project list. */
+      const state = this._rootState(storageRootKey);
+      if (state !== undefined && state !== 'available') {
+        roots.push({ status: 'inaccessible', root, reason: state });
+        continue;
+      }
+      let provider: FileSystemProvider;
+      try {
+        // Out-of-band writes reach the provider through the external-change path
+        // (native observer, safety poll, or a sibling-tab notification), so a scan
+        // never has to drop the handle cache to see them.
+        provider = await this._registry.getProvider(scope);
+      } catch (error) {
+        roots.push({ status: 'inaccessible', root, reason: error instanceof Error ? error.message : String(error) });
+        continue;
+      }
+      let directories: string[];
+      try {
+        // The workspace root exists by definition; a project is any immediate
+        // child directory carrying `tau.json`. Entry kinds come from the listing
+        // so files never cost a `stat`, and dotdirs are excluded by name alone.
+        const entries = await readDirectoryEntries(provider, '');
+        directories = entries
+          .filter((entry) => entry.kind === 'dir' && !entry.name.startsWith('.'))
+          .map((entry) => entry.name)
+          .sort();
+      } catch (error) {
+        roots.push({ status: 'inaccessible', root, reason: error instanceof Error ? error.message : String(error) });
+        continue;
+      }
+      const probe = async (directory: string): Promise<ProjectDiscoveryEntry | undefined> => {
+        const relativeDirectory = assertRootedPath(directory);
+        const locator = projectLocatorFor(root, storageRootKey, relativeDirectory);
+        // One unreadable child must not blank an otherwise readable root: it is
+        // reported in place and the scan continues. `inaccessible` stays
+        // reserved for failures of the root listing or its provider.
+        const reading = await this._readProjectDirectory({
+          provider,
+          directory: relativeDirectory,
+          scope,
+          storageRootKey,
+        });
+        switch (reading.kind) {
+          case 'not-a-project': {
+            return undefined;
+          }
+          case 'identified': {
+            return reading.issue === undefined
+              ? { status: 'valid', projectId: reading.projectId, manifest: reading.manifest, locator }
+              : {
+                  status: 'valid',
+                  projectId: reading.projectId,
+                  manifest: reading.manifest,
+                  locator,
+                  issue: reading.issue,
+                };
+          }
+          case 'adoptable': {
+            return { status: 'adoption-required', manifest: reading.manifest, locator, issue: reading.issue };
+          }
+          case 'invalid': {
+            return { status: 'invalid', locator, issue: reading.issue };
+          }
+        }
+      };
+      // Chunked awaits bound the probe concurrency; the pre-sorted input keeps
+      // the result order independent of completion order.
+      for (let offset = 0; offset < directories.length; offset += manifestProbeConcurrency) {
+        const chunk = await Promise.all(
+          directories.slice(offset, offset + manifestProbeConcurrency).map(async (directory) => probe(directory)),
+        );
+        discovered.push(...chunk.filter((entry) => entry !== undefined));
+      }
+      roots.push({ status: 'complete', root });
+    }
+    /* oxlint-enable eslint/no-await-in-loop -- End bounded serial root scan. */
+
+    const priority: Record<Exclude<FileSystemBackend, 'memory'>, number> = {
+      indexeddb: 0,
+      opfs: 1,
+      webaccess: 2,
+      // Disk beats every browser engine: on desktop it is the only real root.
+      node: 3,
+    };
+    discovered.sort((left, right) => {
+      const backendOrder = priority[left.locator.backend] - priority[right.locator.backend];
+      if (backendOrder !== 0) {
+        return backendOrder;
+      }
+      const rootOrder = left.locator.storageRootKey.localeCompare(right.locator.storageRootKey);
+      if (rootOrder !== 0) {
+        return rootOrder;
+      }
+      return left.locator.relativeDirectory.localeCompare(right.locator.relativeDirectory);
+    });
+
+    const occurrenceCount = new Map<string, number>();
+    for (const entry of discovered) {
+      if (entry.status === 'valid') {
+        occurrenceCount.set(entry.projectId, (occurrenceCount.get(entry.projectId) ?? 0) + 1);
+      }
+    }
+    const entries = discovered.map(
+      (entry): ProjectDiscoveryEntry =>
+        entry.status === 'valid' && (occurrenceCount.get(entry.projectId) ?? 0) > 1
+          ? { ...entry, status: 'duplicate-id' }
+          : entry,
+    );
+    return { entries, roots };
+  }
+
+  /**
+   * Give an `adoption-required` project directory a Tau identity in place,
+   * writing the recovered declaration discovery showed and preserving its generated identity. Service-side because the
+   * write must re-establish adoptability under the same physical lock every
+   * other project mutation takes — a UI-side read/modify/write could adopt a
+   * directory a sibling tab just repaired.
+   *
+   * @param locator - Discovery locator of the directory to adopt.
+   * @param options - `id` restores the identity this exact directory's route was bound to; absent mints a fresh one.
+   * @returns The declaration now on disk and its separately resolved identity.
+   */
+  public async adoptProjectDirectory(
+    locator: ProjectLocator,
+    options?: { readonly id?: string },
+  ): Promise<ResolvedProjectManifest> {
+    const path = assertRootedPath(locator.relativeDirectory);
+    if (path !== locator.relativeDirectory || !isProjectDirectoryPath(path)) {
+      throw new TypeError(`Adoption target must be a canonical project directory: ${locator.relativeDirectory}`);
+    }
+    if (options?.id !== undefined && !projectIdSchema.safeParse(options.id).success) {
+      throw new TypeError(`Invalid project id: ${JSON.stringify(options.id)}`);
+    }
+    const root = this._discoveryRoots().find((candidate) => candidate.storageRootKey === locator.storageRootKey);
+    if (root === undefined) {
+      throw new TypeError(`Adoption target is not a configured discovery root: ${locator.storageRootKey}`);
+    }
+    const provider = await this._registry.getProvider(root.scope);
+    const physicalLock = `${locator.storageRootKey}:${path}`;
+    return this._crossTabCoordinator.withLocks([physicalLock], async () =>
+      this._resourceQueue.queueForMany([physicalLock], async () => {
+        const authority = {
+          provider,
+          directory: path,
+          scope: root.scope,
+          storageRootKey: locator.storageRootKey,
+          alreadyLocked: true,
+        };
+        const reading = await this._readProjectDirectory(authority);
+        if (reading.kind !== 'adoptable') {
+          throw new TypeError(`Project directory is not adoptable: ${path}`);
+        }
+        const identity = await this._resolveIdentity({
+          ...authority,
+          preferredProjectId: options?.id,
+          alreadyLocked: true,
+        });
+        if (identity.status !== 'resolved') {
+          throw new Error(`Project identity could not be established: ${JSON.stringify(identity)}`);
+        }
+        const manifest = projectToManifest(reading.manifest);
+        await provider.writeFile(`${path}/tau.json`, serializeProjectManifest(manifest));
+        this._crossTabCoordinator.notifyDirectoryChange('/', this._scopedPhysicalAuthority(root.scope, ''));
+        return { projectId: identity.projectId, manifest };
+      }),
+    );
+  }
+
+  /**
+   * Permanently remove one exact physical project directory. Identity is
+   * re-established under the same project-wide lock that all logical project
+   * mutations acquire, so no write can race the verification/delete window.
+   *
+   * @param input - Exact project identity, physical path, and storage scope.
+   * @returns Identity-safe deletion outcome.
+   */
+  public async permanentlyDeleteProjectDirectory(
+    input: PermanentDeleteProjectDirectoryInput,
+  ): Promise<PermanentDeleteProjectDirectoryResult> {
+    const { projectId } = input;
+    if (!projectIdSchema.safeParse(projectId).success) {
+      throw new TypeError(`Invalid project id: ${JSON.stringify(projectId)}`);
+    }
+    const path = assertRootedPath(input.providerBasePath);
+    if (path !== input.providerBasePath) {
+      throw new TypeError('Permanent delete target must already be canonical.');
+    }
+    if (!isProjectDirectoryPath(path)) {
+      throw new TypeError('Permanent delete target must be an immediate child of the workspace root.');
+    }
+    // `StorageRootConfig` has no ephemeral member, but an untyped RPC caller can
+    // still deliver one, and this operation must never run against it.
+    if (!isDurableScope(input.scope)) {
+      throw new TypeError('Permanent project deletion requires durable storage.');
+    }
+    const scope: StorageRootConfig = { ...input.scope };
+    const provider = await this._registry.getProvider(scope);
+    const logicalRoot = projectRoute(projectId);
+    const physicalLock = `${this._registry.resolveStorageRootKey(scope)}:${path}`;
+    const locks = [`project:${projectId}`, physicalLock];
+    return this._crossTabCoordinator.withLocks(locks, async () =>
+      this._resourceQueue.queueForMany(locks, async () => {
+        await provider.refresh?.([path]);
+        if (!(await provider.exists(path))) {
+          return { status: 'absent' };
+        }
+
+        const manifestPath = `${path}/tau.json`;
+        if (!(await provider.exists(manifestPath))) {
+          return { status: 'unidentifiable' };
+        }
+        const manifest = await provider.readFile(manifestPath);
+        let identity: ProjectIdentityRecord | undefined;
+        let identityBytes: Uint8Array<ArrayBuffer>;
+        try {
+          identityBytes = await provider.readFile(`${path}/${projectIdentityPath}`);
+          identity = parseProjectIdentityBytes(identityBytes);
+        } catch {
+          return { status: 'unidentifiable' };
+        }
+        if (identity.projectId !== projectId) {
+          return { status: 'identity-mismatch', actualProjectId: identity.projectId };
+        }
+
+        this._revokeProjectRoute(logicalRoot, true);
+        const separator = path.lastIndexOf('/');
+        const physicalParent = separator === -1 ? '' : path.slice(0, separator);
+        const authorityParent = physicalParent === '' ? '/' : `/${physicalParent}`;
+        const parentAuthority = this._scopedPhysicalAuthority(scope, physicalParent);
+        try {
+          await this._deleteProjectDirectory({ provider, directoryPath: path, manifest, identity: identityBytes });
+        } finally {
+          this._projectIndexes.clear();
+          this._pipeline.emitChangeEvent({ type: 'directoryChanged', path: authorityParent, backend: scope.backend });
+          this._crossTabCoordinator.notifyDirectoryChange(authorityParent, parentAuthority);
+        }
+        if (await provider.exists(path)) {
+          throw new Error(`Permanent delete did not remove ${path}`);
+        }
+        return { status: 'deleted' };
+      }),
+    );
+  }
+
+  /**
+   * Commit one durable pending-operation snapshot to its exact physical
+   * project directory. The manifest is the commit marker and is always
+   * written last.
+   *
+   * The commit publishes no bus event — the route is not mounted until the
+   * caller configures it — so a mutation origin has nothing to tag.
+   *
+   * @param input - Owned journal snapshot and exact target locator.
+   * @param _context - Mutation origin metadata, which the unmounted commit does not publish.
+   * @returns Replay-safe commit outcome.
+   */
+  public async commitPendingProjectDirectory(
+    input: CommitPendingProjectDirectoryInput,
+    _context?: WorkspaceMutationContext,
+  ): Promise<CommitPendingProjectDirectoryResult> {
+    const { path, files, manifest, scope, storageRootKey, projectId, staging } =
+      this._validatePendingProjectCommit(input);
+    const provider = await this._registry.getProvider(scope);
+    const logicalRoot = projectRoute(projectId);
+    const physicalLock = `${storageRootKey}:${path}`;
+    const locks = [`project:${projectId}`, physicalLock];
+
+    return this._crossTabCoordinator.withLocks(locks, async () =>
+      this._resourceQueue.queueForMany(locks, async () => {
+        let mutationBegan = false;
+        try {
+          await provider.refresh?.([path]);
+          /* A staging written straight into this directory (where a move would copy) is the directory's residue. */
+          const staged = staging === undefined ? undefined : await readStagedImport(provider, staging.operationId);
+          if (staged?.inPlace !== undefined && staged.inPlace !== path) {
+            throw new TypeError(`The staged import ${staged.operationId} was written for another directory.`);
+          }
+          /* Written in place, the directory is the import's only while its owner marker names the operation. */
+          const stagedInPlace = staged?.inPlace === path;
+          if (stagedInPlace && !(await ownsImportTarget(provider, path, staged.operationId))) {
+            throw new TypeError(`The project folder ${path} no longer belongs to the import ${staged.operationId}.`);
+          }
+          if (await provider.exists(path)) {
+            const targetStat = await provider.stat(path);
+            if (targetStat.type !== 'dir') {
+              throw new TypeError(`Pending project target is not a directory: ${path}`);
+            }
+            const existingManifestPath = `${path}/tau.json`;
+            if (await provider.exists(existingManifestPath)) {
+              const existing = readProjectManifestBytes(await provider.readFile(existingManifestPath));
+              let identity: ProjectIdentityRecord | undefined;
+              try {
+                identity = await this._readIdentity({ provider, directory: path, scope, storageRootKey });
+              } catch {
+                return { status: 'unidentifiable-manifest' };
+              }
+              if (!existing.success || identity === undefined) {
+                return { status: 'unidentifiable-manifest' };
+              }
+              if (identity.projectId !== projectId) {
+                return { status: 'identity-mismatch', actualProjectId: identity.projectId };
+              }
+              /* A commit that stopped after its manifest left its staging: the project is whole, so it goes now. */
+              if (staging !== undefined) {
+                await this._removeStaging(provider, staging.operationId);
+              }
+              return { status: 'already-committed' };
+            }
+            let residueIdentity: ProjectIdentityRecord | undefined;
+            try {
+              residueIdentity = await this._readIdentity({ provider, directory: path, scope, storageRootKey });
+            } catch {
+              return { status: 'unidentifiable-manifest' };
+            }
+            if (residueIdentity === undefined && !stagedInPlace) {
+              return { status: 'unidentifiable-manifest' };
+            }
+            if (residueIdentity !== undefined && residueIdentity.projectId !== projectId) {
+              return { status: 'identity-mismatch', actualProjectId: residueIdentity.projectId };
+            }
+            mutationBegan = true;
+            /* A staged import's residue is the entries an earlier attempt already moved in: they stay. */
+            if (staging === undefined) {
+              await this._clearProjectDirectoryContents(provider, path);
+            }
+          }
+
+          mutationBegan = true;
+          await provider.mkdir(path, { recursive: true });
+          this._projectIndexes.removeDirectory(logicalRoot);
+          const identity = await this._resolveIdentity({
+            provider,
+            directory: path,
+            scope,
+            storageRootKey,
+            preferredProjectId: projectId,
+            alreadyLocked: true,
+          });
+          if (identity.status !== 'resolved') {
+            throw new Error(`Pending project identity could not be established: ${JSON.stringify(identity)}`);
+          }
+
+          /* The payload lands in bounded batches, then the manifest — the commit
+           * marker — alone, after every payload byte applied (D2 phases). */
+          const commitPhase = async (entries: readonly BatchEntry[]): Promise<void> => {
+            const receipts = await this._pipeline.applyUnlocked(provider, entries);
+            const failure = receipts.find(({ outcome }) => outcome !== 'applied');
+            if (failure !== undefined) {
+              throw failure.error instanceof Error ? failure.error : new Error('Pending project commit failed.');
+            }
+          };
+          let importFacts: BatchEntry[] = [];
+          if (staging !== undefined) {
+            if (staged === undefined) {
+              throw new Error(`The staged import ${staging.operationId} is gone.`);
+            }
+            const written = new Set(files.map(([relativePath]) => relativePath));
+            const placed = await this._placeStagedImport({ provider, staged, target: path, written });
+            /* A linked import's `.git`, which the revisions authority fetched into the staging: moved, never written here (I6). */
+            await placeStagedControl(provider, staged.operationId, path);
+            /* Each file's mtime as placed: the index takes a fact only for a file still at exactly this (size, mtime). */
+            const observed = await mapConcurrent(placed, directoryConcurrency, async (entry) =>
+              provider.stat(`${path}/${entry.path}`).catch(() => undefined),
+            );
+            const entries: RecordedImportEntry[] = [];
+            for (const [index, entry] of placed.entries()) {
+              const stat = observed[index];
+              if (stat?.type === 'file' && stat.size === entry.size) {
+                entries.push({ ...entry, mtimeMs: stat.mtimeMs });
+              }
+            }
+            const record: ImportFactsRecord = {
+              version: 1,
+              operationId: staged.operationId,
+              pin: staged.pin,
+              at: Date.now(),
+              entries,
+            };
+            importFacts = [
+              {
+                op: 'write',
+                path: `${path}/${importFactsPath}`,
+                data: new TextEncoder().encode(JSON.stringify(record)),
+              },
+            ];
+          }
+          await commitPhase([
+            ...files.map(
+              ([relativePath, descriptor]): BatchEntry => ({
+                op: 'write',
+                path: `${path}/${relativePath}`,
+                data: descriptor.content,
+                ...(descriptor.mode === undefined ? {} : { mode: descriptor.mode }),
+              }),
+            ),
+            ...importFacts,
+          ]);
+          /* The staging lets go of the directory before the manifest makes it a project, so none names a committed one. */
+          if (staging !== undefined) {
+            await releaseStagedImport(
+              { provider, apply: async (entries) => this._pipeline.applyUnlocked(provider, entries) },
+              staging.operationId,
+            );
+          }
+          await commitPhase([{ op: 'write', path: `${path}/tau.json`, data: manifest }]);
+          const committed = parseProjectManifestBytes(await provider.readFile(`${path}/tau.json`));
+          const committedIdentity = await this._readIdentity({ provider, directory: path, scope, storageRootKey });
+          if (!committed.success || committedIdentity?.projectId !== projectId) {
+            throw new Error(`Pending project manifest verification failed for ${projectId}`);
+          }
+
+          if (staging !== undefined) {
+            await this._removeStaging(provider, staging.operationId);
+          }
+
+          this._crossTabCoordinator.notifyDirectoryChange(logicalRoot, this._scopedPhysicalAuthority(scope, path));
+          return { status: 'committed' };
+        } catch (error) {
+          if (mutationBegan) {
+            this._projectIndexes.removeDirectory(logicalRoot);
+            this._crossTabCoordinator.notifyDirectoryChange(logicalRoot, this._scopedPhysicalAuthority(scope, path));
+          }
+          throw error;
+        }
+      }),
+    );
+  }
+
+  /**
+   * Where an import stages on one durable storage root (charter D12): the
+   * root's provider and the unlocked batch apply over it. Staging is private
+   * to its operation, under the reserved `.tau-staging/` folder no discovery
+   * or index reads, so it takes no lock; the commit takes the project's. An
+   * import written straight into its project directory claims, writes and
+   * removes that directory under the lock its commit takes (`exclusive`), so
+   * neither interleaves with a create of the same folder.
+   *
+   * @param scope - A durable storage root.
+   * @returns The staging port.
+   * @throws TypeError for a scope that is not durable.
+   */
+  public async importStaging(scope: StorageRootConfig): Promise<ImportStagingPort> {
+    const parsed = pendingProjectScopeSchema.safeParse(scope);
+    if (!parsed.success) {
+      throw new TypeError(parsed.error.issues[0]?.message ?? 'An import stages on durable storage only.');
+    }
+    const provider = await this._registry.getProvider(parsed.data);
+    const storageRootKey = this._registry.resolveStorageRootKey(parsed.data);
+    /* A desktop node root's host copies what a person chose on it straight into the staging (W7.4). */
+    const { copyFromImportGrant } = provider as Partial<Pick<HostImportCopier, 'copyFromImportGrant'>>;
+    return {
+      provider,
+      apply: async (entries) => this._pipeline.applyUnlocked(provider, entries),
+      ...(typeof copyFromImportGrant === 'function'
+        ? { copyHost: async (grant, entries) => copyFromImportGrant.call(provider, grant, entries) }
+        : {}),
+      exclusive: async <Result>(path: string, work: () => Promise<Result>): Promise<Result> => {
+        const physicalLock = `${storageRootKey}:${path}`;
+        return this._crossTabCoordinator.withLocks([physicalLock], async () =>
+          this._resourceQueue.queueForMany([physicalLock], work),
+        );
+      },
+    };
+  }
+
+  /**
+   * Verify declaration and identity without conversion, adoption or repair.
+   * @param input - Captured exact-mount provider and its physical lock identity.
+   * @returns Verified bytes or a truthful fallback outcome; topology fencing belongs to the service.
+   */
+  public async verifyProjectRoute(input: {
+    readonly projectId: string;
+    readonly provider: FileSystemProvider;
+    readonly directory: string;
+    readonly storageRootKey: string;
+  }): Promise<ProjectRouteVerification> {
+    const directory = assertRootedPath(input.directory);
+    const locks = [`project:${input.projectId}`, `${input.storageRootKey}:${directory}`];
+    return this._crossTabCoordinator.withLocks(locks, async () =>
+      this._resourceQueue.queueForMany(locks, async (): Promise<ProjectRouteVerification> => {
+        try {
+          await input.provider.refresh?.([directory]);
+          const manifestBytes = await input.provider.readFile(joinRelativePath(directory, 'tau.json'));
+          const manifest = parseProjectManifestBytes(manifestBytes);
+          if (!manifest.success) {
+            return { status: 'discovery-required' };
+          }
+          const identityBytes = await input.provider.readFile(joinRelativePath(directory, projectIdentityPath));
+          let identity: ProjectIdentityRecord;
+          try {
+            identity = parseProjectIdentityBytes(identityBytes);
+          } catch {
+            return { status: 'discovery-required' };
+          }
+          return identity.projectId === input.projectId
+            ? { status: 'verified', project: { projectId: input.projectId, manifest: manifest.data } }
+            : { status: 'discovery-required' };
+        } catch (error) {
+          return { status: isNotFoundError(error) ? 'discovery-required' : 'unavailable' };
+        }
+      }),
+    );
+  }
+
+  private async _readIdentity(authority: DirectoryAuthority): Promise<ProjectIdentityRecord | undefined> {
+    let bytes: Uint8Array<ArrayBuffer>;
+    try {
+      bytes = await authority.provider.readFile(`${authority.directory}/${projectIdentityPath}`);
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return undefined;
+      }
+      throw error;
+    }
+    try {
+      return parseProjectIdentityBytes(bytes);
+    } catch (error) {
+      throw Object.assign(new Error(`Invalid project identity: ${errorMessage(error)}`), { code: 'IDENTITY_INVALID' });
+    }
+  }
+
+  private async _resolveIdentity(
+    input: DirectoryAuthority & {
+      readonly preferredProjectId?: string;
+      readonly initialIdentity?: { readonly record: ProjectIdentityRecord | undefined };
+      readonly manifestBytes?: Uint8Array<ArrayBuffer>;
+      readonly alreadyLocked?: boolean;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<ProjectIdentityResult> {
+    if (input.initialIdentity?.record !== undefined) {
+      return this._observedIdentityResolver.resolve({
+        locationKey: `${input.storageRootKey}:${input.directory}`,
+        mode: 'read',
+        initialIdentity: input.initialIdentity,
+        ...(input.preferredProjectId === undefined ? {} : { preferredProjectId: input.preferredProjectId }),
+      });
+    }
+    const signal =
+      input.signal === undefined ? this._lifetime.signal : AbortSignal.any([this._lifetime.signal, input.signal]);
+    if (signal.aborted) {
+      return { status: 'failed', message: 'Project identity resolution was canceled.' };
+    }
+    const actor = createProjectIdentityActor({
+      input: {
+        locationKey: `${input.storageRootKey}:${input.directory}`,
+        mode: 'ensure',
+        ...(input.preferredProjectId === undefined ? {} : { preferredProjectId: input.preferredProjectId }),
+        ...(input.initialIdentity === undefined ? {} : { initialIdentity: input.initialIdentity }),
+      },
+      actors: {
+        readIdentity: createAsyncLogic<ProjectIdentityRecord | undefined, { locationKey: string }>({
+          run: async ({ signal }) => {
+            const identity = await this._readIdentity(input);
+            signal.throwIfAborted();
+            return identity;
+          },
+        }),
+        mintIdentity: createAsyncLogic<string, { locationKey: string }>({
+          run: async ({ signal }) => {
+            signal.throwIfAborted();
+            return generatePrefixedId(idPrefix.project);
+          },
+        }),
+        initializeIdentity: createAsyncLogic<ProjectIdentityRecord, { locationKey: string; projectId: string }>({
+          run: async ({ input: candidate, signal }) => {
+            const record: ProjectIdentityRecord = { version: 1, projectId: candidate.projectId };
+            const path = `${input.directory}/${projectIdentityPath}`;
+            const result = await this._checkedWrite({
+              ...input,
+              projectId: candidate.projectId,
+              path,
+              data: serializeProjectIdentity(record),
+              preconditions: [
+                { path, expected: null },
+                ...(input.manifestBytes === undefined
+                  ? []
+                  : [{ path: `${input.directory}/tau.json`, expected: input.manifestBytes }]),
+              ],
+              signal,
+            });
+            signal.throwIfAborted();
+            if (result.status === 'applied') {
+              return record;
+            }
+            const winner = await this._readIdentity(input);
+            signal.throwIfAborted();
+            if (winner === undefined) {
+              throw new Error(
+                'The project declaration changed while its identity was being initialized. Retry discovery.',
+              );
+            }
+            return winner;
+          },
+        }),
+      },
+    });
+    const cancel = (): void => {
+      actor.send({ type: 'cancel' });
+    };
+    signal.addEventListener('abort', cancel, { once: true });
+    actor.start();
+    try {
+      return await toPromise(actor);
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      actor.stop();
+    }
+  }
+
+  private async _checkedWrite(
+    input: DirectoryAuthority & {
+      readonly projectId: string;
+      readonly path: string;
+      readonly data: Uint8Array<ArrayBuffer>;
+      readonly preconditions: readonly FileWritePrecondition[];
+      readonly alreadyLocked?: boolean;
+      readonly signal: AbortSignal;
+    },
+  ): Promise<CheckedFileWriteResult> {
+    const physicalLock = `${input.storageRootKey}:${input.directory}`;
+    const run = async (): Promise<CheckedFileWriteResult> => {
+      input.signal.throwIfAborted();
+      if (!input.provider.capabilities.writable) {
+        throw new Error('Project identity persistence is unavailable on this read-only storage.');
+      }
+      if (input.provider.writeFileChecked !== undefined) {
+        return input.provider.writeFileChecked({
+          path: input.path,
+          data: input.data,
+          preconditions: input.preconditions,
+        });
+      }
+      const conflicts = [];
+      for (const precondition of input.preconditions) {
+        let actual: Exclude<FileWritePrecondition['expected'], string>;
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- Compare every expected byte under the held physical lock.
+          actual = await input.provider.readFile(precondition.path);
+        } catch (error) {
+          if (!isNotFoundError(error)) {
+            throw error;
+          }
+          actual = null;
+        }
+        const expected =
+          typeof precondition.expected === 'string'
+            ? new TextEncoder().encode(precondition.expected)
+            : precondition.expected;
+        const matches =
+          actual === null
+            ? expected === null
+            : actual.byteLength === expected?.byteLength && actual.every((byte, index) => byte === expected[index]);
+        if (!matches) {
+          conflicts.push({ path: precondition.path, actual });
+        }
+      }
+      if (conflicts.length > 0) {
+        return { status: 'conflict', conflicts };
+      }
+      input.signal.throwIfAborted();
+      await input.provider.writeFile(input.path, input.data);
+      return { status: 'applied', content: input.data };
+    };
+    const locked = async (): Promise<CheckedFileWriteResult> =>
+      input.alreadyLocked === true ? run() : this._resourceQueue.queueForMany([physicalLock], run);
+    // Native checked writes own their authority fence. Browser providers without
+    // that primitive require Web Locks; best-effort exclusion is insufficient.
+    const result =
+      input.provider.writeFileChecked === undefined
+        ? await this._crossTabCoordinator.withRequiredLocks(input.alreadyLocked === true ? [] : [physicalLock], locked)
+        : await locked();
+    if (result.status === 'applied') {
+      const relativePath = input.path.slice(input.directory.length + 1);
+      const logicalPath = `${projectRoute(input.projectId)}/${relativePath}`;
+      this._projectIndexes.invalidate(logicalPath);
+      if (input.alreadyLocked !== true) {
+        this._pipeline.emitChangeEvent({ type: 'fileWritten', path: logicalPath, backend: input.scope.backend });
+        this._crossTabCoordinator.notifyDirectoryChange('/', this._scopedPhysicalAuthority(input.scope, ''));
+      }
+    }
+    return result;
+  }
+
+  private async _readProjectDirectory(authority: DirectoryAuthority): Promise<ProjectDirectoryReading> {
+    const { provider, directory } = authority;
+    const [manifestResult, identityResult] = await Promise.allSettled([
+      provider.readFile(`${directory}/tau.json`),
+      this._readIdentity(authority),
+    ]);
+    if (manifestResult.status === 'rejected') {
+      if (!isNotFoundError(manifestResult.reason)) {
+        return {
+          kind: 'invalid',
+          issue: { code: 'manifest-unreadable', message: errorMessage(manifestResult.reason) },
+        };
+      }
+      const entries = await readDirectoryEntries(provider, directory).catch(() => []);
+      if (!entries.some((entry) => entry.kind === 'dir' && entry.name === '.tau')) {
+        return { kind: 'not-a-project' };
+      }
+      const mainFile = entries
+        .filter((entry) => entry.kind === 'file' && /^main\.[^.]+$/.test(entry.name))
+        .map((entry) => entry.name)
+        .sort()[0];
+      return {
+        kind: 'adoptable',
+        manifest: {
+          $schema: projectManifestSchemaUrl,
+          name: basenameOf(directory),
+          description: '',
+          tags: [],
+          assets: { main: { entryPath: mainFile ?? 'main.ts' } },
+        },
+        issue: { code: 'manifest-missing' },
+      };
+    }
+    if (identityResult.status === 'rejected') {
+      const error: unknown = identityResult.reason;
+      const invalid =
+        typeof error === 'object' && error !== null && 'code' in error && error.code === 'IDENTITY_INVALID';
+      return {
+        kind: 'invalid',
+        issue: { code: invalid ? 'identity-invalid' : 'identity-unavailable', message: errorMessage(error) },
+      };
+    }
+    const bytes = manifestResult.value;
+    const read = readProjectManifestBytes(bytes);
+    const legacy = read.success ? undefined : convertLegacyProjectManifestBytes(bytes);
+    if (legacy?.success === true) {
+      const { projectId, manifest } = legacy.data;
+      const nextBytes = serializeProjectManifest(manifest);
+      const actor = createProjectManifestConversionActor({
+        input: { projectId },
+        actors: {
+          establishIdentity: createAsyncLogic<ProjectIdentityResult, { projectId: string }>({
+            run: async ({ input, signal }) => {
+              const result = await this._resolveIdentity({
+                ...authority,
+                preferredProjectId: input.projectId,
+                initialIdentity: { record: identityResult.value },
+                manifestBytes: bytes,
+                signal,
+              });
+              signal.throwIfAborted();
+              return result;
+            },
+          }),
+          replaceManifest: createAsyncLogic<'converted' | 'unchanged' | 'conflict', { projectId: string }>({
+            run: async ({ input, signal }) => {
+              const identityBytes = await provider.readFile(`${directory}/${projectIdentityPath}`);
+              signal.throwIfAborted();
+              if (parseProjectIdentityBytes(identityBytes).projectId !== input.projectId) {
+                return 'conflict';
+              }
+              const result = await this._checkedWrite({
+                ...authority,
+                projectId: input.projectId,
+                path: `${directory}/tau.json`,
+                data: nextBytes,
+                preconditions: [
+                  { path: `${directory}/tau.json`, expected: bytes },
+                  { path: `${directory}/${projectIdentityPath}`, expected: identityBytes },
+                ],
+                signal,
+              });
+              signal.throwIfAborted();
+              if (result.status === 'applied') {
+                return 'converted';
+              }
+              // A failed precondition can be an identity replacement even when
+              // another writer already published the same declaration bytes.
+              return result.status === 'unchanged' ? 'unchanged' : 'conflict';
+            },
+          }),
+        },
+      });
+      const cancel = (): void => {
+        actor.send({ type: 'cancel' });
+      };
+      this._lifetime.signal.addEventListener('abort', cancel, { once: true });
+      actor.start();
+      if (this._lifetime.signal.aborted) {
+        cancel();
+      }
+      try {
+        const result = await toPromise(actor);
+        if (result.status === 'converted' || result.status === 'unchanged') {
+          return { kind: 'identified', projectId, manifest };
+        }
+        if (
+          result.status === 'conflict' &&
+          identityResult.value !== undefined &&
+          identityResult.value.projectId !== projectId
+        ) {
+          return {
+            kind: 'invalid',
+            issue: {
+              code: 'identity-conflict',
+              expectedProjectId: projectId,
+              actualProjectId: identityResult.value.projectId,
+            },
+          };
+        }
+        return {
+          kind: 'invalid',
+          issue: {
+            code: 'identity-unavailable',
+            message:
+              result.status === 'failed'
+                ? result.message
+                : 'Project declaration changed during conversion. Retry discovery.',
+          },
+        };
+      } finally {
+        this._lifetime.signal.removeEventListener('abort', cancel);
+        actor.stop();
+      }
+    }
+    if (!read.success) {
+      return { kind: 'invalid', issue: read.issue };
+    }
+    if (
+      identityResult.value === undefined &&
+      (read.issue?.code === 'manifest-invalid-json' || read.issue?.code === 'manifest-unknown-schema')
+    ) {
+      return { kind: 'invalid', issue: read.issue };
+    }
+    const identity = await this._resolveIdentity({
+      ...authority,
+      initialIdentity: { record: identityResult.value },
+      manifestBytes: bytes,
+    });
+    switch (identity.status) {
+      case 'resolved': {
+        return {
+          kind: 'identified',
+          projectId: identity.projectId,
+          manifest: read.data,
+          ...(read.issue === undefined ? {} : { issue: read.issue }),
+        };
+      }
+      case 'conflict': {
+        return {
+          kind: 'invalid',
+          issue: {
+            code: 'identity-conflict',
+            expectedProjectId: identity.expectedProjectId,
+            actualProjectId: identity.actualProjectId,
+          },
+        };
+      }
+      case 'failed': {
+        return { kind: 'invalid', issue: { code: 'identity-unavailable', message: identity.message } };
+      }
+      case 'missing': {
+        return {
+          kind: 'invalid',
+          issue: { code: 'identity-unavailable', message: 'Project identity has not been persisted.' },
+        };
+      }
+    }
+  }
+
+  private _validatePendingProjectCommit(input: CommitPendingProjectDirectoryInput): {
+    path: string;
+    files: Array<readonly [string, { readonly content: Uint8Array<ArrayBuffer>; readonly mode?: '100644' | '100755' }]>;
+    manifest: Uint8Array<ArrayBuffer>;
+    scope: StorageRootConfig;
+    storageRootKey: string;
+    projectId: string;
+    staging: { readonly operationId: string } | undefined;
+  } {
+    const parsedInput = pendingProjectCommitInputSchema.safeParse(input);
+    if (!parsedInput.success) {
+      throw new TypeError(parsedInput.error.issues[0]?.message ?? 'Pending project commit input is invalid');
+    }
+    const manifest = new Uint8Array(parsedInput.data.manifest);
+    const parsedManifest = parseProjectManifestBytes(manifest);
+    if (!parsedManifest.success) {
+      throw new TypeError('Pending project commit manifest is invalid');
+    }
+    const { projectId } = parsedInput.data;
+    const scope: StorageRootConfig = { ...parsedInput.data.scope };
+    const storageRootKey = this._registry.resolveStorageRootKey(scope);
+    const path = parsedInput.data.providerBasePath;
+    const files: Array<
+      readonly [string, { readonly content: Uint8Array<ArrayBuffer>; readonly mode?: '100644' | '100755' }]
+    > = [];
+    for (const [relativePath, { content, mode }] of Object.entries(parsedInput.data.files)) {
+      const ownedContent = new Uint8Array(content);
+      files.push([relativePath, { content: ownedContent, ...(mode === undefined ? {} : { mode }) }]);
+    }
+
+    return {
+      path,
+      files: files.sort(([left], [right]) => left.localeCompare(right)),
+      manifest,
+      scope,
+      storageRootKey,
+      projectId,
+      staging: parsedInput.data.staging,
+    };
+  }
+
+  /**
+   * Remove an import's staging once its project is whole. The project does
+   * not depend on it, so a removal that fails is left to the next sweep,
+   * which finds it owned by nothing (W7).
+   */
+  private async _removeStaging(provider: FileSystemProvider, operationId: string): Promise<void> {
+    const directory = importStagingDirectory(operationId);
+    try {
+      if (!(await provider.exists(directory))) {
+        return;
+      }
+      const receipts = await this._pipeline.applyUnlocked(provider, [
+        { op: 'delete', path: directory, kind: 'dir', recursive: true },
+      ]);
+      const failure = receipts.find(({ outcome }) => outcome !== 'applied');
+      if (failure !== undefined) {
+        console.warn(`[ProjectDirectories] The staging ${directory} is left for the sweep.`, failure.error);
+      }
+    } catch (error) {
+      console.warn(`[ProjectDirectories] The staging ${directory} is left for the sweep.`, error);
+    }
+  }
+
+  /**
+   * Put a staged import's files in the project. Staged under `tree/` (where a
+   * move is a metadata operation) they move, as bounded changesets: every
+   * directory first, then the moves. Written in place (where a move would
+   * copy) they are already there, and each is checked by its size, except
+   * those under `.tau`, which wait in `tree/` and move in here, so the pending
+   * folder never looks adoptable. No byte is written again either way, beyond
+   * those few `.tau` files a copying rename writes twice (I2, I3). Replay-safe: an entry no longer in
+   * staging was moved by an earlier attempt, and must be at the target with
+   * its recorded size.
+   *
+   * @returns The entries the project now holds from the import, with their facts.
+   */
+  private async _placeStagedImport(input: {
+    readonly provider: FileSystemProvider;
+    readonly staged: StagedImport;
+    readonly target: string;
+    readonly written: ReadonlySet<string>;
+  }): Promise<StagedImportEntry[]> {
+    const { provider, staged, target, written } = input;
+    const entries = staged.entries.filter((entry) => !written.has(entry.path));
+    /* The ledger is on disk, so its paths are held to the rules `files` is held to, in every spelling. */
+    for (const { path } of entries) {
+      if (!isSafeRelativePath(path) || isReservedImportPath(path)) {
+        throw new TypeError(`A staged import path is not a project file: ${path}`);
+      }
+    }
+    const isAt = async (entry: StagedImportEntry): Promise<boolean> => {
+      const stat = await provider.stat(`${target}/${entry.path}`).catch(() => undefined);
+      return stat?.type === 'file' && stat.size === entry.size;
+    };
+    const missing = (entry: StagedImportEntry): Error => new Error(`A staged import entry is missing: ${entry.path}`);
+    /* Written in place, all but `.tau` is already there; `.tau` (and, staged to move, everything) moves from `tree/`. */
+    const moves = staged.inPlace === undefined ? entries : entries.filter(({ path }) => isTauControlPath(path));
+    const fixed = staged.inPlace === undefined ? [] : entries.filter(({ path }) => !isTauControlPath(path));
+    if (moves.length > 0) {
+      const tree = `${staged.directory}/tree`;
+      const present = await mapConcurrent(moves, directoryConcurrency, async (entry) =>
+        provider.exists(`${tree}/${entry.path}`),
+      );
+      const directories = new Set<string>();
+      for (const { path } of moves) {
+        const slash = path.lastIndexOf('/');
+        if (slash > 0) {
+          directories.add(path.slice(0, slash));
+        }
+      }
+      /* Only the deepest folders: a recursive mkdir makes every ancestor. */
+      const ancestors = new Set<string>();
+      for (const directory of directories) {
+        for (let slash = directory.indexOf('/'); slash > 0; slash = directory.indexOf('/', slash + 1)) {
+          ancestors.add(directory.slice(0, slash));
+        }
+      }
+      const leaves = [...directories].filter((directory) => !ancestors.has(directory));
+      const settle = async (batch: readonly BatchEntry[], what: string): Promise<void> => {
+        const receipts = await this._pipeline.applyUnlocked(provider, batch);
+        const failure = receipts.find(({ outcome }) => outcome !== 'applied');
+        if (failure !== undefined) {
+          throw failure.error instanceof Error ? failure.error : new Error(`The staged import's ${what} failed.`);
+        }
+      };
+      await settle(
+        leaves.map((directory) => ({ op: 'mkdir', path: `${target}/${directory}`, recursive: true })),
+        'folders',
+      );
+      const moving: StagedImportEntry[] = [];
+      const moved: StagedImportEntry[] = [];
+      for (const [index, entry] of moves.entries()) {
+        (present[index] === true ? moving : moved).push(entry);
+      }
+      await settle(
+        moving.map((entry) => ({
+          op: 'move',
+          from: `${tree}/${entry.path}`,
+          to: `${target}/${entry.path}`,
+          replace: true,
+        })),
+        'moves',
+      );
+      const arrived = await mapConcurrent(moved, directoryConcurrency, isAt);
+      const lost = moved.find((_, index) => arrived[index] !== true);
+      if (lost !== undefined) {
+        throw missing(lost);
+      }
+    }
+    const inPlace = await mapConcurrent(fixed, directoryConcurrency, isAt);
+    const absent = fixed.find((_, index) => inPlace[index] !== true);
+    if (absent !== undefined) {
+      throw missing(absent);
+    }
+    const executable = entries.filter((entry) => entry.mode === '100755');
+    if (provider.setFileMode !== undefined) {
+      await mapConcurrent(executable, directoryConcurrency, async (entry) =>
+        provider.setFileMode?.(`${target}/${entry.path}`, '100755'),
+      );
+    }
+    return entries;
+  }
+
+  private _scopedPhysicalAuthority(scope: WorkspaceScope, providerBasePath: string): PhysicalAuthority {
+    return {
+      storageRootKey: this._registry.resolveStorageRootKey(scope),
+      providerBasePath: assertRootedPath(providerBasePath),
+    };
+  }
+
+  private async _clearProjectDirectoryContents(provider: FileSystemProvider, directoryPath: string): Promise<void> {
+    const stateDirectory = joinRelativePath(directoryPath, '.tau');
+    const removal = async (entries: readonly string[], parent: string, kept: ReadonlySet<string>): Promise<void> => {
+      const receipts = await this._pipeline.applyUnlocked(
+        provider,
+        entries
+          .filter((entry) => !kept.has(entry.toLowerCase()))
+          .map((entry) => ({ op: 'delete', path: joinRelativePath(parent, entry), recursive: true })),
+      );
+      const failure = receipts.find(({ outcome }) => outcome !== 'applied');
+      if (failure !== undefined) {
+        throw failure.error instanceof Error ? failure.error : new Error('Project directory removal failed.');
+      }
+    };
+    /* Both identity markers stay until every sibling is gone: two batches, the state directory's last. */
+    await removal(await provider.readdir(directoryPath), directoryPath, new Set(['tau.json', '.tau']));
+    await removal(await provider.readdir(stateDirectory), stateDirectory, new Set(['project.json']));
+  }
+
+  private async _deleteProjectDirectory(input: {
+    provider: FileSystemProvider;
+    directoryPath: string;
+    manifest: Uint8Array<ArrayBuffer>;
+    identity: Uint8Array<ArrayBuffer>;
+  }): Promise<void> {
+    const { provider, directoryPath, manifest, identity } = input;
+    const manifestPath = joinRelativePath(directoryPath, 'tau.json');
+    const identityPath = joinRelativePath(directoryPath, projectIdentityPath);
+    const stateDirectory = joinRelativePath(directoryPath, '.tau');
+    await this._clearProjectDirectoryContents(provider, directoryPath);
+    try {
+      await provider.unlink(identityPath);
+      await provider.rmdir(stateDirectory);
+      await provider.unlink(manifestPath);
+      await provider.rmdir(directoryPath);
+    } catch (error) {
+      try {
+        if (await provider.exists(directoryPath)) {
+          if (!(await provider.exists(identityPath))) {
+            await provider.writeFile(identityPath, identity);
+          }
+          if (!(await provider.exists(manifestPath))) {
+            await provider.writeFile(manifestPath, manifest);
+          }
+        }
+      } catch {
+        // Preserve the original removal failure; durable journal remains for retry.
+      }
+      throw error;
+    }
+  }
+}

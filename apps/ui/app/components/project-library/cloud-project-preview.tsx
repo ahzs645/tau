@@ -1,0 +1,110 @@
+import { useEffect, useRef, useState } from 'react';
+import { Box } from 'lucide-react';
+import { Loader } from '@taucad/ui/components/loader';
+import { Button } from '@taucad/ui/components/button';
+import { Skeleton } from '@taucad/ui/components/skeleton';
+import { cn } from '@taucad/ui/utils/cn';
+import { useCloudProjectPreview } from '#hooks/use-cloud-project-preview.js';
+
+export function CloudProjectPreview({
+  projectId,
+  name,
+  isCompact = false,
+}: {
+  readonly projectId: string;
+  readonly name: string;
+  readonly isCompact?: boolean;
+}): React.JSX.Element {
+  const target = useRef<HTMLDivElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string>();
+  const preview = useCloudProjectPreview(projectId, isVisible);
+  useEffect(() => {
+    const element = target.current;
+    if (!element) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsVisible(entry?.isIntersecting ?? false);
+      },
+      { rootMargin: '100px' },
+    );
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+  /* A retried read with nothing cached clears its error while it runs, so its Retry is kept through its own request. */
+  const [isRetrying, setIsRetrying] = useState(false);
+  const hasImage = preview.url !== undefined && failedUrl !== preview.url;
+  const isRetryBusy = isRetrying || preview.isLoading;
+  /* The media box is a skeleton until the read settles; the icon says it settled with no image (or failed). */
+  return (
+    <div
+      ref={target}
+      className={cn(
+        'relative flex shrink-0 items-center justify-center overflow-hidden bg-muted text-muted-foreground',
+        isCompact ? 'size-9 rounded-md' : 'aspect-4/3 w-full',
+      )}
+    >
+      {hasImage ? (
+        <img
+          src={preview.url}
+          alt={`Saved preview of ${name}`}
+          className='size-full object-contain'
+          onError={() => {
+            setFailedUrl(preview.url);
+          }}
+        />
+      ) : preview.isSettled || isRetrying ? (
+        /* A retried failure has answered once already, so its icon stays until the Retry's own answer. */
+        <Box
+          aria-label={
+            preview.isFailed || failedUrl !== undefined || isRetrying ? 'Saved preview unavailable' : 'No saved preview'
+          }
+          className={isCompact ? 'size-4' : 'size-8'}
+        />
+      ) : (
+        <Skeleton
+          className='size-full rounded-none'
+          role='status'
+          aria-busy='true'
+          aria-label='Loading saved preview'
+        />
+      )}
+
+      {!isCompact && preview.isFailed && !preview.canRetry ? (
+        <p className='absolute right-2 bottom-2 left-2 text-center text-xs'>
+          Preview unavailable. Open the project to view it.
+        </p>
+      ) : null}
+      {!isCompact &&
+      (isRetrying || (preview.isFailed && preview.canRetry) || (preview.url && failedUrl === preview.url)) ? (
+        <Button
+          size='sm'
+          variant='outline'
+          className='absolute bottom-2 z-20'
+          /* Not `disabled`, which would drop the focus of the person who pressed it. */
+          aria-disabled={isRetryBusy}
+          aria-busy={isRetryBusy}
+          onClick={async () => {
+            if (isRetryBusy) {
+              return;
+            }
+            setFailedUrl(undefined);
+            setIsRetrying(true);
+            try {
+              await preview.retry();
+            } finally {
+              setIsRetrying(false);
+            }
+          }}
+        >
+          {isRetryBusy ? <Loader className='size-3 motion-reduce:animate-none' /> : null}
+          {isRetryBusy ? 'Loading preview…' : 'Retry preview'}
+        </Button>
+      ) : null}
+    </div>
+  );
+}

@@ -17,14 +17,14 @@ type AuthLinks = {
  * @example
  * ```tsx
  * const { signIn, signUp, signOut } = useAuthLinks();
- * return <NavLink to={signIn}>Sign In</NavLink>;
+ * return <NavLink to={signIn}>Sign in</NavLink>;
  * ```
  */
-export function useAuthLinks(): AuthLinks {
+export function useAuthLinks(options?: { readonly redirectTo?: string }): AuthLinks {
   const { pathname, search } = useLocation();
 
   return useMemo(() => {
-    const redirectTo = encodeURIComponent(pathname + search);
+    const redirectTo = encodeURIComponent(options?.redirectTo ?? pathname + search);
 
     return {
       signIn: `/auth/sign-in?redirectTo=${redirectTo}`,
@@ -32,5 +32,5 @@ export function useAuthLinks(): AuthLinks {
       signUp: `/auth/sign-up?redirectTo=${redirectTo}`,
       signOut: `/auth/sign-out?redirectTo=${redirectTo}`,
     };
-  }, [pathname, search]);
+  }, [options?.redirectTo, pathname, search]);
 }

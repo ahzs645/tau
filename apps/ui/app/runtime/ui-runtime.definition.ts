@@ -1,0 +1,117 @@
+import { defineRuntime } from '@taucad/runtime/worker';
+import { openrscad } from '@taucad/openrscad';
+import { assimp } from '@taucad/assimp';
+import { brep } from '@taucad/brep';
+import { cadmpeg } from '@taucad/cadmpeg';
+import { esbuild } from '@taucad/esbuild';
+import { gltf } from '@taucad/gltf';
+import { heif } from '@taucad/heif';
+import { image } from '@taucad/image';
+import { jscad } from '@taucad/jscad';
+import { manifold } from '@taucad/manifold';
+import { geometryCache, gltfEdgeDetection, parameterFileResolver, parameterUnits } from '@taucad/middleware';
+import { opencascade } from '@taucad/opencascade';
+import { picogk } from '@taucad/picogk/browser';
+import { picovoxel } from '@taucad/picovoxel';
+import { replicad } from '@taucad/replicad';
+import { tscircuit } from '@taucad/tscircuit';
+import { slicer } from '@taucad/slicer';
+import { smlib } from '@taucad/smlib';
+import { zoo } from '@taucad/zoo';
+import { zooCloseErrors } from '#cloud/zoo-close-errors.js';
+import { runtimeRecycleHeapBytes } from '@taucad/ui-core/lib/device-memory-class';
+import { uiRuntimeConfigSchema } from '#runtime/ui-runtime.schema.js';
+import type { UiRuntimeConfig } from '#runtime/ui-runtime.schema.js';
+
+import { cadmpegEngines } from '#runtime/cadmpeg-engines.js';
+import { picogkBrowserAssets } from '#runtime/picogk-browser-assets.js';
+
+type UiRuntimeOptions = {
+  readonly withSourceMapping?: boolean;
+};
+
+/*
+ * D-RT-04: on a phone the pthread builds reserve a 4 GiB shared memory up front and spawn one worker per core with
+ * 8 MiB stacks; measured on the iPhone profile, replicad's costs +124 MB of WASM and +4 workers at load. A
+ * memory-constrained device pins the single-threaded builds (OpenCascade already defaults to one); elsewhere 'auto' keeps the pthread build where the
+ * worker is cross-origin isolated (a pinned 'multi' fails on plain-http LAN origins without SharedArrayBuffer).
+ */
+/*
+ * D-RT-03: WebAssembly memory never shrinks, and iOS kills a tab at roughly 1.5-2 GB across the page, its workers and
+ * their heaps. PicoVoxel's own recycle threshold (1.5 GiB) is lowered to the audit's 512 MiB on a phone. The voxel
+ * size stays the model's (graphics-backend policy rule 17).
+ * The CAD machine recycles the editor runtime at the same threshold.
+ */
+const constrainedRecycleHeapBytes = runtimeRecycleHeapBytes(true);
+
+const createUiRuntimeOptions = (config: UiRuntimeConfig, options: UiRuntimeOptions = {}) => ({
+  plugins: [
+    esbuild({ bundlers: { default: { acquisition: config.acquisition } } }),
+    // Single-threaded 'full' build by default on every device. Previews mesh at the requested tessellation on every
+    // device too: there is no preview triangle budget (kernel budget program D1).
+    opencascade(),
+    openrscad(),
+    picogk({
+      kernels: {
+        default: {
+          wasm: config.memoryConstrained ? 'single' : 'auto',
+          assets: picogkBrowserAssets(),
+          recycleHeapBytes: runtimeRecycleHeapBytes(config.memoryConstrained),
+        },
+      },
+    }),
+    jscad(),
+    manifold(),
+    // Exact exports always run on the serial build; on a phone the fast lane does too, so one runtime stays warm.
+    picovoxel(
+      config.memoryConstrained
+        ? { kernels: { default: { wasm: 'serial', recycleHeapBytes: constrainedRecycleHeapBytes } } }
+        : undefined,
+    ),
+    // Claims only files importing @classcad/smlibwasm; the kernel's WebAssembly loads on first use.
+    smlib(),
+    gltf(),
+    brep(),
+    /*
+     * One engine per opened format, fetched and verified by digest (cadmpeg engine delivery charter D2, D11, D12). The
+     * export transcoder is not selected here (the plugin's default preset), so only the kernel takes the option.
+     */
+    cadmpeg({ kernels: { import: { engines: cadmpegEngines() } } }),
+    image(),
+    // HEIC/HEIF stills to JPEG, PNG and WebP (operator ruling O1); libheif loads only for a HEIC source.
+    heif(),
+    slicer(),
+    assimp({ preset: 'all' }),
+    replicad({
+      kernels: {
+        default: {
+          wasm: config.memoryConstrained ? 'single' : 'auto',
+          // D-RT-01: the live operation tier keeps recent operation results live in the worker, up to its byte
+          // budget (`computeReuseBytes`, 256 MiB by default); a phone renders without it until a budget is qualified there.
+          ...(config.memoryConstrained ? { computeReuse: false } : {}),
+          withSourceMapping: options.withSourceMapping === true,
+        },
+      },
+    }),
+    zoo({
+      kernels: {
+        default: {
+          baseUrl: `${config.tauWebSocketUrl}/v1/kernels/zoo`,
+          // Billing copy lives behind the cloud boundary so self-host builds never ship it.
+          closeErrors: zooCloseErrors,
+        },
+      },
+    }),
+    tscircuit(),
+  ],
+  middleware: [parameterFileResolver(), parameterUnits(), geometryCache(), gltfEdgeDetection()],
+});
+
+const createUiRuntime = (options: UiRuntimeOptions = {}) =>
+  defineRuntime({
+    configSchema: uiRuntimeConfigSchema,
+    createRuntime: (config) => createUiRuntimeOptions(config, options),
+  });
+
+export const runtime = createUiRuntime();
+export const debugRuntime = createUiRuntime({ withSourceMapping: true });

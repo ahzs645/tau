@@ -1,21 +1,43 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+// oxlint-disable-next-line import/no-unassigned-import -- Side-effect import to polyfill IndexedDB for tests
+import 'fake-indexeddb/auto';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MountTable } from '#mount-table.js';
 import { WorkspaceFileService } from '#workspace-file-service.js';
 import { ProviderRegistry } from '#provider-registry.js';
 import { ResourceQueue } from '#resource-queue.js';
 import { ChangeEventBus } from '#change-event-bus.js';
-import { createMemoryProvider } from '#backend/memory-provider.js';
+import { getEventOrigin } from '#event-origin-registry.js';
+import { CrossTabCoordinator } from '#cross-tab-coordinator.js';
+import { changeEventEntries } from '#changeset.js';
 import type { ChangeEvent, FileSystemProvider } from '#types.js';
 
 async function createMountedWorkspaceFileService() {
-  const rootProvider = await createMemoryProvider();
-  const nodeModulesProvider = await createMemoryProvider();
+  const providerRegistry = new ProviderRegistry();
+  const rootProvider = await providerRegistry.getProvider({
+    backend: 'memory',
+    storageRootKey: 'memory:mount-integration-root',
+  });
+  const nodeModulesProvider = await providerRegistry.getProvider({
+    backend: 'memory',
+    storageRootKey: 'memory:mount-integration-node-modules',
+  });
 
   const mountTable = new MountTable();
-  mountTable.mount('/', rootProvider, { backend: 'memory' });
-  mountTable.mount('/node_modules', nodeModulesProvider, { backend: 'memory' });
-
-  const providerRegistry = new ProviderRegistry();
+  mountTable.mount('/', rootProvider, {
+    class: 'authored',
+    backend: 'memory',
+    storageRootKey: 'memory:mount-integration-root',
+  });
+  mountTable.mount('/node_modules', nodeModulesProvider, {
+    class: 'authored',
+    backend: 'memory',
+    storageRootKey: 'memory:mount-integration-node-modules',
+  });
+  mountTable.mount('/previews/deps', nodeModulesProvider, {
+    class: 'authored',
+    backend: 'memory',
+    storageRootKey: 'memory:mount-integration-node-modules',
+  });
 
   const resourceQueue = new ResourceQueue();
   const eventBus = new ChangeEventBus();
@@ -27,7 +49,7 @@ async function createMountedWorkspaceFileService() {
     mountTable,
   });
 
-  return { service, rootProvider, nodeModulesProvider, eventBus, mountTable };
+  return { service, rootProvider, nodeModulesProvider, eventBus, mountTable, providerRegistry };
 }
 
 describe('MountTable integration', () => {
@@ -49,29 +71,79 @@ describe('MountTable integration', () => {
   // -------------------------------------------------------------------------
 
   describe('multi-mount routing', () => {
+    it('keeps the committed project-route projection when staging a replacement fails', async () => {
+      const context = await createMountedWorkspaceFileService();
+      const committedId = 'proj_ccccccccccccccccccccc';
+      const replacementId = 'proj_rrrrrrrrrrrrrrrrrrrrr';
+      await context.service.configureProjectRoots({
+        projects: [
+          {
+            projectId: committedId,
+            backend: 'memory',
+            storageRootKey: 'memory:committed',
+            providerBasePath: 'committed-physical',
+          },
+        ],
+        roots: [],
+      });
+      await context.service.writeFile(`/projects/${committedId}/main.ts`, 'committed');
+      vi.spyOn(context.providerRegistry, 'getProvider').mockRejectedValueOnce(new Error('provider unavailable'));
+
+      const result = await context.service.configureProjectRoots({
+        projects: [
+          {
+            projectId: replacementId,
+            backend: 'memory',
+            storageRootKey: 'memory:replacement',
+            providerBasePath: 'replacement-physical',
+          },
+          {
+            projectId: committedId,
+            backend: 'memory',
+            storageRootKey: 'memory:committed',
+            providerBasePath: 'committed-physical',
+          },
+        ],
+        roots: [],
+      });
+
+      /* The failed provider skips its own route (blueprint B15) and nothing else. */
+      expect(result.skipped).toEqual([
+        {
+          kind: 'project',
+          reason: 'provider-unavailable',
+          projectId: replacementId,
+          storageRootKey: 'memory:replacement',
+        },
+      ]);
+      expect(context.mountTable.getExactMount(`/projects/${replacementId}`)).toBeUndefined();
+      expect(await context.service.readFile(`/projects/${committedId}/main.ts`, 'utf8')).toBe('committed');
+      context.service.dispose();
+    });
+
     it('should route readFile to root mount for project files', async () => {
-      await rootProvider.writeFile('/src/main.ts', 'hello');
+      await rootProvider.writeFile('src/main.ts', 'hello');
       const content = await service.readFile('/src/main.ts', 'utf8');
       expect(content).toBe('hello');
     });
 
     it('should route readFile to node_modules mount', async () => {
-      await nodeModulesProvider.writeFile('/lodash/index.js', 'module.exports = {}');
+      await nodeModulesProvider.writeFile('lodash/index.js', 'module.exports = {}');
       const content = await service.readFile('/node_modules/lodash/index.js', 'utf8');
       expect(content).toBe('module.exports = {}');
     });
 
     it('should route writeFile to correct provider based on path', async () => {
       await service.writeFile('/src/app.ts', 'app code');
-      await service.writeFile('/node_modules/react/index.js', 'react');
+      await service.writeFile('/previews/deps/react/index.js', 'react');
 
-      expect(await rootProvider.readFile('/src/app.ts', 'utf8')).toBe('app code');
-      expect(await nodeModulesProvider.readFile('/react/index.js', 'utf8')).toBe('react');
+      expect(await rootProvider.readFile('src/app.ts', 'utf8')).toBe('app code');
+      expect(await nodeModulesProvider.readFile('react/index.js', 'utf8')).toBe('react');
     });
 
     it('should route exists to correct provider', async () => {
-      await rootProvider.writeFile('/project.json', '{}');
-      await nodeModulesProvider.writeFile('/pkg/index.js', 'x');
+      await rootProvider.writeFile('project.json', '{}');
+      await nodeModulesProvider.writeFile('pkg/index.js', 'x');
 
       expect(await service.exists('/project.json')).toBe(true);
       expect(await service.exists('/node_modules/pkg/index.js')).toBe(true);
@@ -85,30 +157,31 @@ describe('MountTable integration', () => {
 
   describe('readdir merge', () => {
     it('should inject node_modules as synthetic directory in root readdir', async () => {
-      await rootProvider.writeFile('/src/main.ts', 'x');
+      await rootProvider.writeFile('src/main.ts', 'x');
       const entries = await service.readdir('/');
       expect(entries).toContain('src');
       expect(entries).toContain('node_modules');
     });
 
     it('should not duplicate node_modules if root provider also has it', async () => {
-      await rootProvider.mkdir('/node_modules');
-      await rootProvider.writeFile('/src/main.ts', 'x');
+      await rootProvider.mkdir('node_modules');
+      await rootProvider.writeFile('src/main.ts', 'x');
       const entries = await service.readdir('/');
       const nmCount = entries.filter((entry) => entry === 'node_modules').length;
       expect(nmCount).toBe(1);
     });
 
     it('should merge synthetic entries in readDirectory tree nodes', async () => {
-      await rootProvider.writeFile('/main.ts', 'x');
+      await rootProvider.writeFile('main.ts', 'x');
       const nodes = await service.readDirectory('/');
       const nmNode = nodes.find((n) => n.name === 'node_modules');
       expect(nmNode).toBeDefined();
       expect(nmNode!.children).toEqual([]);
+      expect(nmNode!.mtimeMs).toBe(0);
     });
 
     it('should only query node_modules provider for /node_modules/ paths', async () => {
-      await nodeModulesProvider.writeFile('/lodash/index.js', 'x');
+      await nodeModulesProvider.writeFile('lodash/index.js', 'x');
       const entries = await service.readdir('/node_modules');
       expect(entries).toContain('lodash');
     });
@@ -119,28 +192,78 @@ describe('MountTable integration', () => {
   // -------------------------------------------------------------------------
 
   describe('cross-mount operations', () => {
-    it('should perform cross-mount rename as copy+delete', async () => {
-      await rootProvider.writeFile('/temp.js', 'temp content');
-      await service.rename('/temp.js', '/node_modules/temp.js');
+    it('should perform a cross-mount move as copy and delete', async () => {
+      await rootProvider.writeFile('temp.js', 'temp content');
+      await service.move('/temp.js', '/previews/deps/temp.js');
 
-      expect(await rootProvider.exists('/temp.js')).toBe(false);
-      expect(await nodeModulesProvider.readFile('/temp.js', 'utf8')).toBe('temp content');
+      expect(await rootProvider.exists('temp.js')).toBe(false);
+      expect(await nodeModulesProvider.readFile('temp.js', 'utf8')).toBe('temp content');
     });
 
-    it('should handle same-mount rename normally', async () => {
-      await rootProvider.writeFile('/old.ts', 'code');
-      await service.rename('/old.ts', '/new.ts');
+    it('should keep the source, remove the destination, and repair both indexes when a cross-mount copy fails', async () => {
+      await rootProvider.writeFile('source/a.txt', 'a');
+      await rootProvider.writeFile('source/b.txt', 'b');
+      await rootProvider.writeFile('source/c.txt', 'c');
+      const sourceView = service.createRootedFileSystem('/');
+      const destinationView = service.createRootedFileSystem('/previews/deps');
+      await sourceView.statTree!('source');
+      await destinationView.statTree!('');
+      const writeFile = nodeModulesProvider.writeFile.bind(nodeModulesProvider);
+      let writes = 0;
+      vi.spyOn(nodeModulesProvider, 'writeFile').mockImplementation(async (path, data) => {
+        writes++;
+        if (writes === 2) {
+          throw new Error('injected destination write failure');
+        }
+        await writeFile(path, data);
+      });
 
-      expect(await rootProvider.exists('/old.ts')).toBe(false);
-      expect(await rootProvider.readFile('/new.ts', 'utf8')).toBe('code');
+      await expect(service.move('/source', '/previews/deps/destination')).rejects.toThrow(
+        'injected destination write failure',
+      );
+
+      await expect(rootProvider.readFile('source/a.txt', 'utf8')).resolves.toBe('a');
+      await expect(rootProvider.readFile('source/b.txt', 'utf8')).resolves.toBe('b');
+      await expect(rootProvider.readFile('source/c.txt', 'utf8')).resolves.toBe('c');
+      await expect(nodeModulesProvider.exists('destination')).resolves.toBe(false);
+      const sourceIndex = await sourceView.statTree!('source');
+      expect(sourceIndex.map(({ path }) => path).toSorted()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+      expect(await destinationView.statTree!('')).toEqual([]);
     });
 
-    it('should duplicate files across mount boundaries', async () => {
-      await rootProvider.writeFile('/src/util.ts', 'util code');
-      await service.duplicateFile('/src/util.ts', '/node_modules/util.ts');
+    it('should handle a same-mount move', async () => {
+      await rootProvider.writeFile('old.ts', 'code');
+      await service.move('/old.ts', '/new.ts');
 
-      expect(await rootProvider.readFile('/src/util.ts', 'utf8')).toBe('util code');
-      expect(await nodeModulesProvider.readFile('/util.ts', 'utf8')).toBe('util code');
+      expect(await rootProvider.exists('old.ts')).toBe(false);
+      expect(await rootProvider.readFile('new.ts', 'utf8')).toBe('code');
+    });
+
+    /*
+     * W12d retired the authority's `duplicateFile`, whose read-then-write routed
+     * through the mount table and therefore copied *across* mounts. The gesture a
+     * consumer reaches is the rooted `duplicate`, and a rooted filesystem is
+     * captured to one exact mount (W5) — so a target the mount table would route
+     * somewhere else is not this view's to write, and shadowing it silently in
+     * the captured provider is the wrong answer (gate G-D, H5). `copyTree`
+     * refuses a target that crosses a mount boundary; this is the same refusal
+     * for the one-file copy.
+     */
+    it('should refuse a rooted duplicate whose target the captured mount does not own', async () => {
+      await rootProvider.writeFile('src/util.ts', 'util code');
+
+      await expect(
+        service.createRootedFileSystem('/').duplicate!('src/util.ts', 'previews/deps/util.ts'),
+      ).rejects.toThrow(/cross mount boundary/u);
+      expect(await rootProvider.exists('previews/deps/util.ts')).toBe(false);
+      expect(await nodeModulesProvider.exists('util.ts')).toBe(false);
+    });
+
+    it('should duplicate inside the mount it captured', async () => {
+      await rootProvider.writeFile('src/util.ts', 'util code');
+      await service.createRootedFileSystem('/').duplicate!('src/util.ts', 'src/util.copy.ts');
+
+      expect(await rootProvider.readFile('src/util.copy.ts', 'utf8')).toBe('util code');
     });
   });
 
@@ -162,15 +285,15 @@ describe('MountTable integration', () => {
       expect(writeEvent).toBeDefined();
     });
 
-    it('should emit fileWritten with virtual absolute path for node_modules writes', async () => {
+    it('should emit fileWritten with the virtual absolute path for nested-mount writes', async () => {
       const events: ChangeEvent[] = [];
       eventBus.subscribe((event) => {
         events.push(event);
       });
 
-      await service.writeFile('/node_modules/lodash/index.js', 'x');
+      await service.writeFile('/previews/deps/lodash/index.js', 'x');
       const writeEvent = events.find(
-        (event) => event.type === 'fileWritten' && 'path' in event && event.path === '/node_modules/lodash/index.js',
+        (event) => event.type === 'fileWritten' && 'path' in event && event.path === '/previews/deps/lodash/index.js',
       );
       expect(writeEvent).toBeDefined();
     });
@@ -182,16 +305,24 @@ describe('MountTable integration', () => {
 
   describe('cache and tree coherence', () => {
     it('should cache readDirectory per virtual path across mounts', async () => {
-      await rootProvider.writeFile('/main.ts', 'x');
-      const first = await service.readDirectory('/');
-      const second = await service.readDirectory('/');
-      expect(first).toEqual(second);
+      await rootProvider.writeFile('main.ts', 'x');
+      const dateNow = vi.spyOn(Date, 'now');
+      try {
+        dateNow.mockReturnValue(100);
+        const first = await service.readDirectory('/');
+        dateNow.mockReturnValue(101);
+        const second = await service.readDirectory('/');
+        expect(first).toEqual(second);
+      } finally {
+        dateNow.mockRestore();
+      }
     });
 
     it('should collect directory stats from mounted provider', async () => {
-      await rootProvider.writeFile('/src/a.ts', 'aaa');
-      await rootProvider.writeFile('/src/b.ts', 'bb');
-      const stats = await service.getDirectoryStat('/src');
+      await rootProvider.writeFile('src/a.ts', 'aaa');
+      await rootProvider.writeFile('src/b.ts', 'bb');
+      /* The index is read through the rooted surface since W12d (D3). */
+      const stats = await service.createRootedFileSystem('/').statTree!('src');
       expect(stats).toHaveLength(2);
       const paths = stats.map((s) => s.path).sort();
       expect(paths).toEqual(['a.ts', 'b.ts']);
@@ -205,9 +336,9 @@ describe('MountTable integration', () => {
   describe('single mount', () => {
     it('should work with only a root mount', async () => {
       const providerRegistry = new ProviderRegistry();
-      const provider = await providerRegistry.createMountProvider({ backend: 'memory' });
+      const provider = await providerRegistry.getProvider({ backend: 'memory', storageRootKey: 'memory:test-root' });
       const mt = new MountTable();
-      mt.mount('/', provider, { backend: 'memory' });
+      mt.mount('/', provider, { class: 'authored', backend: 'memory', storageRootKey: 'memory:test-root' });
 
       const svc = new WorkspaceFileService({
         providerRegistry,
@@ -222,134 +353,7 @@ describe('MountTable integration', () => {
     });
   });
 
-  // -------------------------------------------------------------------------
-  // Dynamic mount routing (domain-agnostic mount / unmount)
-  // -------------------------------------------------------------------------
-
-  describe('dynamic mount routing', () => {
-    it('should mount a path prefix on the specified backend', async () => {
-      await service.mount('/projects/proj_A', { backend: 'memory', preservePath: true });
-      const exists = await service.exists('/projects/proj_A');
-      expect(exists).toBeDefined();
-    });
-
-    it('should route reads/writes to the mounted provider for mounted paths', async () => {
-      await service.mount('/projects/proj_A', { backend: 'memory', preservePath: true });
-      await service.writeFile('/projects/proj_A/main.ts', 'project A code');
-      const content = await service.readFile('/projects/proj_A/main.ts', 'utf8');
-      expect(content).toBe('project A code');
-
-      // Verify the file is NOT on the root provider
-      expect(await rootProvider.exists('/projects/proj_A/main.ts')).toBe(false);
-    });
-
-    it('should route non-mounted paths to the root provider', async () => {
-      await service.mount('/projects/proj_A', { backend: 'memory', preservePath: true });
-      await service.writeFile('/config.json', '{}');
-      expect(await rootProvider.readFile('/config.json', 'utf8')).toBe('{}');
-    });
-
-    it('should unmount a prefix and fall through to root', async () => {
-      await service.mount('/projects/proj_B', { backend: 'memory', preservePath: true });
-      await service.writeFile('/projects/proj_B/app.ts', 'app code');
-
-      service.unmount('/projects/proj_B');
-
-      expect(await service.exists('/projects/proj_B/app.ts')).toBe(false);
-    });
-
-    it('should handle multiple simultaneous mounts on different prefixes', async () => {
-      await service.mount('/projects/proj_X', { backend: 'memory', preservePath: true });
-      await service.mount('/projects/proj_Y', { backend: 'memory', preservePath: true });
-
-      await service.writeFile('/projects/proj_X/x.ts', 'X');
-      await service.writeFile('/projects/proj_Y/y.ts', 'Y');
-
-      expect(await service.readFile('/projects/proj_X/x.ts', 'utf8')).toBe('X');
-      expect(await service.readFile('/projects/proj_Y/y.ts', 'utf8')).toBe('Y');
-
-      // Cross-isolation: project X file not visible under project Y
-      expect(await service.exists('/projects/proj_Y/x.ts')).toBe(false);
-    });
-
-    it('should emit correct backend in events for mounted paths', async () => {
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => {
-        events.push(event);
-      });
-
-      await service.mount('/projects/proj_C', { backend: 'memory', preservePath: true });
-      await service.writeFile('/projects/proj_C/main.ts', 'code');
-
-      const writeEvent = events.find(
-        (event) => event.type === 'fileWritten' && 'path' in event && event.path === '/projects/proj_C/main.ts',
-      );
-      expect(writeEvent).toBeDefined();
-      expect(writeEvent!.backend).toBe('memory');
-    });
-
-    it('should emit correct backend in events for root paths', async () => {
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => {
-        events.push(event);
-      });
-
-      await service.mount('/projects/proj_D', { backend: 'memory', preservePath: true });
-      await service.writeFile('/root-file.txt', 'root content');
-
-      const writeEvent = events.find(
-        (event) => event.type === 'fileWritten' && 'path' in event && event.path === '/root-file.txt',
-      );
-      expect(writeEvent).toBeDefined();
-      expect(writeEvent!.backend).toBe('memory');
-    });
-
-    it('should isolate project mount from root mount', async () => {
-      const providerRegistry = new ProviderRegistry();
-      const rootProvider = await providerRegistry.createMountProvider({ backend: 'memory' });
-
-      const projectMountTable = new MountTable();
-      projectMountTable.mount('/', rootProvider, { backend: 'memory' });
-      const projectEventBus = new ChangeEventBus();
-
-      const projectService = new WorkspaceFileService({
-        providerRegistry,
-        resourceQueue: new ResourceQueue(),
-        eventBus: projectEventBus,
-        mountTable: projectMountTable,
-      });
-
-      await projectService.mount('/projects/proj_E', { backend: 'memory', preservePath: true });
-
-      await projectService.writeFile('/projects/proj_E/test.ts', 'hello');
-      expect(await projectService.readFile('/projects/proj_E/test.ts', 'utf8')).toBe('hello');
-
-      expect(await projectService.exists('/test.ts')).toBe(false);
-    });
-
-    it('should dispose the mount provider on unmount', async () => {
-      await service.mount('/projects/proj_F', { backend: 'memory', preservePath: true });
-      await service.writeFile('/projects/proj_F/test.ts', 'test');
-
-      expect(await service.exists('/projects/proj_F/test.ts')).toBe(true);
-
-      service.unmount('/projects/proj_F');
-
-      expect(await service.exists('/projects/proj_F/test.ts')).toBe(false);
-    });
-
-    it('should pass full path to provider when mount uses preservePath', async () => {
-      await service.mount('/projects/proj_G', { backend: 'memory', preservePath: true });
-
-      await service.writeFile('/projects/proj_G/main.ts', 'code');
-
-      const content = await service.readFile('/projects/proj_G/main.ts', 'utf8');
-      expect(content).toBe('code');
-
-      const entries = await service.readdir('/projects/proj_G');
-      expect(entries).toContain('main.ts');
-    });
-
+  describe('boot topology routing', () => {
     // Project bootstrap contract pin: the cross-workspace `client.writeFiles`
     // path used by `createProject` (apps/ui/app/hooks/use-project-manager.tsx)
     // dispatches a bulk write keyed by absolute paths under sibling mount
@@ -360,34 +364,81 @@ describe('MountTable integration', () => {
     // to `client.writeFiles` is correct only if this routing contract holds.
     it('should route bulk writeFiles across sibling mount prefixes to the correct providers', async () => {
       const providerRegistry = new ProviderRegistry();
-      const rootProvider = await providerRegistry.createMountProvider({ backend: 'memory' });
+      const rootProvider = await providerRegistry.getProvider({ backend: 'memory', storageRootKey: 'memory:root' });
+      const firstProjectProvider = await providerRegistry.getProvider({ backend: 'indexeddb' });
+      const secondProjectProvider = await providerRegistry.getProvider({
+        backend: 'memory',
+        storageRootKey: 'memory:second-project',
+      });
       const siblingMountTable = new MountTable();
-      siblingMountTable.mount('/', rootProvider, { backend: 'memory' });
+      siblingMountTable.mount('/', rootProvider, {
+        class: 'authored',
+        backend: 'memory',
+        storageRootKey: 'memory:root',
+      });
+      siblingMountTable.mount('/projects/proj_A', firstProjectProvider, {
+        class: 'authored',
+        backend: 'indexeddb',
+        storageRootKey: providerRegistry.resolveStorageRootKey({ backend: 'indexeddb' }),
+        providerBasePath: 'projects/proj_A',
+      });
+      siblingMountTable.mount('/projects/proj_B', secondProjectProvider, {
+        class: 'authored',
+        backend: 'memory',
+        storageRootKey: 'memory:second-project',
+        providerBasePath: 'projects/proj_B',
+      });
+      const siblingEventBus = new ChangeEventBus();
+      const crossTabCoordinator = new CrossTabCoordinator();
       const siblingService = new WorkspaceFileService({
         providerRegistry,
         resourceQueue: new ResourceQueue(),
-        eventBus: new ChangeEventBus(),
+        eventBus: siblingEventBus,
+        crossTabCoordinator,
         mountTable: siblingMountTable,
       });
-
-      await siblingService.mount('/projects/proj_A', { backend: 'memory', preservePath: true });
-      await siblingService.mount('/projects/proj_B', { backend: 'memory', preservePath: true });
+      const events: ChangeEvent[] = [];
+      const unsubscribe = siblingEventBus.subscribe((event) => {
+        events.push(event);
+      });
 
       const firstMain = '/projects/proj_A/main.ts';
       const firstUtility = '/projects/proj_A/lib/util.ts';
       const secondMain = '/projects/proj_B/main.ts';
-      await siblingService.writeFiles({
-        [firstMain]: { content: 'A main' },
-        [firstUtility]: { content: 'A util' },
-        [secondMain]: { content: 'B main' },
-      });
 
-      // Each file lands under its own mount prefix; cross-isolation holds.
-      expect(await siblingService.readFile('/projects/proj_A/main.ts', 'utf8')).toBe('A main');
-      expect(await siblingService.readFile('/projects/proj_A/lib/util.ts', 'utf8')).toBe('A util');
-      expect(await siblingService.readFile('/projects/proj_B/main.ts', 'utf8')).toBe('B main');
-      expect(await siblingService.exists('/projects/proj_A/B-main.ts')).toBe(false);
-      expect(await siblingService.exists('/projects/proj_B/lib/util.ts')).toBe(false);
+      try {
+        await siblingService.writeFiles(
+          {
+            [firstMain]: { content: 'A main' },
+            [firstUtility]: { content: 'A util' },
+            [secondMain]: { content: 'B main' },
+          },
+          { originClientId: 'batch_author' },
+        );
+
+        // Each file lands under its own mount prefix; cross-isolation holds.
+        expect(await siblingService.readFile(firstMain, 'utf8')).toBe('A main');
+        expect(await siblingService.readFile(firstUtility, 'utf8')).toBe('A util');
+        expect(await siblingService.readFile(secondMain, 'utf8')).toBe('B main');
+        expect(await siblingService.exists('/projects/proj_A/B-main.ts')).toBe(false);
+        expect(await siblingService.exists('/projects/proj_B/lib/util.ts')).toBe(false);
+
+        expect(events).toHaveLength(1);
+        const writtenEvents = events
+          .flatMap((event) => changeEventEntries(event))
+          .filter((event) => event.type === 'fileWritten')
+          .map((event) => ({ path: event.path, backend: event.backend, origin: getEventOrigin(event) }))
+          .sort((a, b) => a.path.localeCompare(b.path));
+        expect(writtenEvents).toEqual([
+          { path: firstUtility, backend: 'indexeddb', origin: 'batch_author' },
+          { path: firstMain, backend: 'indexeddb', origin: 'batch_author' },
+          { path: secondMain, backend: 'memory', origin: 'batch_author' },
+        ]);
+      } finally {
+        unsubscribe();
+        siblingService.dispose();
+        crossTabCoordinator.dispose();
+      }
     });
   });
 });

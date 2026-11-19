@@ -3,21 +3,22 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "apps/api",
   "projectType": "application",
-  "tags": ["scope:api", "type:app"],
+  "tags": ["scope:api", "type:app", "release:app", "deploy:staging"],
   "targets": {
+    "formal:nightly": {},
     "setup-env": {
-      "command": "if [ ! -f \"./apps/api/.env\" ]; then cp ./apps/api/.env.example ./apps/api/.env; fi"
+      "command": "node -e \"const fs = require('node:fs'); if (!fs.existsSync('apps/api/.env')) fs.copyFileSync('apps/api/.env.example', 'apps/api/.env')\""
     },
     "deploy": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "fly deploy --config ./apps/api/fly.staging.toml --dockerfile ./apps/api/Dockerfile"
+        "command": "fly deploy --config ./apps/api/fly.staging.toml --dockerfile ./apps/api/Dockerfile --ignorefile ./apps/api/Dockerfile.dockerignore"
       }
     },
     "deploy:prod": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "fly deploy --config ./apps/api/fly.prod.toml --dockerfile ./apps/api/Dockerfile"
+        "command": "fly deploy --config ./apps/api/fly.prod.toml --dockerfile ./apps/api/Dockerfile --ignorefile ./apps/api/Dockerfile.dockerignore"
       }
     },
     "serve": {
@@ -37,11 +38,25 @@
       },
       "parallelism": true
     },
-    "auth-schema-generate": {
+    "start": {
       "executor": "nx:run-commands",
+      "continuous": true,
       "options": {
-        "command": "npx auth@latest generate --config app/config/auth.ts --output app/database/auth-schema.ts --yes",
-        "cwd": "{projectRoot}"
+        "command": "node apps/api/dist/main.js",
+        "cwd": ".",
+        "forwardAllArgs": false
+      },
+      "parallelism": true
+    },
+    "docker:smoke": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Build the production API image as Fly does. CI's API Docker smoke test builds this image and boots it against Postgres and Redis; its plan selects that job when Nx marks this project affected, so only a change to the API or a project it depends on rebuilds the image."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "docker build --file apps/api/Dockerfile --tag tau-api:smoke ."
       }
     },
     "launch": {
@@ -50,32 +65,16 @@
         "command": "fly launch --config ./apps/api/fly.prod.toml"
       }
     },
-    "db-generate": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "drizzle-kit generate",
-        "cwd": "{projectRoot}"
-      }
-    },
     "db-migrate": {
       "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Bootstrap and maintain the local database exactly as the Fly release_command does: apply the Drizzle migrations, install the billing protections and the runtime role, and — with TAU_CLOUD_ENABLED=true — derive the development tariff from the code route table over infra/billing/development.commercial.json and publish it when its content moved. Idempotent: a second run reports `unchanged`."
+      },
+      "dependsOn": ["build:billing-command"],
       "options": {
-        "command": "drizzle-kit migrate",
-        "cwd": "{projectRoot}"
-      }
-    },
-    "db-studio": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "drizzle-kit studio",
-        "cwd": "{projectRoot}"
-      }
-    },
-    "db-push": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "drizzle-kit push",
-        "cwd": "{projectRoot}"
+        "cwd": "{workspaceRoot}",
+        "command": "node --env-file-if-exists=apps/api/.env apps/api/dist/billing-command.js migrate --environment development --commercial-file infra/billing/development.commercial.json"
       }
     },
     "test:models": {
@@ -85,10 +84,36 @@
         "cwd": "{projectRoot}"
       }
     },
-    "benchmark:models": {
+    "test:live": {
       "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Live provider suites driven through the in-process model gateway (app/testing/live). Each suite skips when its provider credential is absent from apps/api/.env."
+      },
       "options": {
-        "command": "node --import @oxc-node/core/register --import ./scripts/raw-loader.mts scripts/benchmark-models.mts",
+        "command": "vitest run --config vitest.live.config.ts",
+        "cwd": "{projectRoot}"
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/packages/plugins/tscircuit/agent/cad-tscircuit/SKILL.md"]
+    },
+    "test:kernel-routing": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "The automatic kernel selection eval instrument without a model: the development corpus, grader and held-out set (AKS-3a, AKS-3d), and the L2 tasks with their runner on a real tau mcp process (AKS-3b). The live arms run under test:live."
+      },
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts app/testing/live/kernel-routing. app/testing/live/kernel-routing-l2.tasks app/testing/live/kernel-routing-l2.runner",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "test:billing-composition": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Billing foundation suites that compose billing with the app's chat and agent-observability code, on the api-billing launcher's test-owned PostgreSQL."
+      },
+      "options": {
+        "command": "node ../libs/api-billing/scripts/test-billing-foundation.mts",
         "cwd": "{projectRoot}"
       }
     },
@@ -97,6 +122,136 @@
       "options": {
         "command": "bash apps/api/scripts/sync-grafana-dashboards.sh"
       }
+    },
+    "grafana:check": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "List Grafana panels and variables whose queries return no data, failing only on panels missing from infra/grafana/known-empty-panels.txt (GRAFANA_URL, default http://localhost:6100)."
+      },
+      "options": {
+        "command": "node apps/api/scripts/check-grafana-panels.mts --baseline=infra/grafana/known-empty-panels.txt"
+      }
+    },
+    "observability:exercise": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Drive every instrumented part of the LOCAL API (auth, telemetry ingest, Tau Sync, publications, Haiku 5.5 via the gateway, WebSockets) so the Grafana dashboards fill. Spends real Anthropic credit, capped by the harness user's promotional credit."
+      },
+      "options": {
+        "command": "node apps/api/scripts/exercise-observability.mts"
+      }
+    },
+    "build:billing-command": {
+      "executor": "nx:run-commands",
+      "outputs": [
+        "{projectRoot}/dist/billing-command.js",
+        "{projectRoot}/dist/billing-command.js.map",
+        "{projectRoot}/dist/migrations"
+      ],
+      "options": {
+        "command": "vite build --config vite.billing-command.config.ts",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "build:maintenance-command": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist/maintenance-command.js", "{projectRoot}/dist/maintenance-command.js.map"],
+      "options": {
+        "command": "vite build --config vite.maintenance-command.config.ts",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "build:mirror-command": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist/mirror-command.js", "{projectRoot}/dist/mirror-command.js.map"],
+      "options": {
+        "command": "vite build --config vite.mirror-command.config.ts",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "build:storage-worker": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist/storage-worker.js", "{projectRoot}/dist/storage-worker.js.map"],
+      "options": {
+        "command": "vite build --config vite.storage-worker.config.ts",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "dev": {
+      "dependsOn": ["storage-worker"]
+    },
+    "dev:cloud": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": ["billing-operations", "storage-worker"],
+      "metadata": {
+        "description": "Start the API dev server with the billing-operations worker deployments run beside it. With TAU_CLOUD_ENABLED=true the webhook only records a Stripe event; billing-operations fulfils purchases, subscriptions and automatic reloads. Without it a paid checkout stays Processing. The API itself settles abandoned LLM operations; the billing-recovery target is optional scale-out."
+      },
+      "options": {
+        "command": "vite",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "billing-recovery": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": ["build:billing-command"],
+      "options": {
+        "command": "node --env-file-if-exists=apps/api/.env apps/api/dist/billing-command.js recover-llm-worker --environment development --limit 100 --poll-milliseconds 5000",
+        "cwd": "{workspaceRoot}",
+        "env": {
+          "OTEL_METRICS_PORT": "9465"
+        }
+      }
+    },
+    "billing-operations": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": ["build:billing-command"],
+      "options": {
+        "command": "node --env-file-if-exists=apps/api/.env apps/api/dist/billing-command.js billing-operations-worker --environment development --limit 100 --poll-milliseconds 5000",
+        "cwd": "{workspaceRoot}",
+        "env": {
+          "OTEL_METRICS_PORT": "9466"
+        }
+      }
+    },
+    "storage-worker": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": ["build:storage-worker"],
+      "metadata": {
+        "description": "Run tau-storage, the git storage worker (DC1), beside the API dev server on :3100. Since DC1 the API holds no lease and runs no git child: it forwards every git RPC to TAU_STORAGE_URL (http://localhost:3100 in .env.example) under the development grant and receipt keys. The worker reads the API's .env for its TAU_S3_* settings and ignores DATABASE_URL and REDIS_URL outside production."
+      },
+      "options": {
+        "command": "node --env-file-if-exists=apps/api/.env apps/api/dist/storage-worker.js",
+        "cwd": "{workspaceRoot}",
+        "env": {
+          "PORT": "3100",
+          "OTEL_METRICS_PORT": "9467",
+          "OTEL_SERVICE_NAME": "tau-storage",
+          "TAU_STORAGE_RECEIPT_URL": "http://localhost:4000/v1/internal/storage/receipts"
+        }
+      }
+    },
+    "probe:private-storage": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node apps/api/scripts/check-private-storage.mts",
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "test": {
+      "inputs": [
+        "default",
+        "^production",
+        "serviceEnvironment",
+        "{workspaceRoot}/infra/billing/development.commercial.json",
+        "{workspaceRoot}/apps/libs/api-*/src/**/*.ts"
+      ]
     }
   }
 }

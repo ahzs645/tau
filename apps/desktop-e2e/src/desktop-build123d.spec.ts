@@ -1,0 +1,956 @@
+/* eslint-disable @typescript-eslint/naming-convention -- Environment variables retain their wire names. */
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { afterEach, expect, test } from 'vitest';
+import type { Locator, Page } from 'playwright';
+import { getBoundingBoxFromInspect, getInspectReport, validateGlbData } from '@taucad/runtime-testing';
+
+import { authenticatePackagedDesktop, desktopDescendants, launchDesktopApp } from '#support/desktop-app.js';
+import type { DesktopSession } from '#support/desktop-app.js';
+import { desktopE2ECompletedArtifact } from '#support/config.js';
+import { expectFirstNativeRender } from '#support/prepared-kernels.js';
+import {
+  gatewayFixtureFinalText,
+  gatewayFixtureModelName,
+  installGatewayFixture,
+  startGatewayFixture,
+} from '#support/gateway-fixture.js';
+import type { GatewayFixture } from '#support/gateway-fixture.js';
+import { deleteTauTestUser, seedTauTestUser, tauTestAccount } from '#support/tau-account.js';
+import {
+  connectPickedFolder,
+  ensureFilesPane,
+  expectCount,
+  expectGeometryFramed,
+  expectRenderCycleSince,
+  expectSignedIn,
+  expectVisible,
+  fileTreeItemOf,
+  openViewerIssues,
+  pressModelTreeShortcut,
+  renderCycleCount,
+  selectChatModel,
+  selectKernel,
+  submitPrompt,
+  waitForProjectOnDisk,
+} from '#support/scenario.js';
+
+const build123dSource = `from dataclasses import dataclass
+from build123d import Box, Color, Compound, Location
+
+@dataclass(frozen=True)
+class Params:
+    width: float = 20.0
+    depth: float = 8.0
+    height: float = 10.0
+    gap: float = 4.0
+
+def main(params: Params):
+    left = Box(params.width, params.depth, params.height)
+    left.label = "Left"
+    left.color = Color("royalblue")
+    right = Box(params.width, params.depth, params.height).moved(Location((params.width + params.gap, 0, 0)))
+    right.label = "Right"
+    right.color = Color("orange")
+    assembly = Compound(children=[left, right])
+    assembly.label = "Assembly"
+    return assembly
+`;
+
+const replicadSource = `import { makeCylinder } from 'replicad';
+
+export const defaultParams = {
+  radius: 10,
+  height: 24,
+};
+
+export default function main(params = defaultParams) {
+  return makeCylinder(params.radius, params.height);
+}
+`;
+
+const failureSentinel = 'desktop CAD failure parity sentinel';
+
+/**
+ * Wait for a preview's runtime alert to carry `text`. The runtime message sits
+ * in the overlay's closed `<details>`, so it is read as `textContent`, not
+ * matched as visible text.
+ */
+const expectAlertText = async (scope: Locator, text: string): Promise<void> => {
+  const alert = scope.getByRole('alert', { name: 'CAD runtime error' });
+  await expect
+    .poll(async () => ((await alert.count()) > 0 ? alert.first().textContent() : ''), { timeout: 120_000 })
+    .toContain(text);
+};
+
+const failingBuild123dSource = `from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Params:
+    width: float = 20.0
+
+def main(params: Params):
+    raise RuntimeError(${JSON.stringify(failureSentinel)})
+`;
+
+const dependentSource = `from dataclasses import dataclass
+from build123d import Box, Color, Compound, Location
+from dimensions import depth
+
+__tau__ = {"dependencies": ["dimensions.py"]}
+
+@dataclass(frozen=True)
+class Params:
+    width: float = 20.0
+    height: float = 10.0
+    gap: float = 4.0
+
+def main(params: Params):
+    left = Box(params.width, depth(), params.height)
+    left.label = "Left"
+    left.color = Color("royalblue")
+    right = Box(params.width, depth(), params.height).moved(Location((params.width + params.gap, 0, 0)))
+    right.label = "Right"
+    right.color = Color("orange")
+    assembly = Compound(children=[left, right])
+    assembly.label = "Assembly"
+    return assembly
+`;
+
+const picogkSource = `using System.ComponentModel.DataAnnotations;
+using System.Numerics;
+using PicoGK;
+Library.Go(Params.VoxelSizeMm, () =>
+{
+    var radius = Params.RadiusMm;
+    Library.oViewer().SetGroupMaterial(0, "3159cf", 0f, 0.7f);
+    Library.oViewer().SetGroupMaterial(1, "f2b134", 0f, 0.7f);
+    Library.oViewer().Add(Utils.mshCreateCube(new Vector3(radius, radius * 0.5f, radius * 0.25f)), 0);
+    Library.oViewer().Add(Voxels.voxSphere(new Vector3(radius * 2f, 0, 0), radius * 0.5f), 1);
+});
+
+public static class Params
+{
+    [Range(0.05, 5.0)]
+    [Display(Name = "Voxel size", Order = 0)]
+    public static float VoxelSizeMm { get; set; } = 1f;
+
+    [Range(1.0, 100.0)]
+    [Display(Name = "Radius", Order = 1)]
+    public static float RadiusMm { get; set; } = 12f;
+}
+`;
+
+const picogkDependentSource = `using PicoGK;
+Library.Go(1f, () => ShapeFactory.Build(12f));
+`;
+
+const picogkHelperSource = (offset: number): string => `using System.Globalization;
+using System.IO;
+using System.Numerics;
+using PicoGK;
+
+public static class ShapeFactory
+{
+    public static void Build(float radius)
+    {
+        var scale = float.Parse(File.ReadAllText("radius-scale.txt"), CultureInfo.InvariantCulture);
+        Library.oViewer().SetGroupMaterial(0, "3159cf", 0f, 0.7f);
+        Library.oViewer().SetGroupMaterial(1, "f2b134", 0f, 0.7f);
+        Library.oViewer().Add(Utils.mshCreateCube(new Vector3(radius, radius * 0.5f, radius * 0.25f)), 0);
+        Library.oViewer().Add(Voxels.voxSphere(new Vector3(radius * ${String(offset)}f, 0, 0), radius * scale), 1);
+    }
+}
+`;
+
+const picogkRuntimeFailure = 'PicoGK packaged runtime failure sentinel';
+const failingPicogkRuntimeSource = `using PicoGK;
+Library.Go(1f, () => throw new System.InvalidOperationException("${picogkRuntimeFailure}"));
+`;
+const slowPicogkSource = `using System.Numerics;
+using PicoGK;
+Library.Go(1f, () =>
+{
+    System.Threading.Thread.Sleep(30000);
+    Library.oViewer().Add(Voxels.voxSphere(Vector3.Zero, 12f));
+});
+`;
+
+const multiStepPicogkSource = `using System.Numerics;
+using System.Threading;
+using PicoGK;
+Library.Go(1f, () =>
+{
+    Library.oViewer().Add(Utils.mshCreateCube(new Vector3(12f, 6f, 3f)), 0);
+    Thread.Sleep(1500);
+    Library.oViewer().Add(Voxels.voxSphere(new Vector3(24f, 0, 0), 6f), 1);
+    Thread.Sleep(8000);
+});
+`;
+
+const workspaceRoot = resolve(import.meta.dirname, '../../..');
+
+type NativeWorker = {
+  readonly pid: number;
+  readonly temporaryRoot: string;
+};
+
+const nativeWorkers = (): readonly NativeWorker[] => {
+  if (process.platform === 'win32') {
+    return [];
+  }
+  const result = spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
+  expect(result.status, result.stderr).toBe(0);
+  const workerCommand = /^\s*(\d+)\s+.*\/worker\.py --workspace (\S+) --artifacts (\S+) --parent-pid \d+$/u;
+  return result.stdout.split('\n').flatMap((line) => {
+    const match = workerCommand.exec(line);
+    const pid = match?.[1];
+    const workspace = match?.[2];
+    const artifacts = match?.[3];
+    if (!pid || !workspace || !artifacts || dirname(workspace) !== dirname(artifacts)) {
+      return [];
+    }
+    return [{ pid: Number(pid), temporaryRoot: dirname(workspace) }];
+  });
+};
+
+const picogkWorkers = (): readonly NativeWorker[] => {
+  if (process.platform === 'win32') {
+    return [];
+  }
+  const result = spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
+  expect(result.status, result.stderr).toBe(0);
+  /* The apphost (`Tau.PicoGK.Worker`) from prepared resources, or the store closure's `dotnet` running the assembly
+   * (`tau-worker/Tau.PicoGK.Worker.dll`, `picogk-closure.ts`). */
+  const workerCommand =
+    /^\s*(\d+)\s+.*Tau\.PicoGK\.Worker(?:\.dll)? --workspace (\S+) --artifacts (\S+) --parent-pid \d+$/u;
+  return result.stdout.split('\n').flatMap((line) => {
+    const match = workerCommand.exec(line);
+    const pid = match?.[1];
+    const workspace = match?.[2];
+    const artifacts = match?.[3];
+    if (!pid || !workspace || !artifacts || dirname(workspace) !== dirname(artifacts)) {
+      return [];
+    }
+    return [{ pid: Number(pid), temporaryRoot: dirname(workspace) }];
+  });
+};
+
+const capturePicoGkFiles = (root: string, destination: string, artifacts: boolean): unknown[] => {
+  if (!existsSync(root)) {
+    return [];
+  }
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry): unknown[] => {
+    const path = join(root, entry.name);
+    const output = join(destination, entry.name);
+    if (entry.isDirectory() && !['.git', '.tau', 'node_modules'].includes(entry.name)) {
+      return capturePicoGkFiles(path, output, artifacts);
+    }
+    if (!entry.isFile() || (!artifacts && !entry.name.endsWith('.cs') && entry.name !== 'tau.json')) {
+      return [];
+    }
+    const bytes = readFileSync(path);
+    mkdirSync(dirname(output), { recursive: true });
+    writeFileSync(output, bytes);
+    const glb = bytes.length >= 20 && bytes.toString('ascii', 0, 4) === 'glTF';
+    return [
+      {
+        path,
+        byteLength: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        ...(glb ? { glb: JSON.parse(bytes.toString('utf8', 20, 20 + bytes.readUInt32LE(12))) as unknown } : {}),
+      },
+    ];
+  });
+};
+
+const ownedPicoGkWorkers = (electronPid: number | undefined): readonly NativeWorker[] => {
+  const result = spawnSync('ps', ['-axww', '-o', 'pid=,ppid=,command='], { encoding: 'utf8' });
+  expect(result.status, result.stderr).toBe(0);
+  const owned = new Set(desktopDescendants(electronPid, result.stdout).map(({ pid }) => pid));
+  return picogkWorkers().filter(({ pid }) => owned.has(pid));
+};
+
+const exportToProject = async (page: Page, projectRoot: string, extension: 'glb' | 'stl'): Promise<string> => {
+  const exportRoot = join(projectRoot, 'exports');
+  const digest = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+  const previous = new Map(
+    existsSync(exportRoot)
+      ? readdirSync(exportRoot)
+          .filter((name) => name.endsWith(`.${extension}`))
+          .map((name) => {
+            const path = join(exportRoot, name);
+            return [path, digest(path)] as const;
+          })
+      : [],
+  );
+  const exportButton = page.getByRole('button', { name: 'Export', exact: true });
+  if (await exportButton.isVisible().catch(() => false)) {
+    await exportButton.click();
+  }
+  const formats = page.getByRole('region', { name: 'Format' });
+  await expectVisible(formats, 30_000);
+  await formats.getByRole('button', { name: 'Export format' }).click();
+  await page.locator('[cmdk-list]').first().waitFor();
+  const requestedFormat = page.locator(`[cmdk-item][data-value="${extension}"]`);
+  if (!(await requestedFormat.isVisible())) {
+    await page.getByRole('button', { name: /^More formats/u }).click();
+  }
+  await requestedFormat.click();
+  const download = page.getByLabel('Download to disk');
+  if (await download.isChecked()) {
+    await download.click();
+  }
+  const save = page.getByLabel('Save to project');
+  if (!(await save.isChecked())) {
+    await save.click();
+  }
+  await page.getByRole('button', { name: `Export ${extension.toUpperCase()}`, exact: true }).click();
+  let path = '';
+  await expect
+    .poll(
+      () => {
+        const matches = existsSync(exportRoot)
+          ? readdirSync(exportRoot).filter((name) => name.endsWith(`.${extension}`))
+          : [];
+        path =
+          matches
+            .map((name) => join(exportRoot, name))
+            .find((candidate) => {
+              const currentDigest = digest(candidate);
+              return !previous.has(candidate) || previous.get(candidate) !== currentDigest;
+            }) ?? '';
+        return path;
+      },
+      { timeout: 120_000 },
+    )
+    .not.toBe('');
+  return path;
+};
+
+/**
+ * The Parameters pane is built from the kernel's own parse of the source it
+ * watches, so the declarations it lists witness which bytes the kernel read.
+ * `dependentSource` moves `depth` out of `Params` and into `dimensions.py`.
+ */
+const expectDependentParameterSchema = async (page: Page): Promise<void> => {
+  await page.keyboard.press('Control+x');
+  await expectVisible(page.getByText('Parameters', { exact: true }), 30_000);
+  await expectVisible(page.getByLabel('Input for Width').first(), 60_000);
+  await expectVisible(page.getByLabel('Input for Height').first(), 60_000);
+  await expectVisible(page.getByLabel('Input for Gap').first(), 60_000);
+  await expectCount(page.getByLabel('Input for Depth'), 0, 60_000);
+};
+
+const validateStep = (path: string): readonly number[] => {
+  const resourceRoot = resolve(workspaceRoot, `apps/desktop/resources/python/${process.platform}-${process.arch}`);
+  const manifest = JSON.parse(readFileSync(join(resourceRoot, 'tau-runtime-manifest.json'), 'utf8')) as {
+    readonly pythonRelativePath: string;
+  };
+  const python = resolve(resourceRoot, manifest.pythonRelativePath);
+  const script =
+    'import json,sys;from build123d import import_step;s=import_step(sys.argv[1]);b=s.bounding_box();print(json.dumps({"valid":s.is_valid,"size":[b.size.X,b.size.Y,b.size.Z]}))';
+  const result = spawnSync(python, ['-I', '-B', '-c', script, path], {
+    encoding: 'utf8',
+    env: { LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  const parsed = JSON.parse(result.stdout) as { readonly valid: boolean; readonly size: readonly number[] };
+  expect(parsed.valid).toBe(true);
+  return parsed.size;
+};
+
+const openFirstProjectCardPreview = async (page: Page): Promise<Locator> => {
+  await page.getByRole('link', { name: 'Projects', exact: true }).click();
+  await page.waitForURL((url) => url.pathname === '/projects', { timeout: 60_000 });
+  await expectVisible(page.getByPlaceholder('Search projects…'), 60_000);
+  const card = page
+    .locator('[data-slot="card"]')
+    .filter({ has: page.getByRole('button', { name: 'Preview model' }) })
+    .first();
+  const toggle = card.getByRole('button', { name: 'Preview model' });
+  await expectVisible(toggle, 60_000);
+  await toggle.click();
+  return card;
+};
+
+let session: DesktopSession | undefined;
+let fixture: GatewayFixture | undefined;
+let seededEmail: string | undefined;
+
+afterEach(async () => {
+  await session?.close();
+  session = undefined;
+  await fixture?.close();
+  fixture = undefined;
+  if (seededEmail) {
+    await deleteTauTestUser(seededEmail);
+    seededEmail = undefined;
+  }
+});
+
+test('boots the packaged desktop app with no endpoint environment', async () => {
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') {
+    return;
+  }
+  session = await launchDesktopApp({
+    token: 'unused',
+    packaged: true,
+    useProductionEndpointDefaults: true,
+    env: { TAU_E2E_DISABLE_CREDENTIAL_PERSISTENCE: '1' },
+  });
+  const environment = await session.page.evaluate(
+    () => (globalThis as typeof globalThis & { readonly ENV?: Readonly<Record<string, string>> }).ENV,
+  );
+  expect(environment).toMatchObject({
+    TAU_API_URL: 'https://api.tau.new',
+    TAU_WEBSOCKET_URL: 'wss://api.tau.new',
+    TAU_FRONTEND_URL: 'https://tau.new',
+  });
+  await expectCount(session.page.getByText('Application Error', { exact: true }), 0);
+});
+
+// 600 s for the loop, plus `firstNativeRenderMilliseconds` for a first-use download on a cold cache.
+test('[completed-artifact] runs the Build123d filesystem, parameter, topology, watcher, viewer, and STEP loop', async () => {
+  const existingWorkerPids = new Set(nativeWorkers().map(({ pid }) => pid));
+  const account = tauTestAccount('build123d');
+  seededEmail = account.email;
+  const token = await seedTauTestUser(account);
+  fixture = await startGatewayFixture({ targetFile: 'main.py', content: build123dSource });
+  /* The package, whose STEP export and worker shutdown are the product's. The app ships no Build123d closure: the
+   * fixture copies the suite's prepared one into the store, or, on a cold cache, the viewer downloads it on first use
+   * (`expectFirstNativeRender`). */
+  session = await launchDesktopApp({
+    token,
+    packaged: true,
+    env: { TAU_E2E_DISABLE_CREDENTIAL_PERSISTENCE: '1' },
+  });
+  const { page } = session;
+  const rendererErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      rendererErrors.push(message.text());
+    }
+  });
+  await fixture.routeThrough(page);
+
+  try {
+    await expectVisible(page.locator('[aria-label="Ask Tau to build anything..."]'), 120_000);
+    await authenticatePackagedDesktop(session, token);
+    await expectSignedIn(page);
+    await selectKernel(page, 'Build123d');
+    await connectPickedFolder(session);
+    await selectChatModel(page, gatewayFixtureModelName);
+
+    const slug = await submitPrompt(page, 'Create the labeled Build123d assembly.');
+    const sourcePath = await waitForProjectOnDisk(session.pickedDirectory, slug, { extension: '.py' });
+    const projectRoot = join(session.pickedDirectory, slug);
+    await expect.poll(() => readFileSync(sourcePath, 'utf8'), { timeout: 120_000 }).toBe(build123dSource);
+    await expectVisible(page.getByText(gatewayFixtureFinalText, { exact: true }), 420_000);
+    await expectCount(page.getByText(/ROOT_UNAVAILABLE/u), 0);
+    await expectCount(page.getByText('File not found', { exact: true }), 0);
+    await expectCount(page.getByText('Native code enabled', { exact: true }), 0);
+    await expectFirstNativeRender(page);
+    await expectVisible(page.getByTestId('cad-viewer-canvas-region').locator('canvas'), 120_000);
+
+    writeFileSync(sourcePath, failingBuild123dSource, 'utf8');
+    const failureIssues = await openViewerIssues(page);
+    const editorFailure = failureIssues.getByText(failureSentinel, { exact: true });
+    await expectVisible(editorFailure, 120_000);
+    await expectCount(editorFailure, 1);
+    await expectCount(page.getByRole('alert', { name: 'CAD runtime error' }), 0);
+    await expectVisible(page.getByTestId('cad-viewer-canvas-region').locator('canvas'), 30_000);
+
+    const card = await openFirstProjectCardPreview(page);
+    await expectAlertText(card, failureSentinel);
+    writeFileSync(sourcePath, build123dSource, 'utf8');
+    await expectVisible(card.locator('canvas'), 120_000);
+    await expectCount(card.getByRole('alert', { name: 'CAD runtime error' }), 0, 120_000);
+    const projectLink = card.getByRole('link');
+    await projectLink.focus();
+    await projectLink.press('Enter');
+    await page.waitForURL(/\/w\/[^/]+\/[^/?]+/u, { timeout: 60_000 });
+    await expectVisible(page.getByTestId('cad-viewer-canvas-region').locator('canvas'), 120_000);
+
+    await ensureFilesPane(page);
+    await expectVisible(fileTreeItemOf(page, 'main.py'), 60_000);
+
+    await page.keyboard.press('Control+x');
+    await expectVisible(page.getByText('Parameters', { exact: true }), 30_000);
+    const width = page.getByLabel('Input for Width').first();
+    await expectVisible(width, 60_000);
+    await expectVisible(page.getByLabel('Input for Depth').first(), 60_000);
+    const beforeParameter = await renderCycleCount(page);
+    await width.fill('30');
+    await width.press('Tab');
+    await expectRenderCycleSince(page, beforeParameter);
+    await expectGeometryFramed(page);
+
+    await pressModelTreeShortcut(page);
+    await expectVisible(page.getByText('Model tree', { exact: true }), 30_000);
+    await expectVisible(page.getByRole('button', { name: 'Left', exact: true }), 60_000);
+    await expectVisible(page.getByRole('button', { name: 'Right', exact: true }), 60_000);
+
+    writeFileSync(join(projectRoot, 'dimensions.py'), 'def depth():\n    return 8.0\n', 'utf8');
+    const beforeDependency = await renderCycleCount(page);
+    writeFileSync(sourcePath, dependentSource, 'utf8');
+    await expectRenderCycleSince(page, beforeDependency);
+    await expectDependentParameterSchema(page);
+    await expectGeometryFramed(page);
+
+    /* The imported module's only observable is the depth it returns, which the
+     * STEP export below reads back as `size[1]`. */
+    const beforeImportedEdit = await renderCycleCount(page);
+    writeFileSync(join(projectRoot, 'dimensions.py'), 'def depth():\n    return 12.0\n', 'utf8');
+    await expectRenderCycleSince(page, beforeImportedEdit);
+    await expectGeometryFramed(page);
+
+    await page.getByRole('button', { name: 'Export', exact: true }).click();
+    await expectVisible(page.getByRole('region', { name: 'Format' }), 30_000);
+    await page.getByRole('button', { name: 'Export format' }).click();
+    await page.locator('[cmdk-item][data-value="step"]').click();
+    await expectVisible(page.getByText('Export options', { exact: true }), 30_000);
+    expect(await page.getByText(/unsafe-eval/u).allTextContents()).toEqual([]);
+    expect(rendererErrors.some((message) => message.includes('unsafe-eval'))).toBe(false);
+    await page.getByLabel('Download to disk').click();
+    await page.getByLabel('Save to project').click();
+    await page.getByRole('button', { name: 'Export STEP', exact: true }).click();
+    const stepPath = join(projectRoot, 'exports/assembly.step');
+    await expect
+      .poll(() => (existsSync(stepPath) ? readFileSync(stepPath).subarray(0, 13).toString() : ''), {
+        timeout: 120_000,
+      })
+      .toBe('ISO-10303-21;');
+    const size = validateStep(stepPath);
+    expect(size[0]).toBeCloseTo(64, 7);
+    expect(size[1]).toBeCloseTo(12, 7);
+    expect(size[2]).toBeCloseTo(10, 7);
+
+    if (process.platform !== 'win32') {
+      const workers = nativeWorkers().filter(({ pid }) => !existingWorkerPids.has(pid));
+      expect(workers.length).toBeGreaterThan(0);
+      /* A real quit, as the PicoGK row below: the fixture's own disposal is `app.exit`, which skips the shutdown
+       * that removes each worker's temporary root. */
+      const electronProcess = session.application.process();
+      await expect
+        .poll(
+          async () =>
+            page.evaluate(() => {
+              const shell = globalThis as typeof globalThis & { tau?: { quit?: { isReady(): boolean } } };
+              return shell.tau?.quit?.isReady() ?? false;
+            }),
+          { timeout: 120_000 },
+        )
+        .toBe(true);
+      await session.application.evaluate(({ app }) => {
+        app.quit();
+      });
+      await expect.poll(() => electronProcess.exitCode, { timeout: 15_000 }).toBe(0);
+      expect(electronProcess.signalCode).toBeNull();
+      await session.close();
+      session = undefined;
+      await expect
+        .poll(() => workers.every(({ pid }) => !nativeWorkers().some((worker) => worker.pid === pid)), {
+          timeout: 10_000,
+        })
+        .toBe(true);
+      await expect
+        .poll(() => workers.every(({ temporaryRoot }) => !existsSync(temporaryRoot)), { timeout: 10_000 })
+        .toBe(true);
+    }
+  } catch (error) {
+    await session?.capture('build123d-failure');
+    throw error;
+  }
+}, 1_200_000);
+
+test('renders a persisted Replicad project card without relaxing the Electron CSP', async () => {
+  const account = tauTestAccount('replicad-preview');
+  seededEmail = account.email;
+  const token = await seedTauTestUser(account);
+  session = await launchDesktopApp({ token });
+  const { page } = session;
+  const rendererErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      rendererErrors.push(message.text());
+    }
+  });
+  fixture = await installGatewayFixture(page, { targetFile: 'main.ts', content: replicadSource });
+
+  try {
+    await expectVisible(page.locator('[aria-label="Ask Tau to build anything..."]'), 120_000);
+    if (desktopE2ECompletedArtifact) {
+      await authenticatePackagedDesktop(session, token);
+    }
+    await expectSignedIn(page);
+    await selectKernel(page, 'Replicad');
+    await connectPickedFolder(session);
+    await selectChatModel(page, gatewayFixtureModelName);
+
+    const slug = await submitPrompt(page, 'Create the Replicad cylinder.');
+    const sourcePath = await waitForProjectOnDisk(session.pickedDirectory, slug, { extension: '.ts' });
+    await expect.poll(() => readFileSync(sourcePath, 'utf8'), { timeout: 120_000 }).toBe(replicadSource);
+    await expectVisible(page.getByText(gatewayFixtureFinalText, { exact: true }), 420_000);
+    await expectVisible(page.getByTestId('cad-viewer-canvas-region').locator('canvas'), 120_000);
+
+    const card = await openFirstProjectCardPreview(page);
+    await expectVisible(card.locator('canvas'), 120_000);
+    expect(rendererErrors.some((message) => message.includes('unsafe-eval'))).toBe(false);
+    await expectCount(card.getByRole('alert', { name: 'CAD runtime error' }), 0);
+  } catch (error) {
+    await session.capture('replicad-preview-failure');
+    throw error;
+  }
+});
+
+// 900 s for the row, plus `firstNativeRenderMilliseconds` for a first-use download on a cold cache.
+test('[completed-artifact] runs packaged PicoGK C# through filesystem, topology, failures, export, and cleanup', async () => {
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') {
+    return;
+  }
+  let observedProjectRoot: string | undefined;
+  const account = tauTestAccount('picogk');
+  seededEmail = account.email;
+  const token = await seedTauTestUser(account);
+  fixture = await startGatewayFixture({ targetFile: 'main.cs', content: picogkSource });
+  session = await launchDesktopApp({
+    token,
+    packaged: true,
+    env: {
+      PATH: '/usr/bin:/bin',
+      TAU_E2E_KEEP_PATH: '1',
+      TAU_DEBUG: 'true',
+      /* An ad-hoc package signature cannot access Electron's prior Keychain
+       * item unattended. Memory-only custody still exercises the production
+       * `tau://auth/callback` exchange without weakening or replacing
+       * safeStorage. */
+      TAU_E2E_DISABLE_CREDENTIAL_PERSISTENCE: '1',
+    },
+  });
+  const { page } = session;
+  const rendererErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      rendererErrors.push(message.text());
+    }
+  });
+  await fixture.routeThrough(page);
+
+  try {
+    await expectVisible(page.locator('[aria-label="Ask Tau to build anything..."]'), 120_000);
+    await authenticatePackagedDesktop(session, token);
+    await expectSignedIn(page);
+    await selectKernel(page, 'PicoGK');
+    await connectPickedFolder(session);
+    await selectChatModel(page, gatewayFixtureModelName);
+
+    const slug = await submitPrompt(page, 'Create the asymmetric PicoGK assembly.');
+    const sourcePath = await waitForProjectOnDisk(session.pickedDirectory, slug, { extension: '.cs' });
+    const projectRoot = join(session.pickedDirectory, slug);
+    observedProjectRoot = projectRoot;
+    await expect.poll(() => readFileSync(sourcePath, 'utf8'), { timeout: 120_000 }).toBe(picogkSource);
+    await expectVisible(page.getByText(gatewayFixtureFinalText, { exact: true }), 420_000);
+    await expectCount(page.getByText('Native code enabled', { exact: true }), 0);
+    await expectFirstNativeRender(page);
+    await expectVisible(page.getByTestId('cad-viewer-canvas-region').locator('canvas'), 120_000);
+
+    await ensureFilesPane(page);
+    const sourceItem = fileTreeItemOf(page, 'main.cs');
+    await expectVisible(sourceItem, 60_000);
+    await sourceItem.click();
+    await expectVisible(page.locator('.cm-editor'), 60_000);
+    await expect
+      .poll(
+        async () =>
+          page
+            .locator('.cm-editor .cm-line span')
+            .evaluateAll((tokens: HTMLElement[]) => new Set(tokens.map((token) => getComputedStyle(token).color)).size),
+        { timeout: 30_000 },
+      )
+      .toBeGreaterThan(1);
+
+    await page.keyboard.press('Control+x');
+    await expectVisible(page.getByText('Parameters', { exact: true }), 30_000);
+    const radius = page.getByLabel('Input for Radius').first();
+    await expectVisible(radius, 60_000);
+    await expectVisible(page.getByLabel('Input for Voxel size').first(), 60_000);
+    const beforeParameter = await renderCycleCount(page);
+    await radius.fill('16');
+    await radius.press('Tab');
+    await expectRenderCycleSince(page, beforeParameter);
+
+    await pressModelTreeShortcut(page);
+    const body = page.locator('[data-model-component-row]').getByRole('button', { name: 'Shape 1', exact: true });
+    const sphere = page.locator('[data-model-component-row]').getByRole('button', { name: 'Shape 2', exact: true });
+    await expectVisible(body, 60_000);
+    await expectVisible(sphere, 60_000);
+    const bodyMaterial = await body.locator('[data-slot="material-swatch"]').getAttribute('style');
+    expect(bodyMaterial).toContain('background');
+    await sphere.click();
+    await expect.poll(async () => sphere.getAttribute('aria-pressed')).toBe('true');
+
+    await page.evaluate(() => {
+      const target = globalThis as typeof globalThis & {
+        __tauPicoGkStates?: string[];
+        __tauPicoGkObserver?: MutationObserver;
+      };
+      const states: string[] = [];
+      target.__tauPicoGkStates = states;
+      let previous = 'idle';
+      const capture = (): void => {
+        const status = [...document.querySelectorAll('span')].find((element) => {
+          const text = element.textContent.trim().toLowerCase();
+          return text === 'buffering…' || text === 'rendering…';
+        });
+        const state = status?.textContent.trim().toLowerCase();
+        const next = state ?? 'idle';
+        if (next !== previous) {
+          states.push(next);
+          previous = next;
+        }
+      };
+      target.__tauPicoGkObserver?.disconnect();
+      target.__tauPicoGkObserver = new MutationObserver(capture);
+      target.__tauPicoGkObserver.observe(document.body, { childList: true, characterData: true, subtree: true });
+      capture();
+    });
+    writeFileSync(sourcePath, multiStepPicogkSource, 'utf8');
+    /* Document evaluation and view rendering may each produce a cycle.
+     * The observer must retain only complete busy-to-ready cycles. */
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const states = (globalThis as typeof globalThis & { __tauPicoGkStates?: string[] }).__tauPicoGkStates ?? [];
+            return (
+              states.length >= 2 &&
+              states.at(-1) === 'idle' &&
+              states.every((state, index) => state === (index % 2 === 0 ? 'rendering…' : 'idle'))
+            );
+          }),
+        { timeout: 120_000 },
+      )
+      .toBe(true);
+    const multiStepStates = await page.evaluate(() => {
+      const target = globalThis as typeof globalThis & {
+        __tauPicoGkStates?: string[];
+        __tauPicoGkObserver?: MutationObserver;
+      };
+      target.__tauPicoGkObserver?.disconnect();
+      return target.__tauPicoGkStates ?? [];
+    });
+    expect(multiStepStates.length).toBeGreaterThanOrEqual(2);
+    expect(multiStepStates).toEqual(multiStepStates.map((_, index) => (index % 2 === 0 ? 'rendering…' : 'idle')));
+    expect(multiStepStates.at(-1)).toBe('idle');
+
+    // Observe a fresh lifecycle before restoring bytes: the previous scene is
+    // already idle, and its material remains visible while native work runs.
+    await page.evaluate(() => {
+      const target = globalThis as typeof globalThis & {
+        __tauPicoGkStates?: string[];
+        __tauPicoGkObserver?: MutationObserver;
+      };
+      if (!target.__tauPicoGkStates || !target.__tauPicoGkObserver) {
+        throw new Error('PicoGK render lifecycle observer was not installed.');
+      }
+      target.__tauPicoGkStates.length = 0;
+      target.__tauPicoGkObserver.observe(document.body, { childList: true, characterData: true, subtree: true });
+    });
+    writeFileSync(sourcePath, picogkSource, 'utf8');
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const target = globalThis as typeof globalThis & { __tauPicoGkStates?: string[] };
+            const states = target.__tauPicoGkStates ?? [];
+            return states.some((state) => state !== 'idle') && states.at(-1) === 'idle';
+          }),
+        { timeout: 120_000 },
+      )
+      .toBe(true);
+    await page.evaluate(() => {
+      const target = globalThis as typeof globalThis & { __tauPicoGkObserver?: MutationObserver };
+      target.__tauPicoGkObserver?.disconnect();
+    });
+    await expect
+      .poll(async () => body.locator('[data-slot="material-swatch"]').getAttribute('style'))
+      .toBe(bodyMaterial);
+    await expectGeometryFramed(page);
+
+    const initialGlbPath = await exportToProject(page, projectRoot, 'glb');
+    const initialGlb = Uint8Array.from(readFileSync(initialGlbPath));
+    validateGlbData(initialGlb);
+    const initialBounds = getBoundingBoxFromInspect(await getInspectReport(initialGlb));
+    expect(initialBounds).toBeDefined();
+
+    const beforeDependencySetup = await renderCycleCount(page);
+    writeFileSync(join(projectRoot, 'ShapeFactory.cs'), picogkHelperSource(2), 'utf8');
+    writeFileSync(join(projectRoot, 'radius-scale.txt'), '0.5\n', 'utf8');
+    writeFileSync(sourcePath, picogkDependentSource, 'utf8');
+    await expectRenderCycleSince(page, beforeDependencySetup);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1500);
+    });
+    await expectCount(page.getByRole('alert', { name: 'CAD runtime error' }), 0, 120_000);
+    const beforeHelperEdit = await renderCycleCount(page);
+    writeFileSync(join(projectRoot, 'ShapeFactory.cs'), picogkHelperSource(3), 'utf8');
+    await expectRenderCycleSince(page, beforeHelperEdit);
+    const beforeAssetEdit = await renderCycleCount(page);
+    writeFileSync(join(projectRoot, 'radius-scale.txt'), '0.75\n', 'utf8');
+    await expectRenderCycleSince(page, beforeAssetEdit);
+    await expectGeometryFramed(page);
+
+    writeFileSync(
+      join(projectRoot, 'ShapeFactory.cs'),
+      picogkHelperSource(3).replace('radius * scale', 'MissingPicoGkSymbol * scale'),
+      'utf8',
+    );
+    const issues = await openViewerIssues(page);
+    const compileFailure = issues.getByText("The name 'MissingPicoGkSymbol' does not exist in the current context", {
+      exact: true,
+    });
+    await expectVisible(compileFailure, 120_000);
+    await expectCount(issues, 1);
+    await expectCount(compileFailure, 1);
+    await expectCount(issues.getByRole('button', { name: /^ShapeFactory\.cs:\d+:\d+$/u }), 1);
+    const card = await openFirstProjectCardPreview(page);
+    await expectAlertText(card, 'MissingPicoGkSymbol');
+    writeFileSync(join(projectRoot, 'ShapeFactory.cs'), picogkHelperSource(3), 'utf8');
+    await expectVisible(card.locator('canvas'), 120_000);
+    await expectCount(card.getByRole('alert', { name: 'CAD runtime error' }), 0, 120_000);
+    await card.getByRole('link').focus();
+    await card.getByRole('link').press('Enter');
+    await page.waitForURL(/\/w\/[^/]+\/[^/?]+/u, { timeout: 60_000 });
+    await expectVisible(page.getByTestId('cad-viewer-canvas-region').locator('canvas'), 120_000);
+
+    writeFileSync(sourcePath, failingPicogkRuntimeSource, 'utf8');
+    /* The project route remounted the viewer bar, whose issues list starts closed. */
+    const runtimeIssues = await openViewerIssues(page);
+    const runtimeFailure = runtimeIssues.getByText(picogkRuntimeFailure, { exact: true });
+    await expectVisible(runtimeFailure, 120_000);
+    await expectCount(runtimeIssues, 1);
+    await expectCount(runtimeFailure, 1);
+    writeFileSync(sourcePath, picogkSource, 'utf8');
+    await expectCount(runtimeFailure, 0, 120_000);
+    await expectGeometryFramed(page);
+
+    const stlPath = await exportToProject(page, projectRoot, 'stl');
+    expect(readFileSync(stlPath).byteLength).toBeGreaterThan(84);
+
+    const workersBeforeReload = ownedPicoGkWorkers(session.application.process().pid);
+    expect(workersBeforeReload).not.toHaveLength(0);
+    const renderingStatus = page.getByText('rendering…', { exact: true });
+    await expectCount(renderingStatus, 0, 120_000);
+    writeFileSync(sourcePath, slowPicogkSource, 'utf8');
+    await expectVisible(renderingStatus, 120_000);
+
+    writeFileSync(sourcePath, picogkSource, 'utf8');
+    await page.reload();
+    await expectCount(page.getByRole('button', { name: 'Revoke', exact: true }), 0);
+    await expectVisible(page.getByTestId('cad-viewer-canvas-region').locator('canvas'), 120_000);
+    await expectGeometryFramed(page);
+    await expect
+      .poll(() => workersBeforeReload.every(({ pid }) => !picogkWorkers().some((worker) => worker.pid === pid)), {
+        timeout: 120_000,
+      })
+      .toBe(true);
+    expect(session.application.windows()).toHaveLength(1);
+    const processes = spawnSync('ps', ['-axww', '-o', 'pid=,ppid=,command='], { encoding: 'utf8' });
+    expect(processes.status, processes.stderr).toBe(0);
+    expect(
+      desktopDescendants(session.application.process().pid, processes.stdout)
+        .map(({ command }) => command)
+        .join('\n'),
+    ).not.toMatch(/PicoGK.*Viewer/u);
+    expect(rendererErrors.some((message) => message.includes('unsafe-eval'))).toBe(false);
+
+    const captureDirectory = await session.capture('picogk-packaged-success');
+    const electronProcess = session.application.process();
+    const workers = ownedPicoGkWorkers(electronProcess.pid);
+    writeFileSync(
+      join(captureDirectory, 'picogk-shutdown-owners.json'),
+      JSON.stringify({ electronPid: electronProcess.pid, workers }, null, 2),
+    );
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const shell = globalThis as typeof globalThis & { tau?: { quit?: { isReady(): boolean } } };
+            return shell.tau?.quit?.isReady() ?? false;
+          }),
+        { timeout: 120_000 },
+      )
+      .toBe(true);
+    await session.application.evaluate(({ app }) => {
+      app.quit();
+    });
+    await expect.poll(() => electronProcess.exitCode, { timeout: 15_000 }).toBe(0);
+    expect(electronProcess.signalCode).toBeNull();
+    await session.close();
+    session = undefined;
+    await expect
+      .poll(() => workers.every(({ pid }) => !picogkWorkers().some((worker) => worker.pid === pid)), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    await expect
+      .poll(() => workers.every(({ temporaryRoot }) => !existsSync(temporaryRoot)), { timeout: 15_000 })
+      .toBe(true);
+  } catch (error) {
+    if (session) {
+      const activeSession = session;
+      try {
+        const captureDirectory = await activeSession.capture('picogk-packaged-failure');
+        const electronPid = activeSession.application.process().pid;
+        if (electronPid === undefined) {
+          throw new Error('Electron PID unavailable; refusing worker filesystem capture.');
+        }
+        const workers = ownedPicoGkWorkers(electronPid);
+        const visibleParameters = await page.getByRole('spinbutton').evaluateAll((inputs: HTMLInputElement[]) =>
+          inputs
+            .filter((input) => input.checkVisibility())
+            .map((input) => ({
+              label: input.getAttribute('aria-label'),
+              value: input.value,
+            })),
+        );
+        writeFileSync(
+          join(captureDirectory, 'picogk-input-artifacts.json'),
+          JSON.stringify(
+            {
+              electronPid,
+              requestParameters: 'unavailable',
+              actorMetadata: 'unavailable',
+              workerResponseDescriptors: 'unavailable; only existing artifact files are captured',
+              visibleParameters,
+              project: observedProjectRoot
+                ? capturePicoGkFiles(observedProjectRoot, join(captureDirectory, 'project'), false)
+                : [],
+              workers: workers.map((worker) => ({
+                ...worker,
+                workspace: capturePicoGkFiles(
+                  join(worker.temporaryRoot, 'workspace'),
+                  join(captureDirectory, `worker-${worker.pid}`, 'workspace'),
+                  false,
+                ),
+                artifacts: capturePicoGkFiles(
+                  join(worker.temporaryRoot, 'artifacts'),
+                  join(captureDirectory, `worker-${worker.pid}`, 'artifacts'),
+                  true,
+                ),
+              })),
+            },
+            null,
+            2,
+          ),
+        );
+      } catch (captureError) {
+        console.error('PicoGK failure evidence capture failed:', captureError);
+      }
+    }
+    throw error;
+  }
+}, 1_500_000);

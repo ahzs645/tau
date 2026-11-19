@@ -1,24 +1,24 @@
-import type { SupportedImportFormat, SupportedExportFormat } from '@taucad/converter';
-import { formatConfigurations, isInputFormatSupported } from '@taucad/converter';
+import { formatConfigurations } from '@taucad/types/constants';
 import type { FileExtension } from '@taucad/types';
-import { getFileExtension } from '#utils/filesystem.utils.js';
+import { getFileExtension } from '@taucad/ui-core/utils/filesystem.utils';
+import type { ConverterExportFormat, ConverterImportFormat } from '@taucad/converter/runtime';
 
 /**
  * Extract file format from filename extension
  */
-export function getFormatFromFilename(filename: string): SupportedImportFormat {
+export function getFormatFromFilename(filename: string): ConverterImportFormat {
   const extension = getFileExtension(filename);
 
   if (!extension) {
     throw new Error('File has no extension');
   }
 
-  if (!isInputFormatSupported(extension)) {
-    throw new Error(`Unsupported file format: .${extension}`);
-  }
-
-  return extension;
+  return extension as ConverterImportFormat;
 }
+
+/** Whether a runtime capability has user-facing converter metadata. */
+export const isConfiguredConverterFormat = (format: string): format is FileExtension =>
+  Object.hasOwn(formatConfigurations, format);
 
 /**
  * Get human-readable display name for format
@@ -45,6 +45,6 @@ export function formatFileSize(bytes: number): string {
 /**
  * Get file extension for output format
  */
-export function getExtensionForFormat(format: SupportedExportFormat): string {
+export function getExtensionForFormat(format: ConverterExportFormat): string {
   return format;
 }

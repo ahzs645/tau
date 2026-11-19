@@ -1,0 +1,1024 @@
+/**
+ * `RevisionPort` — the one substrate seam every Tau host implements.
+ *
+ * A revision is an immutable, content-addressed snapshot of one workspace tree
+ * with its parents and provenance, and its id **is** its Git commit id, so the
+ * same tree and the same headers name the same revision on every host. `log`
+ * and `diff` are deliberately tree-free: they answer questions about the graph
+ * without materializing any tree, so a revision pane never pays for one.
+ *
+ * A conflict is a value in this graph, not a failed operation. An adapter that
+ * advertises `conflictsAsValues` records a conflicted revision and reports it;
+ * a conflicted revision never leaves the host that created it.
+ */
+
+import type { ImmutableRevisionTree, RevisionId } from '#algorithms/index.js';
+import type { RecordedProvenance, RevisionActor, RevisionProvenance, RevisionSummary } from '#revision-authority.js';
+import type {
+  RevisionDiffKind as ComparisonDiffKind,
+  RevisionDiffEntry as ComparisonDiffEntry,
+} from '#algorithms/revision-comparison.js';
+import type { ObjectFormat } from '#object-hash.js';
+import type { RevisionCommitAuthor } from '#revision-headers.js';
+/** Which of the two remote kinds a project's remote is. @public */
+export type RemoteKind = 'tau' | 'git';
+
+/** One remote, as git's remotes list holds it. @public */
+export type Remote = Readonly<{
+  name: string;
+  url: string;
+  kind: RemoteKind;
+  provider?: 'github';
+  repositoryId?: string;
+  fetchOnly?: boolean;
+}>;
+
+/** Which implementation is behind one port. @public */
+export type RevisionEngine = 'isomorphic-git' | 'native-git' | 'remote';
+
+/** Runtime facts an adapter reports about itself and its repository. @public */
+export type RevisionEngineDescriptor = Readonly<{
+  engine: RevisionEngine;
+  /** Engine version string, or `'unknown'` when the engine has none. */
+  version: string;
+  /** Recorded repository object hash. Never assumed by a caller (I-HASH). */
+  objectFormat: ObjectFormat;
+  /** Every revision carries a `change-id` from creation. */
+  changeIds: true;
+  /** Whether a conflicted revision can be recorded rather than refused. */
+  conflictsAsValues: boolean;
+  /** Whether `fetch` and `push` address a real remote. */
+  transports: boolean;
+  /** Whether the engine can fan in more than two parents in one revision. */
+  nWayMerge: boolean;
+  /** Whether `listCheckouts`, `addCheckout` and `removeCheckout` are implemented. */
+  checkouts: boolean;
+  /**
+   * Whether this store records a tracked large object as a git-LFS pointer.
+   *
+   * A caller that computes a tree id without writing it has to hash what the
+   * store will record, pointers included (I5) — so the cut asks rather than
+   * assumes. True on both legs since W11b: the decision is host-neutral
+   * (`lfs.ts`) and only the transport behind it differs.
+   */
+  largeObjects: boolean;
+  /**
+   * Whether the repository matches its attributes case-insensitively
+   * (`core.ignoreCase`, a native host on a case-insensitive disk). The cut's
+   * clean folds case exactly when this says so, so its prediction is the
+   * host's own tree (I5). Absent means case-sensitive, as the browser is.
+   */
+  ignoreCase?: boolean;
+  /**
+   * Whether a checkout keeps each large object's bytes as a file once the
+   * store holds it (D9: a disk host keeps a physical copy). Large-object
+   * adoption, which replaces such a file by its pointer, then adopts nothing.
+   */
+  keepsLargeObjectFiles?: boolean;
+}>;
+
+/** Durable storage evidence for one revision. `objectFormat` travels with it. @public */
+export type RevisionReceipt = Readonly<{
+  engine: RevisionEngine;
+  /** Lowercase hexadecimal commit id. Equal to the revision id. */
+  commitId: string;
+  /** Rendered Jujutsu change id. */
+  changeId: string;
+  objectFormat: ObjectFormat;
+  conflicted: boolean;
+}>;
+
+/** One revision's headers and provenance, without its tree. @public */
+export type RevisionRecord = Readonly<{
+  id: RevisionId;
+  parents: readonly RevisionId[];
+  /**
+   * Object id of the tree this revision carries — the tree, not the commit.
+   * Two turns whose bytes are identical share it and differ in their ids, which
+   * is what makes "did this turn change anything" answerable without reading a
+   * single blob.
+   */
+  treeId: string;
+  provenance: RecordedProvenance;
+  summary: RevisionSummary;
+  receipt: RevisionReceipt;
+}>;
+
+/**
+ * One graph node as `log` reports it. Tree-free by contract: the tree's id is
+ * on the commit the walk already read, and no tree object is ever opened.
+ *
+ * @public
+ */
+export type RevisionLogEntry = Readonly<{
+  id: RevisionId;
+  changeId: string;
+  parents: readonly RevisionId[];
+  /** Object id of the tree this revision carries, as {@link RevisionRecord.treeId}. */
+  treeId: string;
+  summary: RevisionSummary;
+  provenance: RecordedProvenance;
+  /** The commit's own git author name, on a commit Tau did not record (B3); absent on one it did. */
+  authorName?: string;
+  /**
+   * The Tau account the commit's author address names, on a commit Tau did not
+   * record: one made with git under that person's Tau no-reply address. Absent
+   * on a recorded commit and on any other address.
+   */
+  authorAccountId?: string;
+  conflicted: boolean;
+}>;
+
+/** How one path changed between two revisions. @public */
+export type RevisionDiffKind = ComparisonDiffKind;
+
+/** One changed path as `diff` reports it. Tree-free by contract: paths, never content. @public */
+export type RevisionDiffEntry = ComparisonDiffEntry;
+
+/** One named ref and the revision it points at. @public */
+export type RevisionRef = Readonly<{
+  name: string;
+  head: RevisionId;
+}>;
+
+/**
+ * Where the live tree is: the branch it tracks, and that branch's head.
+ *
+ * Git's HEAD in spirit — a *symbolic* ref, so a turn recorded onto the branch
+ * moves the head with it and nothing has to be written twice.
+ *
+ * @public
+ */
+export type RevisionHead = Readonly<{
+  /** The branch the live tree is on. */
+  branch: string;
+  /** That branch's head, or `undefined` while the branch is still unborn. */
+  head: RevisionId | undefined;
+}>;
+
+/** Input for creating a revision store and, for ordinary projects, its generated setup files. @public */
+export type InitRevisionStoreInput = Readonly<{
+  /** Identity stamped on every revision this port writes. */
+  author: Readonly<{ name: string; email: string }>;
+  /** Extra generated ignore lines beyond the derived-content set. */
+  additionalIgnores?: readonly string[];
+  /** `false` initializes only control-plane storage for a reviewed remote bootstrap. */
+  createSetupFiles?: boolean;
+}>;
+
+/** Input for recording one revision. @public */
+export type WriteRevisionInput = Readonly<{
+  parents: readonly RevisionId[];
+  /**
+   * The tree to record, exactly as given unless
+   * {@link WriteRevisionInput.largeObjects} asks for the clean step.
+   *
+   * Required: a merge is computed by the caller, with `mergeRevisionTrees` from
+   * `@taucad/revisions/algorithms`, and the terms of an unresolved one arrive
+   * here as {@link WriteRevisionInput.conflict} — which is what keeps a conflict
+   * a value in the graph without either engine having to agree on a merge
+   * algorithm (I-CONF, EQ14).
+   */
+  tree: ImmutableRevisionTree;
+  /**
+   * Whether the store's large-object clean step runs on `tree` before it is
+   * recorded.
+   *
+   * Default `true`: a project tree is recorded as its `.gitattributes` says,
+   * which is `git add` honouring a clean filter. `false` records the tree byte
+   * for byte, as `git add --no-filters` would, and is what a record ref needs: a
+   * closed tree can never carry a `.gitattributes`, so a pointer written into
+   * one is a pointer no attribute names, that no stock clone can smudge and no
+   * plain remote can serve.
+   */
+  largeObjects?: boolean;
+  provenance: RevisionProvenance;
+  summary: RevisionSummary;
+  /**
+   * Conflicted term trees in Jujutsu's add/remove order with their labels.
+   * Only an adapter advertising `conflictsAsValues` accepts this, and only when
+   * the caller — not the engine — computed the conflict.
+   */
+  conflict?: Readonly<{ trees: readonly string[]; labels: readonly string[] }>;
+  /**
+   * The linked forge's no-reply identity for the person recording (D33), for
+   * the commit's git author line alone: the trailer never carries it (I3).
+   * Absent, the author is the Tau no-reply address the person's id gives.
+   */
+  commitAuthor?: RevisionCommitAuthor;
+}>;
+
+/** Input for one expected-old ref publication. @public */
+export type UpdateRevisionRefInput = Readonly<{
+  /**
+   * A branch name (`main`), or any other ref in full (`refs/tau/chats/c1`).
+   *
+   * The record set the design pushes lives outside `refs/heads`, and a port that
+   * could only name branches could not address half of what its own `push`
+   * moves — so a name beginning `refs/` is taken literally and every other name
+   * is a branch (W17).
+   */
+  name: string;
+  /** `undefined` means "this ref must be unborn". */
+  expectedHead: RevisionId | undefined;
+  /**
+   * The revision this ref must name. Omitted, the ref is **deleted** under the
+   * same expected-old check — a branch is a name for a head, so removing the
+   * name is the same operation as moving it, and the revisions it reached stay
+   * reachable as objects.
+   */
+  head?: RevisionId;
+}>;
+
+/** Outcome of one expected-old ref publication. @public */
+export type UpdateRevisionRefResult =
+  | Readonly<{
+      status: 'updated';
+      name: string;
+      previousHead: RevisionId | undefined;
+      /** `undefined` when the publication deleted the ref. */
+      head: RevisionId | undefined;
+    }>
+  | Readonly<{
+      status: 'conflicted';
+      name: string;
+      expectedHead: RevisionId | undefined;
+      actualHead: RevisionId | undefined;
+      /** `undefined` when the refused publication was a deletion. */
+      proposedHead: RevisionId | undefined;
+    }>;
+
+/** Input for a bounded graph walk. @public */
+export type RevisionLogInput = Readonly<{
+  /** Heads to walk back from. Every recorded revision when absent. */
+  heads?: readonly RevisionId[];
+  limit?: number;
+}>;
+
+/** Two heads to compare by reachability. @public */
+export type RevisionDivergenceInput = Readonly<{
+  head: RevisionId;
+  base: RevisionId;
+}>;
+
+/**
+ * How far two heads have gone apart, as `git rev-list --left-right --count
+ * head...base` counts it.
+ *
+ * @public
+ */
+export type RevisionDivergence = Readonly<{
+  /** Revisions reachable from `head` and not from `base`. */
+  ahead: number;
+  /** Revisions reachable from `base` and not from `head`. */
+  behind: number;
+}>;
+
+/** Input for a tree-free path diff. @public */
+export type RevisionDiffInput = Readonly<{
+  /** `undefined` compares against the empty tree. */
+  from: RevisionId | undefined;
+  to: RevisionId;
+}>;
+
+/**
+ * One fully-qualified ref on a remote, as the server advertises it.
+ *
+ * Full names (`refs/heads/main`), not branch names: the record set the design
+ * pushes lives outside `refs/heads` (`refs/tau/chats/*`), so a transport that
+ * spoke in branch names could not name half of what it moves.
+ *
+ * @public
+ */
+export type RemoteRef = Readonly<{ name: string; head: RevisionId }>;
+
+/** What one leg fetches, and where it puts it. @public */
+export type RevisionFetchInput = Readonly<{
+  /** Remote name from the store's own remotes list. */
+  remote: string;
+  /**
+   * Fully-qualified refs to fetch. Every advertised ref when absent.
+   *
+   * Each lands at `refs/remotes/<remote>/…` — the remote-tracking half of the
+   * store — so a fetch never moves a local branch and the merge that follows is
+   * the ordinary one (A22). A fetched tag also updates its same-named local tag
+   * when that name is unborn or still matches the previous remote-tracking
+   * value; an unpushed local tag move is preserved for leased publication.
+   */
+  refs?: readonly string[];
+  /**
+   * The listing {@link RevisionPort.listRemoteRefs} just answered for this
+   * remote, when the caller is fetching what it listed (R6). A port that kept
+   * that listing's advertisement fetches against it instead of asking the
+   * remote again; any other port, or any other value, asks as before. The
+   * caller owns its freshness: hand back only a listing taken for this fetch.
+   */
+  advertised?: readonly RemoteRef[];
+  /**
+   * Abandon this fetch when the caller cancels or its transfer budget expires.
+   *
+   * Browser transports pass it to their requests. Native Git terminates the
+   * command process group, including its LFS child, when the signal fires.
+   */
+  signal?: AbortSignal;
+  /** Maximum aggregate response-body bytes accepted by this fetch. */
+  maximumTransferBytes?: number;
+}>;
+
+/** The remote-tracking refs one fetch wrote. @public */
+export type RevisionFetchResult = Readonly<{
+  /** `refs/remotes/<remote>/<name>` entries, as this store now holds them. */
+  refs: readonly RemoteRef[];
+}>;
+
+/** Nonsecret identity recorded with a Git remote. @public */
+export type SetRevisionRemoteInput = Readonly<{
+  name: string;
+  url: string;
+  provider?: 'github';
+  /** Stable decimal GitHub repository id. */
+  repositoryId?: string;
+  /** Fetch and display this relationship, but never offer it a ref. */
+  fetchOnly?: boolean;
+}>;
+
+/**
+ * A remote that is not in git's config yet: the name it would be recorded
+ * under, which decides how a refusal is classified, and its address.
+ *
+ * @public
+ */
+export type RevisionRemoteAddress = Pick<SetRevisionRemoteInput, 'name' | 'url'>;
+
+/** One ref a push offers the remote. @public */
+export type RevisionPushRef = Readonly<{
+  /** Fully-qualified local ref, e.g. `refs/heads/main` or `refs/tau/chats/c1`. */
+  name: string;
+  /** The receiving ref, when it differs from {@link RevisionPushRef.name}. */
+  remoteName?: string;
+  /**
+   * The lease: what this host last observed the *remote* ref to be (D14's
+   * `push(expected)`, A32, S24).
+   *
+   * Three states, and the difference between the last two matters:
+   *
+   * - **Absent** — no lease. The remote's own fast-forward rule decides, which
+   *   is what a first push and the record set want.
+   * - **A revision** — refuse unless the remote ref is still exactly there. A
+   *   rewritten history (restore, amend) is allowed *because* nothing moved
+   *   underneath it; a ref that moved is refused with `leaseLost` and left
+   *   alone, which is the conflict signal A22 works from.
+   * - **`undefined`** — refuse unless the ref does not exist yet.
+   */
+  expected?: RevisionId | undefined;
+}>;
+
+/**
+ * Identity of one sync attempt's pushes (F5): any fresh object, kept for that attempt and dropped after it.
+ *
+ * An attempt offers the history set and the record set as separate pushes
+ * (A39). A leg that reads the remote's ref advertisement itself reads it once
+ * per session and keeps it current with what each push of the session moved,
+ * instead of once per push; a leg whose transport advertises on its own (native
+ * Git) ignores it. The object carries nothing: its identity is the key.
+ *
+ * @public
+ */
+export type RevisionPushSession = Readonly<Record<string, never>>;
+
+/**
+ * What one push asks of a remote.
+ *
+ * The caller splits the two sets (A39) and this is where the difference is
+ * expressed: the history set goes `atomic`, so `main` and its tags land
+ * together or not at all, and the record set does not, so a chat ref the server
+ * refuses never blocks a branch.
+ *
+ * @public
+ */
+export type RevisionPushInput = Readonly<{
+  /** Cancel byte transfers and prevent subsequent ref publication. */
+  signal?: AbortSignal;
+  remote: string;
+  /** Refuse a changed destination; pin every transfer to this approved URL. */
+  repositoryUrl?: string;
+  refs: readonly RevisionPushRef[];
+  /** All-or-nothing across the listed refs. Default `false`. */
+  atomic?: boolean;
+  /** Share one advertisement with the other pushes of the same sync attempt. Absent, this push reads its own. */
+  session?: RevisionPushSession;
+}>;
+
+/** How one ref of a push ended. @public */
+export type RevisionPushRefStatus = 'updated' | 'upToDate' | 'rejected';
+
+/** One ref's outcome, which is the unit a push reports in. @public */
+export type RevisionPushRefResult = Readonly<{
+  /** The local ref that was offered. */
+  name: string;
+  status: RevisionPushRefStatus;
+  /** What the remote holds for this ref now, when the push moved it. */
+  head: RevisionId | undefined;
+  /**
+   * Why it was refused, when it was. Never a credential.
+   *
+   * The server's own words where there are any — git's `--porcelain` text on
+   * the native leg, the remote's per-ref error on the browser leg — and
+   * `leaseLost` where the client refused the push itself, because a lease it
+   * held no longer matched the advertisement and nothing was offered.
+   */
+  reason?: string;
+}>;
+
+/** Every offered ref's outcome, in the order they were offered. @public */
+export type RevisionPushResult = Readonly<{ refs: readonly RevisionPushRefResult[] }>;
+
+/** The conflicted term trees and labels recorded on one revision. @public */
+export type RevisionConflict = Readonly<{
+  trees: readonly string[];
+  labels: readonly string[];
+}>;
+
+/**
+ * One place a project's files are: the live tree, or a linked copy on a branch
+ * of its own. The id is stable across turns, and is what a chat and the
+ * workbench attach to (S5).
+ *
+ * @public
+ */
+export type Checkout = Readonly<{
+  /** Stable within one project. Derived from the branch, so one branch is one checkout. */
+  id: string;
+  projectId: string;
+  /** Where the files are: a host path on a disk host, a route on the browser leg. */
+  root: string;
+  kind: 'live' | 'linked';
+  /** The branch this checkout tracks, or `undefined` when its head is detached. */
+  branch: string | undefined;
+  /** The revision its head names, or `undefined` on an unborn branch. */
+  baseRevisionId: RevisionId | undefined;
+}>;
+
+/**
+ * A Git operation in progress in one checkout, which Tau waits out instead of recording over.
+ *
+ * - `merge`, `cherryPick`, `revert` and `rebase`: stock Git stopped part-way
+ *   (`MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `rebase-merge` or
+ *   `rebase-apply`), usually on a conflict the person is resolving.
+ * - `detached`: the checkout's `HEAD` names a commit rather than a branch, so
+ *   no branch could carry a revision. `branch` is the one Git left last, the
+ *   way back, when Git's own log names one.
+ * - `locked`: another Git process holds the checkout's `index.lock`.
+ *
+ * `runsCommands`, on a `rebase` only: its todo still holds an `exec` or `x`
+ * line, so `git rebase --continue` will run commands. Tau warns rather than
+ * refusing the rebase (LP7, OD4).
+ *
+ * @public
+ */
+export type RevisionGitOperation = Readonly<{
+  kind: 'merge' | 'cherryPick' | 'revert' | 'rebase' | 'detached' | 'locked';
+  branch?: string;
+  runsCommands?: true;
+}>;
+
+/**
+ * One checkout as a project's registry holds it: the port's record, plus the
+ * two facts only a host knows.
+ *
+ * The port's `baseRevisionId` is the branch's head, and the registry calls it
+ * `headRevisionId`, so the rename happens here once instead of at every
+ * consumer. `leaseRunIds` comes from `.tau/runs` — the port knows nothing about
+ * leases — and `removable` from the host's clock and merged-branch policy.
+ *
+ * @public
+ */
+export type CheckoutRecord = Readonly<Omit<Checkout, 'baseRevisionId'>> &
+  Readonly<{
+    /** The revision this checkout's branch names, or `undefined` while unborn. */
+    headRevisionId?: string;
+    /** Tree object id of that head — the left-hand side of the I5 gate. */
+    headTreeId?: string;
+    /** Run ids of the leases currently holding this checkout. */
+    leaseRunIds: readonly string[];
+    /**
+     * Chat ids of those leases, deduplicated.
+     *
+     * A record, not a routing memory: the chips that say who is working where
+     * come from `.tau/runs/*.json` like every other lease fact, so a host that
+     * rehydrates from records alone rebuilds them (I3; W7 review R9).
+     */
+    leaseChatIds: readonly string[];
+    /** Set when the host's policy would offer this checkout for removal (A25). */
+    removable?: boolean;
+  }>;
+
+/**
+ * One conflicted revision no decision has landed yet (charter D14).
+ *
+ * Read from the conflict lines themselves, `refs/heads/conflicts/<into>/<device>`,
+ * on every host that holds them — recorded here or fetched from another device —
+ * so *Needs your decision* survives a reload and appears on every device (I3).
+ * A revision the line it decides already contains is resolved and is never
+ * listed.
+ *
+ * @public
+ */
+export type ConflictRecord = Readonly<{
+  /** The conflicted revision. */
+  revisionId: string;
+  /** Its conflict line, `conflicts/<into>/<device>`. */
+  line: string;
+  /** The line the decision lands on. */
+  into: string;
+  /** Whether another device recorded it. */
+  foreign: boolean;
+}>;
+
+/**
+ * One version: an annotated tag on a revision (S31, A21, B6).
+ *
+ * Annotated rather than lightweight, because a version has a name, an author,
+ * a time and a reason of its own — and because an annotated tag is an object
+ * every git client and host already understands, so `refs/tags/*` transports
+ * with the history set (A39) and a clone shows the versions without Tau.
+ *
+ * The ref is `refs/tags/v<number>` (`versionTagRef`). The name is free text
+ * and lives in the tag's message and trailer, never in the ref, so any name a
+ * person types is a valid one and a rename rewrites the tag at the same ref.
+ *
+ * @public
+ */
+export type RevisionTag = Readonly<{
+  /**
+   * Its identity: random, minted when the version is made and kept by a
+   * rename or a move to another number. Two versions are the same version
+   * exactly when their ids are equal (`isSameVersion`).
+   */
+  id: string;
+  /**
+   * Its number, `V<n>`, once per project (blueprint B6), and its ref,
+   * `refs/tags/v<n>`. V1 is the Start entry, which has no tag, so a tag's
+   * number is 2 or more.
+   */
+  number: number;
+  /** What a person called it, such as "Ready for print". Not unique. */
+  name: string;
+  revisionId: RevisionId;
+  /** Why this version has a name. */
+  note: string | undefined;
+  /** Who made it (S37). `undefined` on a tag this store did not write. */
+  actor: RevisionActor | undefined;
+  /** Milliseconds since the Unix epoch, to the second the tag records. */
+  createdAt: number;
+}>;
+
+/**
+ * A version's tag name, `v<number>`: what follows `refs/tags/`.
+ *
+ * @param number - The version's number, 2 or more.
+ * @returns The tag name.
+ * @public
+ */
+export const versionTagName = (number: number): string => `v${String(number)}`;
+
+/**
+ * A version's ref, `refs/tags/v<number>`.
+ *
+ * @param number - The version's number, 2 or more.
+ * @returns The fully-qualified ref.
+ * @public
+ */
+export const versionTagRef = (number: number): string => `refs/tags/${versionTagName(number)}`;
+
+/** Input for making, renaming or moving one version. @public */
+export type CreateRevisionTagInput = Readonly<{
+  name: string;
+  revisionId: RevisionId;
+  note?: string;
+  actor?: RevisionActor;
+  /**
+   * The version's number, 2 or more. Absent, this is a new version and takes
+   * the lowest number above every `refs/tags/v<n>` this store holds, version
+   * or not. A number that already names a version renames it: it keeps its
+   * id, entry, creation time and actor (`versionTagWrite`). A number another
+   * tag holds that is not a version is refused.
+   */
+  number?: number;
+  /**
+   * The version's id. Only a move to another number passes it, so the moved
+   * version stays the same version; a new version mints its own.
+   */
+  id?: string;
+  /** Milliseconds since the Unix epoch. Defaults to the store's clock. */
+  createdAt?: number;
+}>;
+
+/** Which tags {@link RevisionPort.listTags} reads. @public */
+export type ListRevisionTagsInput = Readonly<{
+  /** A remote's tags as last fetched (`refs/remotes/<remote>/tags/*`) instead of this store's own. */
+  remote?: string;
+}>;
+
+/** Input for adding one linked checkout. @public */
+export type AddCheckoutInput = Readonly<{
+  /** The branch the new checkout tracks. One checkout per branch. */
+  branch: string;
+  /**
+   * Where an unborn branch starts. Ignored when the branch already exists: the
+   * checkout is then placed at that branch's head, which is what makes two
+   * hosts' answers to the same input the same.
+   */
+  from?: RevisionId;
+}>;
+
+/**
+ * How one tree read treats large objects that are not in this store yet.
+ *
+ * @public
+ */
+export type ReadTreeOptions = Readonly<{
+  /**
+   * `local` answers from this store alone: an object that is not here yet
+   * stays its pointer, and nothing is fetched. A caller that asks for it
+   * either reads only small files or tracks every pointer it got back.
+   * `stored` fetches what the store lacks, as the default does, then answers
+   * each large object as its pointer once the store holds it whole: for a
+   * writer that lands it from the store rather than from bytes in hand
+   * (W11.3). A host whose store a checkout cannot read answers the bytes, as
+   * the default does, so a pointer in the answer always names a stored object.
+   * Absent, every pointer is resolved, from the remote if need be.
+   */
+  largeObjects?: 'local' | 'stored';
+  /**
+   * Only these project-relative paths are wanted, so a host may read just
+   * them instead of every blob in the tree. A host may still answer the whole
+   * tree; a path the revision does not hold, or that names a directory, is
+   * absent either way. Callers read the answer with `get`.
+   */
+  paths?: readonly string[];
+  /** Told about each large object as the remote delivers it, while a fetching read runs. */
+  onLargeObject?: (oid: string, content: Uint8Array<ArrayBuffer>) => void;
+  /**
+   * Large objects to fetch before the rest, asked again before each transfer
+   * starts, so an oid added while the read runs goes next (D10). A host that
+   * cannot order its transfers may ignore it.
+   */
+  firstLargeObjects?: () => ReadonlySet<string>;
+  /**
+   * Told whenever bytes of one of this read's large objects arrive, by its
+   * oid, including a transfer another reader started and this one joined.
+   */
+  onTransferProgress?: (oid: string) => void;
+  /** Stops a fetching read's transfers; the read then rejects. */
+  signal?: AbortSignal;
+}>;
+
+/**
+ * One file of a revision's tree, as its tree objects name it: no blob is read
+ * to list it (D10).
+ *
+ * @public
+ */
+export type RevisionTreeListing = Readonly<{
+  path: string;
+  /** The blob's id. */
+  oid: string;
+  /** A regular or an executable file: a tree's other entries are not checkout files. */
+  mode: '100644' | '100755';
+  /** The blob's size, when the store knows it without reading the blob (a head listing, or the engine's own). */
+  size?: number;
+  /** The large object a pointer blob names, when the store knows it without reading the pointer. */
+  largeObject?: Readonly<{ oid: string; size: number }>;
+}>;
+
+/**
+ * The substrate capability. Every host constructs one; the port, not the
+ * engine, is the seam callers program against.
+ *
+ * @public
+ */
+export type RevisionPort = Readonly<{
+  describe(): Promise<RevisionEngineDescriptor>;
+  init(input: InitRevisionStoreInput): Promise<void>;
+  readRevision(id: RevisionId): Promise<RevisionRecord | undefined>;
+  /** The tree; a host without large objects, or with its own smudge, may ignore `options`. */
+  readTree(id: RevisionId, options?: ReadTreeOptions): Promise<ImmutableRevisionTree | undefined>;
+  /**
+   * Every file of one revision's tree by path, from its tree objects alone:
+   * what a viewer-first open lists before any file is written (D10).
+   * `undefined` when the store does not hold the revision.
+   */
+  listTree?(id: RevisionId): Promise<readonly RevisionTreeListing[] | undefined>;
+  /**
+   * One large object from this store alone, or `undefined` when it is not
+   * here; nothing is fetched. A host whose checkouts never hold a placeholder
+   * may leave it out (D9).
+   */
+  readLargeObject?(pointer: Readonly<{ oid: string; size: number }>): Promise<Uint8Array<ArrayBuffer> | undefined>;
+  /**
+   * Put one large object in this store under its pointer: written to a
+   * `.partial` and renamed into place, so the store never names a torn object
+   * (D9 adoption). A repeat writes nothing. Optional, like `readLargeObject`.
+   */
+  storeLargeObject?(pointer: Readonly<{ oid: string; size: number }>, content: Uint8Array<ArrayBuffer>): Promise<void>;
+  /**
+   * Large objects by their pointers alone, from this store or else the
+   * remote, whether or not any revision names them: a placeholder an undo or
+   * merge wrote is filled by its own oid (D10 `filled`). Answers every
+   * object's bytes by oid; rejects as a fetching `readTree` does.
+   */
+  fetchLargeObjects?(
+    pointers: ReadonlyArray<Readonly<{ oid: string; size: number }>>,
+    options?: Pick<ReadTreeOptions, 'onLargeObject' | 'firstLargeObjects' | 'onTransferProgress' | 'signal'>,
+  ): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>>;
+  writeRevision(input: WriteRevisionInput): Promise<RevisionReceipt>;
+  /** A branch by name, or any other ref spelled in full. */
+  readRef(name: string): Promise<RevisionId | undefined>;
+  updateRef(input: UpdateRevisionRefInput): Promise<UpdateRevisionRefResult>;
+  /** The branch the live tree tracks, or `undefined` in a store that has none yet. */
+  readHead(): Promise<RevisionHead | undefined>;
+  /** Point the live tree's head at one branch, born or not. */
+  setHead(branch: string): Promise<void>;
+  /**
+   * Named refs, answered in the vocabulary the prefix was asked in.
+   *
+   * No prefix, or a bare one, lists branch names as branch names; a prefix
+   * beginning `refs/` lists that namespace and reports full names, which is how
+   * the record set (`refs/tau/chats/*`) is enumerated (W17).
+   */
+  listRefs(prefix?: string): Promise<readonly RevisionRef[]>;
+  /**
+   * The reachable graph in first-parent-first topological order, newest first.
+   *
+   * A revision appears only after every revision that names it as a parent, and
+   * among those eligible the one reached by following first parents comes
+   * first — so a merge is followed by its first-parent side, then the side it
+   * merged, then their common history. Every engine answers identically; `limit`
+   * cuts that order from the front and never reorders it (review 4 R12).
+   *
+   * Unbounded, that holds unconditionally. A *bounded* walk reads only what the
+   * order needs and assumes non-decreasing committer time from parent to child
+   * to know when it has read enough: under an inverted clock a bounded result
+   * may place a parent before a child (review 4 R39).
+   */
+  log(input?: RevisionLogInput): Promise<readonly RevisionLogEntry[]>;
+  /**
+   * Count what each of two heads has that the other lacks, without listing
+   * either history: the walk stops at their common ancestry.
+   */
+  divergence(input: RevisionDivergenceInput): Promise<RevisionDivergence>;
+  diff(input: RevisionDiffInput): Promise<readonly RevisionDiffEntry[]>;
+  /**
+   * The paths each revision changed against its first parent, in one read: a
+   * page of History asks this for its automatic entries (A4), within rule 20's
+   * log cost. A revision that changed nothing, or names no parent, is absent.
+   * A port without it answers through {@link RevisionPort.diff}, one per revision.
+   */
+  firstParentChanges?(ids: readonly RevisionId[]): Promise<ReadonlyMap<string, readonly string[]>>;
+  /**
+   * Every ref the remote advertises, without fetching an object.
+   *
+   * A name reads a remote in git's config. A {@link RevisionRemoteAddress}
+   * reads an address that is not recorded, credited and classified exactly as
+   * it would be once recorded under that name, and writes nothing: how
+   * *Change backup* checks a new remote before it replaces the old one (R2).
+   */
+  listRemoteRefs(
+    remote: string | RevisionRemoteAddress,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ): Promise<readonly RemoteRef[]>;
+  /** Bring the remote's refs into `refs/remotes/<remote>/…`; never moves a branch. */
+  fetch(input: RevisionFetchInput): Promise<RevisionFetchResult>;
+  /** Offer refs to the remote and report each one's outcome. */
+  push(input: RevisionPushInput): Promise<RevisionPushResult>;
+  /** Git's own remotes list for this store. */
+  listRemotes(): Promise<readonly Remote[]>;
+  /** Create or re-point one remote by name. */
+  setRemote(input: SetRevisionRemoteInput): Promise<void>;
+  /** Remove one remote. History and remote-tracking refs stay. */
+  removeRemote(name: string): Promise<void>;
+  /**
+   * Make a version at `refs/tags/v<number>`, or rename one.
+   *
+   * A new version takes the next number. Given the number of a version that
+   * exists, the tag is rewritten at the same ref with the new name: *Rename*
+   * in the pane is this, and keeps the number (Q13).
+   */
+  tag(input: CreateRevisionTagInput): Promise<RevisionTag>;
+  /**
+   * Every version in this store, or in a remote's tracking refs, lowest
+   * number first. A `refs/tags/v<n>` that is not an annotated tag with a valid
+   * `Tau-Tag` record is not listed, but it still holds its number.
+   */
+  listTags(input?: ListRevisionTagsInput): Promise<readonly RevisionTag[]>;
+  /**
+   * Remove this store's tag for one number. Only renumbering uses it: a
+   * version is never removed (Q13), but one that is not backed up moves to a
+   * free number. The revision it named stays, and stays reachable by id.
+   */
+  deleteTag(number: number): Promise<void>;
+  /** Rendered Jujutsu change id of one revision. */
+  changeId?(id: RevisionId): Promise<string | undefined>;
+  /**
+   * Conflicted term trees and labels, or `undefined` when the revision is resolved.
+   *
+   * Required since W10: a conflict is a value in this graph, and a host that
+   * could record one without being able to read it back would leave a person
+   * with a branch that says *Needs resolution* and nothing to resolve.
+   */
+  conflicts(id: RevisionId): Promise<RevisionConflict | undefined>;
+  /** Every place this project's files are, live checkout first. */
+  listCheckouts?(): Promise<readonly Checkout[]>;
+  /**
+   * The untracked paths one checkout's own Git ignore rules exclude.
+   *
+   * Capture versions what the path registry admits, and the tree's own ignore
+   * rules decide too, or a revision records a person's build output and
+   * secrets and commits them to their branch. The sources are the checkout's
+   * `.gitignore` files, nested, and the store's `info/exclude` (Tau's derived
+   * ignores); never `core.excludesFile`, which is per device. Both legs answer
+   * for every repository with Git's semantics, so a cut excludes the same
+   * paths on each (I5). A path the checkout tracks is never listed.
+   *
+   * The repository's own `core.ignoreCase` decides whether letters fold, on
+   * both legs.
+   *
+   * Given `paths`, the answer covers those alone, so a capture that names
+   * what changed costs what changed rather than a walk of the checkout: each
+   * named path Git would leave out, or the ignored directory above it that
+   * Git would list instead. One that does not exist is left out.
+   *
+   * @param root - A linked checkout's root, or `undefined` for the live checkout.
+   * @param paths - Only these paths, each relative to that root.
+   * @returns Paths relative to that root, a directory with a trailing `/`, or
+   *   `undefined` when the registry alone decides (a port that does not read ignore rules).
+   */
+  ignoredPaths?(root?: string, paths?: readonly string[]): Promise<readonly string[] | undefined>;
+  /**
+   * What the ignore rules read besides the checkout's own `.gitignore` files
+   * (the store's `info/exclude` and `core.ignoreCase`), as one comparable
+   * value. While it holds, and no `.gitignore` changed, an answer for the
+   * paths that changed keeps an earlier listing current; a port without it is
+   * asked for a whole listing at every capture.
+   *
+   * @param root - A linked checkout's root, or `undefined` for the live checkout.
+   * @returns A value that differs whenever those sources do.
+   */
+  ignoreContext?(root?: string): Promise<string>;
+  /**
+   * The Git operation another process left in progress in one checkout.
+   *
+   * A store shared with stock Git can be mid-merge, mid-rebase or on a
+   * detached head while Tau watches it. A revision cut then would record
+   * conflict markers or move the branch under the person's own operation, so
+   * a checkout waits while this answers anything. A port with no stock Git
+   * beside it leaves it out.
+   *
+   * @param root - A linked checkout's root, or `undefined` for the live checkout.
+   * @returns The operation, or `undefined` when nothing is in progress.
+   */
+  gitOperation?(root?: string): Promise<RevisionGitOperation | undefined>;
+  /** Add one linked checkout on its own branch. */
+  addCheckout?(input: AddCheckoutInput): Promise<Checkout>;
+  /** Remove one linked checkout. Removing the live checkout is refused. */
+  removeCheckout?(id: string): Promise<void>;
+}>;
+
+/**
+ * What a remote said about room when it refused a push for storage (D16, C13).
+ *
+ * The numbers the Tau API's LFS batch refusal actually carries. They were
+ * parsed into `LfsQuotaRefusal` and then dropped one hop later, so the Sync
+ * region's storage meter had nothing to render but the file list. Declared here
+ * because it is a *contract* shape: `remote.machine` and `sync.machine` may
+ * import types from this module and from nowhere else (I20).
+ *
+ * @public
+ */
+export type RemoteStorageRefusal = Readonly<{
+  /** How much room is left under the plan, when the remote said. */
+  remainingBytes?: number;
+  /** How much more this push needed than would fit, when the remote said. */
+  shortfallBytes?: number;
+}>;
+
+/** Stable failure categories every adapter shares. @public */
+export type RevisionPortErrorCode =
+  /** A branch was asked of a checkout that has no revision and nothing to record. */
+  | 'BRANCH_NEEDS_REVISION'
+  /** A branch name conflict lines own: `conflicts` or a name under it (charter D14). */
+  | 'BRANCH_NAME_RESERVED'
+  /** A rename of a branch a linked checkout holds: the checkout is named by its branch. */
+  | 'BRANCH_RENAME_LINKED'
+  /** A rename of a branch a remote holds: no push removes the old name there. */
+  | 'BRANCH_RENAME_PUSHED'
+  /** The requested branch already has a checkout, or the id names no checkout. */
+  | 'CHECKOUT_CONFLICT'
+  | 'ENGINE_FAILED'
+  | 'ENGINE_UNAVAILABLE'
+  /** A budgeted fetch exceeded its aggregate response-body ceiling. */
+  | 'FETCH_LIMIT_EXCEEDED'
+  | 'INVALID_REPOSITORY'
+  | 'INVALID_TRANSPORT'
+  /**
+   * The push would carry large objects and the remote cannot hold them (P20).
+   *
+   * Raised by both legs, before any object or ref is offered, so a third-party
+   * remote never receives pointers whose bytes have nowhere to go. The message
+   * names the files.
+   */
+  | 'LFS_REMOTE_UNSUPPORTED'
+  /** A large object this revision references is not in this store, and cannot be fetched. */
+  | 'MISSING_LARGE_OBJECT'
+  /*
+   * The remote's own answers (N1).
+   *
+   * Every one of these means the remote *was* reached and said no, which is why
+   * none of them may ever be spelled "could not be reached": that sentence is
+   * `ENGINE_FAILED`'s alone, and `ENGINE_FAILED` is reserved for a transport
+   * failure carrying no HTTP status at all. One classifier produces the whole
+   * set — `remoteTransportError` in `#remotes.js` — and both legs call it.
+   */
+  /** Any HTTP 403 that is not an entitlement refusal. */
+  | 'REMOTE_FORBIDDEN'
+  /** HTTP 403 whose body `code` is `GIT_SYNC_NOT_ENTITLED`: the plan does not include syncing. */
+  | 'REMOTE_NOT_ENTITLED'
+  /** HTTP 404: the remote has no repository at this address for this account. */
+  | 'REMOTE_NOT_FOUND'
+  /**
+   * HTTP 409 `GIT_PROXY_REDIRECTED_CREDENTIAL`: the repository moved (D11).
+   *
+   * The API's git proxy refuses to follow a redirect with a credential, so a
+   * renamed or transferred repository answers this until the person confirms
+   * the new address. Terminal: retrying the old address reproduces it.
+   */
+  | 'REMOTE_MOVED'
+  /**
+   * HTTP 500 `GIT_REPOSITORY_INCOMPLETE`: the hosted repository is damaged.
+   *
+   * Its manifest names a pack the store does not hold. Terminal: every retry
+   * reproduces it until an operator restores the repository, so it is never
+   * filed as `REMOTE_UNAVAILABLE`.
+   */
+  | 'REMOTE_DAMAGED'
+  /** HTTP 413 with no LFS file list; a batch refusal keeps raising `LfsQuotaError`. */
+  | 'REMOTE_QUOTA_EXCEEDED'
+  /**
+   * The remote's credential has to be granted again.
+   *
+   * Spelled identically to `RemoteReauthorizationCode` in `#remotes.js`, which
+   * is the same literal on a plain `Error` for the hosts that raise it before a
+   * request is made. `remote.machine` routes both to `reconnectRequired`.
+   */
+  | 'REMOTE_REAUTHORIZATION_REQUIRED'
+  /** A reviewed remote ref changed before it could be adopted locally. */
+  | 'REMOTE_REF_CONFLICT'
+  /**
+   * The remote refused the refs themselves, in its own words and with no status.
+   *
+   * Tau Cloud's `pre-receive` hook refuses a deletion or a rewind on *every* ref
+   * family, `refs/tau/*` included (contract §4), and it answers over git's
+   * `remote:` sideband rather than with an HTTP status — so without this the one
+   * refusal a fetch-and-replay actually clears read as `ENGINE_FAILED`, the code
+   * reserved for a remote that was never reached.
+   */
+  | 'REMOTE_REJECTED'
+  /** HTTP 401: this device's credential is not one the remote accepts. */
+  | 'REMOTE_UNAUTHORIZED'
+  /** HTTP 429 or 5xx: the remote is there and cannot answer yet. Retryable. */
+  | 'REMOTE_UNAVAILABLE'
+  | 'UNKNOWN_REVISION'
+  | 'UNSUPPORTED_OPERATION';
+
+/** Typed revision-port failure. @public */
+export class RevisionPortError extends Error {
+  public readonly code: RevisionPortErrorCode;
+  /**
+   * How long a rate-limited remote (HTTP 429) asked this host to wait: its
+   * `Retry-After`, or a bounded default on a leg that cannot read the header.
+   * A wait, not a failure to back off from (W13d).
+   */
+  public readonly retryAfterMilliseconds: number | undefined;
+  /** The HTTP status a remote answered with, where one did (a `404` and a `410` share `REMOTE_NOT_FOUND`). */
+  public readonly status: number | undefined;
+
+  /**
+   * Create a stable port failure.
+   *
+   * @param code - Machine-readable failure category.
+   * @param message - Safe diagnostic without remote credentials or command arguments.
+   * @param options - Optional cause, a rate limit's wait, and the HTTP status.
+   */
+  public constructor(
+    code: RevisionPortErrorCode,
+    message: string,
+    options?: ErrorOptions & Readonly<{ retryAfterMilliseconds?: number; status?: number }>,
+  ) {
+    super(message, options);
+    this.name = 'RevisionPortError';
+    this.code = code;
+    this.retryAfterMilliseconds = options?.retryAfterMilliseconds;
+    this.status = options?.status;
+  }
+}

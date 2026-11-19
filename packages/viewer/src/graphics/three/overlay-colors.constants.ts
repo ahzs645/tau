@@ -1,0 +1,164 @@
+/**
+ * Single tuning source for 3D viewport overlay tints (infinite grid + axes helper).
+ *
+ * Values are calibrated to render visibly across **both** WebGL (gamma-space canvas blend)
+ * and WebGPU. Per-surface blend math now differs:
+ *
+ * - **Axes** (transparent `Line2NodeMaterial`) blend in **gamma space** on both backends —
+ *   WebGPU routes through the in-shader `sRGBTransferOETF`/`sRGBTransferEOTF` wrap
+ *   (graphics-backend-policy `CB-4`) so saturated axis tints reach perceptual parity with
+ *   WebGL's sRGB-encoded framebuffer blend.
+ * - **Grid** (`infinite-grid-material.node.ts`) blends into the transparent linear frame;
+ *   the frame output encodes straight colour and premultiplies after, so the page composite
+ *   is gamma space on every backend. Encoding the premultiplied value instead made the
+ *   light-theme grid nearly invisible and over-brightened the dark one.
+ *
+ * **Tuning rules** (do not break without policy review):
+ * 1. Tune visually against `/e2e/graphics-backend` with both backends side-by-side.
+ * 2. Never re-pin to a known-broken backend baseline (e.g. pre-`<colorspace_fragment>`
+ *    WebGL output, or the pre-`CB-4` WebGPU linear-blend over-saturation). Pinning to a
+ *    bug freezes the bug into the design contract.
+ * 3. Both backends must remain visibly above the threshold of perception in light AND
+ *    dark mode — the prior `0xA6_A6_A6` light-mode value rendered nearly invisibly under
+ *    WebGPU's linear blend.
+ */
+
+import { viewerRenderProfile } from '@taucad/types/constants/viewer-render-profile';
+
+/**
+ * Infinite grid line tint, **light theme**. sRGB hex.
+ *
+ * The viewport canvas is transparent over the page background. The frame output encodes
+ * straight colour and premultiplies after (`encodeFrameOutput` in `post-processing-webgpu.tsx`),
+ * so the browser composites the grid in gamma space on every backend. Over white (`#FFFFFF`)
+ * at alpha 0.3 this reads ~`#EAEAEA`, a step of about 21 from white (operator review
+ * 2026-11-05: half the step of the earlier `#737373` tint, which read too strong).
+ */
+export const infiniteGridColorLightMode = 0xb9_b9_b9;
+
+/**
+ * Infinite grid line tint, **dark theme**. sRGB hex.
+ *
+ * Over the dark background (`#171717`) at alpha 0.3 this reads ~`#2A2A2A`, a step of about
+ * 20 from the background (operator review 2026-11-05: half the step of the earlier `#999999`
+ * tint). Its step from the background matches the light grid's step from white.
+ */
+export const infiniteGridColorDarkMode = 0x58_58_58;
+
+/** High-contrast grid tints and opacity. The stronger alpha keeps both WebGL's gamma blend and WebGPU's linear blend above 3:1. */
+export const infiniteGridColorHighContrastLightMode = 0x00_00_00;
+export const infiniteGridColorHighContrastDarkMode = 0xff_ff_ff;
+export const infiniteGridOpacity = 0.3;
+export const infiniteGridOpacityHighContrast = 0.7;
+
+/**
+ * Infinite grid line widths in framebuffer pixels, minor then major. Shared by the WebGL and WebGPU grid
+ * materials and the SVG viewer's grid, so every viewer draws the same lines.
+ */
+export const infiniteGridSmallThickness = 1.25;
+export const infiniteGridLargeThickness = 2;
+
+/**
+ * The grid tint and line opacity for a theme: the single source for the 3D grid and the SVG viewer's grid.
+ *
+ * @param theme - The colour scheme and whether high contrast is on.
+ * @returns The sRGB hex tint and the line opacity.
+ */
+export const resolveInfiniteGridTint = ({
+  colorScheme,
+  isHighContrast,
+}: {
+  readonly colorScheme: 'light' | 'dark';
+  readonly isHighContrast: boolean;
+}): { readonly color: number; readonly opacity: number } =>
+  isHighContrast
+    ? {
+        color: colorScheme === 'light' ? infiniteGridColorHighContrastLightMode : infiniteGridColorHighContrastDarkMode,
+        opacity: infiniteGridOpacityHighContrast,
+      }
+    : {
+        color: colorScheme === 'light' ? infiniteGridColorLightMode : infiniteGridColorDarkMode,
+        opacity: infiniteGridOpacity,
+      };
+
+/**
+ * GLTF characteristic-edge tint, **light theme**. sRGB hex.
+ *
+ * Black matches the runtime edge middleware default and reads clearly over
+ * matcap-lit surfaces on light viewport backgrounds. Defined by the viewer render profile, which captures also read.
+ */
+export const gltfEdgeColorLightMode = viewerRenderProfile.colorSchemes.light.edgeColor;
+
+/**
+ * GLTF characteristic-edge tint, **dark theme**. sRGB hex.
+ *
+ * Neutral gray only (no brand chroma): `oklch(0.62 0 0deg)` → `#868686`. Opaque, so it reads
+ * well above the 30%-alpha grid ({@link infiniteGridColorDarkMode}) on dimmed matcap faces,
+ * but well below near-white so characteristic edges do not glare against `#171717`. Defined by the viewer render
+ * profile, which captures also read.
+ */
+export const gltfEdgeColorDarkMode = viewerRenderProfile.colorSchemes.dark.edgeColor;
+
+/**
+ * Edge tint of a **hovered** model component, drawn through occluding surfaces. Light yellow;
+ * one value for both themes — reads against white and `#171717`. See
+ * `docs/research/viewer-edge-emphasis-highlighting-blueprint.md`.
+ */
+export const gltfEdgeHoverColor = 0xff_d5_4a;
+
+/**
+ * Edge tint of a **selected** or focused model component. Same light yellow as hover: the
+ * darker `0xb88600` read as illegible over orange/wood surfaces (operator ruling 2026-09-22).
+ */
+export const gltfEdgeSelectedColor = gltfEdgeHoverColor;
+
+/**
+ * Default tints for the {@link AxesHelper} XYZ axis lines. Stock Three.js axis hues,
+ * desaturated slightly so they read as orientation cues rather than primary geometry.
+ * Consumed verbatim by `THREE.Color`; valid in any {@linkcode @react-three/drei} `<Line>`,
+ * `Line2NodeMaterial`, or other Three.js color slot.
+ *
+ * Axis lines are drawn untone-mapped on both backends (WebGL `toneMapped={false}`; WebGPU
+ * tone-maps only its scene pass), so these are the display colours: the ACES rendering of the
+ * original `rgb(125, 56, 50)` / `rgb(64, 115, 63)` / `rgb(37, 78, 136)` tints, which the axes
+ * showed before the default tone mapping became Neutral.
+ */
+export const axesHelperColors = {
+  /* oxlint-disable tau-lint/no-hardcoded-color -- Three.js viewport axis tints */
+  x: 'rgb(130, 41, 37)',
+  y: 'rgb(53, 122, 56)',
+  z: 'rgb(0, 70, 145)',
+  /* oxlint-enable tau-lint/no-hardcoded-color */
+} as const;
+
+/**
+ * Default opacity for {@link AxesHelper} axis lines.
+ *
+ * Both backends must honor this via `transparent: true` on the underlying material:
+ *
+ * - **WebGL** — `Line` (drei) / `LineMaterial` (gizmo cube) must set `transparent: true`
+ *   so `THREE.WebGLRenderer` enables `gl.BLEND` and the sRGB framebuffer carries the
+ *   gamma-space blend. Skipping the flag silently drops `opacity` and writes the opaque
+ *   source color straight to the framebuffer (CB-1).
+ * - **WebGPU** — Tau's `Line2NodeMaterial` (see
+ *   `apps/ui/app/components/geometry/graphics/three/materials/line2.material.ts`) sets
+ *   `transparent: true` explicitly and performs the alpha mix in **sRGB space** inside the
+ *   shader (CB-4 in-shader OETF/EOTF wrap), reaching perceptual parity with the WebGL
+ *   gamma-space framebuffer blend even for fully saturated axis tints against dark
+ *   backgrounds (the prior linear-space blend produced visibly over-saturated lines).
+ *
+ * Routing every viewport line through Tau's `Line2NodeMaterial` (not the stock
+ * `three/webgpu` class) is what closes the seam — both the scene `AxesHelper` and the
+ * gizmo cube axes import it from the same module.
+ */
+export const axesHelperOpacity = 0.6;
+
+/**
+ * Outline of a section cut that does not close into a loop: an open surface, a crack or a branch, where the cap is
+ * left open. Tau's `--destructive` (`oklch(0.55 0.25 15deg)`, gamut-clipped to sRGB `#DD003F`); one opaque value for
+ * both themes, as the semantic status colours keep their lightness in both modes.
+ */
+export const sectionCapOpenChainColor = 0xdd_00_3f;
+
+/** How many times the ordinary cap outline's width an open chain is drawn, so it stands out from closed cap edges. */
+export const sectionCapOpenChainWidthScale = 2;

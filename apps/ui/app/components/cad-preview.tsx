@@ -1,9 +1,11 @@
-import { memo, useEffect, useMemo, useState } from 'react';
-import type { Geometry } from '@taucad/types';
-import { ModelViewer, RenderStatusOverlay } from '#components/model-viewer.js';
-import type { ModelViewerGraphicsOptions, ModelViewerProps } from '#components/model-viewer.js';
+import { memo } from 'react';
+import { cn } from '@taucad/ui/utils/cn';
+import { useSelector } from '@xstate/react';
+import { ModelViewer, RuntimeStatusOverlay } from '@taucad/viewer/model-viewer';
+import type { ModelViewerGraphicsOptions, ModelViewerState } from '@taucad/viewer/model-viewer';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
-import type { StageOptions } from '#components/geometry/graphics/three/stage.js';
+import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
+import type { StageOptions } from '@taucad/viewer/graphics/three/stage-options';
 
 /**
  * Visual rendering settings for the CAD preview viewer.
@@ -17,23 +19,19 @@ type CadPreviewViewerProps = {
   readonly enableZoom?: boolean;
   readonly stageOptions?: StageOptions;
   readonly graphicsOptions?: CadPreviewGraphicsOptions;
-  readonly staticPreviewUrl?: string;
-  readonly fallbackGeometries?: readonly Geometry[];
+  /** A larger artifact is not handed to three.js; a notice asks to open the project instead. */
+  readonly maxArtifactBytes?: number;
 };
 
-export async function loadStaticPreviewGeometry(url: string, signal?: AbortSignal): Promise<Geometry> {
-  const response = await fetch(url, { signal });
-  if (!response.ok) {
-    throw new Error(`Failed to load static preview GLB: ${response.status}`);
+const cadPreviewStatusToViewerState = (status: CadPreviewStatus, hasArtifact: boolean): ModelViewerState => {
+  // Keep the last settled frame visible during parameter re-renders; only
+  // block the viewport with a full-screen loader on the initial load.
+  if (status === 'loading') {
+    return hasArtifact ? 'ready' : 'loading';
   }
 
-  const content = new Uint8Array(await response.arrayBuffer());
-  return {
-    format: 'gltf',
-    content,
-    hash: `static-preview:${url}`,
-  };
-}
+  return 'ready';
+};
 
 /**
  * Thin adapter over `ModelViewer` that reads from `CadPreviewProvider` context.
@@ -58,117 +56,47 @@ export const CadPreviewViewer = memo(function CadPreviewViewer({
   enableZoom,
   stageOptions,
   graphicsOptions,
-  staticPreviewUrl,
-  fallbackGeometries,
+  maxArtifactBytes,
 }: CadPreviewViewerProps): React.JSX.Element {
-  const { geometries, graphicsRef, status, error } = useCadPreview();
-  const [staticPreviewGeometry, setStaticPreviewGeometry] = useState<Geometry | undefined>(undefined);
+  const { artifact, artifactHash, graphicsRef, status, error } = useCadPreview();
+  const enableLines = useSelector(graphicsRef, (state) => state.context.enableLines);
+  const enableSurfaces = useSelector(graphicsRef, (state) => state.context.enableSurfaces);
+  const enableMatcap = useSelector(graphicsRef, (state) => state.context.enableMatcap);
+  const enableGizmo = useSelector(graphicsRef, (state) => state.context.enableGizmo);
+  const enableGrid = useSelector(graphicsRef, (state) => state.context.enableGrid);
+  const enableAxes = useSelector(graphicsRef, (state) => state.context.enableAxes);
 
-  useEffect(() => {
-    if (!staticPreviewUrl) {
-      setStaticPreviewGeometry(undefined);
-      return;
-    }
-
-    const controller = new AbortController();
-
-    // oxlint-disable-next-line tau-lint/no-async-iife -- static preview fetch is a best-effort first paint.
-    void (async () => {
-      try {
-        setStaticPreviewGeometry(await loadStaticPreviewGeometry(staticPreviewUrl, controller.signal));
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-
-        setStaticPreviewGeometry(undefined);
-      }
-    })();
-
-    return () => {
-      controller.abort();
-    };
-  }, [staticPreviewUrl]);
-
-  const displayGeometries = useMemo(() => {
-    if (geometries.length > 0) {
-      return geometries;
-    }
-
-    if (status !== 'error' && fallbackGeometries && fallbackGeometries.length > 0) {
-      return [...fallbackGeometries];
-    }
-
-    if (status === 'error' || !staticPreviewGeometry) {
-      return [];
-    }
-
-    return [staticPreviewGeometry];
-  }, [geometries, status, fallbackGeometries, staticPreviewGeometry]);
+  if (artifact && maxArtifactBytes !== undefined && artifact.content.length > maxArtifactBytes) {
+    return (
+      <p
+        role='status'
+        className={cn('flex items-center justify-center p-4 text-center text-sm text-muted-foreground', className)}
+      >
+        Too large to preview. Open the project to view it.
+      </p>
+    );
+  }
 
   return (
     <ModelViewer
-      geometries={displayGeometries}
+      artifact={artifact}
+      artifactHash={artifactHash}
+      viewerState={cadPreviewStatusToViewerState(status, Boolean(artifact))}
       graphicsRef={graphicsRef}
       className={className}
       enablePan={enablePan}
       enableZoom={enableZoom}
       stageOptions={stageOptions}
-      graphicsOptions={graphicsOptions}
+      graphicsOptions={{
+        enableLines,
+        enableSurfaces,
+        enableMatcap,
+        enableGizmo,
+        enableGrid,
+        enableAxes,
+        ...graphicsOptions,
+      }}
       error={status === 'error' ? (error ?? new Error('Failed to render preview')) : error}
-    />
-  );
-});
-
-export const StaticPreviewViewer = memo(function StaticPreviewViewer({
-  className,
-  enablePan,
-  enableZoom,
-  stageOptions,
-  graphicsOptions,
-  staticPreviewUrl,
-  graphicsRef,
-}: CadPreviewViewerProps & {
-  readonly staticPreviewUrl: string;
-  /** Optional external graphics actor so parents can drive viewer tools (measure, section view). */
-  readonly graphicsRef?: ModelViewerProps['graphicsRef'];
-}): React.JSX.Element {
-  const [geometry, setGeometry] = useState<Geometry | undefined>(undefined);
-  const [error, setError] = useState<Error | undefined>(undefined);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setGeometry(undefined);
-    setError(undefined);
-
-    // oxlint-disable-next-line tau-lint/no-async-iife -- static preview fetch is the render source.
-    void (async () => {
-      try {
-        setGeometry(await loadStaticPreviewGeometry(staticPreviewUrl, controller.signal));
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-
-        setError(error instanceof Error ? error : new Error('Failed to load static preview'));
-      }
-    })();
-
-    return () => {
-      controller.abort();
-    };
-  }, [staticPreviewUrl]);
-
-  return (
-    <ModelViewer
-      geometries={geometry ? [geometry] : []}
-      graphicsRef={graphicsRef}
-      className={className}
-      enablePan={enablePan}
-      enableZoom={enableZoom}
-      stageOptions={stageOptions}
-      graphicsOptions={graphicsOptions}
-      error={error}
     />
   );
 });
@@ -186,5 +114,12 @@ type CadPreviewStatusProps = {
 export function CadPreviewStatus({ className }: CadPreviewStatusProps): React.ReactNode {
   const { status } = useCadPreview();
 
-  return <RenderStatusOverlay status={status === 'loading' ? 'loading' : 'idle'} className={className} />;
+  return (
+    <RuntimeStatusOverlay
+      status={
+        status === 'loading' ? 'evaluating' : status === 'ready' ? 'ready' : status === 'error' ? 'error' : 'closed'
+      }
+      className={className}
+    />
+  );
 }

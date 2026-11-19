@@ -12,30 +12,30 @@ import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent, CardFooter } from '#components/ui/card.js';
-import { Field, FieldError } from '#components/ui/field.js';
-import { Input } from '#components/ui/input.js';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '#components/ui/input-group.js';
-import { Label } from '#components/ui/label.js';
-import { Skeleton } from '#components/ui/skeleton.js';
-import { Spinner } from '#components/ui/spinner.js';
-import { cn } from '#utils/ui.utils.js';
+import { Field, FieldError } from '@taucad/ui/components/field';
+import { Input } from '@taucad/ui/components/input';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@taucad/ui/components/input-group';
+import { Label } from '@taucad/ui/components/label';
+import { Skeleton } from '@taucad/ui/components/skeleton';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
+import { SettingsGroup, SettingsRow } from '@taucad/settings-ui/components/settings/settings-item';
+import { authErrorMessage } from '@taucad/ui-core/utils/auth-error.utils';
+import { Button } from '@taucad/ui/components/button';
 
 export type ChangePasswordProps = {
   className?: string;
 };
 
 /**
- * Render a card form for changing the authenticated user's password.
+ * Render the password group: a form for changing the authenticated user's password.
  *
  * When the user has a credential account, displays fields for current password,
  * new password, and optionally confirm password. When the user only has social
  * accounts, displays a prompt to set a password via the reset flow.
  *
- * @returns A JSX element containing the change-password or set-password card
+ * @returns A JSX element containing the change-password or set-password group
  */
-export function ChangePassword({ className }: ChangePasswordProps) {
+export function ChangePassword({ className }: ChangePasswordProps): React.JSX.Element {
   const { authClient, emailAndPassword, localization } = useAuth();
   const { data: session } = useSession(authClient);
   const { data: accounts, isPending: isAccountsPending } = useListAccounts(authClient);
@@ -73,25 +73,18 @@ function SetPassword({ className }: { className?: string }) {
   };
 
   return (
-    <div>
-      <h2 className='mb-3 text-sm font-semibold'>{localization.settings.changePassword}</h2>
-
-      <Card className={cn(className)}>
-        <CardContent className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
-          <div>
-            <p className='text-sm leading-tight font-medium'>{localization.settings.setPassword}</p>
-
-            <p className='mt-0.5 text-xs text-muted-foreground'>{localization.settings.setPasswordDescription}</p>
-          </div>
-
-          <Button size='sm' disabled={isPending || !session} onClick={handleSetPassword}>
+    <SettingsGroup title='Password' className={className}>
+      <SettingsRow
+        title={localization.settings.setPassword}
+        description={localization.settings.setPasswordDescription}
+        control={
+          <Button variant='outline' disabled={isPending || !session} onClick={handleSetPassword}>
             {isPending && <Spinner />}
-
             {localization.auth.sendResetLink}
           </Button>
-        </CardContent>
-      </Card>
-    </div>
+        }
+      />
+    </SettingsGroup>
   );
 }
 
@@ -116,7 +109,7 @@ function ChangePasswordForm({
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      toast.error(error.error?.message ?? error.message);
+      toast.error(authErrorMessage(error));
     },
     onSuccess: () => {
       setCurrentPassword('');
@@ -135,8 +128,8 @@ function ChangePasswordForm({
     confirmPassword?: string;
   }>({});
 
-  const handleSubmit = (e: SyntheticEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const handleSubmit = (event: SyntheticEvent<HTMLFormElement>) => {
+    event.preventDefault();
 
     if (emailAndPassword.confirmPassword && newPassword !== confirmPassword) {
       setCurrentPassword('');
@@ -154,181 +147,176 @@ function ChangePasswordForm({
   };
 
   return (
-    <div>
-      <h2 className='mb-3 text-sm font-semibold'>{localization.settings.changePassword}</h2>
+    <SettingsGroup title='Password' className={className}>
+      <form onSubmit={handleSubmit} className='flex flex-col gap-4 py-4'>
+        <Field data-invalid={Boolean(fieldErrors.currentPassword)}>
+          <Label htmlFor='currentPassword'>{localization.settings.currentPassword}</Label>
 
-      <form onSubmit={handleSubmit}>
-        <Card className={cn(className)}>
-          <CardContent className='flex flex-col gap-6'>
-            <Field data-invalid={Boolean(fieldErrors.currentPassword)}>
-              <Label htmlFor='currentPassword'>{localization.settings.currentPassword}</Label>
+          {session ? (
+            <Input
+              id='currentPassword'
+              name='currentPassword'
+              type='password'
+              autoComplete='current-password'
+              placeholder={localization.settings.currentPasswordPlaceholder}
+              value={currentPassword}
+              onChange={(event) => {
+                setCurrentPassword(event.target.value);
 
-              {session ? (
-                <Input
-                  id='currentPassword'
-                  name='currentPassword'
-                  type='password'
-                  autoComplete='current-password'
-                  placeholder={localization.settings.currentPasswordPlaceholder}
-                  value={currentPassword}
-                  onChange={(e) => {
-                    setCurrentPassword(e.target.value);
+                setFieldErrors((previous) => ({
+                  ...previous,
+                  currentPassword: undefined,
+                }));
+              }}
+              disabled={isPending}
+              required
+              onInvalid={(event) => {
+                event.preventDefault();
 
-                    setFieldErrors((previous) => ({
-                      ...previous,
-                      currentPassword: undefined,
-                    }));
+                setFieldErrors((previous) => ({
+                  ...previous,
+                  currentPassword: (event.target as HTMLInputElement).validationMessage,
+                }));
+              }}
+              aria-invalid={Boolean(fieldErrors.currentPassword)}
+            />
+          ) : (
+            <Skeleton>
+              <Input className='invisible' />
+            </Skeleton>
+          )}
+
+          <FieldError>{fieldErrors.currentPassword}</FieldError>
+        </Field>
+
+        <Field data-invalid={Boolean(fieldErrors.newPassword)}>
+          <Label htmlFor='newPassword'>{localization.auth.newPassword}</Label>
+
+          {session ? (
+            <InputGroup>
+              <InputGroupInput
+                id='newPassword'
+                name='newPassword'
+                type={isNewPasswordVisible ? 'text' : 'password'}
+                autoComplete='new-password'
+                placeholder={localization.auth.newPasswordPlaceholder}
+                value={newPassword}
+                onChange={(event) => {
+                  setNewPassword(event.target.value);
+
+                  setFieldErrors((previous) => ({
+                    ...previous,
+                    newPassword: undefined,
+                  }));
+                }}
+                minLength={emailAndPassword.minPasswordLength}
+                maxLength={emailAndPassword.maxPasswordLength}
+                disabled={isPending}
+                required
+                onInvalid={(event) => {
+                  event.preventDefault();
+                  setFieldErrors((previous) => ({
+                    ...previous,
+                    newPassword: (event.target as HTMLInputElement).validationMessage,
+                  }));
+                }}
+                aria-invalid={Boolean(fieldErrors.newPassword)}
+              />
+
+              <InputGroupAddon align='inline-end'>
+                <InputGroupButton
+                  size='icon-xs'
+                  aria-label={isNewPasswordVisible ? localization.auth.hidePassword : localization.auth.showPassword}
+                  onClick={() => {
+                    setIsNewPasswordVisible(!isNewPasswordVisible);
                   }}
                   disabled={isPending}
-                  required
-                  onInvalid={(e) => {
-                    e.preventDefault();
+                >
+                  {isNewPasswordVisible ? <EyeOff /> : <Eye />}
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+          ) : (
+            <Skeleton>
+              <Input className='invisible' />
+            </Skeleton>
+          )}
+
+          <FieldError>{fieldErrors.newPassword}</FieldError>
+        </Field>
+
+        {emailAndPassword.confirmPassword && (
+          <Field data-invalid={Boolean(fieldErrors.confirmPassword)}>
+            <Label htmlFor='confirmPassword'>{localization.auth.confirmPassword}</Label>
+
+            {session ? (
+              <InputGroup>
+                <InputGroupInput
+                  id='confirmPassword'
+                  name='confirmPassword'
+                  type={isConfirmPasswordVisible ? 'text' : 'password'}
+                  autoComplete='new-password'
+                  placeholder={localization.auth.confirmPasswordPlaceholder}
+                  value={confirmPassword}
+                  onChange={(event) => {
+                    setConfirmPassword(event.target.value);
 
                     setFieldErrors((previous) => ({
                       ...previous,
-                      currentPassword: (e.target as HTMLInputElement).validationMessage,
+                      confirmPassword: undefined,
                     }));
                   }}
-                  aria-invalid={Boolean(fieldErrors.currentPassword)}
+                  minLength={emailAndPassword.minPasswordLength}
+                  maxLength={emailAndPassword.maxPasswordLength}
+                  disabled={isPending}
+                  required
+                  onInvalid={(event) => {
+                    event.preventDefault();
+
+                    setFieldErrors((previous) => ({
+                      ...previous,
+                      confirmPassword: (event.target as HTMLInputElement).validationMessage,
+                    }));
+                  }}
+                  aria-invalid={Boolean(fieldErrors.confirmPassword)}
                 />
-              ) : (
-                <Skeleton>
-                  <Input className='invisible' />
-                </Skeleton>
-              )}
 
-              <FieldError>{fieldErrors.currentPassword}</FieldError>
-            </Field>
-
-            <Field data-invalid={Boolean(fieldErrors.newPassword)}>
-              <Label htmlFor='newPassword'>{localization.auth.newPassword}</Label>
-
-              {session ? (
-                <InputGroup>
-                  <InputGroupInput
-                    id='newPassword'
-                    name='newPassword'
-                    type={isNewPasswordVisible ? 'text' : 'password'}
-                    autoComplete='new-password'
-                    placeholder={localization.auth.newPasswordPlaceholder}
-                    value={newPassword}
-                    onChange={(e) => {
-                      setNewPassword(e.target.value);
-
-                      setFieldErrors((previous) => ({
-                        ...previous,
-                        newPassword: undefined,
-                      }));
+                <InputGroupAddon align='inline-end'>
+                  <InputGroupButton
+                    size='icon-xs'
+                    aria-label={
+                      isConfirmPasswordVisible ? localization.auth.hidePassword : localization.auth.showPassword
+                    }
+                    onClick={() => {
+                      setIsConfirmPasswordVisible(!isConfirmPasswordVisible);
                     }}
-                    minLength={emailAndPassword.minPasswordLength}
-                    maxLength={emailAndPassword.maxPasswordLength}
                     disabled={isPending}
-                    required
-                    onInvalid={(e) => {
-                      e.preventDefault();
-                      setFieldErrors((previous) => ({
-                        ...previous,
-                        newPassword: (e.target as HTMLInputElement).validationMessage,
-                      }));
-                    }}
-                    aria-invalid={Boolean(fieldErrors.newPassword)}
-                  />
-
-                  <InputGroupAddon align='inline-end'>
-                    <InputGroupButton
-                      size='icon-xs'
-                      aria-label={
-                        isNewPasswordVisible ? localization.auth.hidePassword : localization.auth.showPassword
-                      }
-                      onClick={() => {
-                        setIsNewPasswordVisible(!isNewPasswordVisible);
-                      }}
-                      disabled={isPending}
-                    >
-                      {isNewPasswordVisible ? <EyeOff /> : <Eye />}
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
-              ) : (
-                <Skeleton>
-                  <Input className='invisible' />
-                </Skeleton>
-              )}
-
-              <FieldError>{fieldErrors.newPassword}</FieldError>
-            </Field>
-
-            {emailAndPassword.confirmPassword && (
-              <Field data-invalid={Boolean(fieldErrors.confirmPassword)}>
-                <Label htmlFor='confirmPassword'>{localization.auth.confirmPassword}</Label>
-
-                {session ? (
-                  <InputGroup>
-                    <InputGroupInput
-                      id='confirmPassword'
-                      name='confirmPassword'
-                      type={isConfirmPasswordVisible ? 'text' : 'password'}
-                      autoComplete='new-password'
-                      placeholder={localization.auth.confirmPasswordPlaceholder}
-                      value={confirmPassword}
-                      onChange={(e) => {
-                        setConfirmPassword(e.target.value);
-
-                        setFieldErrors((previous) => ({
-                          ...previous,
-                          confirmPassword: undefined,
-                        }));
-                      }}
-                      minLength={emailAndPassword.minPasswordLength}
-                      maxLength={emailAndPassword.maxPasswordLength}
-                      disabled={isPending}
-                      required
-                      onInvalid={(e) => {
-                        e.preventDefault();
-
-                        setFieldErrors((previous) => ({
-                          ...previous,
-                          confirmPassword: (e.target as HTMLInputElement).validationMessage,
-                        }));
-                      }}
-                      aria-invalid={Boolean(fieldErrors.confirmPassword)}
-                    />
-
-                    <InputGroupAddon align='inline-end'>
-                      <InputGroupButton
-                        size='icon-xs'
-                        aria-label={
-                          isConfirmPasswordVisible ? localization.auth.hidePassword : localization.auth.showPassword
-                        }
-                        onClick={() => {
-                          setIsConfirmPasswordVisible(!isConfirmPasswordVisible);
-                        }}
-                        disabled={isPending}
-                      >
-                        {isConfirmPasswordVisible ? <EyeOff /> : <Eye />}
-                      </InputGroupButton>
-                    </InputGroupAddon>
-                  </InputGroup>
-                ) : (
-                  <Skeleton>
-                    <Input className='invisible' />
-                  </Skeleton>
-                )}
-
-                <FieldError>{fieldErrors.confirmPassword}</FieldError>
-              </Field>
+                  >
+                    {isConfirmPasswordVisible ? <EyeOff /> : <Eye />}
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+            ) : (
+              <Skeleton>
+                <Input className='invisible' />
+              </Skeleton>
             )}
-          </CardContent>
 
-          <CardFooter>
-            <Button type='submit' size='sm' disabled={isPending || !session}>
-              {isPending && <Spinner />}
+            <FieldError>{fieldErrors.confirmPassword}</FieldError>
+          </Field>
+        )}
+        <div className='flex items-center justify-end gap-3'>
+          {/* The submit always sends `revokeOtherSessions: true`, so say so before it is pressed. */}
+          <p id='changePasswordSignOutNote' className='text-xs text-muted-foreground'>
+            Your other devices will be signed out.
+          </p>
+          <Button type='submit' disabled={isPending || !session} aria-describedby='changePasswordSignOutNote'>
+            {isPending && <Spinner />}
 
-              {localization.settings.updatePassword}
-            </Button>
-          </CardFooter>
-        </Card>
+            {localization.settings.updatePassword}
+          </Button>
+        </div>
       </form>
-    </div>
+    </SettingsGroup>
   );
 }

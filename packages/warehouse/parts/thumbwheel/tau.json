@@ -1,0 +1,17 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "Scalloped thumbwheel",
+  "description": "Editable hand-operated component with shaped gripping surfaces and an actual hub opening where applicable.",
+  "tags": [
+    "Handles and controls",
+    "parametric",
+    "replicad",
+    "warehouse"
+  ],
+  "assets": {
+    "main": {
+      "entryPath": "main.ts",
+      "thumbnail": "thumbnail.webp"
+    }
+  }
+}

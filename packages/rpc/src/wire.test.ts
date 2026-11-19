@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { isWireMessage, wireVersion } from '#wire.js';
+import { describe, it, expect, vi } from 'vitest';
+import { isWireMessage, wireMessageSchema, wireVersion } from '#wire.js';
 import type {
   WireRequest,
   WireResponseOk,
@@ -21,6 +21,68 @@ import type {
 describe('wireVersion', () => {
   it('is the v1 number', () => {
     expect(wireVersion).toBe(1);
+  });
+});
+
+describe('wire frame corpus', () => {
+  const accepted = [
+    { v: 1, k: 'rq', i: 'r1', n: 'call', a: undefined },
+    { v: 1, k: 'rs', i: 'r1', o: 1, d: undefined },
+    { v: 1, k: 'rs', i: 'r1', o: 0, e: { m: 'failed' } },
+    { v: 1, k: 'rc', i: 'r1', e: undefined },
+    { v: 1, k: 'rp', i: 'r1' },
+    { v: 1, k: 'rp', i: 'r1', d: { done: 1, bytes: 0 } },
+    { v: 1, k: 'nt', n: 'event', a: undefined },
+    { v: 1, k: 'ss', i: 's1', n: 'stream', a: undefined },
+    { v: 1, k: 'sn', i: 's1', d: undefined },
+    { v: 1, k: 'sc', i: 's1' },
+    { v: 1, k: 'se', i: 's1', e: { m: 'failed' } },
+    { v: 1, k: 'su', i: 's1' },
+    { v: 1, k: 'lh', o: 1, d: undefined },
+    { v: 1, k: 'lh', o: 0, e: { m: 'failed' } },
+    { v: 1, k: 'lb', r: undefined },
+    { v: 1, k: 'fa', i: 'r1' },
+    { v: 1, k: 'fw', i: 's1', s: 1 },
+  ] as const;
+
+  const rejected = [
+    { v: 1, k: 'rq', i: 'r1', n: 'call' },
+    { v: 1, k: 'rs', i: 'r1', o: 1 },
+    { v: 1, k: 'rs', i: 'r1', o: 0, e: { c: 'missing-message' } },
+    { v: 1, k: 'rc', i: '' },
+    { v: 1, k: 'rp', i: '' },
+    { v: 1, k: 'nt', n: 'event' },
+    { v: 1, k: 'ss', i: 's1', n: 'stream' },
+    { v: 1, k: 'sn', i: 's1' },
+    { v: 1, k: 'sc', i: '' },
+    { v: 1, k: 'se', i: 's1', e: { m: 42 } },
+    { v: 1, k: 'su', i: '' },
+    { v: 1, k: 'lh', o: 2 },
+    { v: 1, k: 'lb', r: 42 },
+    { v: 1, k: 'fa', i: '' },
+    { v: 1, k: 'fw', i: 's1', s: Number.POSITIVE_INFINITY },
+  ] as const;
+
+  it('drives the Zod schema with every frame shape accepted by the legacy guards', () => {
+    for (const frame of accepted) {
+      expect(wireMessageSchema.safeParse(frame).success, JSON.stringify(frame)).toBe(true);
+      expect(isWireMessage(frame), JSON.stringify(frame)).toBe(true);
+    }
+  });
+
+  it('preserves every representative legacy rejection', () => {
+    for (const frame of rejected) {
+      expect(wireMessageSchema.safeParse(frame).success, JSON.stringify(frame)).toBe(false);
+      expect(isWireMessage(frame), JSON.stringify(frame)).toBe(false);
+    }
+  });
+
+  it('diagnoses version skew for every schema-derived frame kind', () => {
+    for (const frame of accepted) {
+      const onVersionMismatch = vi.fn();
+      expect(isWireMessage({ ...frame, v: 2 }, onVersionMismatch)).toBe(false);
+      expect(onVersionMismatch).toHaveBeenCalledWith({ expected: wireVersion, received: 2, kind: frame.k });
+    }
   });
 });
 
@@ -158,7 +220,7 @@ describe('isWireMessage — lifecycle family', () => {
   });
 });
 
-describe('isWireMessage — flow control family (reserved)', () => {
+describe('isWireMessage — flow control family', () => {
   it('accepts a flow-ack frame so receivers can drop without crashing', () => {
     const frame: WireFlowAck = { v: 1, k: 'fa', i: 'r1' };
     expect(isWireMessage(frame)).toBe(true);
@@ -171,6 +233,10 @@ describe('isWireMessage — flow control family (reserved)', () => {
 
   it('rejects a flow-window frame with a non-finite slot count', () => {
     expect(isWireMessage({ v: 1, k: 'fw', i: 's1', s: Number.POSITIVE_INFINITY })).toBe(false);
+  });
+
+  it.each([0, -1, 1.5])('rejects an invalid flow-window slot count (%s)', (slots) => {
+    expect(isWireMessage({ v: 1, k: 'fw', i: 's1', s: slots })).toBe(false);
   });
 });
 
@@ -188,6 +254,18 @@ describe('isWireMessage — rejection paths', () => {
   it('rejects a frame with the wrong version', () => {
     expect(isWireMessage({ v: 2, k: 'rq', i: 'x', n: 'n', a: null })).toBe(false);
     expect(isWireMessage({ v: 0, k: 'rq', i: 'x', n: 'n', a: null })).toBe(false);
+  });
+
+  it('diagnoses a wrong version only for known frame kinds', () => {
+    const onVersionMismatch = vi.fn();
+
+    expect(isWireMessage({ v: 2, k: 'rq', i: 'x', n: 'n', a: null }, onVersionMismatch)).toBe(false);
+    expect(isWireMessage({ v: 2, k: 'rq' }, onVersionMismatch)).toBe(false);
+    expect(isWireMessage({ v: 2, k: 'unknown', i: 'x' }, onVersionMismatch)).toBe(false);
+
+    expect(onVersionMismatch).toHaveBeenCalledTimes(2);
+    expect(onVersionMismatch).toHaveBeenNthCalledWith(1, { expected: wireVersion, received: 2, kind: 'rq' });
+    expect(onVersionMismatch).toHaveBeenNthCalledWith(2, { expected: wireVersion, received: 2, kind: 'rq' });
   });
 
   it('rejects a frame with an unknown kind', () => {

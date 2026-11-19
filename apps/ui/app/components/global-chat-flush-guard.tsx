@@ -1,9 +1,8 @@
 /**
  * GlobalChatFlushGuard
  *
- * Single app-shell flush guard that fans out a `{ type: 'flushNow' }`
- * event to every live chat session's persistence + draft actor when the
- * page is about to unload (or becomes hidden). Replaces the per-route
+ * Single app-shell flush guard that flushes every live composer record when
+ * the page becomes hidden. Replaces the per-route
  * `FlushOnCloseGuard` (project) and `HomepageChatFlushOnCloseGuard`
  * (homepage) — those guards each subscribed to a single chat, which
  * doesn't compose once concurrent chats live in `ChatSessionStore`.
@@ -14,8 +13,9 @@
  * - Reads `useChatSessionStore()` (no subscription needed —
  *   `useFlushOnClose` stores the callback by ref, so the latest store
  *   snapshot is read at flush time, not at registration time).
- * - On flush, iterates `store.list()` and calls `flushNow` on the
- *   `persistenceActorRef` and `draftActorRef` of every session.
+ * - On hidden preparation, asks the store to flush every composer record
+ *   (`flushComposerRecords`, R9). The host log already owns chat transcripts,
+ *   so there is no message-persistence actor to flush.
  *   Disposed chats (e.g. a focused chat closed mid-session) are not
  *   touched because they are no longer in the store's snapshot.
  *
@@ -30,16 +30,7 @@ import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
 export function GlobalChatFlushGuard(): ReactNode {
   const store = useChatSessionStore();
 
-  useFlushOnClose(() => {
-    for (const chatId of store.list()) {
-      const session = store.get(chatId);
-      if (!session) {
-        continue;
-      }
-      session.persistenceActorRef.send({ type: 'flushNow' });
-      session.draftActorRef.send({ type: 'flushNow' });
-    }
-  });
+  useFlushOnClose(async () => store.flushComposerRecords(), { stage: 'producer' });
 
   return null;
 }

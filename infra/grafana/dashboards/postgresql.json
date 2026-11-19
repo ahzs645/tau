@@ -7,19 +7,29 @@
   "templating": {
     "list": [
       {
+        "name": "app",
+        "label": "Application",
+        "type": "constant",
+        "query": ".*",
+        "description": "Local default matches unlabeled series. Hosted provisioning binds this to exactly one application.",
+        "current": { "text": ".*", "value": ".*" },
+        "hide": 2
+      },
+      {
         "name": "service",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(up, service_name)",
-        "multi": true,
-        "includeAll": true,
-        "current": { "text": "All", "value": "$__all" }
+        "label": "Service",
+        "type": "custom",
+        "query": "tau-api",
+        "description": "Tau runs one service. A constant, so panels never lose their filter when the API's own series go stale during an outage.",
+        "current": { "text": "tau-api", "value": "tau-api" },
+        "options": [{ "text": "tau-api", "value": "tau-api", "selected": true }],
+        "includeAll": false
       },
       {
         "name": "instance",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(up{service_name=~\"$service\"}, instance)",
+        "query": "label_values(process_uptime{app=~\"$app\",service_name=~\"$service\"}, instance)",
         "multi": true,
         "includeAll": true,
         "current": { "text": "All", "value": "$__all" }
@@ -38,19 +48,18 @@
           "format": "table",
           "refId": "A"
         }
-      ]
+      ],
+      "id": 1
     },
     {
-      "title": "DB Query Rate",
+      "title": "Transactions per Second",
       "type": "stat",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "targets": [
-        {
-          "expr": "sum(rate(db_client_operation_duration_count{service_name=~\"$service\"}[5m])) by (db_operation_name)",
-          "legendFormat": "{{db_operation_name}}"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
+      "targets": [{ "expr": "sum(rate(postgresql_commits_total[5m])) + sum(rate(postgresql_rollbacks_total[5m]))" }],
+      "fieldConfig": {
+        "defaults": { "unit": "ops" }
+      },
+      "id": 2
     },
     {
       "title": "Transaction Rate",
@@ -63,19 +72,23 @@
           "format": "table",
           "refId": "A"
         }
-      ]
+      ],
+      "id": 3
     },
     {
-      "title": "DB Query Latency (p95)",
+      "title": "Row Operations by Kind",
       "type": "timeseries",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=~\"$service\"}[5m])) by (le, db_operation_name))",
-          "legendFormat": "{{db_operation_name}}"
+          "expr": "sum by (operation) (rate(postgresql_operations_total[5m]))",
+          "legendFormat": "{{operation}}"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
+      "fieldConfig": {
+        "defaults": { "unit": "ops" }
+      },
+      "id": 4
     },
     {
       "title": "Deadlocks",
@@ -99,7 +112,8 @@
             ]
           }
         }
-      }
+      },
+      "id": 5
     },
     {
       "title": "Table Sizes",
@@ -115,9 +129,13 @@
       ],
       "fieldConfig": {
         "overrides": [
-          { "matcher": { "id": "byName", "options": "size" }, "properties": [{ "id": "unit", "value": "decbytes" }] }
+          {
+            "matcher": { "id": "byName", "options": "size" },
+            "properties": [{ "id": "unit", "value": "decbytes" }]
+          }
         ]
-      }
+      },
+      "id": 6
     },
     {
       "title": "Index Usage",
@@ -130,26 +148,39 @@
           "format": "table",
           "refId": "A"
         }
-      ]
+      ],
+      "id": 7
     },
     {
-      "title": "DB Pending Requests",
+      "title": "PostgreSQL Connections Used",
       "type": "stat",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 20 },
-      "targets": [
-        {
-          "expr": "db_client_connection_pending_requests{service_name=~\"$service\"}",
-          "legendFormat": "pending"
+      "targets": [{ "expr": "sum(postgresql_backends) / max(postgresql_connection_max)" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 0.7, "color": "yellow" },
+              { "value": 0.9, "color": "red" }
+            ]
+          }
         }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
+      },
+      "id": 8
     },
     {
       "title": "Error Logs",
       "type": "logs",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+      "targets": [
+        {
+          "expr": "{service_name=~\"$service\"} | detected_level=~\"error|fatal|critical\"",
+          "refId": "A"
+        }
+      ],
       "options": {
         "showTime": true,
         "showLabels": true,
@@ -158,14 +189,86 @@
         "prettifyLogMessage": false,
         "enableLogDetails": true,
         "sortOrder": "Descending"
-      }
+      },
+      "id": 9
     },
     {
       "title": "Recent Traces",
       "type": "traces",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
       "datasource": { "type": "tempo", "uid": "tempo" },
-      "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+      "targets": [
+        {
+          "query": "{resource.service.name=~\"$service\"}",
+          "refId": "A",
+          "queryType": "traceqlSearch"
+        }
+      ],
+      "id": 10
+    },
+    {
+      "title": "Pooled client connections by process",
+      "description": "PostgreSQL connections each API process holds open, by Machine (instance), Fly process group and client pool (database connection audit R4). Each process counts only its own sockets, so the stack sums across instances, unlike tau_db_connections. The red dashed series is the session pooler's capacity for the login (tau_db_pooler_capacity, from DATABASE_POOLER_POOL_SIZE). The dashed threshold lines mark the declared budget of 12, 13 (db-pooler-clients-high, warning: over budget) and 14 (db-pooler-clients-near-cap, critical): those rules add 2 to this stack for revisions-maintenance, which holds up to 2 more on the same login and exports no metrics. Pools stay full after a burst, so sitting at the budget is normal.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 36 },
+      "targets": [
+        {
+          "expr": "sum by (instance, tau_process, tau_db_pool) (tau_db_client_connections{app=~\"$app\",service_name=~\"$service\"})",
+          "legendFormat": "{{instance}} {{tau_process}} {{tau_db_pool}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max(tau_db_pooler_capacity{app=~\"$app\",service_name=~\"$service\"})",
+          "legendFormat": "pooler capacity",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": { "stacking": { "mode": "normal", "group": "A" }, "thresholdsStyle": { "mode": "dashed" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 12 },
+              { "color": "orange", "value": 13 },
+              { "color": "red", "value": 14 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "pooler capacity" },
+            "properties": [
+              { "id": "custom.stacking", "value": { "mode": "none", "group": "A" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "id": 11
+    },
+    {
+      "title": "Pool connects and refusals",
+      "description": "Connections each pool opened in the last 5 minutes, by TCP outcome, and queries that failed because the pooler or PostgreSQL refused a connection (Supavisor EMAXCONN, SQLSTATE 53300). Any refusal pages (db-pool-refusals).",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 36 },
+      "targets": [
+        {
+          "expr": "sum by (tau_db_pool, outcome) (increase(tau_db_client_connects_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{tau_db_pool}} connect {{outcome}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (instance, tau_db_pool) (increase(tau_db_client_refusals_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{instance}} {{tau_db_pool}} refused",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "id": 12
     }
   ],
   "schemaVersion": 39

@@ -1,0 +1,177 @@
+/**
+ * File System Types
+ *
+ * Types for filesystem operations and state management.
+ */
+
+import type { filesystemBackends } from '#constants/filesystem.constants.js';
+
+/**
+ * Available filesystem backend types.
+ *
+ * @public
+ */
+export type FileSystemBackend = (typeof filesystemBackends)[number];
+
+/** One byte precondition for a checked whole-file replacement. `null` requires absence. @public */
+export type FileWritePrecondition = Readonly<{
+  path: string;
+  // oxlint-disable-next-line typescript/no-restricted-types -- `null` is the explicit wire-safe absent-file sentinel.
+  expected: Uint8Array<ArrayBuffer> | string | null;
+}>;
+
+/** Input for one checked whole-file replacement. @public */
+export type CheckedFileWrite = Readonly<{
+  path: string;
+  data: Uint8Array<ArrayBuffer> | string;
+  preconditions: readonly FileWritePrecondition[];
+  signal?: AbortSignal;
+}>;
+
+/**
+ * One digest precondition for a checked whole-file replacement (charter D17):
+ * the file must exist and its bytes must hash to `sha256`. The authority reads
+ * and hashes the file under the write's locks, so the request carries 64
+ * characters where a byte precondition carries the whole file.
+ *
+ * @public
+ */
+export type FileDigestPrecondition = Readonly<{
+  path: string;
+  /** Lowercase hexadecimal SHA-256 of the bytes the caller's change was made from. */
+  expectedSha256: string;
+}>;
+
+/** A precondition the authority checks before a checked write: bytes, absence or a digest. @public */
+export type CheckedWritePrecondition = FileWritePrecondition | FileDigestPrecondition;
+
+/**
+ * A checked whole-file replacement as the authority takes it: its preconditions
+ * may name a digest. A provider's own checked write takes bytes only
+ * ({@link CheckedFileWrite}); the authority reads a digest's bytes first.
+ *
+ * @public
+ */
+export type AuthorityCheckedFileWrite = Readonly<
+  Omit<CheckedFileWrite, 'preconditions'> & { preconditions: readonly CheckedWritePrecondition[] }
+>;
+
+/**
+ * Result of a checked whole-file replacement.
+ *
+ * `sha256` is the authority's digest of `content`, present when a digest
+ * precondition asked for one: what the caller checks its next write against.
+ * A conflict's `sha256` is the digest of its `actual` bytes, likewise.
+ *
+ * @public
+ */
+export type CheckedFileWriteResult =
+  | Readonly<{ status: 'applied' | 'unchanged'; content: Uint8Array<ArrayBuffer>; sha256?: string }>
+  | Readonly<{
+      status: 'conflict';
+      conflicts: ReadonlyArray<
+        // oxlint-disable-next-line typescript/no-restricted-types -- `null` distinguishes an absent file from empty bytes.
+        Readonly<{ path: string; actual: Uint8Array<ArrayBuffer> | null; sha256?: string }>
+      >;
+    }>;
+
+/**
+ * Filesystem backend configuration.
+ * Used to define backend implementations with canHandle/create pattern.
+ *
+ * @public
+ */
+export type FileSystemBackendConfig = {
+  readonly name: FileSystemBackend;
+  readonly label: string;
+  readonly description: string;
+  readonly canHandle: () => boolean;
+  readonly create: () => Promise<void>;
+};
+
+/**
+ * Stat metadata for a filesystem entry. Re-exported from `@taucad/filesystem`
+ * via the worker event channel; declared here so the canonical
+ * {@link ChangeEvent} union can carry optional `target` payloads.
+ *
+ * @public
+ */
+export type ChangeEventStat = {
+  readonly type: 'file' | 'dir';
+  readonly size: number;
+  readonly mtimeMs: number;
+};
+
+/**
+ * One exact filesystem change fact.
+ *
+ * Per `docs/research/editor-filesystem-surface-audit.md` R2, file and
+ * directory operations are emitted under distinct discriminators so
+ * participants can distinguish subtree migrations from single-file
+ * renames, and copy from write.
+ *
+ * @public
+ */
+export type PathChangeEvent =
+  | { type: 'fileWritten'; path: string; backend: FileSystemBackend; target?: ChangeEventStat }
+  | { type: 'fileDeleted'; path: string; backend: FileSystemBackend }
+  | { type: 'fileRenamed'; oldPath: string; newPath: string; backend: FileSystemBackend; target?: ChangeEventStat }
+  | { type: 'fileCopied'; sourcePath: string; targetPath: string; backend: FileSystemBackend; target?: ChangeEventStat }
+  | { type: 'directoryCreated'; path: string; backend: FileSystemBackend; target?: ChangeEventStat }
+  | { type: 'directoryDeleted'; path: string; backend: FileSystemBackend }
+  | { type: 'directoryRenamed'; oldPath: string; newPath: string; backend: FileSystemBackend; target?: ChangeEventStat }
+  | {
+      type: 'directoryCopied';
+      sourcePath: string;
+      targetPath: string;
+      backend: FileSystemBackend;
+      target?: ChangeEventStat;
+    }
+  | { type: 'directoryChanged'; path: string; backend: FileSystemBackend }
+  | { type: 'backendChanged'; backend: FileSystemBackend };
+
+/**
+ * Every fact one changeset committed, delivered as one event (charter D2, I4).
+ *
+ * A changeset of one entry is delivered as that entry's own event; a larger one
+ * arrives once as this envelope, in entry order, so a subscriber does one unit
+ * of work per changeset instead of one per path. A transport that fans events
+ * out to other realms expands it at its edge.
+ *
+ * @public
+ */
+export type ChangeSetEvent = {
+  type: 'changeSet';
+  entries: readonly PathChangeEvent[];
+};
+
+/**
+ * Discriminated union of filesystem change events emitted by the event bus:
+ * one exact path fact, or one changeset's facts together.
+ *
+ * @public
+ */
+export type ChangeEvent = PathChangeEvent | ChangeSetEvent;
+
+/**
+ * File Status in the filesystem
+ *
+ * @public
+ */
+export type FileStatus = 'clean' | 'modified' | 'added' | 'deleted' | 'untracked';
+
+/**
+ * File System Item
+ *
+ * Represents a file or directory in the virtual filesystem.
+ *
+ * @public
+ */
+export type FileSystemItem = {
+  path: string;
+  content: string;
+  isDirectory: boolean;
+  status?: FileStatus;
+  lastModified?: number;
+  size?: number;
+};

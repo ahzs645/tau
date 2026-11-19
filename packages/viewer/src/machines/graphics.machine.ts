@@ -1,0 +1,3214 @@
+import { createAsyncLogic, createCallbackLogic, setup, types } from 'xstate';
+import type {
+  ActorRefFrom,
+  CallbackActorLogic,
+  AnyActor,
+  EnqueueObject,
+  EventObject,
+  MetaObject,
+  SnapshotFrom,
+  StateMachine,
+  Sources,
+  StateSchema,
+  SystemRegistry,
+} from 'xstate';
+import { eventSchemas } from '#machines/machine-schemas.js';
+import type { GeometryComponentManifest, GridSizes } from '@taucad/types';
+import type { KnownArtifact } from '@taucad/runtime';
+import { idPrefix } from '@taucad/types/constants';
+import { getLengthUnit, metersPerLengthUnit } from '#constants/length-units.js';
+import type { LengthSymbol, UnitSystem } from '#constants/length-units.js';
+import { generatePrefixedId } from '@taucad/utils/id';
+import { createCameraView } from '@taucad/camera';
+import type { CameraBounds } from '@taucad/camera';
+import { cameraMachine } from '@taucad/camera/machine';
+import type { CameraMachineEmitted, CameraMachineEvent } from '@taucad/camera/machine';
+import type { CameraNavigationStep } from '#graphics/three/controls/camera-navigation.js';
+import { resolveCoordinateTransform, resolveMetersPerRenderUnit } from '@taucad/spatial';
+import { canonicalGltfWorld, tauWorld } from '#graphics/world-conventions.js';
+import type {
+  CameraOwnedSettings,
+  GraphicsBackendPreference,
+  GraphicsOwnedSettings,
+  PersistedSectionView,
+  PinnedMeasurement,
+  ResolvedGraphicsBackend,
+} from '#graphics/graphics-settings.js';
+import {
+  onWebGpuCanvasLoss,
+  probeWebGpuSupportWithin,
+  resolveGraphicsBackendPreference,
+} from '#graphics/graphics-backend.js';
+import {
+  applySectionCutPatch,
+  createDefaultPlaneCut,
+  createDefaultRevolutionCut,
+  maxSectionCuts,
+} from '#graphics/section-cuts.js';
+import type { SectionAxis, SectionCut, SectionCutPatch, SectionPlane, SectionVector } from '#graphics/section-cuts.js';
+import { recordRendererSpan } from '#lib/renderer-telemetry.js';
+import { viewerFirstFrame } from '#lib/viewer-events.js';
+import { deriveModelInteractionUnitId, modelInteractionMachine } from '#machines/model-interaction.machine.js';
+import type {
+  ModelInteractionContext,
+  ModelInteractionSource,
+  ViewerHoverSuppressionReason,
+} from '#machines/model-interaction.machine.js';
+import { kinematicsMachine } from '#machines/kinematics.machine.js';
+import { canvasMachine } from '#machines/canvas.machine.js';
+import { framingMachine } from '#machines/framing.machine.js';
+import type { FramingEvent, FramingPendingPose } from '#machines/framing.machine.js';
+import { sectionInputMachine } from '#machines/section-input.machine.js';
+import {
+  selectViewportGizmoInteractionLocked,
+  viewportGizmoGestureMachine,
+} from '#machines/viewport-gizmo-gesture.machine.js';
+import type {
+  ViewportGizmoAdapterLogic,
+  ViewportGizmoEnvironment,
+  ViewportGizmoGestureRef,
+} from '#machines/viewport-gizmo-gesture.machine.js';
+import type { SectionInputAdapterLogic } from '#machines/section-input.machine.js';
+import { presentationMachine } from '#machines/presentation.machine.js';
+import type { PresentationHostLogic, PresentationRef } from '#machines/presentation.machine.js';
+import { defaultFramingStage } from '#graphics/three/framing-stage.js';
+import type { CanvasRef, CanvasSurfaceKind } from '#machines/canvas.machine.js';
+import type { webglContextMachine } from '#machines/webgl-context.machine.js';
+import type { MeasurementAnchor, MeasurementRecord, MeasurementOperation } from '#constants/measurement.types.js';
+import { describeFault } from '#machines/machine-fault.js';
+
+/**
+ * Actor reference for the model interaction machine that a graphics actor drives.
+ *
+ * @public
+ */
+export type ModelInteractionRef = ActorRefFrom<typeof modelInteractionMachine>;
+/**
+ * Actor reference for the kinematics machine spawned by a graphics actor.
+ *
+ * @public
+ */
+export type KinematicsRef = ActorRefFrom<typeof kinematicsMachine>;
+
+/**
+ * Actor reference for the camera spawned by a graphics actor: the view's camera, whose lifetime is the graphics
+ * actor's (charter D5, I11).
+ *
+ * @public
+ */
+export type GraphicsCameraRef = ActorRefFrom<typeof cameraMachine>;
+
+/**
+ * The controls adapter a canvas hands graphics once its renderer exists: a callback actor whose closure holds the
+ * canvas's `camera-controls` instance, DOM surface and native cameras (charter D4). It sends back the gesture events.
+ *
+ * @public
+ */
+export type ControlsAdapterLogic = CallbackActorLogic<
+  { type: 'stop' } | { type: 'navigate'; step: CameraNavigationStep },
+  unknown,
+  { type: 'interactionStarted' } | { type: 'interactionMoved' } | { type: 'interactionEnded' }
+>;
+
+/**
+ * The SVG view's DOM adapter, which its `<svg>` ref callback hands graphics in `svgViewAttached`: a callback actor whose
+ * closure holds the panzoom instance, its listeners and the viewport's resize observer (charter D4). It sends back each
+ * new visible span, and fits the drawing on `fit`.
+ *
+ * @public
+ */
+export type SvgViewAdapterLogic = CallbackActorLogic<
+  { type: 'fit' },
+  unknown,
+  { type: 'cameraViewChanged'; verticalSpan: number }
+>;
+
+/**
+ * A presented glTF scene's kinematics adapter, which the scene's ref callback hands graphics in
+ * `kinematicsSceneAttached`: a callback actor whose closure holds the scene's pose composer, the playback demand-frame
+ * source and the page visibility listener (charter D4). Graphics spawns it with its kinematics child, which it
+ * subscribes to; it sends nothing back.
+ *
+ * @public
+ */
+export type KinematicsSceneAdapterLogic = CallbackActorLogic<EventObject, Readonly<{ kinematics: KinematicsRef }>>;
+
+/**
+ * The record fields a view's framing applies once after its entry's first frame, as `entryChanged` carries them.
+ *
+ * @public
+ */
+export type GraphicsPendingPose = FramingPendingPose;
+
+/**
+ * Actor reference for the framing actor spawned by a graphics actor: it decides when the view's geometry is framed
+ * and sends the camera the event that does it (charter D2, D20; I7, I8).
+ *
+ * @public
+ */
+export type GraphicsFramingRef = ActorRefFrom<typeof framingMachine>;
+
+/**
+ * Actor reference for a section input a graphics actor runs: the gesture machine with the DOM adapter its section
+ * handles provided.
+ *
+ * @public
+ */
+export type GraphicsSectionInputRef = ActorRefFrom<typeof sectionInputMachine>;
+
+/**
+ * Each model unit's focused component, by unit id: a unit with no focus has no entry.
+ *
+ * @public
+ */
+export type ComponentFocus = Readonly<Record<string, string>>;
+
+/**
+ * A reason for ignoring pointer clicks on the model, such as an active measure tool.
+ *
+ * @public
+ */
+export type ModelPointerClickSuppressionReason = 'measureTool';
+
+/**
+ * What a GLTF result must reach before it is presented: display only, or display plus section analysis when a section view is active.
+ *
+ * @public
+ */
+export type GltfPresentationBarrier = 'display-ready' | 'analysis-ready';
+
+const markMeasurementsOutOfDate = (
+  measurements: MeasurementRecord[],
+  matches: (measurement: MeasurementRecord) => boolean,
+): MeasurementRecord[] => {
+  if (!measurements.some((measurement) => measurement.status !== 'out-of-date' && matches(measurement))) {
+    return measurements;
+  }
+  return measurements.map((measurement) =>
+    measurement.status !== 'out-of-date' && matches(measurement)
+      ? { ...measurement, status: 'out-of-date' }
+      : measurement,
+  );
+};
+
+/**
+ * Measurements reported for one GLTF presentation attempt: its identity, outcome, sizes, phase durations and loader counters.
+ *
+ * @public
+ */
+export type GltfPresentationTelemetry = Readonly<{
+  revision: number;
+  key: string;
+  backend: ResolvedGraphicsBackend;
+  barrier: GltfPresentationBarrier;
+  outcome: 'presented' | 'failed' | 'cancelled' | 'stale';
+  glbBytes: number;
+  /** Submission is a CPU boundary; pixels require browser or GPU evidence. */
+  renderBoundary?: 'submitted';
+  meshCount: number;
+  triangleCount: number;
+  sourceLineCount: number;
+  lineSegmentCount: number;
+  durations: Readonly<
+    Partial<
+      Record<
+        | 'receiptToPreparation'
+        | 'parse'
+        /** Present only when the result was written into the presented buffers in place (D22). */
+        | 'inPlace'
+        | 'manifest'
+        | 'annotation'
+        | 'topologySubmit'
+        | 'topologyWorker'
+        | 'topologyPack'
+        | 'topologyHydrate'
+        | 'topologyResolve'
+        | 'fatLines'
+        | 'materials'
+        | 'pipelineWarmup'
+        | 'commitToFirstFrame'
+        | 'receiptToFirstFrame',
+        number
+      >
+    >
+  >;
+  modelEmptyFrames: number;
+  committedBundleHighWaterMark: number;
+  candidateBundleHighWaterMark: number;
+  /** Observed loader concurrency and work; cumulative for this viewer owner. */
+  activeParses?: number;
+  activeParseHighWaterMark?: number;
+  parsesStarted?: number;
+  parsesDiscarded?: number;
+  topologyJobsStarted: number;
+  topologyJobsDiscarded: number;
+}>;
+
+/**
+ * The requested and presented GLTF revision and key, with the phase of the presentation in progress.
+ *
+ * @public
+ */
+export type GltfPresentationProjection = Readonly<{
+  requestedRevision: number;
+  requestedKey?: string;
+  presentedRevision: number;
+  presentedKey?: string;
+  phase: 'idle' | 'preparing' | 'awaiting-analysis' | 'presented' | 'failed';
+}>;
+
+const withGltfPresentationPhase = (
+  projection: Omit<GltfPresentationProjection, 'phase'>,
+  phase: GltfPresentationProjection['phase'],
+): GltfPresentationProjection => ({ ...projection, phase });
+
+const addSuppressionReason = <T extends string>(reasons: readonly T[], reason: T): T[] =>
+  reasons.includes(reason) ? [...reasons] : [...reasons, reason];
+
+const removeSuppressionReason = <T extends string>(reasons: readonly T[], reason: T): T[] =>
+  reasons.filter((existingReason) => existingReason !== reason);
+
+/**
+ * Context type definition.
+ *
+ * Law 4 of the persisted view settings ownership blueprint classifies every field here:
+ *
+ * - **durable** -- in `GraphicsViewSettings`, seeded once at spawn and restored identically by an
+ *   in-app revisit and a page reload: `enableSurfaces`, `enableLines`, `enableGizmo`, `enableGrid`,
+ *   `enableAxes`, `enableMatcap`, `upDirection`, `graphicsBackendPreference`,
+ *   the pinned half of `measurements`, and the section view -- `isSectionViewActive` and the values of
+ *   `sectionCuts` (entry-scoped; the cut ids are made anew at every seed).
+ * - **session** -- survives an in-app revisit because this actor is retained, and is lost on reload
+ *   by decision: `displayUnits.length` (the grid unit symbol, session-scoped by ruling E4),
+ *   `isGridSizeLocked`, `isMeasureActive`, the unpinned half of `measurements`,
+ *   `currentMeasurementStart`, `modelInteractionUnitId` and `selectedSectionCutId`.
+ * - **ephemeral** -- derived from geometry, the canvas or a pointer on every mount, never seeded:
+ *   `gridSizes`, `gridSizesComputed`, `cadUnits`, `cameraVisibleSpan`, `geometryRadius`,
+ *   `geometryCenter`, `resolvedGraphicsBackend`, `canvas`, `webGpuAvailable`, `hoveredSectionCutId`,
+ *   `committedSectionCuts` (what the caps last committed),
+ *   `hoveredMeasurementId`, `measureSnapDistance`, every
+ *   suppression and interaction flag, `pickableMeshesVersion`, `geometry`, `geometryKey` and
+ *   `gltfPresentation`; `presentationRef`, `framedFocusComponentId` and `presentedManifest`, the manifest of the
+ *   scene this view last committed; `poseRevision`, folded from the kinematics
+ *   child; and `componentFocus`, folded from the model interaction.
+ *
+ * No field here stores a copy of a value another actor owns, except two folds: `poseRevision`, the stamp a measurement
+ * takes, folded from each snapshot of the kinematics child so a completion never reads that child's snapshot; and
+ * `componentFocus`, each unit's focused component, folded from each snapshot of a model interaction graphics owns, or
+ * sent by the host that owns a shared one, so a commit can frame a focus that predates it without reading that
+ * snapshot. The camera's field of view and pose
+ * belong to the view's camera session, and the render timeout to the entry's CAD actor.
+ * @public
+ */
+// oxlint-disable-next-line typescript/consistent-type-definitions -- an interface, not a type alias: declarations reference it by name, where an alias is expanded into every transition of the machine (TS7056)
+export interface GraphicsContext {
+  /** The first defect this actor caught at its root (MC-R12), the likeliest cause of any after it; it keeps its state and answers every event. */
+  fault?: string;
+  /** Session-scoped (E4): human-selected display units; lengths remain stored physically in metres. */
+  displayUnits: {
+    length: {
+      symbol: LengthSymbol;
+      metersPerUnit: number;
+      system: UnitSystem;
+    };
+  };
+  /**
+   * The units that are currently being used for the CAD system.
+   */
+  cadUnits: {
+    length: {
+      symbol: LengthSymbol;
+    };
+  };
+
+  // Grid state
+  /** The grid size that should be set based on the current camera position and fov */
+  gridSizes: GridSizes;
+  /** The grid size that is currently being displayed */
+  gridSizesComputed: GridSizes;
+  /** Whether the grid size should be locked to the computed value */
+  isGridSizeLocked: boolean;
+
+  /** Projection-neutral visible vertical span supplied by the active renderer. */
+  cameraVisibleSpan: number;
+  /** Physical bounding-sphere radius in metres. */
+  geometryRadius: number;
+  /** Physical geometry-bounds center in the Tau root frame, measured in metres. */
+  geometryCenter: [number, number, number];
+
+  // Visibility state
+  enableSurfaces: boolean;
+  enableLines: boolean;
+  enableGizmo: boolean;
+  enableGrid: boolean;
+  enableAxes: boolean;
+  enableMatcap: boolean;
+  upDirection: 'x' | 'y' | 'z';
+  /** User preference (`auto` uses runtime GPU probe). */
+  graphicsBackendPreference: GraphicsBackendPreference;
+  /**
+   * Probe result cached after startup (the `backend` region's invoked probe). Until the probe answers, the `backend`
+   * region is `probing` and a WebGPU-preferring viewer mounts no canvas: a canvas mounted on WebGL meanwhile would be
+   * thrown away for a WebGPU one, and on a software adapter its work also delays the adapter answer.
+   */
+  webGpuAvailable: boolean;
+  /** Capability-derived candidate; initialization can still fall back to WebGL. */
+  resolvedGraphicsBackend: ResolvedGraphicsBackend;
+  /**
+   * The mounted surface's canvas actor, which owns the renderer lifecycle (`creating → ready → presented ; lost ;
+   * failed`). Only a Three canvas attaches one, or the placeholder that holds its place while the WebGPU probe runs, so
+   * a stage showing other content (an SVG) is never waiting.
+   *
+   * One canvas per graphics actor: a second surface attaching replaces the first one's actor.
+   */
+  canvas: Readonly<{ canvasId: string; ref: CanvasRef }> | undefined;
+
+  // Section view state
+  isSectionViewActive: boolean;
+  /** The section's cuts in order, at most `maxSectionCuts`; the removed volume is their union. */
+  sectionCuts: readonly SectionCut[];
+  /** The cut whose editor and handles show. */
+  selectedSectionCutId: string | undefined;
+  /** The cut hovered in the section row or the scene; both highlight it. */
+  hoveredSectionCutId: string | undefined;
+  /**
+   * The cut list the clip, caps and raycasts show: the latest one the caps committed. Every cut list commits once the
+   * sources it cuts are known; none is refused.
+   */
+  committedSectionCuts: readonly SectionCut[];
+
+  // Measure state
+  isMeasureActive: boolean;
+  /** Whether the active tool has attached its input listeners; never persisted. */
+  isMeasureInputReady: boolean;
+  measurements: MeasurementRecord[];
+  currentMeasurementStart: [number, number, number] | undefined;
+  currentMeasurementAnchor?: MeasurementAnchor;
+  measureMode: 'auto' | 'point';
+  measureFrame: 'tau:root' | 'selected-local';
+  measureSnapEnabled: boolean;
+  measureOperation: MeasurementOperation;
+  measureFilter: 'auto' | 'point' | 'edge' | 'face' | 'circle' | 'body';
+  measureLockedTargetId?: string;
+  measureCandidates: Array<{ id: string; label: string }>;
+  measureActiveCandidateId?: string;
+  measureChosenCandidateId?: string;
+  measureCatalogHasMore: boolean;
+  measureMessage?: string;
+  measurePreviewDistance?: number;
+  measureSnapDistance: number; // Pixels
+  hoveredMeasurementId?: string;
+
+  // State flags
+  suppressNextModelPointerClick: boolean;
+  modelPointerClickSuppressionReasons: ModelPointerClickSuppressionReason[];
+  viewerHoverSuppressionReasons: ViewerHoverSuppressionReason[];
+  /** Bumps when geometry or component display changes can invalidate renderer-side picking caches. */
+  pickableMeshesVersion: number;
+  modelInteractionRef: ModelInteractionRef;
+  ownsModelInteractionRef: boolean;
+  modelInteractionUnitId?: string;
+  /** Per-view mechanism pose, keyed by the same unit ids as model interaction. */
+  kinematicsRef: KinematicsRef;
+  /** The kinematics revision last observed, which a completed measurement is stamped with. */
+  poseRevision: number;
+  /**
+   * The view's camera. Its pose and render frame outlive every canvas and provider mount; its clip policy is held by
+   * the canvas that draws the grid, and cleared when that canvas stops.
+   */
+  cameraRef: GraphicsCameraRef;
+  /**
+   * The attached canvas's controls adapter: the only listener on its `camera-controls` instance (charter I9). It
+   * stops with its canvas, so a canvas remount replaces it and never runs two.
+   */
+  controlsAdapter: Readonly<{ canvasId: string; ref: AnyActor }> | undefined;
+  /** The mounted SVG view's adapter, while a 2D drawing is shown. */
+  svgView: Readonly<{ viewId: string; ref: AnyActor }> | undefined;
+  /** The presented glTF scene's kinematics adapter, while the scene is attached. */
+  kinematicsScene: Readonly<{ sceneId: string; ref: AnyActor }> | undefined;
+  /**
+   * The unit whose mechanism graphics loaded into its kinematics child at a commit: a commit of another unit, a
+   * cleared artifact or a 2D artifact clears it there.
+   */
+  kinematicsUnitId: string | undefined;
+  /**
+   * Whether a canvas has presented the camera at least once. It stays set after the canvas detaches (a hidden tab), since
+   * the camera keeps its pose.
+   */
+  cameraPresented: boolean;
+  /** The view's framing actor, beside its camera: it frames the entry's first geometry and refits on a large change. */
+  framingRef: GraphicsFramingRef;
+  /**
+   * The view's GLB presentation: the request its renderer's host prepares and how far that request got, for as long as
+   * the view lives. What the view shows is `gltfPresentation`.
+   */
+  presentationRef: PresentationRef;
+  /** The component focus last framed, so focusing it again, or a new presentation of it, keeps the camera. */
+  framedFocusComponentId: string | undefined;
+  /** Each model unit's focused component, folded from the model interaction (see the context notes). */
+  componentFocus: ComponentFocus;
+  /**
+   * The manifest of the presented GLB, kept from its commit: a focus frames this view on this view's own geometry,
+   * whichever view loaded the unit's manifest into a shared model interaction last.
+   */
+  presentedManifest: GeometryComponentManifest | undefined;
+  /**
+   * The presentation key the camera's render frame is anchored for. A measurement of a new key re-anchors the frame on
+   * its geometry; a re-measured key (a settled pose, a remount) keeps it.
+   */
+  renderFrameKey: string | undefined;
+  /**
+   * The section input of the mounted section handles. It stops with them, so a remount or a new surface replaces it
+   * and never runs two.
+   */
+  sectionInput: Readonly<{ inputId: string; ref: GraphicsSectionInputRef }> | undefined;
+  /**
+   * The gesture of the mounted view cube. It stops with the cube, so a remount replaces it and never runs two; while it
+   * holds the interaction lock the canvas's controls do not step.
+   */
+  viewportGizmo: Readonly<{ gizmoId: string; ref: ViewportGizmoGestureRef }> | undefined;
+  /**
+   * The viewer environment the view cube is painted from, as the graphics provider last reported it; `undefined`
+   * until it does.
+   */
+  viewerEnvironment: ViewportGizmoEnvironment | undefined;
+
+  // Geometry data from CAD
+  artifact: KnownArtifact | undefined;
+  /** Runtime-stamped projection hash, used for skip-when-unchanged optimizations. */
+  artifactKey: string;
+  /** Source identity travels with the artifact through the renderer handoff. */
+  artifactSourceFile?: string;
+  /**
+   * What the view shows: the requested and the presented GLB identity, and a phase that keeps `presented` after a
+   * replacement fails, or while the presented request's renderer is gone. The request's own progress is
+   * `presentationRef`'s state.
+   */
+  gltfPresentation: GltfPresentationProjection;
+}
+
+// Event types
+/**
+ * Events accepted by the graphics machine.
+ *
+ * @public
+ */
+export type GraphicsEvent =
+  // Grid events
+  | { type: 'updateGridSize'; payload: GridSizes }
+  | { type: 'setGridSizeLocked'; payload: boolean }
+  | { type: 'setGridUnit'; payload: { unit: LengthSymbol } }
+  // Camera events
+  | { type: 'fitView' }
+  /**
+   * One orbit, pan or zoom step from an arrow key or a plus or minus key (N1). Graphics
+   * hands it to the canvas's controls adapter, which moves the controls, so the pose reaches the camera as the
+   * person's input. Unhandled while no canvas has its controls, so `snapshot.can(event)` says whether a key is claimed.
+   */
+  | { type: 'navigateCamera'; step: CameraNavigationStep }
+  /** The camera child's `viewChanged`, folded into the visible span. */
+  | { type: 'cameraViewChanged'; verticalSpan: number }
+  /**
+   * Internal: the kinematics child's revision, folded from each of its snapshots for the measurements taken at it.
+   * Graphics subscribes to its own child for this; a host has no reason to send it.
+   */
+  | { type: 'poseRevisionObserved'; revision: number }
+  // Visibility events
+  | { type: 'setSurfaceVisibility'; payload: boolean }
+  | { type: 'setLinesVisibility'; payload: boolean }
+  | { type: 'setGizmoVisibility'; payload: boolean }
+  | { type: 'setGridVisibility'; payload: boolean }
+  | { type: 'setAxesVisibility'; payload: boolean }
+  | { type: 'setMatcapVisibility'; payload: boolean }
+  | { type: 'setUpDirection'; payload: 'x' | 'y' | 'z' }
+  /**
+   * A view record's up direction (charter G6): graphics takes it, and the camera adopts it through
+   * `adoptPersistedPose`, so it is never a person's `up` change that the record would save again.
+   */
+  | { type: 'adoptUpDirection'; payload: 'x' | 'y' | 'z' }
+  | { type: 'setGraphicsBackendPreference'; payload: GraphicsBackendPreference }
+  /** A WebGPU canvas on this page could not present, or lost its device to the browser: WebGPU is off for the page. */
+  | { type: 'webGpuCanvasLost' }
+  /**
+   * A viewer surface entered the document: graphics starts its canvas actor, which the surface's R3F root then hosts.
+   * Sent once per surface from its element's ref, so a StrictMode replay detaches and attaches again.
+   */
+  | {
+      type: 'canvasAttached';
+      canvasId: string;
+      kind: CanvasSurfaceKind;
+      /** The viewer's WebGL context budget, when the embedder tracks one. */
+      webglContext?: ActorRefFrom<typeof webglContextMachine>;
+      /** The surface estimate the viewer was admitted with. */
+      admittedBytes?: number;
+      /** The surface re-attached to a renderer that already exists, so its canvas actor times no load spans. */
+      reattached?: boolean;
+    }
+  /** The surface left the document: its canvas actor stops and returns its budget. */
+  | { type: 'canvasDetached'; canvasId: string }
+  /**
+   * The attached surface's renderer exists: graphics starts its controls adapter, which stops with the surface. A
+   * re-delivery for the running adapter's surface changes nothing.
+   */
+  | { type: 'controlsAttached'; canvasId: string; adapter: ControlsAdapterLogic }
+  /** A mounted SVG view hands graphics its adapter; it replaces any other. */
+  | { type: 'svgViewAttached'; viewId: string; adapter: SvgViewAdapterLogic }
+  /** The SVG view left, or its drawing changed. A stale id is ignored. */
+  | { type: 'svgViewDetached'; viewId: string }
+  /** A presented glTF scene hands graphics its kinematics adapter; it replaces any other. */
+  | { type: 'kinematicsSceneAttached'; sceneId: string; adapter: KinematicsSceneAdapterLogic }
+  /** The scene left, or another presentation replaced it. A stale id is ignored. */
+  | { type: 'kinematicsSceneDetached'; sceneId: string }
+  /**
+   * Section handles mounted around a surface: graphics starts their section input with this DOM adapter, replacing the
+   * one it ran. A re-delivery for the running input changes nothing.
+   */
+  | { type: 'sectionInputAttached'; inputId: string; adapter: SectionInputAdapterLogic }
+  /** The section handles left: their section input stops, and gives back whatever it held. */
+  | { type: 'sectionInputDetached'; inputId: string }
+  /**
+   * A view cube mounted: graphics starts its gesture with this DOM adapter, replacing the one it ran. A re-delivery
+   * for the running gesture changes nothing.
+   */
+  | { type: 'viewportGizmoAttached'; gizmoId: string; adapter: ViewportGizmoAdapterLogic }
+  /** The view cube left: its gesture stops, gives back the lock it held and disposes the cube. */
+  | { type: 'viewportGizmoDetached'; gizmoId: string }
+  /** The graphics provider reports the viewer environment: the view cube is repainted from it. */
+  | { type: 'viewerEnvironmentChanged'; environment: ViewportGizmoEnvironment }
+  // Framing events
+  /**
+   * The view's entry: a new identity frames its first geometry again, with the record's pose applied after that
+   * frame. Before the first frame, the latest record for the same entry replaces the pending pose.
+   */
+  | { type: 'entryChanged'; identity: string; pendingPose?: FramingPendingPose }
+  /**
+   * The presented geometry was measured, in metres, with the host's resolved stage and surface. A new key anchors the
+   * render frame on it; the framing actor decides whether the camera frames, refits or only takes the bounds.
+   */
+  | Extract<FramingEvent, { type: 'geometryBoundsMeasured' }>
+  // Section view events
+  /** Turning the section on with no cuts adds the default plane, removing the side `viewDirection` faces. */
+  | { type: 'setSectionViewActive'; payload: boolean; viewDirection?: SectionVector }
+  | { type: 'adoptSectionView'; section: PersistedSectionView }
+  /** Adds a cut with the defaults, selects it and turns the section on. Refused at `maxSectionCuts`. */
+  | { type: 'addSectionCut'; payload: AddSectionCutPayload }
+  /** A patch that changes no value keeps the snapshot. */
+  | { type: 'updateSectionCut'; payload: { id: string; patch: SectionCutPatch } }
+  /** Removing the last cut turns the section off. */
+  | { type: 'removeSectionCut'; payload: string }
+  | { type: 'selectSectionCut'; payload: string | undefined }
+  | { type: 'hoverSectionCut'; payload: string | undefined }
+  /** From the caps, in the frame they commit a cut list. A repeated value keeps the snapshot. */
+  | { type: 'commitSectionCuts'; payload: readonly SectionCut[] }
+  // Measure events
+  | { type: 'setMeasureActive'; payload: boolean }
+  | { type: 'setMeasureInputReady'; ready: boolean }
+  | { type: 'adoptPinnedMeasurements'; measurements: readonly PinnedMeasurement[] }
+  | { type: 'startMeasurement'; payload: [number, number, number]; anchor?: MeasurementAnchor }
+  | {
+      type: 'completeMeasurement';
+      payload: [number, number, number];
+      anchor?: MeasurementAnchor;
+      operation?: MeasurementOperation;
+      distance?: number;
+      quality?: MeasurementRecord['quality'];
+    }
+  | { type: 'startFeatureMeasurement'; anchor: MeasurementAnchor }
+  | { type: 'completeFeatureMeasurement'; record: Omit<MeasurementRecord, 'id' | 'isPinned'> }
+  | { type: 'setMeasureMode'; mode: 'auto' | 'point' }
+  | { type: 'setMeasureFrame'; frame: GraphicsContext['measureFrame'] }
+  | { type: 'setMeasureSnapEnabled'; enabled: boolean }
+  | { type: 'setMeasureOperation'; operation: MeasurementOperation }
+  | { type: 'setMeasureFilter'; filter: GraphicsContext['measureFilter'] }
+  | {
+      type: 'setMeasureCandidates';
+      candidates: GraphicsContext['measureCandidates'];
+      activeId?: string;
+      hasMore?: boolean;
+    }
+  | { type: 'chooseMeasureCandidate'; id: string }
+  | { type: 'clearMeasureChosenCandidate' }
+  | { type: 'requestMeasureCandidateCommit' }
+  | { type: 'requestMeasureCatalog'; append?: boolean }
+  | { type: 'setMeasureMessage'; message?: string }
+  | { type: 'setMeasurePreviewDistance'; distance?: number }
+  | { type: 'setMeasureLockedTarget'; id?: string }
+  | { type: 'measurementSourceChanged'; geometryKey: string }
+  | { type: 'measurementPoseChanged'; revision: number }
+  | { type: 'measurementCutChanged' }
+  | { type: 'addMeasurementRecord'; record: MeasurementRecord }
+  | { type: 'resolveMeasurementRecord'; id: string; patch: Partial<MeasurementRecord> }
+  | { type: 'cancelCurrentMeasurement' }
+  | { type: 'clearMeasurement'; payload: string } // Measurement id
+  | { type: 'clearAllMeasurements' }
+  | { type: 'clearUnpinnedMeasurements' }
+  | { type: 'setHoveredMeasurement'; payload: string | undefined }
+  | { type: 'setMeasurementName'; id: string; name: string }
+  | { type: 'toggleMeasurementPinned'; id: string }
+  // Viewer shortcuts
+  /**
+   * A viewer shortcut the bar's keyboard adapter heard. Graphics decides what it does from its own state, emits
+   * `viewerShortcutApplied` with the outcome, and handles nothing when the key does nothing here, so
+   * `snapshot.can(event)` says whether the viewer claims the key. `camera` is the camera child's view at the press;
+   * `cutId` is the cut of the focused chip, which Delete and Backspace prefer to the selected cut.
+   */
+  | {
+      type: 'viewerShortcutPressed';
+      shortcut: ViewerShortcut;
+      pressId: string;
+      camera: ViewerShortcutCamera;
+      cutId?: string;
+    }
+  // Controls adapter events, forwarded to the camera
+  | { type: 'interactionStarted' }
+  /** Sent once per gesture, on its first movement. */
+  | { type: 'interactionMoved' }
+  | { type: 'interactionEnded' }
+  | {
+      type: 'beginViewerModelHoverSuppression';
+      reason: ViewerHoverSuppressionReason;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'endViewerModelHoverSuppression';
+      reason: ViewerHoverSuppressionReason;
+      source?: ModelInteractionSource;
+    }
+  | { type: 'markModelPointerGestureMoved' }
+  | { type: 'clearModelPointerClickGuard' }
+  // Artifact updates from CAD
+  | {
+      type: 'updateArtifact';
+      artifact: KnownArtifact;
+      hash: string;
+      sourceFile?: string;
+    }
+  | { type: 'clearArtifact' }
+  /** A mounted GltfMesh's host, which prepares each GLB request; it replaces any other. */
+  | { type: 'presentationHostAttached'; hostId: string; host: PresentationHostLogic }
+  /** The GltfMesh left. A stale id is ignored. */
+  | { type: 'presentationHostDetached'; hostId: string }
+  /**
+   * The focused component of each model unit ({@link selectComponentFocus}): graphics folds it from a model interaction
+   * it owns, and a host that shares one model interaction across views sends it to each view when it changes. A focus
+   * on the presented unit frames the camera on that component.
+   */
+  | { type: 'componentFocusObserved'; focus: ComponentFocus }
+  | { type: 'gltfPreparationStarted'; revision: number; key: string }
+  | {
+      type: 'gltfDisplayReady';
+      revision: number;
+      key: string;
+      barrier: GltfPresentationBarrier;
+    }
+  | { type: 'gltfAnalysisReady'; revision: number; key: string }
+  | {
+      type: 'gltfPresentationCommitted';
+      revision: number;
+      key: string;
+      unitId: string;
+      manifest: GeometryComponentManifest;
+    }
+  | { type: 'gltfPresentationFailed'; revision: number; key: string }
+  | { type: 'gltfPresentationMeasured'; telemetry: GltfPresentationTelemetry }
+  // Model/component interaction events
+  | {
+      type: 'loadModelComponentManifest';
+      unitId: string;
+      manifest: GeometryComponentManifest;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'clearModelComponentManifest';
+      unitId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'setHoveredModelComponent';
+      unitId: string;
+      componentId: string | undefined;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'toggleModelComponentSelection';
+      unitId: string;
+      componentId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'selectModelComponent';
+      unitId: string;
+      componentId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'clearModelComponentSelection';
+      unitId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'hideModelComponent';
+      unitId: string;
+      componentId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'showModelComponent';
+      unitId: string;
+      componentId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'showHiddenModelComponents';
+      unitId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'isolateModelComponent';
+      unitId: string;
+      componentId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'clearModelComponentIsolation';
+      unitId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'setModelComponentOpacity';
+      unitId: string;
+      componentId: string;
+      opacity: number;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'resetModelComponentOpacities';
+      unitId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'focusModelComponent';
+      unitId: string;
+      componentId: string;
+      source?: ModelInteractionSource;
+    }
+  | {
+      type: 'clearModelComponentFocus';
+      unitId: string;
+      source?: ModelInteractionSource;
+    }
+  /**
+   * Seeds the scene's bounding sphere without a measurement, for a host with no Three.js stage. The stage's own
+   * measurement sets it through `geometryBoundsMeasured`.
+   */
+  | {
+      type: 'sceneRadiusUpdated';
+      radius: number;
+      centerMeters: [number, number, number];
+    };
+
+/**
+ * The graphics machine's public alphabet: every {@link GraphicsEvent} type, in the union's order. The totality test
+ * samples each one and fails when this list and the union differ.
+ *
+ * @public
+ */
+export const graphicsEventTypes = [
+  'updateGridSize',
+  'setGridSizeLocked',
+  'setGridUnit',
+  'fitView',
+  'navigateCamera',
+  'cameraViewChanged',
+  'poseRevisionObserved',
+  'setSurfaceVisibility',
+  'setLinesVisibility',
+  'setGizmoVisibility',
+  'setGridVisibility',
+  'setAxesVisibility',
+  'setMatcapVisibility',
+  'setUpDirection',
+  'adoptUpDirection',
+  'setGraphicsBackendPreference',
+  'webGpuCanvasLost',
+  'canvasAttached',
+  'canvasDetached',
+  'controlsAttached',
+  'sectionInputAttached',
+  'sectionInputDetached',
+  'svgViewAttached',
+  'svgViewDetached',
+  'kinematicsSceneAttached',
+  'kinematicsSceneDetached',
+  'viewportGizmoAttached',
+  'viewportGizmoDetached',
+  'viewerEnvironmentChanged',
+  'entryChanged',
+  'geometryBoundsMeasured',
+  'setSectionViewActive',
+  'adoptSectionView',
+  'addSectionCut',
+  'updateSectionCut',
+  'removeSectionCut',
+  'selectSectionCut',
+  'hoverSectionCut',
+  'commitSectionCuts',
+  'setMeasureActive',
+  'setMeasureInputReady',
+  'adoptPinnedMeasurements',
+  'startMeasurement',
+  'completeMeasurement',
+  'startFeatureMeasurement',
+  'completeFeatureMeasurement',
+  'setMeasureMode',
+  'setMeasureFrame',
+  'setMeasureSnapEnabled',
+  'setMeasureOperation',
+  'setMeasureFilter',
+  'setMeasureCandidates',
+  'chooseMeasureCandidate',
+  'clearMeasureChosenCandidate',
+  'requestMeasureCandidateCommit',
+  'requestMeasureCatalog',
+  'setMeasureMessage',
+  'setMeasurePreviewDistance',
+  'setMeasureLockedTarget',
+  'measurementSourceChanged',
+  'measurementPoseChanged',
+  'measurementCutChanged',
+  'addMeasurementRecord',
+  'resolveMeasurementRecord',
+  'cancelCurrentMeasurement',
+  'clearMeasurement',
+  'clearAllMeasurements',
+  'clearUnpinnedMeasurements',
+  'setHoveredMeasurement',
+  'setMeasurementName',
+  'toggleMeasurementPinned',
+  'viewerShortcutPressed',
+  'interactionStarted',
+  'interactionMoved',
+  'interactionEnded',
+  'beginViewerModelHoverSuppression',
+  'endViewerModelHoverSuppression',
+  'markModelPointerGestureMoved',
+  'clearModelPointerClickGuard',
+  'updateArtifact',
+  'clearArtifact',
+  'presentationHostAttached',
+  'presentationHostDetached',
+  'componentFocusObserved',
+  'gltfPreparationStarted',
+  'gltfDisplayReady',
+  'gltfAnalysisReady',
+  'gltfPresentationCommitted',
+  'gltfPresentationFailed',
+  'gltfPresentationMeasured',
+  'loadModelComponentManifest',
+  'clearModelComponentManifest',
+  'setHoveredModelComponent',
+  'toggleModelComponentSelection',
+  'selectModelComponent',
+  'clearModelComponentSelection',
+  'hideModelComponent',
+  'showModelComponent',
+  'showHiddenModelComponents',
+  'isolateModelComponent',
+  'clearModelComponentIsolation',
+  'setModelComponentOpacity',
+  'resetModelComponentOpacities',
+  'focusModelComponent',
+  'clearModelComponentFocus',
+  'sceneRadiusUpdated',
+] as const satisfies ReadonlyArray<GraphicsEvent['type']>;
+
+/**
+ * The cut to add. A plane defaults to the first of XZ, YZ and XY the list lacks, and a cutaway to the up axis;
+ * both pass through the geometry centre. `viewDirection` points from the view's target toward the camera (the camera
+ * view's `direction`): a plane then removes the side facing the camera and a cutaway opens toward it.
+ * @public
+ */
+export type AddSectionCutPayload =
+  | { kind: 'plane'; plane?: SectionPlane; viewDirection?: SectionVector }
+  | { kind: 'revolution'; axis?: SectionAxis; viewDirection?: SectionVector };
+
+// Emitted events
+/**
+ * Events emitted by the graphics machine to its observers.
+ *
+ * @public
+ */
+export type GraphicsEmitted =
+  | { type: 'gridUpdated'; sizes: GridSizes }
+  /** Fit view, for a viewer with no camera: the SVG pan-zoom resets on it. The 3D camera fits through framing. */
+  | { type: 'viewFitRequested' }
+  | { type: 'geometryRadiusCalculated'; radius: number }
+  /**
+   * The unit this view presents, or the media type of its artifact, changed. A project that shares one model
+   * interaction across views releases a unit's manifest once no view presents it as a GLB.
+   */
+  | { type: 'presentedUnitChanged'; unitId: string | undefined; mediaType: string | undefined }
+  /** What the shortcut of `pressId` did, for the bar that heard it to announce. */
+  | { type: 'viewerShortcutApplied'; pressId: string; outcome: ViewerShortcutOutcome }
+  /** Use target: the measuring tool's session commits the chosen candidate. */
+  | { type: 'measureCandidateCommitRequested' }
+  /** List the targets in view: a fresh catalog, or with `append` the next page of the one listed. */
+  | { type: 'measureCatalogRequested'; append: boolean }
+  /** The person is editing the section cuts: the section region entered `on.editing`. */
+  | { type: 'sectionEdited' }
+  /**
+   * The section settled: it is off, or no cut changed for {@link sectionSettleDelay}. Read the section from context
+   * (`isSectionViewActive`, `sectionCuts`).
+   */
+  | { type: 'sectionSettled' };
+
+/**
+ * Milliseconds the section cuts stay quiet before they are settled (the section quiet gate, charter G6).
+ *
+ * @public
+ */
+export const sectionSettleDelay = 250;
+
+/**
+ * A viewer shortcut: F fits the view, S and M toggle Section and Measure, G the grid, P the projection, Escape steps
+ * back, and Delete or Backspace removes a cut.
+ *
+ * @public
+ */
+export type ViewerShortcut = 'fitView' | 'section' | 'measure' | 'grid' | 'projection' | 'escape' | 'removeCut';
+
+/**
+ * What a viewer shortcut did.
+ *
+ * @public
+ */
+export type ViewerShortcutOutcome =
+  | 'fitted'
+  | 'noModelToFit'
+  | 'sectionOn'
+  | 'sectionOff'
+  | 'sectionNeedsModel'
+  | 'measureOn'
+  | 'measureOff'
+  | 'measureNeedsModel'
+  | 'gridShown'
+  | 'gridHidden'
+  | 'perspective'
+  | 'orthographic'
+  | 'pointCancelled'
+  | 'cutRemoved';
+
+/**
+ * The camera child's view at a shortcut press: Section cuts away the side `direction` faces, and P switches between
+ * orthographic (a field of view of 0) and the last perspective angle.
+ *
+ * @public
+ */
+export type ViewerShortcutCamera = Readonly<{
+  direction: SectionVector;
+  requestedVerticalFieldOfView: number;
+  lastPerspectiveVerticalFieldOfView: number;
+}>;
+
+/**
+ * Create-only seed. The durable half is exactly the keys this machine owns (Law 1), so a new
+ * owned key reaches the actor without a second mapping.
+ * @public
+ */
+// oxlint-disable-next-line typescript/consistent-type-definitions -- an interface, not a type alias, so declarations reference it by name (TS7056)
+export interface GraphicsInput extends Partial<GraphicsOwnedSettings> {
+  /** The camera's create-only seed: the view's persisted field of view and pose. */
+  camera?: Partial<CameraOwnedSettings>;
+  measureSnapDistance?: number; // Default 10px for a fine pointer
+  modelInteractionRef?: ModelInteractionRef;
+}
+
+type GraphicsSnapshot = SnapshotFrom<typeof graphicsMachine>;
+
+type LengthUnitData = {
+  unit: string;
+  symbol: LengthSymbol;
+  factor: number;
+  system: UnitSystem;
+};
+
+function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
+  const unit = getLengthUnit(symbol);
+  return { unit: unit.label, symbol, factor: metersPerLengthUnit(symbol), system: unit.system };
+}
+
+/**
+ * Grid size calculation logic with unit system handling
+ *
+ * Metric Units (mm, cm, m, etc.):
+ * - Visual grid spacing is ALWAYS the same baseline calculation regardless of unit
+ * - Returned GridSizes values are in base metric units (no factor applied)
+ * - Display layers divide physical metre sizes by `displayUnits.length.metersPerUnit`
+ * - Grid recalculation only happens on camera/controls changes, not unit factor changes
+ *
+ * Imperial Units (inches, feet):
+ * - Visual grid spacing changes when switching from metric to imperial (applies /25.4 conversion)
+ * - Fixed scaling factors applied to produce reasonable grid sizes
+ * - Inches (factor=1): scaled by 0.5 to produce reasonable inch values
+ * - Feet (factor=12): scaled by 0.6/factor to produce reasonable foot values
+ * - Returned GridSizes values include all conversions and factors applied
+ */
+// Lower values produce coarser spacing on average; raise to fit more cells per view.
+const baseGridSizeCoefficient = 3;
+
+// Grid size calculation logic (ported from React)
+function calculateGridSizes({
+  visibleSpan,
+  gridUnitSystem,
+  unitFactor,
+}: {
+  visibleSpan: number;
+  gridUnitSystem: 'si' | 'imperial';
+  unitFactor: number;
+}): GridSizes {
+  let baseGridSize = visibleSpan / baseGridSizeCoefficient;
+
+  let scalingFactor;
+  if (gridUnitSystem === 'imperial') {
+    // For imperial: convert to imperial units AND scale appropriately
+    baseGridSize /= unitFactor;
+    scalingFactor = unitFactor;
+  } else {
+    // For metric: calculate grid spacing normally, then apply factor only to display values
+    scalingFactor = 1;
+  }
+
+  // For metric: calculate grid spacing normally, then apply factor only to display values
+  const exponent = Math.floor(Math.log10(baseGridSize));
+  const mantissa = baseGridSize / 10 ** exponent;
+  const largeSize = mantissa < Math.sqrt(10) ? 10 ** exponent : 5 * 10 ** exponent;
+  const safeSize = largeSize * scalingFactor;
+  const smallSize = safeSize / 10;
+
+  // For metric: visual spacing stays the same, factor is just metadata for display
+  return {
+    smallSize,
+    largeSize: safeSize,
+    effectiveSize: baseGridSize,
+    baseSize: visibleSpan,
+  };
+}
+
+/**
+ * Create-only section-view seed. The persisted cuts are applied to context directly, each under a new id, and the
+ * section is on only with a cut to show.
+ */
+function createSectionViewSeed(
+  sectionView: GraphicsOwnedSettings['sectionView'],
+): Pick<GraphicsContext, 'isSectionViewActive' | 'sectionCuts' | 'selectedSectionCutId' | 'hoveredSectionCutId'> {
+  const sectionCuts = (sectionView?.cuts ?? []).map(
+    (cut): SectionCut => ({ ...cut, id: generatePrefixedId(idPrefix.sectionCut) }),
+  );
+  return {
+    isSectionViewActive: (sectionView?.active ?? false) && sectionCuts.length > 0,
+    sectionCuts,
+    selectedSectionCutId: undefined,
+    hoveredSectionCutId: undefined,
+  };
+}
+
+const adoptedSection = (context: GraphicsContext, section: PersistedSectionView) => {
+  const unchanged =
+    context.isSectionViewActive === (section.active && section.cuts.length > 0) &&
+    JSON.stringify(context.sectionCuts.map(({ id: _id, ...cut }) => cut)) === JSON.stringify(section.cuts);
+  return unchanged ? undefined : createSectionViewSeed(section);
+};
+
+const graphicsActors = {
+  probeWebGpu: createAsyncLogic({ run: async () => probeWebGpuSupportWithin() }),
+  watchWebGpuCanvasLoss: createCallbackLogic<{ type: 'stop' }>(({ sendBack }) =>
+    onWebGpuCanvasLoss(() => {
+      sendBack({ type: 'webGpuCanvasLost' });
+    }),
+  ),
+  modelInteraction: modelInteractionMachine,
+  kinematics: kinematicsMachine,
+  canvas: canvasMachine,
+  camera: cameraMachine,
+  framing: framingMachine,
+  presentation: presentationMachine,
+};
+
+type GraphicsEnqueue = EnqueueObject<GraphicsEvent, GraphicsEmitted, SystemRegistry, typeof graphicsActors>;
+
+type ViewerShortcutDecision = Readonly<{
+  outcome: ViewerShortcutOutcome;
+  /** Raised on graphics, so the shortcut takes the same transition as its control. */
+  event?: GraphicsEvent;
+  camera?: Extract<CameraMachineEvent, { type: 'setVerticalFieldOfView' }>;
+}>;
+
+type ViewerShortcutPressedEvent = Extract<GraphicsEvent, { type: 'viewerShortcutPressed' }>;
+
+const sectionOffDecision: ViewerShortcutDecision = {
+  outcome: 'sectionOff',
+  event: { type: 'setSectionViewActive', payload: false },
+};
+const measureOffDecision: ViewerShortcutDecision = {
+  outcome: 'measureOff',
+  event: { type: 'setMeasureActive', payload: false },
+};
+
+/** S and M: turn the tool off, or on when there is a model to cut or measure. */
+const decideToolToggle = (
+  context: GraphicsContext,
+  tool: 'section' | 'measure',
+  camera: ViewerShortcutCamera,
+): ViewerShortcutDecision => {
+  const hasModel = context.geometryRadius > 0;
+  if (tool === 'section') {
+    if (context.isSectionViewActive) {
+      return sectionOffDecision;
+    }
+    return hasModel
+      ? {
+          outcome: 'sectionOn',
+          event: { type: 'setSectionViewActive', payload: true, viewDirection: camera.direction },
+        }
+      : { outcome: 'sectionNeedsModel' };
+  }
+  if (context.isMeasureActive) {
+    return measureOffDecision;
+  }
+  return hasModel
+    ? { outcome: 'measureOn', event: { type: 'setMeasureActive', payload: true } }
+    : { outcome: 'measureNeedsModel' };
+};
+
+/** Escape steps back: a half-placed point, then Measure, then Section. */
+const decideEscape = (context: GraphicsContext): ViewerShortcutDecision | undefined => {
+  if (context.currentMeasurementStart) {
+    return { outcome: 'pointCancelled', event: { type: 'cancelCurrentMeasurement' } };
+  }
+  if (context.isMeasureActive) {
+    return measureOffDecision;
+  }
+  return context.isSectionViewActive ? sectionOffDecision : undefined;
+};
+
+/** Delete and Backspace remove the focused chip's cut, else the selected one, while Section is on. */
+const decideRemoveCut = (context: GraphicsContext, cutId: string | undefined): ViewerShortcutDecision | undefined => {
+  const id = cutId ?? context.selectedSectionCutId;
+  return id !== undefined && context.isSectionViewActive && context.sectionCuts.some((cut) => cut.id === id)
+    ? { outcome: 'cutRemoved', event: { type: 'removeSectionCut', payload: id } }
+    : undefined;
+};
+
+/** What a shortcut does in `context`, or nothing: S, M and P do nothing for 2D geometry. */
+const decideViewerShortcut = (
+  context: GraphicsContext,
+  { shortcut, camera, cutId }: ViewerShortcutPressedEvent,
+): ViewerShortcutDecision | undefined => {
+  const is2d = context.artifact?.mimeType === 'image/svg+xml';
+  switch (shortcut) {
+    case 'fitView': {
+      return is2d || (context.geometryRadius > 0 && selectFramingFits(context.framingRef))
+        ? { outcome: 'fitted', event: { type: 'fitView' } }
+        : { outcome: 'noModelToFit' };
+    }
+    case 'grid': {
+      const isShown = !context.enableGrid;
+      return { outcome: isShown ? 'gridShown' : 'gridHidden', event: { type: 'setGridVisibility', payload: isShown } };
+    }
+    case 'section':
+    case 'measure': {
+      return is2d ? undefined : decideToolToggle(context, shortcut, camera);
+    }
+    case 'projection': {
+      if (is2d) {
+        return undefined;
+      }
+      const isOrthographic = camera.requestedVerticalFieldOfView === 0;
+      return {
+        outcome: isOrthographic ? 'perspective' : 'orthographic',
+        camera: {
+          type: 'setVerticalFieldOfView',
+          verticalFieldOfView: isOrthographic ? camera.lastPerspectiveVerticalFieldOfView : 0,
+        },
+      };
+    }
+    case 'escape': {
+      return decideEscape(context);
+    }
+    case 'removeCut': {
+      return decideRemoveCut(context, cutId);
+    }
+  }
+};
+
+/**
+ * Whether Fit view fits a model: framing has framed the entry and holds a measurement to fit (it ignores the request
+ * while an entry waits for its first presentation). Read it from the framing actor, with `useSelector(framingRef, …)`.
+ * @public
+ */
+export const selectFramingFitsModel = (framing: SnapshotFrom<typeof framingMachine>): boolean =>
+  framing.matches('framed') && 'measuredBounds' in framing.context && framing.context.measuredBounds !== undefined;
+
+const selectFramingFits = (framingRef: GraphicsFramingRef): boolean => selectFramingFitsModel(framingRef.getSnapshot());
+
+/** Whether the person is holding a camera gesture (pointer down on the controls). */
+const selectGestureHeld = (cameraRef: GraphicsCameraRef): boolean =>
+  cameraRef.getSnapshot().matches({ gesture: 'held' });
+
+/**
+ * The controls adapter stops with its canvas: a new or detached surface ends the old gesture listener. A gesture it
+ * held ends with it, so the camera cannot stay `gesture.held` and hover suppression cannot stick (G3 report).
+ */
+const stopControlsAdapter = (
+  context: GraphicsContext,
+  enq: GraphicsEnqueue,
+): Pick<GraphicsContext, 'controlsAdapter' | 'viewerHoverSuppressionReasons'> => {
+  if (context.controlsAdapter) {
+    enq.stop(context.controlsAdapter.ref);
+    enq.sendTo(context.cameraRef, { type: 'interactionEnded' });
+  }
+  return {
+    controlsAdapter: undefined,
+    viewerHoverSuppressionReasons: removeSuppressionReason(context.viewerHoverSuppressionReasons, 'cameraControls'),
+  };
+};
+type GraphicsPatch = Partial<GraphicsContext>;
+type ModelInteractionMessage = Parameters<ModelInteractionRef['send']>[0];
+
+/** Every model/component command is the model-interaction actor's to apply. */
+const forwardToModelInteraction = (
+  context: GraphicsContext,
+  enq: GraphicsEnqueue,
+  message: ModelInteractionMessage,
+): void => {
+  enq.sendTo(context.modelInteractionRef, message);
+};
+
+const clearViewerHover = (context: GraphicsContext, enq: GraphicsEnqueue, source: ModelInteractionSource): void => {
+  if (context.modelInteractionUnitId) {
+    forwardToModelInteraction(context, enq, {
+      type: 'setHoveredComponent',
+      unitId: context.modelInteractionUnitId,
+      componentId: undefined,
+      source,
+    });
+  }
+};
+
+/** Tells the view's observers when the unit it presents, or its artifact's media type, changes. */
+const emitPresentedUnitChange = (
+  context: GraphicsContext,
+  enq: GraphicsEnqueue,
+  next: Readonly<{ unitId: string | undefined; mediaType: string | undefined }>,
+): void => {
+  if (next.unitId !== context.modelInteractionUnitId || next.mediaType !== context.artifact?.mimeType) {
+    enq.emit({ type: 'presentedUnitChanged', ...next });
+  }
+};
+
+const gltfRequestMatches = (context: GraphicsContext, event: Readonly<{ revision: number; key: string }>): boolean =>
+  event.revision === context.gltfPresentation.requestedRevision && event.key === context.gltfPresentation.requestedKey;
+
+/**
+ * Loads a committed unit's mechanism into kinematics, or clears it when the manifest has none, and clears the unit
+ * loaded before when another one is presented. `loadMechanism` keeps the coordinates of a mechanism it already holds,
+ * so a repeated commit changes nothing.
+ *
+ * @returns The unit whose mechanism is now loaded.
+ */
+const loadCommittedMechanism = (
+  context: GraphicsContext,
+  enq: GraphicsEnqueue,
+  { unitId, manifest }: Readonly<{ unitId: string; manifest: GeometryComponentManifest }>,
+): string | undefined => {
+  if (context.kinematicsUnitId !== undefined && context.kinematicsUnitId !== unitId) {
+    enq.sendTo(context.kinematicsRef, { type: 'clearMechanism', unitId: context.kinematicsUnitId });
+  }
+  const { mechanism } = manifest;
+  enq.sendTo(
+    context.kinematicsRef,
+    mechanism ? { type: 'loadMechanism', unitId, mechanism } : { type: 'clearMechanism', unitId },
+  );
+  return mechanism ? unitId : undefined;
+};
+
+/** Clears the loaded mechanism when the view stops showing a glTF unit (a cleared or 2D artifact). */
+const clearLoadedMechanism = (context: GraphicsContext, enq: GraphicsEnqueue): void => {
+  if (context.kinematicsUnitId !== undefined) {
+    enq.sendTo(context.kinematicsRef, { type: 'clearMechanism', unitId: context.kinematicsUnitId });
+  }
+};
+
+const beginMeasureHoverSuppression = (context: GraphicsContext, enq: GraphicsEnqueue): GraphicsPatch => {
+  if (!context.viewerHoverSuppressionReasons.includes('measureTool')) {
+    clearViewerHover(context, enq, 'viewer');
+  }
+  return {
+    modelPointerClickSuppressionReasons: addSuppressionReason(
+      context.modelPointerClickSuppressionReasons,
+      'measureTool',
+    ),
+    viewerHoverSuppressionReasons: addSuppressionReason(context.viewerHoverSuppressionReasons, 'measureTool'),
+  };
+};
+
+const endMeasureHoverSuppression = (context: GraphicsContext): GraphicsPatch => ({
+  modelPointerClickSuppressionReasons: removeSuppressionReason(
+    context.modelPointerClickSuppressionReasons,
+    'measureTool',
+  ),
+  viewerHoverSuppressionReasons: removeSuppressionReason(context.viewerHoverSuppressionReasons, 'measureTool'),
+});
+
+/** The cuts after a patch of one cut, or `undefined` when the cut is gone or the patch changes nothing. */
+const updatedSectionCut = (
+  context: GraphicsContext,
+  payload: Extract<GraphicsEvent, { type: 'updateSectionCut' }>['payload'],
+): Pick<GraphicsContext, 'sectionCuts'> | undefined => {
+  const cut = context.sectionCuts.find((candidate) => candidate.id === payload.id);
+  if (!cut) {
+    return undefined;
+  }
+  const next = applySectionCutPatch(cut, payload.patch, context.geometryCenter);
+  return next === cut
+    ? undefined
+    : { sectionCuts: context.sectionCuts.map((candidate) => (candidate === cut ? next : candidate)) };
+};
+
+/** Appends a cut made with the defaults, selects it and marks the section on; the caller checks the budget. */
+const appendSectionCut = (
+  context: GraphicsContext,
+  payload: AddSectionCutPayload,
+): Pick<GraphicsContext, 'isSectionViewActive' | 'sectionCuts' | 'selectedSectionCutId'> => {
+  const id = generatePrefixedId(idPrefix.sectionCut);
+  const cut =
+    payload.kind === 'plane'
+      ? createDefaultPlaneCut({
+          id,
+          plane: payload.plane,
+          existing: context.sectionCuts,
+          center: context.geometryCenter,
+          viewDirection: payload.viewDirection,
+        })
+      : createDefaultRevolutionCut({
+          id,
+          axis: payload.axis ?? context.upDirection,
+          center: context.geometryCenter,
+          viewDirection: payload.viewDirection,
+        });
+  return { isSectionViewActive: true, sectionCuts: [...context.sectionCuts, cut], selectedSectionCutId: id };
+};
+
+/** Drops the cut and the selection and hover that name it; `undefined` when no cut has that id. */
+const withoutSectionCut = (
+  context: GraphicsContext,
+  id: string,
+): Pick<GraphicsContext, 'sectionCuts' | 'selectedSectionCutId' | 'hoveredSectionCutId'> | undefined => {
+  const sectionCuts = context.sectionCuts.filter((cut) => cut.id !== id);
+  if (sectionCuts.length === context.sectionCuts.length) {
+    return undefined;
+  }
+  return {
+    sectionCuts,
+    selectedSectionCutId: context.selectedSectionCutId === id ? undefined : context.selectedSectionCutId,
+    hoveredSectionCutId: context.hoveredSectionCutId === id ? undefined : context.hoveredSectionCutId,
+  };
+};
+
+/**
+ * Turning the section off: nothing is cut, so nothing is committed until the caps draw again, and no cut stays hovered
+ * for when it turns back on.
+ */
+const sectionOffContext: Pick<GraphicsContext, 'isSectionViewActive' | 'committedSectionCuts' | 'hoveredSectionCutId'> =
+  {
+    isSectionViewActive: false,
+    committedSectionCuts: [],
+    hoveredSectionCutId: undefined,
+  };
+
+/** Selecting or hovering names a cut in the list, or none; naming the current one again changes nothing. */
+const isSectionCutReference = (context: GraphicsContext, current: string | undefined, next: string | undefined) =>
+  next !== current && (next === undefined || context.sectionCuts.some((cut) => cut.id === next));
+
+/** WebGPU is off for the page: the preference resolves without it. */
+const webGpuOffContext = ({ context }: { context: GraphicsContext }): GraphicsPatch => ({
+  webGpuAvailable: false,
+  resolvedGraphicsBackend: resolveGraphicsBackendPreference(context.graphicsBackendPreference, false),
+});
+
+/** The frame every view's camera is placed in; the render frame anchors on it. */
+const cameraFrameId = 'tau:root';
+
+/** The transform from glTF's Y-up world to Tau's Z-up world, column-major, as GltfMesh's asset group applies it. */
+const canonicalGltfToTau = resolveCoordinateTransform({ source: canonicalGltfWorld, target: tauWorld }).matrix;
+
+/** Bounds in glTF world space, as a manifest records them, moved into Tau world space. */
+const toTauBounds = ({ min, max }: CameraBounds): CameraBounds => {
+  const low: [number, number, number] = [Infinity, Infinity, Infinity];
+  const high: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (const x of [min[0], max[0]]) {
+    for (const y of [min[1], max[1]]) {
+      for (const z of [min[2], max[2]]) {
+        for (let axis = 0; axis < 3; axis += 1) {
+          const value =
+            canonicalGltfToTau[axis]! * x +
+            canonicalGltfToTau[axis + 4]! * y +
+            canonicalGltfToTau[axis + 8]! * z +
+            canonicalGltfToTau[axis + 12]!;
+          low[axis] = Math.min(low[axis]!, value);
+          high[axis] = Math.max(high[axis]!, value);
+        }
+      }
+    }
+  }
+  return { min: low, max: high };
+};
+
+/**
+ * Each model unit's focused component, from a model-interaction snapshot, for `componentFocusObserved`.
+ *
+ * @param context - The model interaction's context.
+ * @returns The focus of every unit that has one.
+ * @public
+ */
+export const selectComponentFocus = (context: ModelInteractionContext): ComponentFocus => {
+  const focus: Record<string, string> = {};
+  for (const [unitId, unit] of Object.entries(context.unitsById)) {
+    if (unit.focusedComponentId) {
+      focus[unitId] = unit.focusedComponentId;
+    }
+  }
+  return focus;
+};
+
+/**
+ * Whether two folds of the component focus name the same component for every unit.
+ *
+ * @param previous - The focus folded before.
+ * @param next - The focus now.
+ * @returns Whether they are the same.
+ * @public
+ */
+export const sameComponentFocus = (previous: ComponentFocus, next: ComponentFocus): boolean => {
+  const units = Object.keys(next);
+  return units.length === Object.keys(previous).length && units.every((unitId) => previous[unitId] === next[unitId]);
+};
+
+/**
+ * Frames the camera on the presented unit's focused component, once per focus: one change, with the source `focus`,
+ * that keeps the scene bounds (D20). A cleared focus leaves the camera where it is.
+ *
+ * @param context - Graphics' context, as it is after the transition.
+ * @param enq - The transition's enqueue.
+ * @returns The component focus now framed, for `framedFocusComponentId`.
+ */
+const frameComponentFocus = (context: GraphicsContext, enq: GraphicsEnqueue): string | undefined => {
+  const componentId = context.modelInteractionUnitId
+    ? context.componentFocus[context.modelInteractionUnitId]
+    : undefined;
+  if (!componentId) {
+    return undefined;
+  }
+  const isPresented =
+    context.artifact?.mimeType === 'model/gltf-binary' && context.gltfPresentation.presentedKey !== undefined;
+  // This view's own geometry: the presented manifest, not the one a shared model interaction holds for the unit.
+  const bounds = context.presentedManifest?.nodesById[componentId]?.bounds;
+  if (componentId === context.framedFocusComponentId || !bounds || !isPresented) {
+    return context.framedFocusComponentId;
+  }
+  enq.sendTo(context.cameraRef, {
+    type: 'frameBounds',
+    bounds: toTauBounds({ min: [...bounds.min], max: [...bounds.max] }),
+    margin: 0.1,
+    source: 'focus',
+  });
+  return componentId;
+};
+
+/** The centre of measured bounds, in metres. */
+const boundsCenter = ({ min, max }: CameraBounds): [number, number, number] => [
+  (min[0] + max[0]) / 2,
+  (min[1] + max[1]) / 2,
+  (min[2] + max[2]) / 2,
+];
+
+/** The camera's opening direction when the view has no persisted pose. */
+const initialCameraDirection = [Math.sqrt(3 / 8), -Math.sqrt(3 / 8), 0.5] as const;
+const upAxisVectors = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] } as const;
+
+/* The camera seed as the view-camera registry built it: the persisted pose and field of view, else the default pose. */
+const cameraSeed = (input: GraphicsInput, upDirection: 'x' | 'y' | 'z') => {
+  const pixelRatio: unknown = Reflect.get(globalThis, 'devicePixelRatio');
+  return {
+    pixelBudget: 0.25,
+    initialView: createCameraView({
+      ...(input.camera?.cameraView ?? {
+        target: [0, 0, 0],
+        direction: initialCameraDirection,
+        up: upAxisVectors[upDirection],
+        // Keep the seed bounds in front of the camera so the empty scene has stable depth precision.
+        verticalSpan: 4,
+        perspectiveZoom: 1,
+      }),
+      frameId: cameraFrameId,
+      // Matches `defaultGraphicsSettings.cameraFovAngle`.
+      requestedVerticalFieldOfView: input.camera?.cameraFovAngle ?? 60,
+      viewport: {
+        width: 1,
+        height: 1,
+        pixelRatio: Math.min(typeof pixelRatio === 'number' && pixelRatio > 0 ? pixelRatio : 1, 2),
+      },
+      bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+    }),
+  };
+};
+
+const graphicsMachineDefinition = setup({
+  actors: graphicsActors,
+  schemas: {
+    context: types<GraphicsContext>(),
+    events: eventSchemas<GraphicsEvent>(),
+    input: types<GraphicsInput>(),
+    emitted: eventSchemas<GraphicsEmitted>(),
+    tags: types<GraphicsTag>(),
+  },
+}).createMachine({
+  id: 'graphics',
+  // A defect (an effect that threw, a failed child, a send to no child) is recorded, never fatal (MC-R12). The first
+  // is kept: the root cause matters more than the defects it sets off.
+  onError: ({ context, event }) => ({ context: { fault: context.fault ?? describeFault(event.error) } }),
+
+  invoke: [{ src: 'watchWebGpuCanvasLoss', id: 'watchWebGpuCanvasLossInvocation' }],
+
+  context: ({ input, spawn, actors }) => {
+    const preference = input.graphicsBackend ?? 'webgpu';
+    const ownsModelInteractionRef = input.modelInteractionRef === undefined;
+    const modelInteractionRef =
+      input.modelInteractionRef ??
+      spawn(actors.modelInteraction, {
+        id: 'model-interaction',
+        input: {},
+      });
+    const seed = cameraSeed(input, input.upDirection ?? 'z');
+    const cameraRef = spawn(actors.camera, { id: 'camera', input: seed });
+
+    return {
+      // Grid state
+      gridSizes: { smallSize: 0.001, largeSize: 0.01 },
+      gridSizesComputed: { smallSize: 0.001, largeSize: 0.01 },
+      isGridSizeLocked: false,
+      displayUnits: {
+        length: {
+          symbol: 'mm',
+          metersPerUnit: 1e-3,
+          system: 'si',
+        },
+      },
+      cadUnits: {
+        length: {
+          symbol: 'mm', // Default to mm
+        },
+      },
+
+      // Camera state
+      cameraVisibleSpan: 0.002,
+      geometryRadius: 0,
+      geometryCenter: [0, 0, 0],
+
+      // Visibility state (from per-view settings or defaults)
+      enableSurfaces: input.enableSurfaces ?? true,
+      enableLines: input.enableLines ?? true,
+      enableGizmo: input.enableGizmo ?? true,
+      enableGrid: input.enableGrid ?? true,
+      enableAxes: input.enableAxes ?? true,
+      enableMatcap: input.enableMatcap ?? false,
+      upDirection: input.upDirection ?? 'z',
+      graphicsBackendPreference: preference,
+      webGpuAvailable: false,
+      resolvedGraphicsBackend: resolveGraphicsBackendPreference(preference, false),
+      canvas: undefined,
+
+      // Section view state (the cuts are durable and entry-scoped)
+      ...createSectionViewSeed(input.sectionView),
+      committedSectionCuts: [],
+
+      // Measure state
+      isMeasureActive: false,
+      isMeasureInputReady: false,
+      measurements: (input.pinnedMeasurements ?? []).map((m) => ({
+        ...m,
+        isPinned: true,
+        status: m.anchors?.length ? 'out-of-date' : 'snapshot',
+        quality: m.quality ?? 'snapshot',
+      })),
+      currentMeasurementStart: undefined,
+      currentMeasurementAnchor: undefined,
+      measureMode: 'auto',
+      measureFrame: 'tau:root',
+      measureSnapEnabled: true,
+      measureOperation: 'point-distance',
+      measureFilter: 'auto',
+      measureLockedTargetId: undefined,
+      measureCandidates: [],
+      measureActiveCandidateId: undefined,
+      measureChosenCandidateId: undefined,
+      measureCatalogHasMore: false,
+      measureMessage: undefined,
+      measurePreviewDistance: undefined,
+      measureSnapDistance: input.measureSnapDistance ?? 10,
+      hoveredMeasurementId: undefined,
+
+      // State flags
+      suppressNextModelPointerClick: false,
+      modelPointerClickSuppressionReasons: [],
+      viewerHoverSuppressionReasons: [],
+      pickableMeshesVersion: 0,
+      modelInteractionRef,
+      ownsModelInteractionRef,
+      modelInteractionUnitId: undefined,
+      kinematicsRef: spawn(actors.kinematics, { id: 'kinematics', input: {} }),
+      poseRevision: 0,
+      cameraRef,
+      framingRef: spawn(actors.framing, {
+        id: 'framing',
+        input: {
+          camera: cameraRef,
+          // The camera opens on the persisted pose, and framing applies it again over the entry's first frame.
+          pendingPose: input.camera?.cameraView && { requestId: 'seed', pose: input.camera.cameraView },
+          ...defaultFramingStage(seed.initialView.up),
+        },
+      }),
+      renderFrameKey: undefined,
+      presentationRef: spawn(actors.presentation, { id: 'presentation' }),
+      framedFocusComponentId: undefined,
+      componentFocus: {},
+      presentedManifest: undefined,
+      sectionInput: undefined,
+      viewportGizmo: undefined,
+      viewerEnvironment: undefined,
+      controlsAdapter: undefined,
+      svgView: undefined,
+      kinematicsScene: undefined,
+      kinematicsUnitId: undefined,
+      cameraPresented: false,
+
+      // Shapes
+      artifact: undefined,
+      artifactKey: '',
+      gltfPresentation: {
+        requestedRevision: 0,
+        presentedRevision: 0,
+        phase: 'idle',
+      },
+    };
+  },
+  exit: ({ context }, enq) => {
+    if (context.ownsModelInteractionRef) {
+      enq.stop(context.modelInteractionRef);
+    }
+    enq.stop(context.kinematicsRef);
+    if (context.controlsAdapter) {
+      enq.stop(context.controlsAdapter.ref);
+    }
+    if (context.canvas) {
+      enq.stop(context.canvas.ref);
+    }
+    if (context.sectionInput) {
+      enq.stop(context.sectionInput.ref);
+    }
+    if (context.svgView) {
+      enq.stop(context.svgView.ref);
+    }
+    if (context.kinematicsScene) {
+      enq.stop(context.kinematicsScene.ref);
+    }
+    if (context.viewportGizmo) {
+      enq.stop(context.viewportGizmo.ref);
+    }
+    enq.stop(context.framingRef);
+    enq.stop(context.presentationRef);
+    enq.stop(context.cameraRef);
+  },
+  initial: 'operational',
+  states: {
+    operational: {
+      /* Seeded cuts set context directly; this raise only enters the section region's `on` state. */
+      entry: ({ context }, enq) => {
+        enq.listen(
+          context.cameraRef,
+          'viewChanged',
+          (event): GraphicsEvent => ({
+            type: 'cameraViewChanged',
+            verticalSpan: (event as CameraMachineEmitted & { type: 'viewChanged' }).verticalSpan,
+          }),
+        );
+        // A measurement is stamped with the pose it was taken at, folded from each kinematics snapshot.
+        enq.subscribeTo(
+          context.kinematicsRef,
+          (snapshot): GraphicsEvent => ({ type: 'poseRevisionObserved', revision: snapshot.context.revision }),
+        );
+        // A component focus on the presented unit frames the camera on that component (D20). Graphics folds the focus
+        // from a model interaction it owns (MC-R11); a host that shares one sends `componentFocusObserved` itself.
+        if (context.ownsModelInteractionRef) {
+          enq.subscribeTo(
+            context.modelInteractionRef,
+            (snapshot): GraphicsEvent => ({
+              type: 'componentFocusObserved',
+              focus: selectComponentFocus(snapshot.context),
+            }),
+          );
+        }
+        if (context.isSectionViewActive) {
+          enq.raise({ type: 'setSectionViewActive', payload: true });
+        }
+      },
+      type: 'parallel',
+      on: {
+        // Grid events
+        updateGridSize: ({ context, event }, enq) => {
+          if (context.isGridSizeLocked) {
+            return { context: { gridSizesComputed: event.payload } };
+          }
+          enq.emit({ type: 'gridUpdated', sizes: event.payload });
+          return { context: { gridSizes: event.payload, gridSizesComputed: event.payload } };
+        },
+        setGridSizeLocked: ({ context, event }) => ({
+          context: { gridSizes: context.gridSizesComputed, isGridSizeLocked: event.payload },
+        }),
+        setGridUnit: ({ context, event, self }, enq) => {
+          const unitData = getLengthUnitData(event.payload.unit);
+          const previousUnitData = getLengthUnitData(context.displayUnits.length.symbol);
+
+          const isSystemChange = previousUnitData.system !== unitData.system;
+          const isImperialFactorChange =
+            unitData.system === 'imperial' && context.displayUnits.length.metersPerUnit !== unitData.factor;
+
+          // Only recalculate grid spacing when:
+          // 1. Switching between si/imperial systems (visual spacing changes)
+          // 2. Changing factor in imperial units (affects visual spacing)
+          // For si units, factor changes only affect display numbers, not visual spacing
+          if (isSystemChange || isImperialFactorChange) {
+            enq.sendTo(self, {
+              type: 'updateGridSize',
+              payload: calculateGridSizes({
+                visibleSpan: context.cameraVisibleSpan,
+                gridUnitSystem: unitData.system,
+                unitFactor: unitData.factor,
+              }),
+            });
+          }
+          return {
+            context: {
+              displayUnits: {
+                length: { symbol: unitData.symbol, metersPerUnit: unitData.factor, system: unitData.system },
+              },
+            },
+          };
+        },
+
+        // Viewer shortcuts: graphics decides, and a key that does nothing here is left unhandled.
+        viewerShortcutPressed: ({ context, event }, enq) => {
+          const decision = decideViewerShortcut(context, event);
+          if (!decision) {
+            return undefined;
+          }
+          if (decision.event) {
+            enq.raise(decision.event);
+          }
+          if (decision.camera) {
+            enq.sendTo(context.cameraRef, decision.camera);
+          }
+          enq.emit({ type: 'viewerShortcutApplied', pressId: event.pressId, outcome: decision.outcome });
+          return {};
+        },
+
+        // Camera events
+        fitView: ({ context }, enq) => {
+          // Fit view zooms and recentres the camera on the latest measurement; it never turns it (framing).
+          enq.sendTo(context.framingRef, { type: 'fitRequested' });
+          if (context.svgView) {
+            enq.sendTo(context.svgView.ref, { type: 'fit' });
+          }
+          enq.emit({ type: 'viewFitRequested' });
+          return {};
+        },
+        navigateCamera: ({ context, event }, enq) => {
+          if (!context.controlsAdapter) {
+            return undefined;
+          }
+          enq.sendTo(context.controlsAdapter.ref, { type: 'navigate', step: event.step });
+          return {};
+        },
+        entryChanged: ({ context, event }, enq) => {
+          enq.sendTo(context.framingRef, event);
+          return {};
+        },
+        geometryBoundsMeasured: ({ context, event }, enq) => {
+          const anchored = event.key === context.renderFrameKey || !(event.radius > 0);
+          if (!anchored) {
+            // A new presentation anchors the render frame on its geometry before the camera frames it, as the stage did.
+            enq.sendTo(context.cameraRef, {
+              type: 'setRenderFrame',
+              renderFrame: {
+                anchorFrameId: cameraFrameId,
+                originMeters: boundsCenter(event.bounds),
+                metersPerRenderUnit: resolveMetersPerRenderUnit({ characteristicLengthMeters: event.radius * 2 }),
+              },
+            });
+          }
+          enq.sendTo(context.framingRef, event);
+          // The measured sphere is the scene's, for the section defaults and the observers of its radius.
+          const center = boundsCenter(event.bounds);
+          const sphereChanged =
+            event.radius > 0 &&
+            (event.radius !== context.geometryRadius ||
+              center.some((value, axis) => value !== context.geometryCenter[axis]));
+          if (sphereChanged) {
+            enq.emit({ type: 'geometryRadiusCalculated', radius: event.radius });
+          }
+          const patch: GraphicsPatch = {
+            ...(anchored ? {} : { renderFrameKey: event.key }),
+            ...(sphereChanged ? { geometryRadius: event.radius, geometryCenter: center } : {}),
+          };
+          return Object.keys(patch).length === 0 ? {} : { context: patch };
+        },
+        poseRevisionObserved: ({ context, event }) =>
+          event.revision === context.poseRevision ? {} : { context: { poseRevision: event.revision } },
+        cameraViewChanged: ({ context, event, self }, enq) => {
+          // Every camera change emits `viewChanged`; only a new span re-derives the grid.
+          if (
+            !Number.isFinite(event.verticalSpan) ||
+            event.verticalSpan <= 0 ||
+            event.verticalSpan === context.cameraVisibleSpan
+          ) {
+            return {};
+          }
+          // Recalculate grid sizes based on new controls state
+          enq.sendTo(self, {
+            type: 'updateGridSize',
+            payload: calculateGridSizes({
+              visibleSpan: event.verticalSpan,
+              gridUnitSystem: context.displayUnits.length.system,
+              unitFactor: context.displayUnits.length.metersPerUnit,
+            }),
+          });
+          return { context: { cameraVisibleSpan: event.verticalSpan } };
+        },
+
+        // Visibility events
+        setSurfaceVisibility: {
+          context: ({ context, event }) => ({
+            enableSurfaces: event.payload,
+            pickableMeshesVersion: context.pickableMeshesVersion + 1,
+          }),
+        },
+        setLinesVisibility: {
+          context: ({ context, event }) => ({
+            enableLines: event.payload,
+            pickableMeshesVersion: context.pickableMeshesVersion + 1,
+          }),
+        },
+        setGizmoVisibility: { context: ({ event }) => ({ enableGizmo: event.payload }) },
+        setGridVisibility: { context: ({ event }) => ({ enableGrid: event.payload }) },
+        setAxesVisibility: { context: ({ event }) => ({ enableAxes: event.payload }) },
+        setMatcapVisibility: { context: ({ event }) => ({ enableMatcap: event.payload }) },
+        setUpDirection: ({ context, event }, enq) => {
+          if (event.payload === context.upDirection) {
+            return {};
+          }
+          // The camera keeps its view direction and takes the new world up, unless the two are parallel.
+          enq.sendTo(context.cameraRef, { type: 'setUpDirection', axis: event.payload });
+          if (context.canvas) {
+            enq.sendTo(context.canvas.ref, { type: 'upDirectionChanged', upDirection: event.payload });
+          }
+          // The view cube turns about the view's up axis (handoff report R24: G8 owns only the cube's own up input).
+          if (context.viewportGizmo) {
+            enq.sendTo(context.viewportGizmo.ref, { type: 'upDirectionChanged', upDirection: event.payload });
+          }
+          return { context: { upDirection: event.payload } };
+        },
+        adoptUpDirection: ({ context, event }) =>
+          event.payload === context.upDirection ? {} : { context: { upDirection: event.payload } },
+        setGraphicsBackendPreference: {
+          context: ({ context, event }) => ({
+            graphicsBackendPreference: event.payload,
+            resolvedGraphicsBackend: resolveGraphicsBackendPreference(event.payload, context.webGpuAvailable),
+          }),
+        },
+
+        canvasAttached: ({ context, event, actors }, enq) => {
+          if (context.canvas?.canvasId === event.canvasId) {
+            // Idempotent re-delivery: this surface's actor is already running.
+            return {};
+          }
+          if (context.canvas) {
+            enq.stop(context.canvas.ref);
+          }
+          const adapter = stopControlsAdapter(context, enq);
+          const ref = enq.spawn(actors.canvas, {
+            id: `canvas:${event.canvasId}`,
+            input: {
+              canvasId: event.canvasId,
+              kind: event.kind,
+              webglContext: event.webglContext,
+              admittedBytes: event.admittedBytes,
+              reattached: event.reattached,
+              camera: context.cameraRef,
+              upDirection: context.upDirection,
+            },
+          });
+          return { context: { canvas: { canvasId: event.canvasId, ref }, ...adapter } };
+        },
+        canvasDetached: ({ context, event }, enq) => {
+          if (context.canvas?.canvasId !== event.canvasId) {
+            // Stale: a replacement surface already took the slot.
+            return {};
+          }
+          enq.stop(context.canvas.ref);
+          return { context: { canvas: undefined, ...stopControlsAdapter(context, enq) } };
+        },
+        controlsAttached: ({ context, event }, enq) => {
+          if (context.canvas?.canvasId !== event.canvasId) {
+            // Stale: that surface is no longer attached.
+            return {};
+          }
+          if (context.controlsAdapter?.canvasId === event.canvasId) {
+            // Idempotent re-delivery: this surface's adapter is already running.
+            return {};
+          }
+          const ref = enq.spawn(event.adapter, { id: `controls:${event.canvasId}` });
+          return { context: { controlsAdapter: { canvasId: event.canvasId, ref }, cameraPresented: true } };
+        },
+        svgViewAttached: ({ context, event }, enq) => {
+          if (context.svgView?.viewId === event.viewId) {
+            // Idempotent re-delivery: this view's adapter is already running.
+            return {};
+          }
+          if (context.svgView) {
+            enq.stop(context.svgView.ref);
+          }
+          const ref = enq.spawn(event.adapter, { id: `svgView:${event.viewId}` });
+          return { context: { svgView: { viewId: event.viewId, ref } } };
+        },
+        svgViewDetached: ({ context, event }, enq) => {
+          if (context.svgView?.viewId !== event.viewId) {
+            // Stale: a newer view already took the slot.
+            return {};
+          }
+          enq.stop(context.svgView.ref);
+          return { context: { svgView: undefined } };
+        },
+        kinematicsSceneAttached: ({ context, event }, enq) => {
+          if (context.kinematicsScene?.sceneId === event.sceneId) {
+            return {};
+          }
+          if (context.kinematicsScene) {
+            enq.stop(context.kinematicsScene.ref);
+          }
+          const ref = enq.spawn(event.adapter, {
+            id: `kinematicsScene:${event.sceneId}`,
+            input: { kinematics: context.kinematicsRef },
+          });
+          return { context: { kinematicsScene: { sceneId: event.sceneId, ref } } };
+        },
+        kinematicsSceneDetached: ({ context, event }, enq) => {
+          if (context.kinematicsScene?.sceneId !== event.sceneId) {
+            return {};
+          }
+          enq.stop(context.kinematicsScene.ref);
+          return { context: { kinematicsScene: undefined } };
+        },
+        sectionInputAttached: ({ context, event }, enq) => {
+          if (context.sectionInput?.inputId === event.inputId) {
+            // Idempotent re-delivery: these handles' input is already running.
+            return {};
+          }
+          if (context.sectionInput) {
+            enq.stop(context.sectionInput.ref);
+          }
+          const ref = enq.spawn(sectionInputMachine.provide({ actors: { adapter: event.adapter } }), {
+            id: `sectionInput:${event.inputId}`,
+          });
+          return { context: { sectionInput: { inputId: event.inputId, ref } } };
+        },
+        sectionInputDetached: ({ context, event }, enq) => {
+          if (context.sectionInput?.inputId !== event.inputId) {
+            // Stale: newer handles already took the slot.
+            return {};
+          }
+          enq.stop(context.sectionInput.ref);
+          return { context: { sectionInput: undefined } };
+        },
+        viewportGizmoAttached: ({ context, event }, enq) => {
+          if (context.viewportGizmo?.gizmoId === event.gizmoId) {
+            // Idempotent re-delivery: this cube's gesture is already running.
+            return {};
+          }
+          if (context.viewportGizmo) {
+            enq.stop(context.viewportGizmo.ref);
+          }
+          const ref = enq.spawn(viewportGizmoGestureMachine.provide({ actors: { adapter: event.adapter } }), {
+            id: `viewportGizmo:${event.gizmoId}`,
+            input: { environment: context.viewerEnvironment, upDirection: context.upDirection },
+          });
+          return { context: { viewportGizmo: { gizmoId: event.gizmoId, ref } } };
+        },
+        viewportGizmoDetached: ({ context, event }, enq) => {
+          if (context.viewportGizmo?.gizmoId !== event.gizmoId) {
+            // Stale: a newer cube already took the slot.
+            return {};
+          }
+          enq.stop(context.viewportGizmo.ref);
+          return { context: { viewportGizmo: undefined } };
+        },
+        viewerEnvironmentChanged: ({ context, event }, enq) => {
+          const { environment } = event;
+          const previous = context.viewerEnvironment;
+          if (
+            previous?.colorScheme === environment.colorScheme &&
+            previous.isHighContrast === environment.isHighContrast &&
+            previous.accentColor === environment.accentColor
+          ) {
+            // Idempotent re-delivery: the environment is already this one.
+            return {};
+          }
+          if (context.viewportGizmo) {
+            enq.sendTo(context.viewportGizmo.ref, { type: 'applyStyle', environment });
+          }
+          return { context: { viewerEnvironment: environment } };
+        },
+
+        // Controls adapter events: the camera owns the gesture phase; graphics owns click and hover suppression.
+        interactionStarted: ({ context }, enq) => {
+          enq.sendTo(context.cameraRef, { type: 'interactionStarted' });
+          return { context: { suppressNextModelPointerClick: false } };
+        },
+        interactionMoved: ({ context }, enq) => {
+          if (!selectGestureHeld(context.cameraRef)) {
+            // A move with no held gesture (a stray control event) neither guards a click nor drops the hover.
+            return {};
+          }
+          enq.sendTo(context.cameraRef, { type: 'interactionMoved' });
+          if (context.viewerHoverSuppressionReasons.includes('cameraControls')) {
+            return { context: { suppressNextModelPointerClick: true } };
+          }
+          clearViewerHover(context, enq, 'viewer');
+          return {
+            context: {
+              suppressNextModelPointerClick: true,
+              viewerHoverSuppressionReasons: addSuppressionReason(
+                context.viewerHoverSuppressionReasons,
+                'cameraControls',
+              ),
+            },
+          };
+        },
+        interactionEnded: ({ context }, enq) => {
+          enq.sendTo(context.cameraRef, { type: 'interactionEnded' });
+          return {
+            context: {
+              viewerHoverSuppressionReasons: removeSuppressionReason(
+                context.viewerHoverSuppressionReasons,
+                'cameraControls',
+              ),
+            },
+          };
+        },
+        beginViewerModelHoverSuppression: ({ context, event }, enq) => {
+          if (context.viewerHoverSuppressionReasons.includes(event.reason)) {
+            return {};
+          }
+          clearViewerHover(context, enq, event.source ?? 'viewer');
+          return {
+            context: {
+              viewerHoverSuppressionReasons: addSuppressionReason(context.viewerHoverSuppressionReasons, event.reason),
+            },
+          };
+        },
+        endViewerModelHoverSuppression: {
+          context: ({ context, event }) => ({
+            viewerHoverSuppressionReasons: removeSuppressionReason(context.viewerHoverSuppressionReasons, event.reason),
+          }),
+        },
+        // Sent on every step of a gizmo drag; only the first one changes anything.
+        markModelPointerGestureMoved: ({ context }) =>
+          context.suppressNextModelPointerClick ? {} : { context: { suppressNextModelPointerClick: true } },
+        clearModelPointerClickGuard: { context: { suppressNextModelPointerClick: false } },
+
+        // Artifact updates
+        clearArtifact: ({ context }, enq) => {
+          if (!context.artifact && !context.modelInteractionUnitId && context.artifactKey === '') {
+            return {};
+          }
+          if (context.ownsModelInteractionRef && context.modelInteractionUnitId) {
+            forwardToModelInteraction(context, enq, {
+              type: 'clearManifest',
+              unitId: context.modelInteractionUnitId,
+              source: 'viewer',
+            });
+            forwardToModelInteraction(context, enq, {
+              type: 'clearSelection',
+              unitId: context.modelInteractionUnitId,
+              source: 'viewer',
+            });
+            forwardToModelInteraction(context, enq, {
+              type: 'clearFocus',
+              unitId: context.modelInteractionUnitId,
+              source: 'viewer',
+            });
+          }
+          const revision = context.gltfPresentation.requestedRevision + 1;
+          enq.sendTo(context.presentationRef, { type: 'clear' });
+          clearLoadedMechanism(context, enq);
+          emitPresentedUnitChange(context, enq, { unitId: undefined, mediaType: undefined });
+          return {
+            context: {
+              kinematicsUnitId: undefined,
+              artifact: undefined,
+              artifactKey: '',
+              artifactSourceFile: undefined,
+              gltfPresentation: { requestedRevision: revision, presentedRevision: revision, phase: 'idle' },
+              modelInteractionUnitId: undefined,
+              presentedManifest: undefined,
+              pickableMeshesVersion: context.pickableMeshesVersion + 1,
+              geometryRadius: 0,
+              geometryCenter: [0, 0, 0] as [number, number, number],
+            },
+          };
+        },
+        updateArtifact: ({ context, event }, enq) => {
+          if (context.ownsModelInteractionRef && event.artifact.mimeType !== 'model/gltf-binary') {
+            const incomingUnitId = event.sourceFile
+              ? deriveModelInteractionUnitId({ sourceFile: event.sourceFile })
+              : undefined;
+            for (const unitId of new Set([context.modelInteractionUnitId, incomingUnitId])) {
+              if (!unitId) {
+                continue;
+              }
+              forwardToModelInteraction(context, enq, { type: 'clearManifest', unitId, source: 'viewer' });
+              forwardToModelInteraction(context, enq, { type: 'clearSelection', unitId, source: 'viewer' });
+              forwardToModelInteraction(context, enq, { type: 'clearFocus', unitId, source: 'viewer' });
+            }
+          }
+          const requestedRevision = context.gltfPresentation.requestedRevision + 1;
+          const modelInteractionUnitId =
+            event.artifact.mimeType === 'model/gltf-binary'
+              ? context.modelInteractionUnitId
+              : event.sourceFile
+                ? deriveModelInteractionUnitId({ sourceFile: event.sourceFile })
+                : undefined;
+          emitPresentedUnitChange(context, enq, {
+            unitId: modelInteractionUnitId,
+            mediaType: event.artifact.mimeType,
+          });
+          enq.sendTo(
+            context.presentationRef,
+            event.artifact.mimeType === 'model/gltf-binary'
+              ? {
+                  type: 'present',
+                  request: {
+                    revision: requestedRevision,
+                    key: event.hash,
+                    unitId: deriveModelInteractionUnitId({ sourceFile: event.sourceFile, geometryHash: event.hash }),
+                    sourceFile: event.sourceFile,
+                    bytes: event.artifact.content,
+                  },
+                }
+              : { type: 'clear' },
+          );
+          const isGltf = event.artifact.mimeType === 'model/gltf-binary';
+          if (!isGltf) {
+            clearLoadedMechanism(context, enq);
+          }
+          return {
+            context: {
+              kinematicsUnitId: isGltf ? context.kinematicsUnitId : undefined,
+              artifact: event.artifact,
+              artifactKey: event.hash,
+              artifactSourceFile: event.sourceFile,
+              gltfPresentation:
+                event.artifact.mimeType === 'model/gltf-binary'
+                  ? withGltfPresentationPhase(
+                      { ...context.gltfPresentation, requestedRevision, requestedKey: event.hash },
+                      'preparing',
+                    )
+                  : withGltfPresentationPhase(
+                      {
+                        ...context.gltfPresentation,
+                        requestedRevision,
+                        requestedKey: undefined,
+                        presentedRevision: requestedRevision,
+                        presentedKey: undefined,
+                      },
+                      'idle',
+                    ),
+              modelInteractionUnitId,
+              presentedManifest:
+                event.artifact.mimeType === 'model/gltf-binary' ? context.presentedManifest : undefined,
+              pickableMeshesVersion:
+                event.artifact.mimeType === 'model/gltf-binary'
+                  ? context.pickableMeshesVersion
+                  : context.pickableMeshesVersion + 1,
+              cadUnits: { length: { symbol: event.artifact.units?.length ?? 'mm' } },
+            },
+          };
+        },
+        presentationHostAttached: ({ context, event }, enq) => {
+          enq.sendTo(context.presentationRef, { type: 'hostAttached', hostId: event.hostId, host: event.host });
+          return {};
+        },
+        presentationHostDetached: ({ context, event }, enq) => {
+          enq.sendTo(context.presentationRef, { type: 'hostDetached', hostId: event.hostId });
+          // A gesture on the mesh ends with it, as when the release may never arrive; the mechanism and its pose stay
+          // for the mesh that mounts next.
+          enq.sendTo(context.kinematicsRef, { type: 'interruptGesture' });
+          return {};
+        },
+        componentFocusObserved: ({ context, event }, enq) => {
+          if (sameComponentFocus(context.componentFocus, event.focus)) {
+            return {};
+          }
+          const next = { ...context, componentFocus: event.focus };
+          return {
+            context: { componentFocus: event.focus, framedFocusComponentId: frameComponentFocus(next, enq) },
+          };
+        },
+        gltfPreparationStarted: {
+          context: ({ context, event }) => ({
+            gltfPresentation: gltfRequestMatches(context, event)
+              ? withGltfPresentationPhase(context.gltfPresentation, 'preparing')
+              : context.gltfPresentation,
+          }),
+        },
+        gltfDisplayReady: ({ context, event }, enq) => {
+          enq.sendTo(context.presentationRef, event);
+          return {
+            context: {
+              gltfPresentation: gltfRequestMatches(context, event)
+                ? withGltfPresentationPhase(
+                    context.gltfPresentation,
+                    event.barrier === 'analysis-ready' ? 'awaiting-analysis' : 'preparing',
+                  )
+                : context.gltfPresentation,
+            },
+          };
+        },
+        gltfAnalysisReady: ({ context, event }, enq) => {
+          enq.sendTo(context.presentationRef, event);
+          return {
+            context: {
+              // Only a scene held at the section barrier resumes: a late section arm analyses the presented scene,
+              // which stays presented.
+              gltfPresentation:
+                gltfRequestMatches(context, event) && context.gltfPresentation.phase === 'awaiting-analysis'
+                  ? withGltfPresentationPhase(context.gltfPresentation, 'preparing')
+                  : context.gltfPresentation,
+            },
+          };
+        },
+        gltfPresentationCommitted: ({ context, event }, enq) => {
+          const { presentedRevision, presentedKey, phase } = context.gltfPresentation;
+          const isRepeat = phase === 'presented' && presentedRevision === event.revision && presentedKey === event.key;
+          // React may attach the same presentation's scene again (StrictMode, a Suspense reveal); it commits once. A
+          // scene prepared again at the same revision has left `presented` first, so its commit still lands.
+          if (!gltfRequestMatches(context, event)) {
+            return {};
+          }
+          const kinematicsUnitId = loadCommittedMechanism(context, enq, event);
+          if (isRepeat) {
+            return kinematicsUnitId === context.kinematicsUnitId ? {} : { context: { kinematicsUnitId } };
+          }
+          enq.sendTo(context.presentationRef, {
+            type: 'gltfPresentationCommitted',
+            revision: event.revision,
+            key: event.key,
+          });
+          // A section armed while this scene was prepared analyses it now that it is presented.
+          if (context.isSectionViewActive) {
+            enq.sendTo(context.presentationRef, { type: 'analyse' });
+          }
+          forwardToModelInteraction(context, enq, {
+            type: 'loadManifest',
+            unitId: event.unitId,
+            manifest: event.manifest,
+            source: 'viewer',
+          });
+          emitPresentedUnitChange(context, enq, { unitId: event.unitId, mediaType: context.artifact?.mimeType });
+          const gltfPresentation = withGltfPresentationPhase(
+            { ...context.gltfPresentation, presentedRevision: event.revision, presentedKey: event.key },
+            'presented',
+          );
+          // A focus that predates the commit (another view of the unit set it) frames this view once it shows the unit.
+          const framedFocusComponentId = frameComponentFocus(
+            { ...context, gltfPresentation, modelInteractionUnitId: event.unitId, presentedManifest: event.manifest },
+            enq,
+          );
+          return {
+            context: {
+              kinematicsUnitId,
+              gltfPresentation,
+              modelInteractionUnitId: event.unitId,
+              pickableMeshesVersion: context.pickableMeshesVersion + 1,
+              presentedManifest: event.manifest,
+              framedFocusComponentId,
+            },
+          };
+        },
+        gltfPresentationFailed: ({ context, event }, enq) => {
+          enq.sendTo(context.presentationRef, event);
+          return {
+            context: {
+              gltfPresentation: gltfRequestMatches(context, event)
+                ? withGltfPresentationPhase(
+                    context.gltfPresentation,
+                    context.gltfPresentation.presentedKey === undefined ? 'failed' : 'presented',
+                  )
+                : context.gltfPresentation,
+            },
+          };
+        },
+        /* D21: the presented frame joins the worker spans that produced it, under the renderer's own
+         * producer identity. The durations ride as attributes rather than as invented child spans —
+         * only their total is anchored to a real clock reading, exactly as the kernels report timings. */
+        gltfPresentationMeasured: ({ event }, enq) => {
+          const { durations, ...attributes } = event.telemetry;
+          const duration = durations.receiptToFirstFrame ?? durations.commitToFirstFrame ?? 0;
+          enq(() => {
+            recordRendererSpan('renderer.presentation', {
+              startTime: performance.now() - duration,
+              duration,
+              attributes: { ...attributes, ...durations },
+            });
+            if (attributes.outcome === 'presented' && durations.receiptToFirstFrame !== undefined) {
+              viewerFirstFrame({
+                backend: attributes.backend,
+                duration: durations.receiptToFirstFrame,
+                triangles: attributes.triangleCount,
+              });
+            }
+          });
+          return {};
+        },
+        sceneRadiusUpdated: ({ event }, enq) => {
+          enq.emit({ type: 'geometryRadiusCalculated', radius: event.radius });
+          return { context: { geometryRadius: event.radius, geometryCenter: event.centerMeters } };
+        },
+
+        // Model/component interaction
+        loadModelComponentManifest: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'loadManifest',
+            unitId: event.unitId,
+            manifest: event.manifest,
+            source: event.source,
+          });
+          emitPresentedUnitChange(context, enq, { unitId: event.unitId, mediaType: context.artifact?.mimeType });
+          return { context: { modelInteractionUnitId: event.unitId } };
+        },
+        clearModelComponentManifest: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'clearManifest',
+            unitId: event.unitId,
+            source: event.source,
+          });
+          return {};
+        },
+        setHoveredModelComponent: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'setHoveredComponent',
+            unitId: event.unitId,
+            componentId: event.componentId,
+            source: event.source,
+          });
+          return {};
+        },
+        toggleModelComponentSelection: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'toggleComponentSelection',
+            unitId: event.unitId,
+            componentId: event.componentId,
+            source: event.source,
+          });
+          return {};
+        },
+        selectModelComponent: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'selectComponent',
+            unitId: event.unitId,
+            componentId: event.componentId,
+            source: event.source,
+          });
+          return {};
+        },
+        clearModelComponentSelection: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'clearSelection',
+            unitId: event.unitId,
+            source: event.source,
+          });
+          return {};
+        },
+        hideModelComponent: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'hideComponent',
+            unitId: event.unitId,
+            componentId: event.componentId,
+            source: event.source,
+          });
+          return {};
+        },
+        showModelComponent: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'showComponent',
+            unitId: event.unitId,
+            componentId: event.componentId,
+            source: event.source,
+          });
+          return {};
+        },
+        showHiddenModelComponents: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'showHiddenComponents',
+            unitId: event.unitId,
+            source: event.source,
+          });
+          return {};
+        },
+        isolateModelComponent: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'isolateComponent',
+            unitId: event.unitId,
+            componentId: event.componentId,
+            source: event.source,
+          });
+          return {};
+        },
+        clearModelComponentIsolation: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'clearIsolation',
+            unitId: event.unitId,
+            source: event.source,
+          });
+          return {};
+        },
+        setModelComponentOpacity: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'setComponentOpacity',
+            unitId: event.unitId,
+            componentId: event.componentId,
+            opacity: event.opacity,
+            source: event.source,
+          });
+          return {};
+        },
+        resetModelComponentOpacities: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'resetComponentOpacities',
+            unitId: event.unitId,
+            source: event.source,
+          });
+          return {};
+        },
+        focusModelComponent: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, {
+            type: 'focusComponent',
+            unitId: event.unitId,
+            componentId: event.componentId,
+            source: event.source,
+          });
+          return {};
+        },
+        clearModelComponentFocus: ({ context, event }, enq) => {
+          forwardToModelInteraction(context, enq, { type: 'clearFocus', unitId: event.unitId, source: event.source });
+          return {};
+        },
+
+        selectSectionCut: ({ context, event }) =>
+          isSectionCutReference(context, context.selectedSectionCutId, event.payload)
+            ? { context: { selectedSectionCutId: event.payload } }
+            : {},
+        hoverSectionCut: ({ context, event }) =>
+          isSectionCutReference(context, context.hoveredSectionCutId, event.payload)
+            ? { context: { hoveredSectionCutId: event.payload } }
+            : {},
+        commitSectionCuts: ({ context, event }) =>
+          event.payload === context.committedSectionCuts ? {} : { context: { committedSectionCuts: event.payload } },
+
+        // Measurement events (available in all operational states)
+        clearMeasurement: {
+          context: ({ context, event }) => ({
+            measurements: context.measurements.filter((m) => m.id !== event.payload),
+          }),
+        },
+        setHoveredMeasurement: { context: ({ event }) => ({ hoveredMeasurementId: event.payload }) },
+        setMeasurementName: {
+          context: ({ context, event }) => ({
+            measurements: context.measurements.map((m) => (m.id === event.id ? { ...m, name: event.name } : m)),
+          }),
+        },
+        toggleMeasurementPinned: {
+          context: ({ context, event }) => ({
+            measurements: context.measurements.map((m) => (m.id === event.id ? { ...m, isPinned: !m.isPinned } : m)),
+          }),
+        },
+        clearUnpinnedMeasurements: {
+          context: ({ context }) => ({ measurements: context.measurements.filter((m) => m.isPinned) }),
+        },
+        adoptPinnedMeasurements: ({ context, event }) => {
+          const current = context.measurements.filter((measurement) => measurement.isPinned);
+          if (
+            JSON.stringify(
+              current.map(({ isPinned: _pinned, status: _status, quality: _quality, ...rest }) => rest),
+            ) === JSON.stringify(event.measurements)
+          ) {
+            return {};
+          }
+          return {
+            context: {
+              measurements: [
+                ...context.measurements.filter((measurement) => !measurement.isPinned),
+                ...event.measurements.map(
+                  (measurement) =>
+                    ({ ...measurement, isPinned: true, status: 'snapshot', quality: 'snapshot' }) as const,
+                ),
+              ],
+            },
+          };
+        },
+        addMeasurementRecord: {
+          context: ({ context, event }) => ({ measurements: [...context.measurements, event.record] }),
+        },
+        resolveMeasurementRecord: {
+          context: ({ context, event }) => ({
+            measurements: context.measurements.map((measurement) =>
+              measurement.id === event.id && measurement.status === 'pending'
+                ? { ...measurement, ...event.patch }
+                : measurement,
+            ),
+          }),
+        },
+        setMeasureMode: {
+          context: ({ event }) => ({
+            measureMode: event.mode,
+            measureCatalogHasMore: false,
+            measureLockedTargetId: undefined,
+            measureChosenCandidateId: undefined,
+          }),
+        },
+        setMeasureFrame: { context: ({ event }) => ({ measureFrame: event.frame }) },
+        setMeasureSnapEnabled: {
+          context: ({ event }) => ({
+            measureSnapEnabled: event.enabled,
+            measureLockedTargetId: undefined,
+            measureChosenCandidateId: undefined,
+          }),
+        },
+        setMeasureOperation: { context: ({ event }) => ({ measureOperation: event.operation }) },
+        setMeasureFilter: {
+          context: ({ event }) => ({
+            measureFilter: event.filter,
+            measureCatalogHasMore: false,
+            measureLockedTargetId: undefined,
+            measureChosenCandidateId: undefined,
+          }),
+        },
+        setMeasureCandidates: {
+          context: ({ context, event }) => ({
+            measureCandidates: event.candidates,
+            measureCatalogHasMore: event.hasMore ?? (event.candidates.length > 0 && context.measureCatalogHasMore),
+            measureChosenCandidateId: event.candidates.some(
+              (candidate) => candidate.id === context.measureChosenCandidateId,
+            )
+              ? context.measureChosenCandidateId
+              : undefined,
+            measureLockedTargetId: event.candidates.some((candidate) => candidate.id === context.measureLockedTargetId)
+              ? context.measureLockedTargetId
+              : undefined,
+            measureActiveCandidateId: event.candidates.some(
+              (candidate) => candidate.id === context.measureChosenCandidateId,
+            )
+              ? context.measureChosenCandidateId
+              : event.activeId,
+          }),
+        },
+        chooseMeasureCandidate: {
+          context: ({ context, event }) =>
+            context.measureCandidates.some((candidate) => candidate.id === event.id)
+              ? { measureActiveCandidateId: event.id, measureChosenCandidateId: event.id }
+              : {},
+        },
+        clearMeasureChosenCandidate: {
+          context: () => ({ measureChosenCandidateId: undefined }),
+        },
+        // The measuring tool's session hears these and does the work; graphics keeps no request counter (G10b).
+        requestMeasureCandidateCommit: (_, enq) => {
+          enq.emit({ type: 'measureCandidateCommitRequested' });
+          return {};
+        },
+        requestMeasureCatalog: ({ event }, enq) => {
+          enq.emit({ type: 'measureCatalogRequested', append: event.append ?? false });
+          return {};
+        },
+        setMeasureMessage: { context: ({ event }) => ({ measureMessage: event.message }) },
+        setMeasurePreviewDistance: { context: ({ event }) => ({ measurePreviewDistance: event.distance }) },
+        setMeasureLockedTarget: { context: ({ event }) => ({ measureLockedTargetId: event.id }) },
+        measurementSourceChanged: {
+          context: ({ context, event }) => ({
+            currentMeasurementStart:
+              context.currentMeasurementAnchor?.geometryKey === event.geometryKey
+                ? context.currentMeasurementStart
+                : undefined,
+            currentMeasurementAnchor:
+              context.currentMeasurementAnchor?.geometryKey === event.geometryKey
+                ? context.currentMeasurementAnchor
+                : undefined,
+            measurements: markMeasurementsOutOfDate(context.measurements, (measurement) =>
+              Boolean(measurement.geometryKey && measurement.geometryKey !== event.geometryKey),
+            ),
+          }),
+        },
+        measurementPoseChanged: {
+          context: ({ context, event }) => ({
+            currentMeasurementStart: undefined,
+            currentMeasurementAnchor: undefined,
+            measurements: markMeasurementsOutOfDate(
+              context.measurements,
+              (measurement) => measurement.poseRevision !== undefined && measurement.poseRevision !== event.revision,
+            ),
+          }),
+        },
+        measurementCutChanged: {
+          context: ({ context }) => ({
+            currentMeasurementStart: undefined,
+            currentMeasurementAnchor: undefined,
+            measurements: markMeasurementsOutOfDate(context.measurements, (measurement) =>
+              Boolean(measurement.anchors?.length && measurement.status !== 'snapshot'),
+            ),
+          }),
+        },
+      },
+      states: {
+        /*
+         * The rendering backend: `probing` while the WebGPU capability probe runs, `resolved` once it answered (or failed
+         * or ran out of time), and `lost` once a WebGPU canvas on this page could not present. A canvas loss reported
+         * while probing turns WebGPU off but, as before, the probe's own answer then decides.
+         */
+        backend: {
+          initial: 'probing',
+          states: {
+            probing: {
+              tags: ['backend-probing'],
+              invoke: {
+                src: 'probeWebGpu',
+                id: 'probeWebGpuInvocation',
+                onDone: ({ context, event }) => {
+                  const output = typeof event.output === 'boolean' ? event.output : false;
+                  return {
+                    target: 'resolved',
+                    context: {
+                      webGpuAvailable: output,
+                      resolvedGraphicsBackend: resolveGraphicsBackendPreference(
+                        context.graphicsBackendPreference,
+                        output,
+                      ),
+                    },
+                  };
+                },
+                /** Probe actor rejected / threw — pessimistic fallback. */
+                onError: ({ context }) => ({
+                  target: 'resolved',
+                  context: {
+                    webGpuAvailable: false,
+                    resolvedGraphicsBackend: resolveGraphicsBackendPreference(context.graphicsBackendPreference, false),
+                  },
+                }),
+              },
+              on: {
+                webGpuCanvasLost: { context: webGpuOffContext },
+              },
+            },
+            resolved: {
+              on: {
+                // A Retry or remount then starts on WebGL instead of repeating the WebGPU start the browser cannot present.
+                webGpuCanvasLost: { target: 'lost', context: webGpuOffContext },
+              },
+            },
+            lost: {
+              on: {
+                webGpuCanvasLost: { context: webGpuOffContext },
+              },
+            },
+          },
+        },
+        section: {
+          initial: 'off',
+          states: {
+            off: {
+              entry: (_, enq) => {
+                enq.emit({ type: 'sectionSettled' });
+              },
+              on: {
+                adoptSectionView: ({ context, event }) => {
+                  const patch = adoptedSection(context, event.section);
+                  return patch ? { target: patch.isSectionViewActive ? 'on' : 'off', context: patch } : {};
+                },
+                setSectionViewActive: ({ context, event }) => {
+                  if (!event.payload) {
+                    return undefined;
+                  }
+                  return {
+                    target: 'on',
+                    context:
+                      context.sectionCuts.length === 0
+                        ? appendSectionCut(context, { kind: 'plane', viewDirection: event.viewDirection })
+                        : { isSectionViewActive: true },
+                  };
+                },
+                addSectionCut: ({ context, event }) =>
+                  context.sectionCuts.length >= maxSectionCuts
+                    ? {}
+                    : { target: 'on', context: appendSectionCut(context, event.payload) },
+                removeSectionCut: ({ context, event }, enq) => {
+                  const patch = withoutSectionCut(context, event.payload);
+                  if (!patch) {
+                    return {};
+                  }
+                  // Nothing is being edited while the section is off: the change is settled at once.
+                  enq.emit({ type: 'sectionSettled' });
+                  return { context: patch };
+                },
+                updateSectionCut: ({ context, event }, enq) => {
+                  const patch = updatedSectionCut(context, event.payload);
+                  if (!patch) {
+                    return {};
+                  }
+                  enq.emit({ type: 'sectionSettled' });
+                  return { context: patch };
+                },
+              },
+            },
+
+            /*
+             * The section quiet gate (charter G6): a change to the cuts enters `editing`, and the cuts settle
+             * `sectionSettleDelay` after the last one. Only a settled section is written to the view record, and a
+             * foreign section is adopted only then; graphics tells its listeners with `sectionEdited` and
+             * `sectionSettled`.
+             */
+            on: {
+              // A section armed after the scene was presented analyses it now (D27: topology only for an armed tool).
+              entry: ({ context }, enq) => {
+                enq.sendTo(context.presentationRef, { type: 'analyse' });
+              },
+              initial: 'settled',
+              states: {
+                settled: {
+                  entry: (_, enq) => {
+                    enq.emit({ type: 'sectionSettled' });
+                  },
+                },
+                editing: {
+                  entry: (_, enq) => {
+                    enq.emit({ type: 'sectionEdited' });
+                  },
+                  after: { [sectionSettleDelay]: { target: 'settled' } },
+                },
+              },
+              on: {
+                adoptSectionView: ({ context, event }) => {
+                  const patch = adoptedSection(context, event.section);
+                  return patch ? { target: patch.isSectionViewActive ? 'on' : 'off', context: patch } : {};
+                },
+                setSectionViewActive: ({ event }) =>
+                  event.payload ? undefined : { target: 'off', context: { ...sectionOffContext } },
+                addSectionCut: ({ context, event }) =>
+                  context.sectionCuts.length >= maxSectionCuts
+                    ? {}
+                    : { target: '.editing', context: appendSectionCut(context, event.payload) },
+                removeSectionCut: ({ context, event }) => {
+                  const patch = withoutSectionCut(context, event.payload);
+                  if (!patch) {
+                    return {};
+                  }
+                  return patch.sectionCuts.length === 0
+                    ? { target: 'off', context: { ...patch, ...sectionOffContext } }
+                    : { target: '.editing', context: patch };
+                },
+                // Each step of a drag or an edit restarts the quiet period.
+                updateSectionCut: ({ context, event }) => {
+                  const patch = updatedSectionCut(context, event.payload);
+                  return patch ? { target: '.editing', context: patch } : {};
+                },
+              },
+            },
+          },
+        },
+
+        measure: {
+          initial: 'off',
+          states: {
+            off: {
+              on: {
+                setMeasureActive: ({ context, event }, enq) =>
+                  event.payload
+                    ? {
+                        target: 'on',
+                        context: {
+                          isMeasureActive: true,
+                          isMeasureInputReady: false,
+                          ...beginMeasureHoverSuppression(context, enq),
+                        },
+                      }
+                    : undefined,
+              },
+            },
+
+            on: {
+              initial: 'selecting',
+              on: {
+                // Listener ownership is synchronous and local to the active tool; late inactive reports are ignored.
+                setMeasureInputReady: { context: ({ event }) => ({ isMeasureInputReady: event.ready }) },
+                // Leaving keeps every measurement; only a half-placed one is dropped.
+                setMeasureActive: ({ context, event }) =>
+                  event.payload
+                    ? undefined
+                    : {
+                        target: 'off',
+                        context: {
+                          isMeasureActive: false,
+                          isMeasureInputReady: false,
+                          currentMeasurementStart: undefined,
+                          currentMeasurementAnchor: undefined,
+                          measureCandidates: [],
+                          measureCatalogHasMore: false,
+                          measureActiveCandidateId: undefined,
+                          measureChosenCandidateId: undefined,
+                          measureLockedTargetId: undefined,
+                          ...endMeasureHoverSuppression(context),
+                        },
+                      },
+                clearAllMeasurements: {
+                  target: '.selecting',
+                  context: {
+                    measurements: [],
+                    currentMeasurementStart: undefined,
+                    currentMeasurementAnchor: undefined,
+                  },
+                },
+              },
+              states: {
+                selecting: {
+                  on: {
+                    completeFeatureMeasurement: {
+                      context: ({ context, event }) => ({
+                        measurements: [
+                          ...context.measurements,
+                          { ...event.record, id: generatePrefixedId(idPrefix.measurement), isPinned: false },
+                        ],
+                      }),
+                    },
+                    startMeasurement: {
+                      target: 'selected',
+                      context: ({ event }) => ({
+                        currentMeasurementStart: event.payload,
+                        currentMeasurementAnchor: event.anchor,
+                      }),
+                    },
+                  },
+                },
+
+                selected: {
+                  on: {
+                    completeFeatureMeasurement: {
+                      target: 'selecting',
+                      context: ({ context, event }) => ({
+                        measurements: [
+                          ...context.measurements,
+                          { ...event.record, id: generatePrefixedId(idPrefix.measurement), isPinned: false },
+                        ],
+                        currentMeasurementStart: undefined,
+                        currentMeasurementAnchor: undefined,
+                      }),
+                    },
+                    completeMeasurement: ({ context, event }) => {
+                      const start = context.currentMeasurementStart;
+                      if (!start) {
+                        return {
+                          target: 'selecting',
+                          context: { currentMeasurementStart: undefined, currentMeasurementAnchor: undefined },
+                        };
+                      }
+                      const end = event.payload;
+                      const sourceGeometryKey =
+                        context.currentMeasurementAnchor?.geometryKey ?? event.anchor?.geometryKey;
+                      return {
+                        target: 'selecting',
+                        context: {
+                          measurements: [
+                            ...context.measurements,
+                            {
+                              id: generatePrefixedId(idPrefix.measurement),
+                              frameId: 'tau:root',
+                              startPoint: start,
+                              endPoint: end,
+                              distance:
+                                event.distance ?? Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]),
+                              operation: event.operation ?? 'point-distance',
+                              quality: event.quality ?? context.currentMeasurementAnchor?.quality ?? 'mesh',
+                              anchors: context.currentMeasurementAnchor
+                                ? [context.currentMeasurementAnchor, event.anchor]
+                                : undefined,
+                              geometryKey: sourceGeometryKey,
+                              poseRevision: context.poseRevision,
+                              status: 'current',
+                              isPinned: false,
+                            },
+                          ],
+                          currentMeasurementStart: undefined,
+                          currentMeasurementAnchor: undefined,
+                        },
+                      };
+                    },
+                    cancelCurrentMeasurement: {
+                      target: 'selecting',
+                      context: { currentMeasurementStart: undefined, currentMeasurementAnchor: undefined },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+/**
+ * The (state, event) pairs the graphics machine leaves unanswered today (MC-R17): its totality baseline. Each
+ * state is a dotted path or `'*'`. The list records the gaps without changing them; a later change that answers one of
+ * these events removes its pair here, and the totality test fails on a stale pair or an unlisted gap.
+ *
+ * @public
+ */
+export const graphicsIgnoredEvents: ReadonlyArray<readonly [state: string, eventType: string]> = [
+  // Declared in the alphabet but handled in no state, deliberately: nothing sends it. The measuring tool's commit
+  // places a feature's first point with `startMeasurement` and its anchor, and completes a one-target feature
+  // measurement with `completeFeatureMeasurement`.
+  ['*', 'startFeatureMeasurement'],
+  // Turning the section on while on, or off while off, returns `undefined`.
+  ['operational.section.off', 'setSectionViewActive'],
+  ['operational.section.on', 'setSectionViewActive'],
+  // Turning the measuring tool on while on, or off while off, returns `undefined`.
+  ['operational.measure.off', 'setMeasureActive'],
+  ['operational.measure.on', 'setMeasureActive'],
+  // The measuring tool's own events, handled only inside `measure.on`.
+  ['operational.measure.off', 'setMeasureInputReady'],
+  ['operational.measure.off', 'clearAllMeasurements'],
+  ['operational.measure.off', 'startMeasurement'],
+  ['operational.measure.off', 'completeMeasurement'],
+  ['operational.measure.off', 'completeFeatureMeasurement'],
+  ['operational.measure.off', 'cancelCurrentMeasurement'],
+  // A point is placed only while selecting, and completed or cancelled only once placed.
+  ['operational.measure.on.selected', 'startMeasurement'],
+  ['operational.measure.on.selecting', 'completeMeasurement'],
+  ['operational.measure.on.selecting', 'cancelCurrentMeasurement'],
+  // A shortcut that does nothing in the current context is left unhandled, so `can` says whether the bar claims the
+  // key: Escape with nothing on, Delete or Backspace with no known cut, and S, M or P on 2D geometry, in any state.
+  ['*', 'viewerShortcutPressed'],
+  // A navigation step with no canvas controls to move is left unhandled, so the bar does not claim the key.
+  ['*', 'navigateCamera'],
+];
+
+/** The graphics machine's state value: the operational backend, section and measure regions. @public */
+export type GraphicsStateValue = {
+  operational: {
+    backend: 'probing' | 'resolved' | 'lost';
+    measure: 'off' | { on: 'selected' | 'selecting' };
+    section: 'off' | { on: 'settled' | 'editing' };
+  };
+};
+
+/**
+ * The graphics machine's tags. `backend-probing`: the WebGPU capability probe has not answered yet.
+ *
+ * @public
+ */
+export type GraphicsTag = 'backend-probing';
+
+/**
+ * The graphics machine's type, written out rather than inferred. The inferred type carries every inline
+ * handler's parameters expanded from the whole setup, which overflows declaration emit (TS7056;
+ * xstate-policy K-17).
+ *
+ * @public
+ */
+export type GraphicsMachine = StateMachine<
+  GraphicsContext,
+  GraphicsEvent,
+  Record<string, AnyActor>,
+  GraphicsStateValue,
+  GraphicsTag,
+  GraphicsInput,
+  Record<never, never>,
+  GraphicsEmitted,
+  MetaObject,
+  StateSchema,
+  Record<never, never>,
+  typeof graphicsActors,
+  Sources['guards'],
+  Sources['delays']
+>;
+
+/** The parameters a written machine type must share with its definition: everything except the config. */
+type CheckedMachineParameters<Machine> =
+  Machine extends StateMachine<
+    infer TContext,
+    infer TEvent,
+    infer TChildren,
+    infer TStateValue,
+    infer TTag,
+    infer TInput,
+    infer TOutput,
+    infer TEmitted,
+    MetaObject,
+    infer _TConfig,
+    infer _TActionMap,
+    infer TActorMap,
+    infer _TGuardMap,
+    infer _TDelayMap
+  >
+    ? {
+        context: TContext;
+        event: TEvent;
+        children: TChildren;
+        stateValue: TStateValue;
+        tag: TTag;
+        input: TInput;
+        output: TOutput;
+        emitted: TEmitted;
+        actors: TActorMap;
+      }
+    : never;
+
+/** `true` when `A` and `B` are assignable to each other, so neither accepts a value the other rejects. */
+type IsSameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/** The names of the parameters on which `Written` and `Definition` disagree; `never` when they agree. */
+type MachineParameterDrift<Written, Definition> = {
+  [K in keyof CheckedMachineParameters<Written>]: IsSameType<
+    CheckedMachineParameters<Written>[K],
+    K extends keyof CheckedMachineParameters<Definition> ? CheckedMachineParameters<Definition>[K] : never
+  > extends true
+    ? never
+    : K;
+}[keyof CheckedMachineParameters<Written>];
+
+/** `Definition` when the written type matches it, else a type `Definition` cannot be assigned to that names the drift. */
+type MatchingDefinition<Definition, Written> = [MachineParameterDrift<Written, Definition>] extends [never]
+  ? Definition
+  : { readonly parameterDrift: MachineParameterDrift<Written, Definition> };
+
+/* The inferred machine keeps its full config type, which is what cannot be serialized; the written type
+ * drops only that config parameter. This module-private assignment fails to compile when the written
+ * context, events, children, state value, tags, input, output, emitted events or actors drift from the
+ * definition, so the cast below never publishes an unverified type. */
+const checkedGraphicsMachineDefinition: MatchingDefinition<typeof graphicsMachineDefinition, GraphicsMachine> =
+  graphicsMachineDefinition;
+
+/**
+ * Graphics Machine
+ *
+ * Manages all graphics-related state including:
+ * - Grid sizing and units
+ * - Camera position and controls
+ * - Screenshot capabilities
+ * - Geometry rendering from CAD
+ *
+ * State Architecture:
+ *
+ * operational (parallel: the tools run together)
+ *   ├── backend
+ *   │   ├── probing (default; the WebGPU capability probe runs)
+ *   │   ├── resolved
+ *   │   └── lost (a WebGPU canvas on the page could not present)
+ *   ├── section
+ *   │   ├── off (default; the cuts are kept)
+ *   │   └── on (at least one cut)
+ *   └── measure
+ *       ├── off (default; the measurements are kept)
+ *       └── on
+ *           ├── selecting (clicking first points)
+ *           └── selected (a first point is placed)
+ *
+ * Common events (grid, camera, visibility, screenshots) and the cut data events are handled once at
+ * the operational level. A transition that turns a tool on or off lives inside that tool's region, so it
+ * never exits and resets the other region.
+ * @public
+ */
+export const graphicsMachine = checkedGraphicsMachineDefinition as unknown as GraphicsMachine;
+
+/**
+ * Selects the key of the geometry currently on screen, falling back to the artifact key before any GLTF has been presented.
+ *
+ * @param snapshot - The graphics machine snapshot.
+ * @returns The presented geometry key.
+ * @public
+ */
+export const selectPresentedGeometryKey = (snapshot: GraphicsSnapshot): string =>
+  snapshot.context.gltfPresentation.presentedKey ?? snapshot.context.artifactKey;
+
+/**
+ * Whether the person is dragging the view's camera: a pose their held gesture made, read at the moment it is needed.
+ *
+ * @param cameraRef - The view's camera.
+ * @returns Whether the camera is in `input.dragging`.
+ * @public
+ */
+export const selectCameraDragging = (cameraRef: GraphicsCameraRef): boolean =>
+  cameraRef.getSnapshot().matches({ input: 'dragging' });
+
+/**
+ * The view's framing actor.
+ *
+ * @param snapshot - The graphics machine snapshot.
+ * @returns The framing actor.
+ * @public
+ */
+export const selectGraphicsFraming = (snapshot: GraphicsSnapshot): GraphicsFramingRef => snapshot.context.framingRef;
+
+/**
+ * Whether the view's entry has had its first geometry framed: until then, the camera holds the seeded or default pose,
+ * which no person placed and nothing persists.
+ * The value lives in the framing child, so the graphics snapshot does not change with it: read it when it is needed,
+ * never through `useGraphicsSelector` or another snapshot-identity subscription.
+ *
+ * @param snapshot - The graphics machine snapshot.
+ * @returns Whether the framing actor is `framed`.
+ * @public
+ */
+export const selectGraphicsFramed = (snapshot: GraphicsSnapshot): boolean =>
+  snapshot.context.framingRef.getSnapshot().matches('framed');
+
+/**
+ * The entry the view frames, once one was named with `entryChanged`.
+ * The value lives in the framing child, so the graphics snapshot does not change with it: read it when it is needed,
+ * never through `useGraphicsSelector` or another snapshot-identity subscription.
+ *
+ * @param snapshot - The graphics machine snapshot.
+ * @returns The entry identity, or `undefined` before the view knows it.
+ * @public
+ */
+export const selectGraphicsFramingIdentity = (snapshot: GraphicsSnapshot): string | undefined =>
+  snapshot.context.framingRef.getSnapshot().context.identity;
+
+/**
+ * Whether the view's cube holds its canvas's interaction lock: its gesture is in a state tagged `interactionLocked`.
+ * The value lives in the gesture child, so the graphics snapshot does not change with it: read it when it is needed,
+ * never through `useGraphicsSelector` or another snapshot-identity subscription.
+ *
+ * @param snapshot - The graphics machine snapshot.
+ * @returns Whether the lock is held; `false` with no cube mounted.
+ * @public
+ */
+export const selectGraphicsViewportGizmoLocked = (snapshot: GraphicsSnapshot): boolean =>
+  selectViewportGizmoInteractionLocked(snapshot.context.viewportGizmo?.ref);

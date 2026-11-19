@@ -1,0 +1,455 @@
+/* oxlint-disable new-cap, @typescript-eslint/consistent-type-imports -- NestJS decorators are factories and DI metadata needs runtime class imports */
+/* eslint-disable @typescript-eslint/naming-convention -- git-lfs wire fields are snake_case */
+import { createHash } from 'node:crypto';
+import { Injectable, Optional } from '@nestjs/common';
+import { and, eq, inArray } from 'drizzle-orm';
+import { DatabaseService } from '@taucad/api-database';
+import { assertActiveProjectLocked } from '@taucad/api-database/project-lifecycle';
+import { withOwnerLock } from '@taucad/api-database/owner-lock';
+import { projectGitLfsObject } from '@taucad/api-database/schema';
+import { FileLinksService } from '@taucad/api-object-storage/file-links';
+import { ObjectStorageService, TAU_DEFAULT_STORAGE_ACCOUNT_ID } from '@taucad/api-object-storage';
+import type { LfsObjectLocation } from '@taucad/api-git-core/lfs-keys';
+import { resolveLfsObjectLocation, tenantLfsObjectKey } from '@taucad/api-git-core/lfs-keys';
+import { projectFileLimitBytes, quotaRefusalSentence } from '@taucad/api-git-core/git.constants';
+import { GitRepositoryService } from '#api/git/git.service.js';
+import type { GitAccess } from '#api/git/git.service.js';
+
+/** Presigned transfers are short-lived; a push uploads immediately. */
+const transferExpirySeconds = 900;
+const objectContentType = 'application/octet-stream';
+
+type LfsObjectRequest = { readonly oid: string; readonly size: number };
+
+/** How many of the refused objects a refusal names, like the `pre-receive` list. */
+const refusedFileLimit = 10;
+
+/**
+ * D16/AC16, D17: the whole batch is refused with the largest objects that do
+ * not fit, and the one sentence addressed to this caller.
+ *
+ * @param reservation - What the reservation refused.
+ * @param access - The caller and the owner's allowance.
+ * @returns The `413`.
+ */
+const quotaRefusal = (
+  reservation: {
+    readonly shortfallBytes: number;
+    readonly remainingBytes: number;
+    readonly files: ReadonlyArray<{ readonly oid: string; readonly size: number }>;
+  },
+  access: GitAccess,
+): LfsBatchOutcome => ({
+  status: 413,
+  body: {
+    code: 'GIT_LFS_QUOTA_EXCEEDED',
+    message: quotaRefusalSentence(access.quotaAudience ?? 'ownerAtTopTier', access.storageLimitBytes),
+    shortfallBytes: reservation.shortfallBytes,
+    remainingBytes: reservation.remainingBytes,
+    files: reservation.files.toSorted((left, right) => right.size - left.size).slice(0, refusedFileLimit),
+  },
+});
+
+type LfsAction = {
+  readonly href: string;
+  readonly header?: Readonly<Record<string, string>>;
+  readonly expires_in: number;
+};
+
+type LfsObjectResponse = {
+  readonly oid: string;
+  readonly size: number;
+  readonly authenticated: true;
+  readonly actions?: Readonly<Record<string, LfsAction>>;
+  readonly error?: { readonly code: number; readonly message: string };
+};
+
+export type LfsBatchResponse = {
+  readonly transfer: 'basic';
+  readonly objects: readonly LfsObjectResponse[];
+};
+
+/**
+ * Git-lfs reads `message` from an error body and shows it to the user, so a
+ * refusal is answered in git-lfs's own shape rather than the API's envelope —
+ * `files` is the list D16/AC16 require, which the client maps back to paths.
+ */
+export type LfsQuotaRefusal = {
+  readonly message: string;
+  readonly code: 'GIT_LFS_QUOTA_EXCEEDED';
+  readonly shortfallBytes: number;
+  readonly remainingBytes: number;
+  readonly files: ReadonlyArray<{ readonly oid: string; readonly size: number }>;
+};
+
+export type LfsBatchOutcome =
+  | { readonly status: 200; readonly body: LfsBatchResponse }
+  | { readonly status: 413; readonly body: LfsQuotaRefusal };
+
+/**
+ * The Tau Hosted Remote's LFS store: git-lfs's batch API in front of presigned
+ * R2 transfers (A24, S49), or of signed `files.<zone>` downloads when the
+ * files service is configured (files service blueprint §1). Objects live under their owner's tenant prefix
+ * (D24) keyed by git-lfs's own `oid`, so the bytes a stock `git lfs push`
+ * uploads are the bytes a stock `git lfs pull` reads back, and nothing here
+ * touches a repository on disk — reachability is decided over a lease by
+ * `lfs-reachability.ts`.
+ */
+@Injectable()
+export class GitLfsService {
+  public constructor(
+    private readonly objectStorage: ObjectStorageService,
+    private readonly repositories: GitRepositoryService,
+    private readonly databaseService: DatabaseService,
+    @Optional() private readonly fileLinks?: FileLinksService,
+  ) {}
+
+  public async batch(args: {
+    access: GitAccess;
+    operation: 'upload' | 'download';
+    objects: readonly LfsObjectRequest[];
+    /** The caller's own credential, echoed so git-lfs can call `verify`. */
+    authorization: string | undefined;
+    /** Absolute base of this repository's LFS endpoints. */
+    endpoint: string;
+  }): Promise<LfsBatchOutcome> {
+    await this.repositories.resolveActiveLocator(args.access);
+    if (args.operation === 'download') {
+      const records = await this.repositories.readLfsObjects(
+        args.access.projectId,
+        args.objects.map((object) => object.oid),
+      );
+      const finalized = new Map(records.map((object) => [object.oid, object]));
+      const located = await Promise.all(
+        args.objects.map(async (object) => {
+          const record = finalized.get(object.oid);
+          const stored =
+            record?.finalized === true && record.size === object.size
+              ? await this.#storedAt(args.access, object.oid)
+              : undefined;
+          return stored?.size === object.size ? ([object.oid, stored] as const) : undefined;
+        }),
+      );
+      const held = new Map(located.filter((entry) => entry !== undefined));
+
+      /* The clear decides, not the head: it runs under the owner lock that
+         retirement deletes rows under, so an object retirement took while this
+         batch was looking at it comes back as absent rather than as a download
+         URL for bytes that are gone (D18). */
+      const confirmed = await this.#clearUnreachable(args.access, [...held.keys()]);
+
+      const objects = await this.#withActiveProject(args.access, async () =>
+        Promise.all(
+          args.objects.map(async (object): Promise<LfsObjectResponse> => {
+            const stored = confirmed.has(object.oid) ? held.get(object.oid) : undefined;
+            if (stored === undefined) {
+              return {
+                oid: object.oid,
+                size: object.size,
+                authenticated: true,
+                error: {
+                  code: 404,
+                  message: 'Object does not exist on the Tau Hosted Remote',
+                },
+              };
+            }
+            return {
+              oid: object.oid,
+              size: object.size,
+              authenticated: true,
+              actions: {
+                download: {
+                  href: await this.#downloadHref(stored),
+                  expires_in: transferExpirySeconds,
+                },
+              },
+            };
+          }),
+        ),
+      );
+      return { status: 200, body: { transfer: 'basic', objects } };
+    }
+
+    if (args.objects.some((object) => object.size > projectFileLimitBytes)) {
+      return {
+        status: 200,
+        body: {
+          transfer: 'basic',
+          objects: args.objects.map((object) => ({
+            ...object,
+            authenticated: true,
+            error:
+              object.size > projectFileLimitBytes
+                ? { code: 413, message: 'Individual project files must be 100 MiB or smaller.' }
+                : { code: 422, message: 'Upload batch refused because another file exceeds 100 MiB.' },
+          })),
+        },
+      };
+    }
+    const reservation = await this.repositories.reserveLfsObjects({ access: args.access, objects: args.objects });
+    if (reservation.status === 'quota') {
+      // The client maps the refused objects back to paths.
+      return quotaRefusal(reservation, args.access);
+    }
+    const states = new Map(reservation.objects.map((object) => [object.oid, object]));
+    const present = await Promise.all(
+      args.objects.map(async (object) => {
+        const record = states.get(object.oid);
+        if (record?.finalized !== true || record.size !== object.size) {
+          return false;
+        }
+        const held = await this.#storedAt(args.access, object.oid);
+        return held?.size === object.size;
+      }),
+    );
+    /* Same rule as the download branch, and the one that matters most: an
+       answer with no actions tells git-lfs to skip the upload, so it may only
+       be given for an object whose reservation row survived the clear under
+       the owner lock. Anything else is handed an upload action — worst case
+       the client re-uploads bytes that are already there. */
+    const confirmed = await this.#clearUnreachable(
+      args.access,
+      args.objects.filter((_, index) => present[index] === true).map((object) => object.oid),
+    );
+
+    /* An object the clear could not confirm is one retirement removed while
+       this batch was looking at it: its bytes are gone, its row is gone, and
+       the client is about to upload it again. Reserve it again here, or the
+       `verify` that follows the upload would answer `unreserved` and fail the
+       push. The reservation is owner-locked and counts the bytes once. */
+    const unconfirmed = args.objects.filter((object, index) => present[index] === true && !confirmed.has(object.oid));
+    if (unconfirmed.length > 0) {
+      const again = await this.repositories.reserveLfsObjects({ access: args.access, objects: unconfirmed });
+      if (again.status === 'quota') {
+        return quotaRefusal(again, args.access);
+      }
+    }
+
+    return this.#withActiveProject(args.access, async () => ({
+      status: 200,
+      body: {
+        transfer: 'basic',
+        objects: await Promise.all(
+          args.objects.map(async (object, index): Promise<LfsObjectResponse> => {
+            if (present[index] === true && confirmed.has(object.oid)) {
+              // Already stored: git-lfs skips an object that has no actions.
+              return {
+                oid: object.oid,
+                size: object.size,
+                authenticated: true,
+              };
+            }
+            return {
+              oid: object.oid,
+              size: object.size,
+              authenticated: true,
+              actions: {
+                upload: {
+                  href: await this.objectStorage.presignPut({
+                    namespace: 'tenants',
+                    key: tenantLfsObjectKey(args.access.ownerId, args.access.projectId, object.oid),
+                    contentType: objectContentType,
+                    contentLength: object.size,
+                    checksumSha256: Buffer.from(object.oid, 'hex').toString('base64'),
+                    expiresInSeconds: transferExpirySeconds,
+                    tier: 'private',
+                  }),
+                  header: {
+                    'Content-Type': objectContentType,
+                    'Content-Length': String(object.size),
+                    'x-amz-checksum-sha256': Buffer.from(object.oid, 'hex').toString('base64'),
+                  },
+                  expires_in: transferExpirySeconds,
+                },
+                verify: {
+                  href: `${args.endpoint}/verify`,
+                  ...(args.authorization === undefined ? {} : { header: { Authorization: args.authorization } }),
+                  expires_in: transferExpirySeconds,
+                },
+              },
+            };
+          }),
+        ),
+      },
+    }));
+  }
+
+  /**
+   * Verify exact stored bytes before making the reserved object readable.
+   *
+   * At the tenant key the store has already verified them (D11, EQ12): every
+   * writer of that key — the presigned PUT this batch signs, relocation and the
+   * mirror restore — pins `x-amz-checksum-sha256` to the oid as a signed header,
+   * and the store refuses a body that does not hash to it. So the HEAD asks for
+   * that stored checksum, and when it is the oid's own digest the bytes are not
+   * read back; a different one refuses. An object at a pre-D24 legacy key is
+   * always read and hashed, whatever checksum it reports, and so is a tenant
+   * object the store holds no whole SHA-256 for (a store that does not report
+   * one, a multipart composite).
+   */
+  public async verify(args: { access: GitAccess; oid: string; size: number }): Promise<boolean> {
+    await this.repositories.resolveActiveLocator(args.access);
+    if (args.size > projectFileLimitBytes) {
+      return false;
+    }
+    // Verified without occupying a pooled database connection or the owner's retirement lock.
+    const signal = AbortSignal.timeout(120_000);
+    const stored = await this.#storedAt(args.access, args.oid, { signal, checksum: true });
+    if (stored === undefined || stored.size !== args.size) {
+      return false;
+    }
+    /* Only a tenant key's writers pin the checksum; a legacy key's is never trusted. */
+    const checksumSha256 = stored.location.namespace === 'tenants' ? stored.checksumSha256 : undefined;
+    if (checksumSha256 !== undefined && checksumSha256 !== Buffer.from(args.oid, 'hex').toString('base64')) {
+      return false;
+    }
+    const etag = checksumSha256 === undefined ? await this.#hashedEtag(stored, args, signal) : stored.etag;
+    if (etag === undefined || etag === '') {
+      return false;
+    }
+    const outcome = await this.repositories.finalizeLfsObject({
+      ...args,
+      verifyContent: async () => {
+        // Re-resolve under the lock: a tenant copy may now shadow the hashed legacy object.
+        const current = await this.#storedAt(args.access, args.oid, { signal: AbortSignal.timeout(5000) });
+        return (
+          current !== undefined &&
+          current.size === args.size &&
+          current.etag === etag &&
+          current.location.namespace === stored.location.namespace &&
+          current.location.key === stored.location.key &&
+          current.location.tier === stored.location.tier
+        );
+      },
+    });
+    return outcome === 'finalized' || outcome === 'already-finalized';
+  }
+
+  /**
+   * The identity of a legacy object whose bytes hash to its oid, or `undefined`.
+   *
+   * @param stored - Where the bytes are.
+   * @param args - The object's oid and declared size.
+   * @param signal - Bounds the read.
+   * @returns The GET response's ETag when the bytes verify.
+   */
+  async #hashedEtag(
+    stored: { location: LfsObjectLocation },
+    args: { oid: string; size: number },
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    const blob = await this.objectStorage.getBlob({ ...stored.location, signal });
+    const hash = createHash('sha256');
+    let size = 0;
+    try {
+      if (blob.etag === '') {
+        return undefined;
+      }
+      for await (const chunk of blob.body) {
+        const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array<ArrayBuffer>);
+        size += bytes.byteLength;
+        if (size > args.size) {
+          return undefined;
+        }
+        hash.update(bytes);
+      }
+      return size === args.size && hash.digest('hex') === args.oid ? blob.etag : undefined;
+    } finally {
+      blob.body.destroy();
+    }
+  }
+
+  /**
+   * Where a client fetches one stored object: a `files.<zone>` link when the
+   * files service is configured and the bytes are in Tau's own account (a
+   * scoped storage account keeps its presigned links), otherwise a presigned
+   * GET. Either expires with the same {@link transferExpirySeconds}.
+   *
+   * @param stored - The object's location and stored size.
+   * @returns The download `href`.
+   */
+  async #downloadHref(stored: { location: LfsObjectLocation; size: number }): Promise<string> {
+    const signed =
+      this.fileLinks?.enabled === true && this.objectStorage.account.id === TAU_DEFAULT_STORAGE_ACCOUNT_ID
+        ? await this.fileLinks.sign({ ...stored.location, size: stored.size, expiresInSeconds: transferExpirySeconds })
+        : undefined;
+    return signed ?? this.objectStorage.presignGet({ ...stored.location, expiresInSeconds: transferExpirySeconds });
+  }
+
+  /** Signing completes under the same project lock that admits deletion. */
+  async #withActiveProject<T>(access: GitAccess, work: () => Promise<T>): Promise<T> {
+    return this.databaseService.database.transaction(async (transaction) => {
+      await assertActiveProjectLocked(
+        transaction,
+        access.projectId,
+        access.viaDevice === undefined ? access.callerId : access.ownerId,
+      );
+      return work();
+    });
+  }
+
+  /**
+   * Where this project's bytes for `oid` actually are, or `undefined`.
+   *
+   * The tenant key first, then the legacy one: every upload since D24 lands
+   * under the tenant prefix, and a project whose objects predate the move is
+   * still served from where its bytes are until the handbook relocates them.
+   *
+   * @param access - The authorized request, which names the owner and project.
+   * @param oid - git-lfs's own SHA-256 object identity.
+   * @param options - `signal` bounds the lookups; `checksum` also asks the store
+   *   for the SHA-256 it verified on write.
+   * @returns The location holding the bytes and their stored length.
+   */
+  async #storedAt(
+    access: GitAccess,
+    oid: string,
+    options: { signal?: AbortSignal; checksum?: boolean } = {},
+  ): Promise<{ location: LfsObjectLocation; size: number; etag: string; checksumSha256?: string } | undefined> {
+    return resolveLfsObjectLocation(this.objectStorage, {
+      ownerId: access.ownerId,
+      projectId: access.projectId,
+      oid,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.checksum === true ? { checksum: true } : {}),
+    });
+  }
+
+  /**
+   * A batch answer of "present" restarts the object's retirement clock (D18, ND17).
+   *
+   * `unreachable_at` is the first moment no retained tree reached an object, and
+   * thirty days after it the object is collected. But a client that has the
+   * object still holds it: git-lfs asks the batch endpoint before it pushes the
+   * pointer that will make it reachable again, and that question is the earliest
+   * evidence there is. Clearing the mark there closes the window where an object
+   * is deleted between the batch answer and the push that would have saved it.
+   *
+   * Under the owner-keyed advisory lock, which is the same lock the retirement
+   * pass and the quota recheck take, so a "present" answer and a destructive
+   * recheck cannot interleave.
+   *
+   * @param access - The authorized request, which names the owner to lock on.
+   * @param oids - The objects this batch found present; none is not an error.
+   * @returns The subset whose reservation row still existed under the lock.
+   */
+  async #clearUnreachable(access: GitAccess, oids: readonly string[]): Promise<ReadonlySet<string>> {
+    const present = [...new Set(oids)];
+    if (present.length === 0) {
+      return new Set();
+    }
+    return withOwnerLock(this.databaseService.database, access.ownerId, async (transaction) => {
+      await assertActiveProjectLocked(
+        transaction,
+        access.projectId,
+        access.viaDevice === undefined ? access.callerId : access.ownerId,
+      );
+      const cleared = await transaction
+        .update(projectGitLfsObject)
+        .set({ unreachableAt: null })
+        .where(and(eq(projectGitLfsObject.projectId, access.projectId), inArray(projectGitLfsObject.oid, present)))
+        .returning({ oid: projectGitLfsObject.oid });
+      return new Set(cleared.map((row) => row.oid));
+    });
+  }
+}

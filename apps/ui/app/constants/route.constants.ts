@@ -1,42 +1,27 @@
-import {
-  BookOpen,
-  ChartColumn,
-  Files,
-  Frame,
-  Hammer,
-  Import,
-  Map,
-  PieChart,
-  Settings,
-  Shuffle,
-  UsersRound,
-} from 'lucide-react';
+import { Hammer, Printer, Import, Plug, Shuffle, UsersRound } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
+import type { FeatureFlagName } from '#flags/flag.constants.js';
+import { PartsIcon } from '@taucad/ui-kit/icons/parts';
 
-type NavRoute = {
+export type NavRoute = {
   title: string;
   url: string;
   icon: LucideIcon;
+  featureFlag?: FeatureFlagName;
   /** When set, clicking the item calls this instead of navigating to `url`. */
   action?: () => void;
 };
 
-type NavProject = {
-  name: string;
-  url: string;
-  icon: LucideIcon;
-};
-
 export const navRoutes: {
+  /** Rows shown directly below New Project. */
   navMain: NavRoute[];
-  navSecondary: NavRoute[];
-  projects: NavProject[];
+  /** Rows listed under the sidebar's More menu. */
+  navMore: NavRoute[];
 } = {
   navMain: [
     {
       title: 'Projects',
-      url: '/projects/library',
+      url: '/projects',
       icon: Hammer,
       // Items: [
       //   {
@@ -53,10 +38,24 @@ export const navRoutes: {
       //   },
       // ],
     },
+  ],
+  navMore: [
+    {
+      title: 'Machines',
+      featureFlag: 'machines',
+      url: '/machines',
+      icon: Printer,
+    },
     {
       title: 'Community',
-      url: '/projects/community',
+      url: '/community',
       icon: UsersRound,
+    },
+    {
+      title: 'Parts',
+      url: '/parts',
+      icon: PartsIcon,
+      featureFlag: 'partsWarehouse',
     },
     {
       title: 'Convert',
@@ -74,46 +73,10 @@ export const navRoutes: {
     //   icon: Workflow,
     // },
     {
-      title: 'Usage',
-      url: '/usage',
-      icon: ChartColumn,
-    },
-  ],
-  navSecondary: [
-    {
-      title: 'Files',
-      url: '/files',
-      icon: Files,
-    },
-    {
-      title: 'Documentation',
-      url: '/docs',
-      icon: BookOpen,
-    },
-    {
-      title: 'Settings',
-      url: '/settings',
-      icon: Settings,
-      action(): void {
-        openSettingsDialog();
-      },
-    },
-  ],
-  projects: [
-    {
-      name: 'Design Engineering',
-      url: '/projects/design-engineering',
-      icon: Frame,
-    },
-    {
-      name: 'Sales & Marketing',
-      url: '/projects/sales-marketing',
-      icon: PieChart,
-    },
-    {
-      name: 'Travel',
-      url: '/projects/travel',
-      icon: Map,
+      title: 'Plugins',
+      url: '/plugins',
+      icon: Plug,
+      featureFlag: 'pluginsStore',
     },
   ],
 };

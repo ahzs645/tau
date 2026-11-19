@@ -1,0 +1,175 @@
+# Standalone-project oracles (native dependency charter W23, D34, I14; go-live row PRJ-1): every
+# template Tau creates runs outside Tau with its ecosystem's own toolchain, from the files in the
+# project folder, and produces the geometry Tau exports for the same project.
+# `scripts/src/check-standalone-project.ts` creates each project with the UI's factory and its
+# fixture (`libs/tau-examples/src/standalone/<kernel>/`), copies it to a bare directory outside the
+# checkout, installs it with the native tool only (`npm ci --ignore-scripts`, `uv sync --locked`,
+# `dotnet restore --locked-mode`; nothing for OpenSCAD and KCL), runs it with the native runner and
+# compares the volume with `tau export` of the same project (1e-6 relative). One job per ecosystem;
+# a row that diverges fails its job with both measurements in the step summary. Not required
+# checks. PicoGK's upstream engine ships for osx-arm64 and win-x64 only, so its row runs in
+# `native-darwin.yml`.
+#
+# When it runs (CI throughput review, operator decision 2026-11-08; Brain ci-audit 2026-11-12,
+# F2): `ci.yml` calls it on every push to `main`, after the required gate, and never on a pull
+# request or in the merge queue; it also runs nightly on `main`, which catches a toolchain-only
+# break (a Node, pnpm or runner image change) within a day. In the queue it started after the
+# gate, so the queue run was still in progress at merge and was cancelled, and the push could not
+# reuse its verdict. The nightly watchdog alerts on a red nightly.
+#
+# The pypi row asks no third-party origin for a pinned byte it has fetched before (Brain
+# research/ci-flake-classes.md, class 1): Build123d's and SMLibPy's linux-x64 closures (CPython
+# from python-build-standalone on GitHub Releases, wheels from PyPI) live in a seed restored from
+# the Actions cache under a key of the two manifests and the two project locks, and `tau prepare`
+# reads it through `TAU_DEPENDENCY_DIR`; uv's cache and its managed CPython ride in the same
+# entry for the native side. Only a pin change misses, and a passing run on `main` that missed
+# saves the entry, so later pushes, the nightly and a dispatch restore it from `main`'s scope.
+name: Standalone projects
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '7 5 * * *' # 05:07 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  standalone:
+    if: ${{ github.repository == 'taucad/tau' }}
+    name: Standalone projects (${{ matrix.ecosystem }})${{ matrix.ecosystem == 'kcl' && ' [quarantined]' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The quarantined KCL row only reports its quarantine, so it runs in the nightly alone.
+        ecosystem: ${{ fromJSON(github.event_name == 'schedule' && '["npm","pypi","none","kcl"]' || '["npm","pypi","none"]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # KCL: Tau's export reaches Zoo through Tau Cloud's proxy, never the local API this workflow sets.
+      TAU_API_URL: ${{ matrix.ecosystem != 'kcl' && 'http://localhost:4000' || '' }}
+      TAU_WEBSOCKET_URL: ${{ matrix.ecosystem != 'kcl' && 'ws://localhost:4001' || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+        with:
+          save-pnpm-store: 'false'
+
+      - name: Install uv
+        if: matrix.ecosystem == 'pypi'
+        run: |
+          pipx install uv==0.12.20
+          uv --version
+
+      - name: Install OpenSCAD
+        if: matrix.ecosystem == 'none'
+        uses: ./.github/actions/apt-install
+        with:
+          packages: --no-install-recommends openscad=2021.01-6build4
+      - name: Report the OpenSCAD version
+        if: matrix.ecosystem == 'none'
+        run: openscad --version
+
+      # Restore the Zoo CLI setup and KCL execution once renewable CI credentials are provisioned.
+      - name: Report Zoo KCL quarantine
+        if: matrix.ecosystem == 'kcl'
+        run: |
+          echo '::notice title=Zoo/KCL quarantined::Skipped pending Zoo credentials and renewable Tau Pro CI authentication.'
+          echo 'Zoo/KCL standalone comparison is quarantined, not qualified. Restore execution after CI authentication is provisioned.' >> "$GITHUB_STEP_SUMMARY"
+
+      # `tau prepare build123d` seals the closure inside the native sandbox, as on a user's machine.
+      - name: Setup Linux sandbox prerequisites
+        if: matrix.ecosystem == 'pypi'
+        uses: ./.github/actions/setup-linux-sandbox
+
+      # The pypi row's kernels are the Python kernel packages: those with a uv project template. The key
+      # digests every byte they pin for this runner (each linux-x64 dependency file's integrity and
+      # each template's uv.lock) and the uv version installed above, so only a pin change misses.
+      - name: Identify the pypi row's pinned downloads
+        id: pins
+        if: matrix.ecosystem == 'pypi'
+        run: |
+          packages=$(for lock in packages/plugins/*/project/uv.lock; do dirname "$(dirname "$lock")"; done)
+          digest=$(PACKAGES="$packages" node --input-type=module -e '
+            import { createHash } from "node:crypto";
+            import { readFileSync } from "node:fs";
+            const hash = createHash("sha256");
+            for (const directory of process.env.PACKAGES.split("\n").filter(Boolean).toSorted()) {
+              const manifest = JSON.parse(readFileSync(`${directory}/tau-plugin.json`, "utf8"));
+              const pins = Object.values(manifest.dependencies).flat()
+                .filter(({ target }) => target.os === "linux" && target.arch === "x64")
+                .flatMap(({ files }) => files.map(({ integrity }) => integrity))
+                .toSorted();
+              if (pins.length === 0) throw new Error(`${directory} pins no linux-x64 dependency file.`);
+              hash.update(`${directory}\n${pins.join("\n")}\n`).update(readFileSync(`${directory}/project/uv.lock`));
+            }
+            console.log(hash.digest("hex"));
+          ')
+          {
+            echo "key=standalone-pypi-v1-linux-x64-uv$(uv --version | cut -d' ' -f2)-$digest"
+            echo 'packages<<EOF'
+            echo "$packages"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pypi row's pinned downloads
+        id: pinned
+        if: matrix.ecosystem == 'pypi'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            out/cache/standalone-pypi-seed
+            ~/.cache/uv
+            ~/.local/share/uv/python
+          key: ${{ steps.pins.outputs.key }}
+
+      # On a hit this only re-verifies every blob against its pin; on a miss (a pin changed) it
+      # downloads the closures from their origins, each blob checked before it is written.
+      - name: Fill the seed from the pinned origins
+        if: matrix.ecosystem == 'pypi'
+        env:
+          PACKAGES: ${{ steps.pins.outputs.packages }}
+        run: |
+          for package in $PACKAGES; do
+            node --import @oxc-node/core/register packages/core/python-kernel/scripts/tau-python-kernel.mts seed \
+              --package "$package" --seed out/cache/standalone-pypi-seed
+          done
+
+      - name: Check every template outside Tau
+        id: check
+        if: matrix.ecosystem != 'kcl'
+        env:
+          ZOO_TOKEN: ${{ secrets.ZOO_TOKEN }}
+          TAU_AUTH_TOKEN: ${{ secrets.TAU_STANDALONE_API_TOKEN }}
+          # The store, then this seed, then the origins: with the seed full, `tau prepare` makes no request.
+          TAU_DEPENDENCY_DIR: ${{ matrix.ecosystem == 'pypi' && format('{0}/out/cache/standalone-pypi-seed', github.workspace) || '' }}
+        run: node scripts/src/check-standalone-project.ts --ecosystem "${{ matrix.ecosystem }}" --work "$RUNNER_TEMP/standalone"
+
+      # Saved only from `main` (a push or the nightly), whose cache scope the merge queue and pull
+      # requests restore from, and only after a passing check, so uv's half of the entry is filled.
+      - name: Save the pypi row's pinned downloads
+        if: matrix.ecosystem == 'pypi' && steps.pinned.outputs.cache-hit != 'true' && steps.check.outcome == 'success' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            out/cache/standalone-pypi-seed
+            ~/.cache/uv
+            ~/.local/share/uv/python
+          key: ${{ steps.pinned.outputs.cache-primary-key }}
+
+      # The lock-parity oracle of the JavaScript row (blueprint I5): the lock Tau writes passes `npm ci`
+      # unmodified and installs and bundles the same tree.
+      - name: Check package-lock.json parity with npm ci
+        if: ${{ !cancelled() && matrix.ecosystem == 'npm' }}
+        env:
+          TAU_NPM_LIVE_TESTS: 'true'
+        run: |
+          set -o pipefail
+          pnpm exec vitest run --root apps/runtime-e2e src/package-lock-parity.test.ts | tee "$RUNNER_TEMP/parity.log"
+          grep -q '"parity":"npm-ci"' "$RUNNER_TEMP/parity.log"

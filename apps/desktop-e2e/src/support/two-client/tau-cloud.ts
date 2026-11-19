@@ -1,0 +1,333 @@
+/* eslint-disable @typescript-eslint/naming-convention -- E2E is the established project acronym. */
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import process from 'node:process';
+import { promisify } from 'node:util';
+import { tauDatabaseCommand } from '#support/tau-account.js';
+import { desktopE2EApiUrl, desktopE2ECompletedArtifact, desktopE2EFrontendUrl } from '#support/config.js';
+import { authenticatePackagedDesktop, launchDesktopApp } from '#support/desktop-app.js';
+import type { DesktopSession } from '#support/desktop-app.js';
+
+/**
+ * What one Tau Cloud owner needs before a project can sync at all (charter W18).
+ *
+ * `#support/tau-account.js` already signs up, verifies, signs in and funds; it
+ * is not edited here. This module adds the two things a *sync* run needs on top
+ * and says plainly why each one is seeded rather than driven:
+ *
+ *  - a **paid plan**, for the Pro allowance and plan rows the suites assert;
+ *    buying one has a Stripe leg this suite must not drive;
+ *  - a **registered project**, which stands in for a product path that does not
+ *    exist (W18 defect DEF-1) and is pinned red separately.
+ */
+
+const execFileAsync = promisify(execFile);
+const workspaceRoot = resolve(import.meta.dirname, '../../../../..');
+
+/** Run one statement against the same run-owned database as account seeding. */
+const psql = async (statement: string): Promise<string> => {
+  const { file, args } = tauDatabaseCommand(statement);
+  const { stdout } = await execFileAsync(file, [...args, '-qtAX'], { encoding: 'utf8' });
+  return stdout.trim();
+};
+
+/** Launch an authenticated client using the production handoff for packaged acceptance. */
+export const launchTauCloudDesktop = async (bearer: string): Promise<DesktopSession> => {
+  const session = await launchDesktopApp({ token: bearer, env: { TAU_DESKTOP_UPDATES: 'off' } });
+  try {
+    if (desktopE2ECompletedArtifact) {
+      await authenticatePackagedDesktop(session, bearer);
+    }
+    return session;
+  } catch (error) {
+    await session.close();
+    throw error;
+  }
+};
+
+/** The identifiers a seeded owner is addressed by on the billing side. */
+export type TauCloudOwnerIds = Readonly<{ accountId: string; userId: string }>;
+
+/**
+ * Read the owner and credit-account ids `seedTauTestUser` left behind.
+ *
+ * @param email - The seeded address.
+ * @returns The auth user id and the credit account its funding bound.
+ */
+export const tauCloudOwnerIds = async (email: string): Promise<TauCloudOwnerIds> => {
+  const userId = await psql(`SELECT id FROM "user" WHERE email = '${email}';`);
+  if (!userId) {
+    throw new Error(`No Tau user exists for ${email}.`);
+  }
+  const accountId = await psql(
+    `SELECT account_id FROM billing.billing_owner_binding WHERE auth_user_id = '${userId}' AND revoked_at IS NULL;`,
+  );
+  if (!accountId) {
+    throw new Error(`${email} has no billing owner binding; fund the account before seeding a plan.`);
+  }
+  return { accountId, userId };
+};
+
+/**
+ * Put the owner on the Pro plan for an hour.
+ *
+ * The rows are the shape `BillingService.projectEntitlements` reads: an owned
+ * subscription — `customer_binding_id` and `offer_snapshot` non-null, which the
+ * `subscription_financial_state` check also wants `request_id`, `request_hash`
+ * and a `slot_state` for — whose `paid_through` is in the future. One hour
+ * rather than a month because `billing.protect_payment_identity` refuses to
+ * delete the row or to pull its `paid_through` back, so the shortest horizon
+ * that outlives a run leaves the least behind.
+ *
+ * @param owner - The seeded owner's ids.
+ * @returns Nothing.
+ */
+export const seedProPlan = async (owner: TauCloudOwnerIds): Promise<void> => {
+  const id = `w18-${owner.userId}`;
+  await psql(
+    `INSERT INTO billing.billing_stripe_customer (id, account_id, environment, stripe_account_id, livemode) ` +
+      `VALUES ('${id}', '${owner.accountId}', 'development', 'acct_tau_two_client', false) ` +
+      `ON CONFLICT (id) DO NOTHING;`,
+  );
+  await psql(
+    `INSERT INTO subscription (id, plan, status, account_id, environment, customer_binding_id, ` +
+      `offer_snapshot, request_id, request_hash, slot_state, paid_through, updated_at) ` +
+      `VALUES ('${id}', 'pro', 'active', '${owner.accountId}', 'development', '${id}', ` +
+      `'{"plan":"pro"}'::jsonb, '${id}-request', '${id}-hash', 'current', now() + interval '1 hour', now()) ` +
+      `ON CONFLICT (id) DO NOTHING;`,
+  );
+};
+
+/**
+ * Register a project on the Tau Hosted Remote.
+ *
+ * A shortcut, not a stand-in: *Connect Tau Cloud* registers the project itself
+ * (`PUT /v1/projects/:id`, W18 DEF-1 / P51). This is for a case that needs the
+ * row to exist before any window has connected.
+ *
+ * @param owner - The project's owner.
+ * @param projectId - The project id, which is also the repository id.
+ * @param name - The project's name, for a readable row.
+ * @returns Nothing.
+ */
+export const registerProjectOnRemote = async (
+  owner: TauCloudOwnerIds,
+  projectId: string,
+  name = 'Two-client E2E',
+): Promise<void> => {
+  await psql(
+    `INSERT INTO project (id, owner_id, name, origin) ` +
+      `VALUES ('${projectId}', '${owner.userId}', '${name.replaceAll("'", "''")}', 'local-mirror') ` +
+      `ON CONFLICT (id) DO NOTHING;`,
+  );
+};
+
+/** Set the storage this project has already spent, so the plan headroom is a known number. */
+export const spendProjectStorage = async (projectId: string, bytes: number): Promise<void> => {
+  await psql(
+    `INSERT INTO project_git (project_id, storage_bytes, lfs_bytes) VALUES ('${projectId}', ${String(bytes)}, 0) ` +
+      `ON CONFLICT (project_id) DO UPDATE SET storage_bytes = ${String(bytes)}, lfs_bytes = 0;`,
+  );
+};
+
+/** Spend LFS storage while preserving a precise amount of the project's plan headroom. */
+export const leaveProjectStorageHeadroom = async (
+  projectId: string,
+  planBytes: number,
+  remainingBytes: number,
+): Promise<void> => {
+  await psql(
+    `INSERT INTO project_git (project_id, storage_bytes, lfs_bytes) ` +
+      `VALUES ('${projectId}', 0, ${String(planBytes - remainingBytes)}) ` +
+      `ON CONFLICT (project_id) DO UPDATE SET lfs_bytes = ` +
+      `GREATEST(0, ${String(planBytes)} - project_git.storage_bytes - ${String(remainingBytes)});`,
+  );
+};
+
+/** Set the LFS bytes one project is charged, leaving its pack bytes as they are. */
+export const setProjectLfsBytes = async (projectId: string, bytes: number): Promise<void> => {
+  await psql(
+    `INSERT INTO project_git (project_id, storage_bytes, lfs_bytes) VALUES ('${projectId}', 0, ${String(bytes)}) ` +
+      `ON CONFLICT (project_id) DO UPDATE SET lfs_bytes = ${String(bytes)};`,
+  );
+};
+
+/** Read the verified LFS bytes charged to one Tau Hosted Remote project. */
+export const projectLfsBytes = async (projectId: string): Promise<number> => {
+  const value = await psql(`SELECT lfs_bytes FROM project_git WHERE project_id = '${projectId}';`);
+  return value === '' ? 0 : Number(value);
+};
+
+/** Make one account a collaborator on the owner's project, as an accepted invitation leaves it (D27). */
+export const addProjectCollaborator = async (
+  input: Readonly<{
+    projectId: string;
+    collaborator: TauCloudOwnerIds;
+    role: 'read' | 'write';
+    invitedBy: TauCloudOwnerIds;
+  }>,
+): Promise<void> => {
+  const { projectId, collaborator, role, invitedBy } = input;
+  await psql(
+    `INSERT INTO project_collaborator (project_id, user_id, role, invited_by) ` +
+      `VALUES ('${projectId}', '${collaborator.userId}', '${role}', '${invitedBy.userId}') ` +
+      `ON CONFLICT (project_id, user_id) DO UPDATE SET role = '${role}';`,
+  );
+};
+
+/** The owner's account-wide figures `GET /v1/projects/:projectId/usage` answers (D18). */
+export type StorageUsage = Readonly<{
+  storageBytes: number;
+  lfsBytes: number;
+  retainedBytes: number;
+  storageLimitBytes: number;
+}>;
+
+/**
+ * Read the usage route as one account, the way a Sync region does.
+ *
+ * @param projectId - The project whose owner's account is asked about.
+ * @param bearer - The asking account's session.
+ * @returns The status, and the figures when it answered `200`.
+ */
+export const readStorageUsage = async (
+  projectId: string,
+  bearer: string,
+): Promise<Readonly<{ status: number; usage: StorageUsage | undefined }>> => {
+  const response = await fetch(`${desktopE2EApiUrl}/v1/projects/${projectId}/usage`, {
+    headers: { authorization: `Bearer ${bearer}`, origin: desktopE2EFrontendUrl },
+  });
+  return { status: response.status, usage: response.ok ? ((await response.json()) as StorageUsage) : undefined };
+};
+
+/** Remove the projects one owner registered, so a re-run starts from the same state. */
+export const forgetSeededProjects = async (owner: TauCloudOwnerIds): Promise<void> => {
+  await psql(`DELETE FROM project WHERE owner_id = '${owner.userId}';`);
+};
+
+/**
+ * Mint a second session for the same account.
+ *
+ * One account, two clients: the desktop shell holds the bearer
+ * `seedTauTestUser` returned, and the browser gets its session from this rather
+ * than from a second `/sign-in/email` — better-auth's default rule for that
+ * route is three attempts per ten seconds per address, and the limit is a
+ * production protection this suite must not weaken. `/one-time-token/verify`
+ * calls `setSessionCookie`, so posting the token from a browser context's own
+ * request API puts the session in that context's cookie jar.
+ *
+ * @param bearer - The desktop session's bearer.
+ * @returns A single-use token the browser context exchanges for a session.
+ */
+export const mintOneTimeToken = async (bearer: string): Promise<string> => {
+  const generated = await fetch(`${desktopE2EApiUrl}/v1/auth/one-time-token/generate`, {
+    headers: { authorization: `Bearer ${bearer}`, origin: desktopE2EFrontendUrl },
+  });
+  if (!generated.ok) {
+    throw new Error(`One-time token generation failed with HTTP ${String(generated.status)}.`);
+  }
+  const { token } = (await generated.json()) as { readonly token?: string };
+  if (!token) {
+    throw new Error('One-time token generation returned no token.');
+  }
+  return token;
+};
+
+/** A fresh project id in the shape `isProjectRepositoryId` accepts. */
+export const twoClientProjectId = (): string => `proj_${randomUUID().replaceAll('-', '')}`;
+
+/** Run `git` and return its exit code and output without throwing. */
+export const runGit = async (
+  args: readonly string[],
+  cwd: string,
+): Promise<Readonly<{ code: number; stdout: string; stderr: string }>> => {
+  try {
+    const { stdout, stderr } = await execFileAsync('git', [...args], {
+      cwd,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        /* A developer's own global git configuration would otherwise decide
+         * what this suite proves. */
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_SYSTEM: '/dev/null',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return { code: 0, stdout, stderr };
+  } catch (error) {
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    return { code: failure.code ?? 1, stdout: failure.stdout ?? '', stderr: failure.stderr ?? String(error) };
+  }
+};
+
+/** The author address Tau writes for a person with no address of their own (`revisionAuthorSignature`). */
+export const tauNoreplyAddress = (userId: string): string => `${userId}@users.noreply.tau.new`;
+
+/**
+ * The message a Tau client writes for one person's save: a title, the
+ * version-2 `Tau-Metadata` trailer and its two readable trailers, in the shape
+ * `revisionCommitMessage` (`packages/revisions/src/revision-headers.ts`) emits.
+ *
+ * Tau Cloud refuses a pushed commit with no Tau record on a project that is
+ * not linked to GitHub, and one whose record names anyone but the pusher
+ * (665276e5f3, blueprint B4). A stock-git peer standing in for another of the
+ * owner's devices therefore records its commits the way that device would.
+ *
+ * @param userId - The pushing account's user id, which the record names.
+ * @param title - The commit's first line.
+ * @param parents - The commit's parent ids, which the trailer repeats.
+ * @returns The full commit message.
+ */
+export const tauRecordedMessage = (userId: string, title: string, parents: readonly string[]): string => {
+  const trailer = {
+    version: 2,
+    parents: [...parents],
+    provenance: {
+      source: 'user',
+      actor: { kind: 'user', id: userId },
+      capture: 'save',
+      via: 'cli',
+      createdAt: Date.now(),
+    },
+    summary: { generated: title },
+  };
+  return `${title}\n\nTau-Metadata: ${JSON.stringify(trailer)}\nTau-Actor: user ${userId}\nTau-Trigger: save\n`;
+};
+
+/**
+ * Commit the index of a stock-git clone as the owner's Tau-recorded save.
+ *
+ * @param git - Runs `git` in the clone, with whatever credentials it carries.
+ * @param userId - The pushing account's user id.
+ * @param title - The commit's first line.
+ * @returns `git commit`'s outcome.
+ */
+export const commitAsTauSave = async (
+  git: (...args: readonly string[]) => ReturnType<typeof runGit>,
+  userId: string,
+  title: string,
+): ReturnType<typeof runGit> => {
+  const parent = await git('rev-parse', '--verify', '--quiet', 'HEAD');
+  const head = parent.stdout.trim();
+  return git(
+    '-c',
+    `user.name=${userId}`,
+    '-c',
+    `user.email=${tauNoreplyAddress(userId)}`,
+    'commit',
+    '--quiet',
+    '--cleanup=verbatim',
+    '-m',
+    tauRecordedMessage(userId, title, head === '' ? [] : [head]),
+  );
+};
+
+/** The `Authorization` value stock git sends once the API challenges it. */
+export const basicAuthorization = (token: string): string =>
+  `Basic ${Buffer.from(`x:${token}`, 'utf8').toString('base64')}`;
+
+/** The workspace root, for the spec's own child processes. */
+export const twoClientWorkspaceRoot = workspaceRoot;

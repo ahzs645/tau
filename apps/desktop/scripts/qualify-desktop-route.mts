@@ -1,0 +1,1270 @@
+/**
+ * Run an authentic installed A→B→C chain on an explicitly disposable host; never signs or publishes. With
+ * `TAU_QUALIFICATION_SCENARIO=recovery` a Windows or Linux row runs T-B22.4 instead (`qualification-recovery.mts`).
+ */
+/* oxlint-disable no-restricted-imports -- The qualification executable composes adjacent private script owners. */
+/* oxlint-disable no-await-in-loop -- Native install/restart stages and evidence reads are intentionally ordered. */
+/* eslint-disable @typescript-eslint/naming-convention -- Child process environment uses its external names. */
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { createReadStream } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, realpath, stat, writeFile, readdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
+import { setTimeout as wait } from 'node:timers/promises';
+import { z } from 'zod';
+import { linuxInstallation } from '#shared/linux-installation.js';
+import { createWindowsPowerShellEnvironment } from '#main/windows-signature.js';
+import { promisify } from 'node:util';
+import { defaultDependencyStore } from '@taucad/host';
+import { assertQualificationConsumerScope, fetchQualificationCandidates } from './qualification-candidates.mjs';
+import { qualificationArtifactObjects, qualificationFeed } from './qualification-feeds.mjs';
+import { startQualificationMirrorProcess } from './qualification-mirror-process.mjs';
+import {
+  assertDisposableQualificationHost,
+  linuxConsumerTlsOwner,
+  prepareQualificationTls,
+} from './qualification-tls.mjs';
+import { observeLinuxCleanHost, startLinuxConsumer } from './qualification-linux-consumer.mjs';
+import type { LinuxConsumer } from './qualification-linux-consumer.mjs';
+import {
+  createWindowsQualificationDriver,
+  observeWindowsConsumerHost,
+  windowsQualificationInstallationPath,
+} from './qualification-windows.mjs';
+import { createLinuxAptQualificationDriver, isAptLockRefusal } from './qualification-linux.mjs';
+import { prepareQualificationAptEnrollment } from './qualification-apt-enrollment.mjs';
+import type { QualificationAptEnrollment } from './qualification-apt-enrollment.mjs';
+import type { LinuxAptQualificationDriver } from './qualification-linux.mjs';
+import type { QualificationMirrorObject } from './qualification-mirror.mjs';
+import { createMacosQualificationDriver } from './qualification-macos.mjs';
+import {
+  assertBaselineShipsAutoInstall,
+  assessRecovery,
+  recoveryFailure,
+  brokenRendererDocument,
+  qualificationScenario,
+  rebuildAppImageWithEntry,
+  recoveryRows,
+  rendererEntryPath,
+} from './qualification-recovery.mjs';
+import type { RecoveryAssessment, RecoveryReceipt } from './qualification-recovery.mjs';
+import { observeMacosCleanHost } from './qualification-macos-host.mjs';
+import { downloadWithBrowser } from './qualification-browser-download.mjs';
+import { discoverQualificationProcesses } from './qualification-processes.mjs';
+import {
+  assertLinuxCleanHost,
+  assertMacosCleanHost,
+  assertWindowsConsumerHost,
+  collectQualificationReceipt,
+  validateSoftwareCiEvidence,
+  macosCleanHostApplication,
+  qualificationProbeObservationSchema,
+} from './qualification-evidence.mjs';
+import type {
+  LinuxCleanHost,
+  LinuxCleanHostAcceptance,
+  QualificationEvidence,
+  QualificationStageEvidence,
+} from './qualification-evidence.mjs';
+import type { QualificationCandidate, QualificationPlatformDriver } from './qualification-platform-types.mjs';
+import { consumerProfile, localProfile } from './qualification-profile-access.mjs';
+
+const execFileAsync = promisify(execFile);
+const required = (name: string): string => z.string().min(1).parse(process.env[name]);
+const json = async (path: string): Promise<unknown> => JSON.parse(await readFile(path, 'utf8'));
+const absentOnEnoent = (error: unknown): false => {
+  if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+    return false;
+  }
+  throw error;
+};
+/**
+ * What a process that ignored an ordinary quit was doing, for the job log of a disposable Linux guest: the app's own
+ * quit, shutdown and updater events since `logOffset` (event name and its first fields only, never the whole log), the kernel's
+ * process state, and every window it still maps with its title. Each part reports its own failure instead of hiding it.
+ */
+const linuxQuitDiagnostics = async (
+  pid: number,
+  log: { path: string; offset: number; read: (path: string) => Promise<Uint8Array<ArrayBuffer>> },
+): Promise<string> => {
+  const { path: logPath, offset: logOffset, read } = log;
+  const parts: string[] = [];
+  try {
+    // The offset is a byte count. When the log has rotated past it (diagnostics.ts renames it to desktop.1.log over
+    // 5 MiB), the offset belongs to the rotated file and the whole current file is newer.
+    const current = await read(logPath);
+    const sources =
+      current.length >= logOffset
+        ? [current.subarray(logOffset)]
+        : [
+            await read(join(dirname(logPath), 'desktop.1.log')).then(
+              (rotated) => rotated.subarray(logOffset),
+              () => new Uint8Array(),
+            ),
+            current,
+          ];
+    const events = sources
+      .map((bytes) => Buffer.from(bytes).toString('utf8'))
+      .join('\n')
+      .split('\n')
+      .filter((line) =>
+        /^\S+ \S+ (?:main\.(?:\S*quiesce|\S*quit|shutdown\S*|window\S*)|services\.quiesced|updater\.\S+|window-state\.\S+)\b/u.test(
+          line,
+        ),
+      )
+      .map((line) => line.slice(0, 240));
+    parts.push(`shutdown events: ${events.length === 0 ? 'none' : events.join(' | ')}`);
+  } catch (error) {
+    parts.push(`shutdown events unreadable: ${String(error)}`);
+  }
+  try {
+    const status = await readFile(`/proc/${pid}/status`, 'utf8');
+    const state = status.split('\n').find((line) => line.startsWith('State:')) ?? 'State: unknown';
+    const wchan = await readFile(`/proc/${pid}/wchan`, 'utf8').catch(() => 'unknown');
+    parts.push(`${state.replaceAll(/\s+/gu, ' ')}, wchan ${wchan}`);
+  } catch (error) {
+    parts.push(`process state unreadable: ${String(error)}`);
+  }
+  try {
+    const { stdout } = await execFileAsync('xdotool', ['search', '--pid', String(pid)], { timeout: 15_000 });
+    const windows = stdout.trim().split(/\s+/u).filter(Boolean);
+    const named = await Promise.all(
+      windows.map(async (id) => {
+        const name = await execFileAsync('xdotool', ['getwindowname', id], { timeout: 15_000 }).then(
+          ({ stdout: title }) => JSON.stringify(title.trim()),
+          () => 'unnamed',
+        );
+        return `${id} ${name}`;
+      }),
+    );
+    parts.push(`windows: ${named.length === 0 ? 'none' : named.join(', ')}`);
+  } catch (error) {
+    // `xdotool search` exits 1 when nothing matches; any other failure is reported, not read as "no windows".
+    const { code } = error as { code?: unknown };
+    parts.push(code === 1 ? 'windows: none' : `windows unreadable: ${String(error)}`);
+  }
+  return parts.join('; ');
+};
+/**
+ * `apt-get update` on a host whose own apt-daily and unattended-upgrades may hold a lock ({@link isAptLockRefusal}): a
+ * lock refusal is retried until the deadline and every other outcome is returned, so an update that failed for its own
+ * reason (the offline mirror) stays a failure the caller can require.
+ */
+const aptUpdate = async (deadlineMs = 600_000): Promise<{ ok: true } | { ok: false; error: unknown }> => {
+  const deadline = Date.now() + deadlineMs;
+  for (;;) {
+    try {
+      await execFileAsync(
+        'sudo',
+        ['-n', 'apt-get', '-o', 'APT::Update::Error-Mode=any', '-o', 'DPkg::Lock::Timeout=120', 'update'],
+        {
+          timeout: 180_000,
+        },
+      );
+      return { ok: true };
+    } catch (error) {
+      const { stderr } = error as { stderr?: string };
+      if (!isAptLockRefusal(stderr ?? '') || Date.now() >= deadline) {
+        return { ok: false, error };
+      }
+    }
+    await wait(5000);
+  }
+};
+const readySchema = z.object({
+  stage: z.enum(['a', 'b', 'c']),
+  pid: z.number().int().positive(),
+  rendererPid: z.number().int().positive(),
+  nonce: z.uuid(),
+});
+const rendererSchema = z.object({
+  stage: z.string(),
+  url: z.string().startsWith('app://tau/w/'),
+  project: z.object({ path: z.string(), sha256: z.string().regex(/^[a-f\d]{64}$/u) }),
+  observedAt: z.iso.datetime(),
+  exported: z.object({ path: z.string(), sha256: z.string(), vertices: z.number().positive() }),
+  nativeEngineLogs: z.array(z.string()).min(1),
+  softwareRenderer: z.string().optional(),
+  /** The viewer's WebGL renderer, reported on request for Linux clean-host stock graphics. */
+  glRenderer: z.string().optional(),
+});
+async function waitFor<T>(read: () => Promise<T | undefined>, message: string, timeout = 900_000): Promise<T> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const result = await read();
+    if (result !== undefined) {
+      return result;
+    }
+    await wait(250);
+  }
+  throw new Error(message);
+}
+const snapshotObjects = async (root: string, prefix = ''): Promise<Map<string, QualificationMirrorObject>> => {
+  const result = new Map<string, QualificationMirrorObject>();
+  for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
+    const path = join(prefix, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error('APT snapshot links forbidden');
+    }
+    if (entry.isDirectory()) {
+      for (const [key, value] of await snapshotObjects(root, path)) {
+        result.set(key, value);
+      }
+    } else if (entry.isFile()) {
+      const absolute = join(root, path);
+      const hash = createHash('sha256');
+      for await (const chunk of createReadStream(absolute)) {
+        if (!(chunk instanceof Uint8Array)) {
+          throw new Error('Expected snapshot bytes');
+        }
+        hash.update(chunk);
+      }
+      result.set(`/${path.replaceAll('\\', '/')}`, {
+        path: absolute,
+        sha256: hash.digest('hex'),
+        size: await stat(absolute).then((info) => info.size),
+        contentType: 'application/octet-stream',
+      });
+    }
+  }
+  return result;
+};
+const main = async (): Promise<void> => {
+  assertDisposableQualificationHost();
+  if (
+    process.env['GITHUB_REF'] !== 'refs/heads/main' ||
+    process.env['GITHUB_EVENT_NAME'] !== 'workflow_dispatch' ||
+    process.env['GITHUB_REPOSITORY'] !== 'taucad/tau'
+  ) {
+    throw new Error('Authentic qualification requires the protected main dispatch');
+  }
+  const route = z
+    .enum(['macos-zip', 'macos-dmg', 'windows-nsis', 'linux-appimage', 'linux-apt'])
+    .parse(required('TAU_QUALIFICATION_ROUTE'));
+  const target = z
+    .enum(['darwin-arm64', 'darwin-x64', 'win32-x64', 'linux-x64'])
+    .parse(`${process.platform}-${process.arch}`);
+  const scenario = qualificationScenario(process.env['TAU_QUALIFICATION_SCENARIO']);
+  const recoveryRoute =
+    route === 'windows-nsis' || route === 'linux-apt' || route === 'linux-appimage' ? route : undefined;
+  if (scenario === 'recovery' && recoveryRoute === undefined) {
+    throw new Error('The recovery scenario (T-B22.4) runs on the Windows and Linux routes only');
+  }
+  const graphics = z.enum(['stock', 'isolated-software']).parse(process.env['TAU_QUALIFICATION_GRAPHICS'] ?? 'stock');
+  if (
+    graphics === 'isolated-software' &&
+    (process.platform !== 'linux' ||
+      !route.startsWith('linux-') ||
+      process.env['TAU_QUALIFICATION_DISPOSABLE_VM'] !== '1' ||
+      process.env['TAU_DESKTOP_QUALIFICATION_SCOPE'] !== 'linux' ||
+      process.env['TAU_QUALIFICATION_CHANNEL'] !== 'staging' ||
+      process.env['TAU_DESKTOP_ACCEPTANCE_KIND'] === 'vm')
+  ) {
+    throw new Error('Isolated software CI is restricted to Linux staging CI');
+  }
+  const graphicsArguments =
+    graphics === 'isolated-software'
+      ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+      : [];
+  if (route === 'linux-appimage' && process.env['APPIMAGE_EXTRACT_AND_RUN']) {
+    throw new Error('Qualification requires native AppImage FUSE mode, not extract-and-run');
+  }
+  if (process.platform === 'linux' && (!process.env['DISPLAY'] || process.env['XDG_SESSION_TYPE'] !== 'x11')) {
+    throw new Error('Qualification requires the declared graphical X11 session');
+  }
+  // Consumer acceptance requires native observations before the run creates its profile.
+  const acceptanceKind = z.enum(['ci', 'vm']).parse(process.env['TAU_DESKTOP_ACCEPTANCE_KIND'] ?? 'ci');
+  if (scenario === 'recovery' && (acceptanceKind !== 'ci' || graphics !== 'stock')) {
+    throw new Error('The recovery scenario (T-B22.4) is a stock-graphics CI row');
+  }
+  assertQualificationConsumerScope({
+    kind: acceptanceKind,
+    route,
+    scope: process.env['TAU_DESKTOP_QUALIFICATION_SCOPE'],
+    channel: required('TAU_QUALIFICATION_CHANNEL'),
+  });
+  const cleanHost =
+    acceptanceKind === 'vm' && route.startsWith('macos-')
+      ? await (async () => {
+          if (!route.startsWith('macos-') || process.env['TAU_DESKTOP_QUALIFICATION_SCOPE'] !== 'macos') {
+            throw new Error('Clean-host acceptance is a Mac-scoped run only');
+          }
+          // Observed before this run creates its profile, so prior Tau state cannot be mistaken for this run's.
+          return assertMacosCleanHost(
+            await observeMacosCleanHost(required('RUNNER_NAME')),
+            process.arch === 'arm64' ? 'arm64' : 'x64',
+          );
+        })()
+      : undefined;
+  const windowsHost =
+    acceptanceKind === 'vm' && route === 'windows-nsis'
+      ? assertWindowsConsumerHost(observeWindowsConsumerHost(required('RUNNER_NAME')))
+      : undefined;
+  // Linux clean host: the consumer account owns the profile and the app; this administrator process never runs it.
+  let linuxConsumer: LinuxConsumer | undefined;
+  let linuxHost: LinuxCleanHost | undefined;
+  // Trusted identity: the runner's Compute API description of the host it created (`instances describe`).
+  const linuxHostIdentity =
+    acceptanceKind === 'vm' && route.startsWith('linux-')
+      ? {
+          template: required('TAU_GCP_HOST_TEMPLATE'),
+          instance: required('TAU_GCP_HOST_INSTANCE'),
+          zone: required('TAU_GCP_HOST_ZONE'),
+        }
+      : undefined;
+  if (linuxHostIdentity) {
+    if (
+      process.env['TAU_DESKTOP_QUALIFICATION_SCOPE'] !== 'linux' ||
+      process.env['TAU_QUALIFICATION_DISPOSABLE_VM'] !== '1' ||
+      graphics !== 'stock'
+    ) {
+      throw new Error('Linux clean-host acceptance is a Linux-scoped stock-graphics guest run only');
+    }
+    linuxConsumer = await startLinuxConsumer({
+      name: required('TAU_QUALIFICATION_CONSUMER'),
+      repository: process.cwd(),
+    });
+    try {
+      // Observed before this run creates its profile or installs anything, so prior Tau state stops the row here.
+      linuxHost = await observeLinuxCleanHost(linuxConsumer, linuxHostIdentity);
+      assertLinuxCleanHost(linuxHost);
+    } catch (error) {
+      await linuxConsumer.close();
+      throw error;
+    }
+  }
+  if (acceptanceKind === 'vm' && !cleanHost && !windowsHost && !linuxHost) {
+    throw new Error('Consumer acceptance requires its own platform scope');
+  }
+  const files = linuxConsumer ? consumerProfile(linuxConsumer) : localProfile;
+  const root = resolve(required('TAU_QUALIFICATION_DIRECTORY'));
+  // The run directory itself stays non-recursive so a leftover one fails the
+  // row instead of being reused, but a fresh checkout has no `out/` yet.
+  await mkdir(dirname(root), { recursive: true });
+  await mkdir(root, { recursive: false });
+  let cleanHostRun: { host: NonNullable<typeof cleanHost>; directory: string } | undefined;
+  if (cleanHost ?? windowsHost) {
+    await mkdir(join(root, 'clean-host'), { recursive: false });
+    if (cleanHost) {
+      cleanHostRun = { host: cleanHost, directory: await realpath(join(root, 'clean-host')) };
+    }
+  }
+  const candidates = await fetchQualificationCandidates({
+    runIds: [
+      required('TAU_QUALIFICATION_RUN_A'),
+      required('TAU_QUALIFICATION_RUN_B'),
+      required('TAU_QUALIFICATION_RUN_C'),
+    ],
+    directory: root,
+    sourceCommit: required('GITHUB_SHA'),
+    scope: process.env['TAU_DESKTOP_QUALIFICATION_SCOPE'] ?? 'all',
+    kind: acceptanceKind,
+  });
+  const { channel } = candidates[2].manifest;
+  const scenarioIdentity = (index: number) => {
+    const { manifest } = candidates[index]!;
+    return { tag: manifest.tag, version: manifest.version, sourceCommit: manifest.sourceCommit };
+  };
+  if (scenario === 'recovery') {
+    // Before anything is installed: a baseline without the guarded automatic install cannot pass this row.
+    assertBaselineShipsAutoInstall(candidates[0].manifest.sourceCommit, (commit, path) => {
+      try {
+        execFileSync('git', ['cat-file', '-e', `${commit}:${path}`], { stdio: 'ignore', timeout: 60_000 });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
+  if (channel !== required('TAU_QUALIFICATION_CHANNEL')) {
+    throw new Error('Candidate channel differs from protected job');
+  }
+  const name = channel === 'staging' ? 'Tau Staging' : 'Tau';
+  const profile = join(
+    linuxConsumer
+      ? join(linuxConsumer.home, '.config')
+      : process.platform === 'darwin'
+        ? join(homedir(), 'Library/Application Support')
+        : process.platform === 'win32'
+          ? required('APPDATA')
+          : (process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config')),
+    name,
+  );
+  // Same split as the run directory: the profile leaf must be absent for the
+  // cold-store check below, but its parent need not exist on a fresh host.
+  await files.mkdir(dirname(profile), true);
+  await files.mkdir(profile, false);
+  // Production uses the per-user data root. The consumer runs with HOME set and no XDG_DATA_HOME or TAU_CONFIG_DIR, so
+  // its store is under its own home, not the runner's (D-H5).
+  const store =
+    channel === 'staging'
+      ? join(profile, 'config/dependencies')
+      : linuxConsumer
+        ? join(linuxConsumer.home, '.local/share/tau/dependencies')
+        : defaultDependencyStore();
+  const coldEntries = await files.readdir(join(store, 'closures/sha256'));
+  if (coldEntries.length > 0) {
+    throw new Error('First-use qualification requires an initially cold dependency store');
+  }
+  const readJson = async (path: string): Promise<unknown> => {
+    const bytes = await files.read(path);
+    return JSON.parse(Buffer.from(bytes).toString('utf8'));
+  };
+  const logSize = async (): Promise<number> => {
+    const size = await files.size(join(profile, 'logs/desktop.log'));
+    return size ?? 0;
+  };
+  const presentLogSize = async (): Promise<number> => {
+    const size = await files.size(join(profile, 'logs/desktop.log'));
+    if (size === undefined) {
+      throw new Error('Installed app wrote no desktop log');
+    }
+    return size;
+  };
+  const consumerCommand = async (file: string, args: readonly string[]): Promise<void> => {
+    const result = await linuxConsumer!.exec(file, args, { killAfter: 30_000 });
+    if (result.status !== 0) {
+      throw new Error(`Consumer ${file} failed: ${result.stderr}`);
+    }
+  };
+  const nonce = randomUUID();
+  /** Linux clean host: the renderer harness runs as the consumer and writes here; results are copied into `root`. */
+  const consumerRenderer = linuxConsumer ? join('/tmp', `tau-qualification-renderer-${nonce}`) : undefined;
+  const linuxRenderers: string[] = [];
+  const installationPath = cleanHost
+    ? macosCleanHostApplication
+    : route.startsWith('macos-')
+      ? join(homedir(), 'Applications', `tau-qualification-${nonce}`, 'Tau.app')
+      : route === 'windows-nsis'
+        ? windowsQualificationInstallationPath(required('LOCALAPPDATA'), nonce)
+        : linuxInstallation(channel, route === 'linux-appimage').launcher;
+  const candidate = (index: number): QualificationCandidate => ({ ...candidates[index]!, route });
+  let tls: Awaited<ReturnType<typeof prepareQualificationTls>> | undefined;
+  let mirror: Awaited<ReturnType<typeof startQualificationMirrorProcess>> | undefined;
+  const failures: unknown[] = [];
+  let acceptedReceipt: ReturnType<typeof collectQualificationReceipt> | undefined;
+  let recoveryReceipt: RecoveryReceipt | undefined;
+  const feeds: Array<Awaited<ReturnType<typeof qualificationFeed>>> = [];
+  let driver: QualificationPlatformDriver & {
+    launch?(stage: 'initial' | 'reinstall', args: readonly string[], env: Record<string, string>): Promise<number>;
+    acceptance?(): NonNullable<QualificationEvidence['acceptance']>;
+    windowsAcceptance?(): NonNullable<QualificationEvidence['windowsAcceptance']>;
+  };
+  let apt: QualificationAptEnrollment | undefined;
+  let aptDriver: LinuxAptQualificationDriver | undefined;
+  const scheduler: Array<NonNullable<QualificationEvidence['scheduler']>[number]> = [];
+  const snapshots: Array<Map<string, QualificationMirrorObject>> = [];
+  const stages: QualificationStageEvidence[] = [];
+  let ordinaryQuit: QualificationEvidence['lifecycle']['ordinaryQuit'];
+  let offlinePid: number | undefined;
+  let projectUrl: string | undefined;
+  let offset = 0;
+  let currentPid: number | undefined;
+  try {
+    // The consumer's browser and app trust the run mirror through the consumer's own NSS database.
+    tls = await prepareQualificationTls(root, linuxConsumer ? linuxConsumerTlsOwner(linuxConsumer.name) : undefined);
+    const transport = await startQualificationMirrorProcess({
+      key: tls.key,
+      certificate: tls.certificate,
+      objects: qualificationArtifactObjects(candidates),
+    });
+    mirror = transport;
+    const keys = z.record(z.string(), z.string()).parse(JSON.parse(process.env['TAU_APPIMAGE_PUBLIC_KEYS'] ?? '{}'));
+    if (route === 'linux-apt' || route === 'linux-appimage') {
+      apt = await prepareQualificationAptEnrollment({
+        candidates: [candidate(0), candidate(1), candidate(2)],
+        bundleDirectories: candidates.map((item) => item.artifactDirectory) as [string, string, string],
+        primaryFingerprint: required('TAU_APT_PRIMARY_FINGERPRINT'),
+        signingFingerprint: required('TAU_APT_SIGNING_FINGERPRINT'),
+        publicKeyPath: join(candidates[0].artifactDirectory, 'qualification-apt-public.asc'),
+        runDirectory: join(root, 'apt'),
+        origin: transport.origin,
+      });
+      const immutable = new Map<string, QualificationMirrorObject>();
+      for (const directory of apt.snapshotDirectories) {
+        const objects = await snapshotObjects(directory);
+        const mutable = new Map<string, QualificationMirrorObject>();
+        for (const [path, object] of objects) {
+          if (path.startsWith('/dists/') && !path.includes('/by-hash/')) {
+            mutable.set(path, object);
+          } else {
+            if (immutable.has(path) && immutable.get(path)?.sha256 !== object.sha256) {
+              throw new Error('APT immutable object changed between candidates');
+            }
+            immutable.set(path, object);
+          }
+        }
+        snapshots.push(mutable);
+      }
+      await transport.addImmutable(immutable);
+      await transport.switchLatest(snapshots[0]!);
+      await apt.enroll();
+    }
+    driver = route.startsWith('macos-')
+      ? createMacosQualificationDriver({
+          mode: 'release',
+          installationPath,
+          architecture: process.arch === 'arm64' ? 'arm64' : 'x64',
+          teamId: required('APPLE_TEAM_ID'),
+          installFormat: route === 'macos-dmg' ? 'dmg' : 'zip',
+          ...(cleanHostRun
+            ? { cleanHost: { ...cleanHostRun, origin: transport.origin, download: downloadWithBrowser } }
+            : {}),
+        })
+      : route === 'windows-nsis'
+        ? createWindowsQualificationDriver({
+            mode: 'release',
+            installationPath,
+            publisher: required('TAU_WINDOWS_PUBLISHER'),
+            ...(windowsHost
+              ? {
+                  cleanHost: {
+                    host: windowsHost,
+                    nonce,
+                    directory: join(root, 'clean-host'),
+                    origin: transport.origin,
+                    download: downloadWithBrowser,
+                  },
+                }
+              : {}),
+          })
+        : (aptDriver = createLinuxAptQualificationDriver({
+            mode: 'release',
+            installationPath: linuxInstallation(channel, route === 'linux-appimage').root,
+            repository: apt!.repositories[0]!,
+            ...(linuxConsumer ? { cleanHost: { consumer: linuxConsumer, origin: transport.origin } } : {}),
+          }));
+
+    const installedA = await driver.install(candidate(0));
+    if (route !== 'linux-apt') {
+      for (const [index, input] of candidates.entries()) {
+        const feed = await qualificationFeed({
+          candidate: input,
+          route,
+          target,
+          origin: transport.origin,
+          keys,
+          historical: index === 0,
+        });
+        feeds.push(feed);
+        await transport.addImmutable(
+          new Map([[`/releases/${encodeURIComponent(input.manifest.tag)}/${feed.name}`, feed.object]]),
+        );
+      }
+    }
+    const setLatest = async (index: number): Promise<void> => {
+      const feed = feeds[index]!;
+      await transport.switchLatest(new Map([[`/latest/${feed.name}`, feed.object]]));
+    };
+    if (!apt) {
+      await setLatest(1);
+    }
+    if (scenario === 'recovery') {
+      /* T-B22.4: A starts with a renderer that cannot load and must reach B through the recovery window alone. */
+      const a = scenarioIdentity(0);
+      const b = scenarioIdentity(1);
+      let executable = installedA.executablePath;
+      if (route === 'windows-nsis') {
+        await writeFile(rendererEntryPath(join(installedA.installationPath, 'resources')), brokenRendererDocument);
+      } else {
+        const layout = linuxInstallation(channel, route === 'linux-appimage');
+        const generation = join(layout.root, 'releases', a.version);
+        executable = join(generation, layout.executable);
+        if (route === 'linux-appimage') {
+          await rebuildAppImageWithEntry({
+            image: executable,
+            document: brokenRendererDocument,
+            workDirectory: join(root, 'recovery-appimage'),
+            run: async (file, args, options) => {
+              const { stdout } = await execFileAsync(file, [...args], {
+                ...(options?.cwd ? { cwd: options.cwd } : {}),
+                maxBuffer: 16 * 1024 * 1024,
+                timeout: 900_000,
+              });
+              return stdout;
+            },
+          });
+        } else {
+          const staged = join(root, 'recovery-index.html');
+          await writeFile(staged, brokenRendererDocument, { flag: 'wx' });
+          await execFileAsync(
+            'sudo',
+            [
+              '-n',
+              'install',
+              '-o',
+              'root',
+              '-g',
+              'root',
+              '-m',
+              '0644',
+              staged,
+              rendererEntryPath(join(generation, 'resources')),
+            ],
+            { timeout: 60_000 },
+          );
+        }
+        // B arrives as a completed system upgrade; A then starts from its own retained generation, as the launcher does.
+        await aptDriver!.installSelection(candidate(1), apt!.repositories[1]!);
+      }
+      // An ordinary launch: no probe argument and no probe state, so boot health and the automatic install are on.
+      const child = spawn(executable, graphicsArguments, {
+        env: { ...process.env, TAU_DESKTOP_UPDATE_FEED: transport.origin },
+        stdio: process.platform === 'linux' ? ['ignore', 'ignore', 'inherit'] : 'ignore',
+      });
+      await new Promise<void>((resolve, reject) => {
+        child.once('spawn', resolve);
+        child.once('error', reject);
+      });
+      currentPid = child.pid;
+      const readText = async (name: string): Promise<string> => {
+        try {
+          return Buffer.from(await files.read(join(profile, name))).toString('utf8');
+        } catch {
+          return '';
+        }
+      };
+      const deadline = Date.now() + 1_500_000;
+      let reason = 'not assessed';
+      let assessed: RecoveryAssessment | undefined;
+      while (!assessed) {
+        // The log rotates at 5 MiB (diagnostics.ts); the rotated file holds the older launches.
+        const log = `${await readText('logs/desktop.1.log')}\n${await readText('logs/desktop.log')}`;
+        const ledgerText = await readText('boot-health.json');
+        try {
+          assessed = assessRecovery({ log, ledger: ledgerText === '' ? undefined : JSON.parse(ledgerText), a, b });
+          currentPid = assessed.b.pid;
+        } catch (error) {
+          reason = error instanceof Error ? error.message : String(error);
+          if (Date.now() >= deadline) {
+            // The verdict alone cannot say why: keep the app's own path-free account of A beside the row's observations.
+            await transport.flush();
+            const failure = recoveryFailure({
+              reason,
+              log,
+              ledgerText,
+              aAlive: currentPid !== undefined && (await files.alive(currentPid)),
+              mirrorRequests: transport.requests,
+            });
+            await writeFile(join(root, 'qualification-recovery.json'), JSON.stringify(failure.record, undefined, 2), {
+              flag: 'wx',
+            });
+            throw failure.error;
+          }
+          await wait(2000);
+        }
+      }
+      const installedB = await driver.observe(candidate(1));
+      await transport.flush();
+      await writeFile(
+        join(root, 'qualification-recovery.json'),
+        JSON.stringify({ assessed, installedA, installedB, mirrorRequests: transport.requests }, undefined, 2),
+        { flag: 'wx' },
+      );
+      recoveryReceipt = {
+        schemaVersion: 1,
+        scenario: 'T-B22.4',
+        id: recoveryRows('all').find((row) => row.route === route)!.id,
+        status: 'passed',
+        route: recoveryRoute!,
+        target: target === 'win32-x64' ? 'win32-x64' : 'linux-x64',
+        channel,
+        a,
+        b,
+        evidence: {
+          a: { ...assessed.a, recoveryTriggers: [...assessed.a.recoveryTriggers] },
+          b: assessed.b,
+          installed: { executableSha256: installedB.executableSha256, asarSha256: installedB.asarSha256 },
+        },
+        logs: `https://github.com/taucad/tau/actions/runs/${required('GITHUB_RUN_ID')}`,
+      };
+    } else {
+      const identity = (index: number) => {
+        const { manifest } = candidates[index]!;
+        return { tag: manifest.tag, version: manifest.version, sourceCommit: manifest.sourceCommit };
+      };
+      await files.writeJson(join(profile, 'route-qualification.request.json'), {
+        schemaVersion: 1,
+        nonce,
+        profile: await files.realpath(profile),
+        route,
+        target,
+        channel,
+        installedPath: await realpath(
+          apt ? installationPath : route === 'windows-nsis' ? installedA.executablePath : installedA.installationPath,
+        ),
+        mirrorOrigin: transport.origin,
+        startedAt: Date.now(),
+        a: identity(0),
+        b: identity(1),
+        c: identity(2),
+      });
+      let consumerLaunches = 0;
+      const launch = async (): Promise<void> => {
+        offset = await logSize();
+        if (aptDriver?.launchConsumer) {
+          // The shipping probe admits a new run only from its nonce argument, so the consumer's first (offline) launch is
+          // the installed launcher; the stage A session is then started from the installed desktop entry.
+          const first = consumerLaunches++ === 0;
+          await aptDriver.launchConsumer(
+            first ? 'offline' : 'initial',
+            first ? [`--tau-route-qualification=${nonce}`] : [],
+            {
+              TAU_DESKTOP_UPDATE_FEED: transport.origin,
+            },
+          );
+          return;
+        }
+        if (driver.launch) {
+          // Clean host: LaunchServices launch from /Applications, honouring Gatekeeper's first-launch decision.
+          await driver.launch('initial', [`--tau-route-qualification=${nonce}`], {
+            TAU_DESKTOP_UPDATE_FEED: transport.origin,
+          });
+          return;
+        }
+        const child = spawn(
+          route === 'linux-apt' || route === 'linux-appimage' ? installationPath : installedA.executablePath,
+          [`--tau-route-qualification=${nonce}`, ...graphicsArguments],
+          {
+            env: { ...process.env, TAU_DESKTOP_UPDATE_FEED: transport.origin },
+            // Keep native loader/FUSE/sandbox startup errors in the disposable Linux job log.
+            stdio: process.platform === 'linux' ? ['ignore', 'ignore', 'inherit'] : 'ignore',
+          },
+        );
+        await new Promise<void>((resolve, reject) => {
+          child.once('spawn', resolve);
+          child.once('error', reject);
+        });
+      };
+      const render = async (stage: string, pid: number, request?: string | { action: string; openedFile: string }) => {
+        const action = typeof request === 'string' ? request : request?.action;
+        const openedFile = typeof request === 'string' ? undefined : request?.openedFile;
+        const fileName = `renderer-${stage}-${pid}-${action ?? 'render'}.json`;
+        const output = join(root, fileName);
+        const rendererEnv = {
+          TAU_QUALIFICATION_PROFILE: profile,
+          TAU_QUALIFICATION_STAGE: stage,
+          TAU_QUALIFICATION_RENDERER_OUTPUT: consumerRenderer ? join(consumerRenderer, fileName) : output,
+          TAU_QUALIFICATION_LOG_OFFSET: String(offset),
+          TAU_QUALIFICATION_EXPECTED_PID: String(pid),
+          ...(projectUrl ? { TAU_QUALIFICATION_PROJECT_URL: projectUrl } : {}),
+          ...(action ? { TAU_QUALIFICATION_RENDERER_ACTION: action } : {}),
+          ...(openedFile ? { TAU_QUALIFICATION_OPEN_FILE: basename(openedFile) } : {}),
+        };
+        const rendererArguments = [
+          '--import',
+          '@oxc-node/core/register',
+          resolve('apps/desktop-e2e/scripts/qualification-renderer.mts'),
+        ];
+        await (
+          linuxConsumer && consumerRenderer
+            ? (async () => {
+                // The consumer connects to its own app; only the harness switches cross, never this job's environment.
+                const result = await linuxConsumer.exec(process.execPath, rendererArguments, {
+                  env: {
+                    ...rendererEnv,
+                    TAU_QUALIFICATION_GRAPHICS: graphics,
+                    TAU_QUALIFICATION_REPORT_GL_RENDERER: '1',
+                  },
+                  killAfter: 1_200_000,
+                  // `--import @oxc-node/core/register` resolves from the working directory: run in this checkout.
+                  cwd: process.cwd(),
+                });
+                for (const suffix of ['', '.png', '.failure.json', '.failure.png']) {
+                  const bytes = await linuxConsumer.readFile(join(consumerRenderer, `${fileName}${suffix}`));
+                  if (bytes) {
+                    await writeFile(`${output}${suffix}`, bytes, { flag: 'wx' });
+                  }
+                }
+                if (result.status !== 0) {
+                  throw new Error(`Consumer renderer exited ${result.status}: ${result.stderr.slice(-4096)}`);
+                }
+              })()
+            : execFileAsync(process.execPath, rendererArguments, {
+                env: {
+                  ...process.env,
+                  ...rendererEnv,
+                  /* The reinstalled app's attach stalls after `<ws connected>` with every target still answering (run
+                   * 42563760774 macos-zip-arm64): Playwright's own CDP traffic for this step names the command that
+                   * never got its answer. Diagnostics only; the step's behaviour and limits are unchanged. */
+                  ...(action === 'reinstall-ui' ? { DEBUG: 'pw:protocol', DEBUG_FILE: `${output}.protocol.txt` } : {}),
+                },
+                maxBuffer: 8 * 1024 * 1024,
+                timeout: 1_200_000,
+              })
+        ).catch(async (error: unknown) => {
+          /* A renderer that never answers leaves no evidence of its own; the app's log since this step began says
+           * whether the main process was busy, still starting or already gone. Bounded, and only on failure. */
+          const log = await files.read(join(profile, 'logs/desktop.log')).then(
+            (bytes) => Buffer.from(bytes.subarray(offset).subarray(-16_384)).toString(),
+            () => '(no desktop log)',
+          );
+          throw new Error(
+            `Renderer step ${stage}/${action ?? 'render'} failed; desktop log since the step began:\n${log}`,
+            { cause: error },
+          );
+        });
+        return action && action !== 'reinstall-ui' && action !== 'active'
+          ? undefined
+          : rendererSchema.parse(await json(output));
+      };
+      if (linuxConsumer && consumerRenderer) {
+        await linuxConsumer.mkdirOne(consumerRenderer);
+      }
+      await transport.setAvailable(false);
+      await launch();
+      if (!route.startsWith('macos-')) {
+        const outageStart = Date.now();
+        const offlineReady = await waitFor(async () => {
+          try {
+            const value = readySchema.parse(await readJson(join(profile, 'route-qualification.ready.json')));
+            return value.stage === 'a' && value.nonce === nonce ? value : undefined;
+          } catch {
+            return undefined;
+          }
+        }, 'Offline baseline did not become ready');
+        currentPid = offlineReady.pid;
+        offlinePid = offlineReady.pid;
+        const rendered = await render('a', offlineReady.pid);
+        if (!rendered) {
+          throw new Error('Initial renderer evidence missing');
+        }
+        projectUrl = rendered.url;
+        await files.writeJson(join(profile, 'route-qualification.command.json'), {
+          schemaVersion: 1,
+          nonce,
+          pid: offlineReady.pid,
+          stage: 'a',
+          action: 'observe',
+          project: rendered.project,
+        });
+        const observed = await waitFor(async () => {
+          try {
+            const value = qualificationProbeObservationSchema.parse(
+              await readJson(join(profile, 'route-qualification.a.json')),
+            );
+            return value.pid === offlineReady.pid && value.action === 'observe' ? value : undefined;
+          } catch {
+            return undefined;
+          }
+        }, 'Initial observe command did not release updater initialization');
+        const beforeReconnect = await driver.observe(candidate(0));
+        if (apt) {
+          // The offline update must fail on the unavailable mirror, not on another apt process holding a lock.
+          const offline = await aptUpdate();
+          if (offline.ok) {
+            throw new Error('Offline APT transport unexpectedly succeeded');
+          }
+        } else {
+          await render('a', offlineReady.pid, 'offline');
+        }
+        const reconnectStart = Date.now();
+        await transport.setAvailable(true);
+        if (apt) {
+          const reconnected = await aptUpdate();
+          if (!reconnected.ok) {
+            throw reconnected.error;
+          }
+        } else {
+          await render('a', offlineReady.pid, 'check');
+        }
+        const afterReconnect = await driver.observe(candidate(0));
+        if (
+          !(await files.alive(offlineReady.pid)) ||
+          beforeReconnect.executableSha256 !== afterReconnect.executableSha256 ||
+          beforeReconnect.asarSha256 !== afterReconnect.asarSha256
+        ) {
+          throw new Error('Offline/reconnect changed baseline or exited its process');
+        }
+        await transport.flush();
+        if (
+          !transport.requests.some((request) => request.status === 503 && Date.parse(request.at) >= outageStart) ||
+          !transport.requests.some((request) => request.status === 200 && Date.parse(request.at) >= reconnectStart)
+        ) {
+          throw new Error('Offline/reconnect transport observations missing');
+        }
+        await writeFile(
+          join(root, 'qualification-offline.json'),
+          JSON.stringify(
+            { pid: offlineReady.pid, beforeReconnect, afterReconnect, requests: transport.requests },
+            undefined,
+            2,
+          ),
+          { flag: 'wx' },
+        );
+        await render('a', offlineReady.pid, apt ? 'quit' : 'quit-ready');
+        try {
+          await waitFor(
+            async () => ((await files.alive(offlineReady.pid)) ? undefined : true),
+            'Baseline ordinary quit did not exit',
+            60_000,
+          );
+        } catch (error) {
+          // The ubuntu-apt-x11 row has stayed alive here in four runs (41783968750 the latest) while debian-apt-x11 exits.
+          if (process.platform !== 'linux' || !(await files.alive(offlineReady.pid))) {
+            throw error;
+          }
+          const diagnostics = await linuxQuitDiagnostics(offlineReady.pid, {
+            path: join(profile, 'logs/desktop.log'),
+            offset,
+            read: files.read,
+          });
+          throw new Error(`Baseline ordinary quit did not exit; ${diagnostics}`, { cause: error });
+        }
+        if (route !== 'linux-apt') {
+          ordinaryQuit = {
+            probe: observed,
+            before: beforeReconnect,
+            after: await driver.observe(candidate(0)),
+            exitedPid: offlineReady.pid,
+          };
+        }
+        await launch();
+      }
+      for (const [index, stage] of (['a', 'b', 'c'] as const).entries()) {
+        const previousPid = currentPid;
+        const ready = await waitFor(async () => {
+          try {
+            const value = readySchema.parse(await readJson(join(profile, 'route-qualification.ready.json')));
+            return value.stage === stage && value.nonce === nonce && value.pid !== previousPid ? value : undefined;
+          } catch {
+            return undefined;
+          }
+        }, `Installed ${stage} did not become ready`);
+        currentPid = ready.pid;
+        const rendered = await render(stage, ready.pid);
+        if (!rendered) {
+          throw new Error('Renderer evidence absent');
+        }
+        if (linuxConsumer) {
+          if (!rendered.glRenderer) {
+            throw new Error('Clean-host viewer did not report its WebGL renderer');
+          }
+          linuxRenderers.push(rendered.glRenderer);
+        }
+        projectUrl = rendered.url;
+        const installed = await driver.observe(candidate(index));
+        let processes = discoverQualificationProcesses(ready.pid, ready.rendererPid);
+        let security = await driver.measureSecurity(processes);
+        const command = async (action: 'observe' | 'install') => {
+          await files.writeJson(join(profile, 'route-qualification.command.json'), {
+            schemaVersion: 1,
+            nonce,
+            pid: ready.pid,
+            stage,
+            action,
+            project: rendered.project,
+          });
+          return waitFor(async () => {
+            try {
+              const value = qualificationProbeObservationSchema.parse(
+                await readJson(join(profile, `route-qualification.${stage}.json`)),
+              );
+              return value.pid === ready.pid && value.action === action ? value : undefined;
+            } catch {
+              return undefined;
+            }
+          }, 'Probe did not observe saved project');
+        };
+        if (apt && aptDriver && stage !== 'c') {
+          const baseline = await aptDriver.captureActiveRuntime(ready.pid, 'resources/app.asar');
+          const scheduled = await aptDriver.waitForScheduledUpgrade({
+            candidate: candidate(index + 1),
+            repository: apt.repositories[index + 1]!,
+            baseline,
+            upgradeTimeout: 900_000,
+            publishSnapshot: async () => {
+              await transport.switchLatest(snapshots[index + 1]!);
+            },
+          });
+          const active = await render(stage, ready.pid, 'active');
+          if (!active || !(await files.alive(ready.pid)) || active.project.sha256 !== rendered.project.sha256) {
+            throw new Error('Old APT session cannot export its retained saved project after selector upgrade');
+          }
+          /* The selector upgrade and the active export can restart the native workers, so the stage evidence takes its
+           * process tree and security from this moment, beside the probe's own observation that follows. */
+          processes = discoverQualificationProcesses(ready.pid, ready.rendererPid);
+          security = await driver.measureSecurity(processes);
+          scheduler.push({
+            ...scheduled,
+            activeSession: {
+              pid: ready.pid,
+              projectSha256: active.project.sha256,
+              exportSha256: active.exported.sha256,
+              vertices: active.exported.vertices,
+            },
+          });
+        }
+        const probe = await command(stage === 'c' ? 'observe' : 'install');
+        if (stage === 'a' && route.startsWith('macos-')) {
+          await render(stage, ready.pid, 'offline');
+          await transport.flush();
+          if (!(await files.alive(ready.pid)) || !transport.requests.some((request) => request.status === 503)) {
+            throw new Error('Mac offline transport did not fail while baseline remained live');
+          }
+          const reconnectStart = Date.now();
+          await transport.setAvailable(true);
+          await render(stage, ready.pid, 'retry');
+          await writeFile(
+            join(root, 'qualification-offline.json'),
+            JSON.stringify(
+              { pid: ready.pid, reconnectStart, baseline: installed, requests: transport.requests },
+              undefined,
+              2,
+            ),
+            { flag: 'wx' },
+          );
+        }
+
+        stages.push({
+          candidate: candidates[index]!.manifest,
+          installed,
+          probe,
+          renderer: {
+            pid: ready.rendererPid,
+            projectPath: join(profile, rendered.project.path),
+            projectSha256: rendered.project.sha256,
+            nativePids: processes.nativeChildPids,
+            nativeAncestry: processes.nativeAncestry,
+            saveObservedAt: Date.parse(rendered.observedAt),
+            ...(rendered.softwareRenderer ? { softwareRenderer: rendered.softwareRenderer } : {}),
+          },
+          security,
+        });
+        offset = await presentLogSize();
+        if (stage === 'a' && !apt) {
+          await setLatest(2);
+        }
+        if (stage === 'c') {
+          const scheme = channel === 'staging' && process.platform !== 'darwin' ? 'tau-staging' : 'tau';
+          const uri = `${scheme}://machines`;
+          if (process.platform === 'darwin') {
+            await execFileAsync('open', ['-a', installationPath, uri], { timeout: 30_000 });
+          } else if (process.platform === 'win32') {
+            await execFileAsync(
+              'powershell.exe',
+              ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process -FilePath $env:TAU_Q_OPEN_URI'],
+              { env: { ...createWindowsPowerShellEnvironment(process.env), TAU_Q_OPEN_URI: uri }, timeout: 30_000 },
+            );
+          } else if (linuxConsumer) {
+            // The consumer's own session opens the link and the file, as a second instance of their running app.
+            await consumerCommand('xdg-open', [uri]);
+          } else if (apt) {
+            await execFileAsync('xdg-open', [uri], { timeout: 30_000 });
+          } else {
+            await execFileAsync(installationPath, [uri], { timeout: 30_000 });
+          }
+          await render(stage, ready.pid, 'uri');
+          if (process.platform === 'darwin') {
+            await execFileAsync('open', ['-a', installationPath, rendered.exported.path], { timeout: 30_000 });
+          } else if (linuxConsumer) {
+            await consumerCommand(installationPath, [rendered.exported.path]);
+          } else {
+            await execFileAsync(
+              route === 'linux-apt' || route === 'linux-appimage' ? installationPath : installed.executablePath,
+              [rendered.exported.path],
+              { timeout: 30_000 },
+            );
+          }
+          await render(stage, ready.pid, { action: 'file', openedFile: rendered.exported.path });
+          await render(stage, ready.pid, 'quit');
+          await waitFor(
+            async () => ((await files.alive(ready.pid)) ? undefined : true),
+            'Final application did not quit',
+            60_000,
+          );
+        }
+      }
+      const final = stages[2]!;
+      const preserved = [
+        { path: final.renderer.projectPath, sha256: await files.sha256(final.renderer.projectPath) },
+        {
+          path: join(profile, 'route-qualification.sentinel'),
+          sha256: await files.sha256(join(profile, 'route-qualification.sentinel')),
+        },
+      ];
+      await driver.remove(preserved);
+      const after = await Promise.all(
+        preserved.map(async (file) => ({ path: file.path, sha256: await files.sha256(file.path) })),
+      );
+      const removedInstallationPath = route === 'windows-nsis' ? final.installed.executablePath : installationPath;
+      const existsAfter = await stat(removedInstallationPath).then(() => true, absentOnEnoent);
+      if (existsAfter) {
+        throw new Error('Uninstalled entry remains present');
+      }
+      const reinstalled = await driver.reinstall(candidate(2), preserved);
+      await files.rm(join(profile, 'DevToolsActivePort'));
+      offset = await presentLogSize();
+      const resumedArgs = ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', ...graphicsArguments];
+      let resumedPid: number | undefined;
+      if (aptDriver?.launchConsumer) {
+        resumedPid = await aptDriver.launchConsumer('reinstall', resumedArgs, { TAU_DESKTOP_UPDATES: 'off' });
+      } else if (driver.launch) {
+        resumedPid = await driver.launch('reinstall', resumedArgs, { TAU_DESKTOP_UPDATES: 'off' });
+      } else {
+        const resumed = spawn(
+          route === 'linux-apt' || route === 'linux-appimage' ? installationPath : reinstalled.executablePath,
+          resumedArgs,
+          { env: { ...process.env, TAU_DESKTOP_UPDATES: 'off' }, stdio: 'ignore' },
+        );
+        await new Promise<void>((resolve, reject) => {
+          resumed.once('spawn', resolve);
+          resumed.once('error', reject);
+        });
+        resumedPid = resumed.pid;
+      }
+      if (!resumedPid) {
+        throw new Error('Reinstalled process has no PID');
+      }
+      const resumed = { pid: resumedPid };
+      currentPid = resumed.pid;
+      await waitFor(
+        async () => ((await files.size(join(profile, 'DevToolsActivePort'))) === undefined ? undefined : true),
+        'Reinstalled renderer debugging endpoint unavailable',
+        60_000,
+      );
+      const reopened = await render('c', resumed.pid, 'reinstall-ui');
+      if (!reopened) {
+        throw new Error('Reinstalled saved project evidence missing');
+      }
+      await render('c', resumed.pid, 'reinstall-quit');
+      await waitFor(
+        async () => ((await files.alive(resumed.pid)) ? undefined : true),
+        'Reinstalled app did not quit',
+        60_000,
+      );
+      const reinstalledFiles = await Promise.all(
+        preserved.map(async (file) => ({ path: file.path, sha256: await files.sha256(file.path) })),
+      );
+      await driver.remove(preserved);
+      await transport.flush();
+      // Observed again once Tau is removed: the stock security policy and the consumer must not have changed.
+      const linuxAcceptance: LinuxCleanHostAcceptance | undefined =
+        linuxConsumer && linuxHost && linuxHostIdentity && aptDriver?.cleanHostRecord
+          ? {
+              kind: 'vm',
+              host: linuxHost,
+              after: await observeLinuxCleanHost(linuxConsumer, linuxHostIdentity),
+              ...aptDriver.cleanHostRecord(),
+              renderers: z.tuple([z.string(), z.string(), z.string()]).parse(linuxRenderers),
+            }
+          : undefined;
+      const evidence: QualificationEvidence = {
+        mode: graphics === 'isolated-software' ? 'software-ci' : 'release',
+        route,
+        target,
+        stages: [stages[0]!, stages[1]!, final],
+        lifecycle: {
+          ...(offlinePid === undefined ? {} : { offline: { pid: offlinePid } }),
+          ...(ordinaryQuit ? { ordinaryQuit } : {}),
+          reinstall: {
+            installed: reinstalled,
+            files: reinstalledFiles,
+            mainPid: resumed.pid,
+            projectPath: join(profile, reopened.project.path),
+            projectSha256: reopened.project.sha256,
+            exportSha256: reopened.exported.sha256,
+          },
+          uninstall: {
+            before: preserved,
+            after,
+            removedInstallationPath,
+            existsAfter,
+          },
+        },
+        ...(apt ? { scheduler } : {}),
+        mirrorRequests: transport.requests.map((request) => ({ ...request, at: Date.parse(request.at) })),
+        logs: `https://github.com/taucad/tau/actions/runs/${required('GITHUB_RUN_ID')}`,
+        suite: (cleanHost ?? windowsHost ?? linuxHost) ? 'clean-host-route-a-b-c-v1' : 'installed-route-a-b-c-v1',
+        ...(driver.acceptance ? { acceptance: driver.acceptance() } : {}),
+        ...(driver.windowsAcceptance ? { windowsAcceptance: driver.windowsAcceptance() } : {}),
+        ...(linuxAcceptance ? { linuxAcceptance } : {}),
+        trustIdentity:
+          route === 'windows-nsis'
+            ? required('TAU_WINDOWS_PUBLISHER')
+            : route.startsWith('macos-')
+              ? required('APPLE_TEAM_ID')
+              : route === 'linux-apt'
+                ? `${required('TAU_APT_PRIMARY_FINGERPRINT')}/${required('TAU_APT_SIGNING_FINGERPRINT')}`
+                : required('TAU_APPIMAGE_KEY_ID'),
+      };
+      await writeFile(join(root, 'qualification-evidence.json'), JSON.stringify(evidence, undefined, 2));
+      if (graphics === 'isolated-software') {
+        validateSoftwareCiEvidence(evidence);
+      } else {
+        acceptedReceipt = collectQualificationReceipt(evidence);
+      }
+    }
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    // Every independent cleanup must run, especially trust removal after a package-manager failure.
+    for (const cleanup of [
+      async () => {
+        if (currentPid && (await files.alive(currentPid))) {
+          await files.terminate(currentPid);
+        }
+      },
+      async () => {
+        if (consumerRenderer) {
+          await linuxConsumer?.exec('rm', ['-rf', '--', consumerRenderer], { killAfter: 60_000 });
+        }
+      },
+      async () => linuxConsumer?.close(),
+      async () => apt?.cleanup(),
+      async () => mirror?.close(),
+      async () => tls?.remove(),
+    ]) {
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    await writeFile(
+      join(root, 'qualification-status.json'),
+      JSON.stringify(
+        {
+          status: failures.length > 0 ? 'failed' : 'passed',
+          mode: graphics === 'isolated-software' ? 'software-ci' : 'release',
+          stages,
+          mirrorRequests: mirror?.requests ?? [],
+          failures: failures.map((error) => (error instanceof Error ? error.message : String(error))),
+        },
+        undefined,
+        2,
+      ),
+    );
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'Qualification or its cleanup failed');
+  }
+  if (recoveryReceipt) {
+    await writeFile(join(root, 'recovery-receipt.json'), JSON.stringify(recoveryReceipt, undefined, 2), { flag: 'wx' });
+    return;
+  }
+  if (graphics === 'isolated-software') {
+    await writeFile(
+      join(root, 'software-ci-evidence.json'),
+      JSON.stringify(
+        {
+          kind: 'isolated-software-ci',
+          status: 'passed',
+          stockGpuAcceptance: 'open',
+          releaseEligible: false,
+          evidence: 'qualification-evidence.json',
+        },
+        undefined,
+        2,
+      ),
+      { flag: 'wx' },
+    );
+    return;
+  }
+  if (!acceptedReceipt) {
+    throw new Error('No accepted qualification receipt');
+  }
+  await writeFile(join(root, 'route-receipts.json'), JSON.stringify([acceptedReceipt], undefined, 2), { flag: 'wx' });
+};
+await main();

@@ -1,0 +1,100 @@
+import { Files, File } from 'lucide-react';
+import type { ReactNode } from 'react';
+import type { ToolInvocation } from '@taucad/chat';
+import { toolName } from '@taucad/chat/constants';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+  ChatToolCardContent,
+  ChatToolCardList,
+  ChatToolCardListItem,
+} from '@taucad/chat-ui/components/chat-tool-card';
+import { ChatToolDescription } from '@taucad/chat-ui/components/chat-tool-text';
+import { ChatToolLabel } from '@taucad/chat-ui/components/chat-tool-label';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
+import { formatToolFileMetadata } from '@taucad/project-workspace/utils/chat-tool-file-metadata';
+
+export function ChatMessageToolGlobSearch({
+  part,
+}: {
+  readonly part: ToolInvocation<typeof toolName.globSearch>;
+}): ReactNode {
+  switch (part.state) {
+    case 'input-streaming':
+    case 'input-available': {
+      const { input } = part;
+      const pattern = input?.pattern ?? 'pattern';
+
+      return (
+        <ChatToolCard variant='minimal' status='loading' isCollapsible={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Files} />
+            <ChatToolCardTitle>
+              <ChatToolLabel verb='Searching for'>
+                <ChatToolDescription>
+                  <span className='font-mono'>{pattern}</span>...
+                </ChatToolDescription>
+              </ChatToolLabel>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
+      );
+    }
+
+    case 'output-available': {
+      const { input, output } = part;
+      const { pattern } = input;
+      const { entries, totalFiles } = output;
+
+      return (
+        <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Files} />
+            <ChatToolCardTitle>
+              <ChatToolLabel verb='Searched'>
+                <ChatToolDescription>
+                  <span className='font-mono'>{pattern}</span> ({totalFiles} file{totalFiles === 1 ? '' : 's'})
+                </ChatToolDescription>
+              </ChatToolLabel>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+          <ChatToolCardContent>
+            <ChatToolCardList maxHeight='max-h-32'>
+              {entries.length === 0 ? (
+                <ChatToolCardListItem className='text-muted-foreground/70 italic'>No files found</ChatToolCardListItem>
+              ) : (
+                <>
+                  {entries.slice(0, 10).map((entry) => (
+                    <ChatToolCardListItem key={entry.path} icon={File}>
+                      <span className='font-mono'>{entry.path}</span>
+                      {entry.isDirectory === true ? undefined : (
+                        <span className='ml-1 text-muted-foreground/70'> ({formatToolFileMetadata(entry)})</span>
+                      )}
+                    </ChatToolCardListItem>
+                  ))}
+                  {entries.length > 10 ? (
+                    <ChatToolCardListItem className='text-muted-foreground/70 italic'>
+                      ... {entries.length - 10} more files
+                    </ChatToolCardListItem>
+                  ) : undefined}
+                </>
+              )}
+            </ChatToolCardList>
+          </ChatToolCardContent>
+        </ChatToolCard>
+      );
+    }
+
+    case 'output-error': {
+      return <ChatToolError errorText={part.errorText} icon={Files} noun='file search' />;
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.globSearch} state: ${part.state}`);
+    }
+  }
+}

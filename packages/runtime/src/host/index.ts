@@ -1,16 +1,47 @@
-/**
- * `@taucad/runtime/host` — symmetric host-side surface that mirrors
- * `@taucad/runtime`'s `createRuntimeClient`.
- *
- * Consumers compose a {@link RuntimeHostConfig} (kernels + middleware +
- * transcoders + bundlers + a transport `host`), pass it to
- * {@link createRuntimeHost}, and receive a {@link RuntimeHostHandle}
- * with `dispose()` for symmetric teardown. The transport `host` owns
- * the wire (the `web`/`node` worker subpath entries spawn the
- * dispatcher IIFE that adopts the worker port and the
- * `inProcessTransport.host` is the contract-stub paired with
- * `inProcessTransport({...})`).
- */
+export { createIndexedDbComputeEngine, fromIndexedDb } from '#cache/indexeddb-compute-engine.js';
+export type { IndexedDbComputeEngine, IndexedDbComputeEngineOptions } from '#cache/indexeddb-compute-engine.js';
+export { createMemoryComputeEngine } from '#cache/memory-compute-engine.js';
+export type { MemoryComputeEngine } from '#cache/memory-compute-engine.js';
+export { defineRuntime } from '#host/host-definition.js';
+export { createHostAdmissionAuthority, HostAdmissionRefusal } from '#host/host-admission.js';
+export type {
+  AdmittedHostOperation,
+  AdmittedHostRoute,
+  AdmitHostOperationInput,
+  AdmitHostRouteInput,
+  CreateHostAdmissionAuthorityInput,
+  HostActor,
+  HostAdmissionAuthority,
+  HostAdmissionOperation,
+  HostAdmissionRefusalCode,
+  HostAdmissionRoute,
+  HostRouteGrant,
+  HostSessionHandle,
+  IssueHostSessionInput,
+} from '#host/host-admission.js';
+export type { RuntimeHostDefinition, RuntimeHostDefinitionInput } from '#host/host-definition.js';
+export { parseHostManifest } from '#host/host-manifest.js';
+export type {
+  AdmittedHostManifestV2,
+  HostCapabilityDescriptor,
+  HostCapabilityEndpoint,
+  HostCapabilityRole,
+  HostManifestV2,
+} from '#host/host-manifest.js';
+export { matchHostCapabilities } from '#host/capability-matching.js';
+export type {
+  HostCapabilityMatch,
+  HostCapabilityRequirement,
+  HostCapabilityValue,
+  MatchHostCapabilitiesInput,
+} from '#host/capability-matching.js';
+export {
+  connectComputeStoreChannel,
+  exposeComputeStoreChannel,
+  fromComputeStoreChannel,
+} from '#transport/_internal/compute-store-channel.js';
+export { exposeMachineChannel } from '#machines/machine-channel.js';
+export type { MachineChannelHostOperations } from '#machines/machine-channel.js';
 
-export { createRuntimeHost, createRuntimeHostConfig } from '#host/create-runtime-host.js';
-export type { RuntimeFileCache, RuntimeHostConfig, RuntimeHostHandle } from '#host/runtime-host.types.js';
+export { MachineSettingsOwner } from '#host/machine-settings-owner.js';
+export type { MachineSettingsSnapshot, MachineSettingsEdit, MachineSettingsSave } from '@taucad/types';

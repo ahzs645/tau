@@ -1,0 +1,35 @@
+import { defineConfig } from 'tsdown';
+import type { UserConfig } from 'tsdown';
+
+const baseConfig: UserConfig = {
+  entry: [
+    'src/index.ts',
+    'src/contract.ts',
+    'src/content-redaction.ts',
+    'src/delivery.ts',
+    'src/authority.ts',
+    'src/identity.ts',
+    'src/pending-stores.ts',
+    'src/host-evidence.ts',
+    'src/node-pending-files.ts',
+    'src/cloud-host-observer.ts',
+    'src/projection.ts',
+    'src/reporter.ts',
+    'src/pi-telemetry.ts',
+    'src/telemetry-policy.ts',
+  ],
+  sourcemap: false,
+  clean: true,
+  dts: true,
+  minify: true,
+  tsconfig: 'tsconfig.build.json',
+  unbundle: true,
+};
+
+const packageConfig: UserConfig = {
+  ...baseConfig,
+  format: 'esm',
+  outDir: 'dist',
+};
+
+export default defineConfig(packageConfig);

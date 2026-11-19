@@ -1,0 +1,123 @@
+import type { WorkbenchLayout, WorkbenchView } from '@taucad/workbench';
+
+import type { MobilePanelId } from '#constants/editor.constants.js';
+import type { GraphicsBackendPreference } from '@taucad/viewer/graphics/graphics-settings';
+
+/** Device-local Restore payload; view seeds recreate only records deleted with a closed tab. */
+export type PreviousWorkbenchLayout = Readonly<{
+  layout: WorkbenchLayout;
+  views: Readonly<Record<string, WorkbenchView>>;
+}>;
+
+// ============================================================================
+// File Types
+// ============================================================================
+
+/**
+ * Represents an open file tab in the editor.
+ *
+ * The `paneId` is the **stable identity** of the tab. The `path` is a
+ * mutable property of the tab (changes on rename/move). React keys,
+ * Dockview panel IDs, and all participants must key off `paneId`, never
+ * `path`, so a rename does not unmount the tab.
+ */
+export type OpenFile = {
+  /** Stable pane identity. Minted once via `generatePrefixedId(idPrefix.pane)`. */
+  paneId: string;
+  /** Current file path (mutable — updated by rename/move participants). */
+  path: string;
+  name: string;
+  /** Timestamp of last focus/access for LRU eviction. */
+  lastAccessedAt: number;
+  /** Bundled kernel typings (`node_modules/…` workspace-relative) open read-only. */
+  readOnly?: boolean;
+};
+
+/**
+ * Source of a file open event.
+ * - 'user': User-initiated action (e.g., clicked on file in tree, breadcrumb, link) - should open editor panel
+ * - 'machine': Programmatic action (e.g., project load, chat tool) - should not auto-open editor panel
+ */
+export type FileOpenSource = 'user' | 'machine' | 'record';
+
+/**
+ * Represents a file or directory item in the file tree.
+ */
+export type FileItem = {
+  id: string;
+  name: string;
+  path: string;
+  content: Uint8Array<ArrayBuffer>;
+  language?: string;
+  isDirectory?: boolean;
+  children?: FileItem[];
+};
+
+/**
+ * Per-panel state for a PaneviewReact panel (expansion + pixel height).
+ */
+export type PaneviewPanelState = {
+  isExpanded: boolean;
+  size: number;
+};
+
+/**
+ * Panel layout state - stored per-project for persistence across page refreshes.
+ */
+export type PanelState = {
+  desktopLayout: {
+    chatOpen: boolean;
+    workbenchOpen: boolean;
+    chatWidth: number;
+    workbenchWidth: number;
+    compactAuxiliary: 'chat' | 'workbench';
+  };
+  /** Mobile active tab ID */
+  mobileActiveTab: MobilePanelId;
+  /** Kernel paneview panel states (keyed by entry path) */
+  kernelPaneview: Record<string, PaneviewPanelState>;
+  /** Model paneview panel states (keyed by entry path) */
+  modelPaneview: Record<string, PaneviewPanelState>;
+  /** Parameters paneview panel states (keyed by entry path) */
+  parametersPaneview: Record<string, PaneviewPanelState>;
+  /** Console paneview panel states (keyed by entry path) */
+  consolePaneview: Record<string, PaneviewPanelState>;
+};
+
+// ============================================================================
+// Editor State Types
+// ============================================================================
+
+/**
+ * Editor State - Transient per-project Editor state stored separately from project data.
+ *
+ * This type is stored in IndexedDB and managed by the editorMachine.
+ * It is decoupled from the Project type to keep the project machine clean for
+ * CLI/multi-frontend reuse.
+ */
+export type EditorState = {
+  /** Primary key, references Project.id */
+  projectId: string;
+  /** Open files/tabs in the editor */
+  openFiles: OpenFile[];
+  /** Currently active pane id (stable across renames) */
+  activePaneId: string | undefined;
+  /** Currently focused chat ID (the chat the user is actively viewing) */
+  focusedChatId: string | undefined;
+  /** Panel layout state (open/close, sizes, mobile tab) */
+  panelState: PanelState;
+  /** Pixel width of each file tab's sidebar on this device, keyed by project path. */
+  fileSidebars: Record<string, number>;
+  /** Rendering API selected on this device. */
+  graphicsBackendPreferences: Record<string, GraphicsBackendPreference>;
+  /** Device-local prior portable projection for Restore previous arrangement. */
+  previousLayout?: PreviousWorkbenchLayout;
+  /** Timestamp of last update */
+  updatedAt: number;
+};
+
+/**
+ * Input type for updating editor state.
+ * The `updatedAt` field is omitted as it's automatically set by the storage layer.
+ */
+export type EditorStateInput = Omit<EditorState, 'updatedAt'>;

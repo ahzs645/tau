@@ -1,0 +1,225 @@
+import { describe, expect, it } from 'vitest';
+import {
+  assertEmailTemplateUrlAllowed,
+  buildFrontendForgotPasswordUrl,
+  buildFrontendMagicLinkVerifyUrl,
+  buildFrontendResetPasswordUrl,
+  buildFrontendVerificationUrl,
+  buildCloudLinkUrl,
+  buildProjectInvitationUrl,
+  sanitizeFrontendRedirectPath,
+} from '#email-link-builder.js';
+
+describe('email link builder', () => {
+  it('rewrites Better Auth verification links to the frontend verification route', () => {
+    expect(
+      buildFrontendVerificationUrl({
+        frontendURL: 'http://localhost:3000',
+        generatedUrl: 'http://localhost:4000/v1/auth/verify-email?token=secret&callbackURL=%2Fs%2Ftau%7Epub_123',
+        token: 'secret',
+      }),
+    ).toBe('http://localhost:3000/auth/verify-email?token=secret&redirectTo=%2Fs%2Ftau%7Epub_123');
+  });
+
+  it('rewrites Better Auth reset links to the frontend reset route', () => {
+    expect(
+      buildFrontendResetPasswordUrl({
+        frontendURL: 'http://localhost:3000',
+        token: 'secret',
+      }),
+    ).toBe('http://localhost:3000/auth/reset-password?token=secret');
+  });
+
+  it('rewrites Better Auth magic links to the frontend verifier route', () => {
+    expect(
+      buildFrontendMagicLinkVerifyUrl({
+        frontendURL: 'http://localhost:3000',
+        generatedUrl: 'http://localhost:4000/v1/auth/magic-link/verify?token=secret&callbackURL=%2Fs%2Ftau%7Epub_123',
+        token: 'secret',
+      }),
+    ).toBe('http://localhost:3000/auth/magic-link/verify?token=secret&redirectTo=%2Fs%2Ftau%7Epub_123');
+  });
+
+  it('builds cloud links from the frontend origin', () => {
+    expect(buildCloudLinkUrl({ frontendURL: 'https://tau.new/', shareId: 'shr_123' })).toBe(
+      'https://tau.new/s/tau~shr_123',
+    );
+  });
+
+  it('builds collaborator invitation links from the frontend origin', () => {
+    expect(buildProjectInvitationUrl({ frontendURL: 'https://tau.new/', token: 'tok_abc-DEF' })).toBe(
+      'https://tau.new/invitations/tok_abc-DEF',
+    );
+  });
+
+  it('accepts only an invitation link for a project-invite email', () => {
+    const template = (url: string) =>
+      ({
+        kind: 'project-invite',
+        recipientEmail: 'friend@example.com',
+        ownerName: 'Ada',
+        projectName: 'Bracket',
+        role: 'read',
+        expiresAt: '3 Dec 2026',
+        url,
+      }) as const;
+    const check = (url: string): void => {
+      assertEmailTemplateUrlAllowed({ frontendURL: 'https://tau.new', template: template(url) });
+    };
+
+    expect(() => {
+      check('https://tau.new/invitations/tok');
+    }).not.toThrow();
+    for (const url of [
+      'https://tau.new/invitations/',
+      'https://tau.new/invitations/tok/extra',
+      'https://tau.new/invitations/tok?redirect=x',
+      'https://tau.new/s/tau~shr_123',
+    ]) {
+      expect(() => {
+        check(url);
+      }).toThrow(/project-invite email URL path/u);
+    }
+    expect(() => {
+      check('https://evil.example/invitations/tok');
+    }).toThrow(/origin/u);
+  });
+
+  it('keeps relative and same-origin redirects but rejects external redirects', () => {
+    expect(
+      sanitizeFrontendRedirectPath({ callbackURL: '/projects/abc?tab=share', frontendURL: 'https://tau.new' }),
+    ).toBe('/projects/abc?tab=share');
+    expect(
+      sanitizeFrontendRedirectPath({
+        callbackURL: 'https://tau.new/s/tau~pub_123',
+        frontendURL: 'https://tau.new',
+      }),
+    ).toBe('/s/tau~pub_123');
+    expect(
+      sanitizeFrontendRedirectPath({
+        callbackURL: 'https://evil.example/steal',
+        frontendURL: 'https://tau.new',
+      }),
+    ).toBe('/');
+  });
+
+  it.each([
+    String.raw`/\evil.example`,
+    '//evil.example',
+    String.raw`/\/evil.example`,
+    'https://tau.new@evil.example/',
+    '/.//evil.example',
+    '/a/..//evil.example',
+  ])('rejects %s, which a browser would leave the origin for', (callbackURL) => {
+    expect(
+      sanitizeFrontendRedirectPath({
+        callbackURL,
+        frontendURL: 'https://tau.new',
+      }),
+    ).toBe('/');
+  });
+
+  it('keeps a path that merely contains an at sign', () => {
+    expect(
+      sanitizeFrontendRedirectPath({
+        callbackURL: '/@evil.example',
+        frontendURL: 'https://tau.new',
+      }),
+    ).toBe('/@evil.example');
+  });
+
+  it('rejects outbound auth email URLs that point at the API origin', () => {
+    expect(() => {
+      assertEmailTemplateUrlAllowed({
+        frontendURL: 'http://localhost:3000',
+        template: {
+          kind: 'reset-password',
+          email: 'user@example.com',
+          url: 'http://localhost:4000/v1/auth/reset-password/token',
+        },
+      });
+    }).toThrow(/origin/u);
+  });
+
+  it('rejects outbound auth email URLs on the wrong frontend path', () => {
+    expect(() => {
+      assertEmailTemplateUrlAllowed({
+        frontendURL: 'https://tau.new',
+        template: {
+          kind: 'magic-link',
+          email: 'user@example.com',
+          url: 'https://tau.new/auth/reset-password?token=secret',
+        },
+      });
+    }).toThrow(/path/u);
+  });
+
+  it('accepts frontend auth and publication email URLs', () => {
+    expect(() => {
+      assertEmailTemplateUrlAllowed({
+        frontendURL: 'https://tau.new',
+        template: {
+          kind: 'magic-link',
+          email: 'user@example.com',
+          url: 'https://tau.new/auth/magic-link/verify?token=secret&redirectTo=%2F',
+        },
+      });
+    }).not.toThrow();
+    expect(() => {
+      assertEmailTemplateUrlAllowed({
+        frontendURL: 'https://tau.new',
+        template: {
+          kind: 'publication-invite',
+          recipientEmail: 'friend@example.com',
+          ownerName: 'Ada',
+          publicationTitle: 'Bracket',
+          url: 'https://tau.new/s/tau~shr_123',
+        },
+      });
+    }).not.toThrow();
+  });
+
+  it.each(['payment-failed', 'auto-reload-disabled', 'auto-reload-action-required'] as const)(
+    'accepts the %s billing deep link and rejects a plausible near-miss',
+    (kind) => {
+      const template = (billingUrl: string) => ({ kind, email: 'user@example.com', billingUrl });
+
+      expect(() => {
+        assertEmailTemplateUrlAllowed({
+          frontendURL: 'https://tau.new',
+          template: template('https://tau.new/?settings=billing'),
+        });
+      }).not.toThrow();
+      // Billing is a settings panel on the root route, not a page; a path link would 404 the recipient.
+      expect(() => {
+        assertEmailTemplateUrlAllowed({
+          frontendURL: 'https://tau.new',
+          template: template('https://tau.new/settings/billing'),
+        });
+      }).toThrow(/path/u);
+      expect(() => {
+        assertEmailTemplateUrlAllowed({
+          frontendURL: 'https://tau.new',
+          template: template('https://evil.example/?settings=billing'),
+        });
+      }).toThrow(/origin/u);
+    },
+  );
+
+  it('accepts the forgot-password link the password-changed email sends', () => {
+    expect(buildFrontendForgotPasswordUrl({ frontendURL: 'https://tau.new' })).toBe(
+      'https://tau.new/auth/forgot-password',
+    );
+    expect(() => {
+      assertEmailTemplateUrlAllowed({
+        frontendURL: 'https://tau.new',
+        template: {
+          kind: 'password-changed',
+          email: 'user@example.com',
+          changedAt: '16 Sep 2026, 10:57 UTC',
+          url: buildFrontendForgotPasswordUrl({ frontendURL: 'https://tau.new' }),
+        },
+      });
+    }).not.toThrow();
+  });
+});

@@ -1,0 +1,54 @@
+import { expect, test } from 'vitest';
+import { page as selectors } from 'vitest/browser';
+import * as target from '#support/external-target.js';
+
+type SectionCapCompleteness = {
+  status: 'complete';
+  admittedSourceCount: number;
+  exactSourceCount: number;
+  perLoopSourceCount: number;
+};
+
+const readCompleteness = async (): Promise<SectionCapCompleteness | undefined> =>
+  target.evaluate(() => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Section view e2e bridge is not installed.');
+    }
+    return bridge.getSectionCapCompleteness();
+  });
+
+test('repaired involute gear produces a complete section snapshot', async () => {
+  await target.navigate('/s/builtin~jscad.gear?graphicsBackend=webgl');
+  await target.expectVisible(selectors.getByCss('canvas[data-engine]'), 60_000);
+  await target.expectGraphicsBackend('webgl');
+  await target.expectGeometryFramed();
+
+  await target.evaluate(() => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Section view e2e bridge is not installed.');
+    }
+    bridge.setSectionCuts([{ kind: 'plane', plane: 'xy', offset: 0.004, isFlipped: false }]);
+  });
+
+  // While the gear's section analysis is pending the caps commit the cut without it, as complete with no sources.
+  await expect
+    .poll(
+      async () => {
+        const polled = await readCompleteness();
+        return polled?.status === 'complete' && polled.admittedSourceCount === 0
+          ? 'complete without sources'
+          : polled?.status;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe('complete');
+  const completeness = await readCompleteness();
+  if (completeness?.status !== 'complete') {
+    throw new Error(`Section caps are incomplete: ${JSON.stringify(completeness)}`);
+  }
+  expect(completeness.admittedSourceCount).toBeGreaterThan(0);
+  // The repaired gear is a closed solid, so it keeps its exact stencil cap.
+  expect(completeness.perLoopSourceCount).toBe(0);
+});

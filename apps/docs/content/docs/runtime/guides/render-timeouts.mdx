@@ -1,0 +1,76 @@
+---
+title: Configure Render Timeouts
+description: Set operation deadlines, handle typed timeout failures, and recover isolated runtime hosts.
+docType: how-to
+icon: lucide:timer-off
+---
+
+Use `operationTimeout` for wall-clock deadlines on document description, evaluation, view rendering, and exports. All values are milliseconds; zero disables enforcement. Direct transcodes have a separate deadline.
+
+## Prerequisites
+
+Use an isolated worker or remote transport capable of enforcing a deadline. Same-isolate `inProcessTransport` rejects a positive timeout because synchronous work also blocks the client's timer. See [Transport API](../api/transport).
+
+## Steps
+
+### 1. Configure the client
+
+```typescript
+import { createRuntimeClient, isOperationTimeoutError } from '@taucad/runtime/client';
+import { createWebWorkerClientOptions } from '@taucad/runtime/transport/web';
+
+const clientOptions = createWebWorkerClientOptions({
+  createWorker: () => new Worker(new URL('./runtime.worker.ts', import.meta.url), { type: 'module' }),
+});
+const client = createRuntimeClient({ ...clientOptions, operationTimeout: 60_000 });
+const document = client.open({ source: { path: 'main.ts' } });
+
+try {
+  const outcome = await document.evaluation();
+  if (!outcome.superseded) {
+    console.log(outcome.evaluation.success);
+  }
+} catch (error) {
+  if (isOperationTimeoutError(error)) {
+    console.warn(error.code, error.phase);
+  } else {
+    throw error;
+  }
+} finally {
+  document.close();
+  await client.shutdown();
+}
+```
+
+The worker entry declares plugins with `defineRuntime` and calls `serveWebWorkerRuntime`; see [Worker Model](../concepts/worker-model). Keep reusable client options at module scope, and materialize a fresh client for each independent lifetime.
+
+### 2. Change future deadlines
+
+```typescript
+import type { RuntimeClient } from '@taucad/runtime/client';
+
+export function changeDeadlines(client: RuntimeClient): void {
+  client.setOperationTimeout(120_000);
+  client.setTranscodeTimeout(30_000);
+}
+```
+
+Both setters return synchronously, reject negative/nonfinite durations, and affect subsequently admitted operations. They do not change work already in flight. Direct conversion defaults to `60_000`; document operations default to zero.
+
+### 3. Distinguish failure from supersession
+
+Deadline expiry rejects the matching promise locally with `OperationTimeoutError`, including without shared memory. Supersession instead resolves as `{ superseded: true }`. Explicit abort uses `OperationAbortedError`; transport loss or termination uses `RuntimeTerminatedError`.
+
+The runtime requests cooperative cancellation. A blocked isolated host that cannot settle during bounded recovery may be terminated. Recreate its client from the stable options spec after termination; explicitly reopen the intended source. The runtime does not replay model operations automatically.
+
+## Variations
+
+Electron uses its renderer/main/utility transport ownership to terminate a blocked utility process. Use `createElectronClientOptions` from `@taucad/runtime/electron/renderer` rather than passing utility IDs or raw ports to the client.
+
+For native/WASM kernels, shared abort state can be checked inside synchronous loops. Kernel authors use the existing operation-scoped services signal and cooperative abort helpers; see [Cooperate with Cancellation](./cooperate-with-cancellation).
+
+## Related
+
+- [Handle Errors](./error-handling)
+- [Client API](../api/client)
+- [Worker Model](../concepts/worker-model)

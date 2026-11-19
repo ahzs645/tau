@@ -1,0 +1,167 @@
+import { globSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+const docsDirectory = resolve(import.meta.dirname, 'content/docs');
+
+/** Whitespace-separated tokens, fences included: the `wc -w` figure used to seed these budgets. */
+const countWords = (source: string): number => source.split(/\s+/u).filter(Boolean).length;
+
+// Ceilings only move down. A raise is a reviewed diff that names the feature
+// paying for it here. Ratcheted down 2026-09-01 after the fresh content rewrite,
+// rounded up to 50 words per page and 500 words site-wide. A page can carry its
+// own ceiling in a frontmatter `wordBudgetOverride` instead of a row here.
+const pageCeilings: Readonly<Record<string, number>> = {
+  'editor/index.mdx': 150,
+  'runtime/api/bundler.mdx': 250,
+  'runtime/api/client.mdx': 2000,
+  'runtime/api/filesystem.mdx': 650,
+  'runtime/api/frameworks.mdx': 700,
+  // Raised 400 -> 450 on 2026-09-06 for the tscircuit kernel row (charter D11).
+  'runtime/api/kernels.mdx': 450,
+  'runtime/api/middleware.mdx': 500,
+  'runtime/api/testing.mdx': 500,
+  'runtime/api/transport.mdx': 1450,
+  // Raised 550 -> 560 on 2026-10-13 for the RealmGroup and RealmHoldInput tables (typed realm groups).
+  // Raised 560 -> 610 on 2026-10-24 for ResourceLimitDetails and the Node telemetry file sink (runtime observability PR-1a).
+  'runtime/api/types.mdx': 610,
+  'runtime/concepts/architecture.mdx': 1650,
+  'runtime/concepts/interactive-architecture.mdx': 1100,
+  'runtime/concepts/kernel-selection.mdx': 850,
+  'runtime/concepts/middleware-model.mdx': 750,
+  'runtime/concepts/path-namespaces.mdx': 700,
+  'runtime/concepts/plugin-system.mdx': 600,
+  'runtime/concepts/render-lifecycle.mdx': 1400,
+  'runtime/concepts/worker-model.mdx': 2000,
+  // Raised 450 -> 500 on 2026-09-27 for the tscircuit kernel (charter D11).
+  // Raised 500 -> 550 on 2026-10-17 for the SMLib install section (SMLib kernel).
+  'runtime/getting-started/installation.mdx': 550,
+  'runtime/getting-started/llms-txt.mdx': 250,
+  'runtime/getting-started/quick-start.mdx': 450,
+  'runtime/getting-started/your-first-kernel.mdx': 900,
+  // Raised 700 -> 750 on 2026-10-17 for the SMLib Vite variation (SMLib kernel).
+  'runtime/guides/bundler-configuration.mdx': 750,
+  'runtime/guides/bundling.mdx': 800,
+  // Raised 400 -> 500 on 2026-09-27 for the tscircuit kernel (charter D11), and 500 -> 550 on 2026-10-17 for the SMLib kernel.
+  // Raised 550 -> 600 on 2026-10-19 for the SMLibPy kernel row, and 600 -> 650 on 2026-10-19 for the PicoVoxel and PicoGK rows (ONB-2).
+  'runtime/guides/choosing-a-kernel.mdx': 650,
+  'runtime/guides/cooperate-with-cancellation.mdx': 650,
+  'runtime/guides/cross-origin-isolation.mdx': 750,
+  'runtime/guides/custom-kernel.mdx': 800,
+  'runtime/guides/custom-middleware.mdx': 600,
+  'runtime/guides/embedding-in-a-host.mdx': 1100,
+  'runtime/guides/error-handling.mdx': 800,
+  'runtime/guides/filesystem-setup.mdx': 750,
+  'runtime/guides/headless-camera-capture.mdx': 800,
+  'runtime/guides/live-rendering.mdx': 800,
+  'runtime/guides/render-timeouts.mdx': 800,
+  'runtime/guides/testing-kernels.mdx': 700,
+  'runtime/guides/using-middleware.mdx': 500,
+  // Raised 550 -> 600 on 2026-09-06 for the tscircuit kernel row (charter D11).
+  // Raised 600 -> 650 on 2026-10-19 for the PicoVoxel, SMLib and PicoGK kernel rows (ONB-2).
+  'runtime/index.mdx': 650,
+  'runtime/reference/replicad.mdx': 100,
+};
+// Agent Workbench Control T20 adds two reviewed editor pages, each with a 500-word budget.
+// T21 baseline repair documents configuration, jobs, machines, host, compute, Electron and protocol APIs in eight references.
+// Raised 33,500 -> 34,700 on 2026-10-15 for machines contract revision 3 (machines, machine-providers and host references).
+// Raised 34,700 -> 34,850 on 2026-10-17 for the SMLib kernel pages.
+// Raised 34,850 -> 35,400 on 2026-10-19 for the SMLibPy kernel pages.
+// Raised 35,400 -> 35,500 on 2026-10-19 for the agent plugin page's install and check lines (ONB-4).
+// Raised 35,500 -> 35,550 on 2026-10-19 for the PicoVoxel, SMLib and PicoGK kernel rows (ONB-2).
+// Raised 35,550 -> 35,600 on 2026-10-24 for ResourceLimitDetails and the Node telemetry file sink (runtime observability PR-1a).
+// Raised 35,600 -> 35,800 on 2026-10-24 for the client Operation Observation section (runtime observability PR-1).
+// Raised 35,800 -> 36,200 on 2026-11-13 for the editor Terminal page (Terminal git access TG6).
+// Raised 36,200 -> 36,350 on 2026-11-15 for the external agents page's install, sign-in and update commands (ACP agent install paths P6).
+// Raised 36,350 -> 36,800 on 2026-11-18 for the editor Native CAD Files page (cadmpeg plugin W8).
+const siteCeiling = 36_800;
+
+const documentTypeCaps = {
+  tutorial: 1500,
+  'how-to': 800,
+  explanation: 1200,
+} as const;
+
+const documentedTypeCapExceptions: Readonly<Record<string, string>> = {
+  'runtime/concepts/architecture.mdx': 'TODO(rewrite wave): split protocol detail from the architecture explanation.',
+  'runtime/concepts/render-lifecycle.mdx': 'TODO(rewrite wave): move cancellation strategies into a focused guide.',
+  'runtime/concepts/worker-model.mdx': 'TODO(rewrite wave): move the three topology recipes out of this explanation.',
+  'runtime/guides/embedding-in-a-host.mdx': 'TODO(rewrite wave): split browser, Node.js, and Electron host topologies.',
+};
+
+type DocumentType = 'tutorial' | 'how-to' | 'reference' | 'explanation';
+
+const parseFrontmatter = (
+  source: string,
+  path: string,
+): { documentType: DocumentType; wordBudgetOverride?: number } => {
+  const frontmatter = /^---\n([\s\S]*?)\n---/u.exec(source)?.[1] ?? '';
+  const documentType = /^docType:\s*(tutorial|how-to|reference|explanation)\s*$/mu.exec(frontmatter)?.[1] as
+    | DocumentType
+    | undefined;
+  if (!documentType) {
+    throw new Error(`${path} has no valid docType`);
+  }
+
+  const override = /^wordBudgetOverride:\s*(\d+)\s*$/mu.exec(frontmatter)?.[1];
+  return { documentType, ...(override ? { wordBudgetOverride: Number(override) } : {}) };
+};
+
+const pages = globSync('**/*.mdx', { cwd: docsDirectory })
+  .toSorted()
+  .map((path) => {
+    const source = readFileSync(resolve(docsDirectory, path), 'utf8');
+    return { path, words: countWords(source), ...parseFrontmatter(source, path) };
+  });
+
+const ceilingFor = ({ path, wordBudgetOverride }: (typeof pages)[number]): number =>
+  wordBudgetOverride ?? pageCeilings[path] ?? 0;
+
+/** From documentation-policy.md §5: "Keep pages under 2000 words." */
+const policyWordLimit = 2000;
+
+describe('docs word budget', () => {
+  it('gives every page a ceiling', () => {
+    // Either source counts, so a page can carry its budget in its own
+    // frontmatter and travel with a `git mv` instead of needing a row here.
+    const unbudgeted = pages
+      .filter((page) => page.wordBudgetOverride === undefined && pageCeilings[page.path] === undefined)
+      .map(({ path }) => path);
+
+    expect(unbudgeted).toEqual([]);
+  });
+
+  it('lists no ceiling for a page that does not exist', () => {
+    const pagePaths = new Set(pages.map(({ path }) => path));
+
+    expect(Object.keys(pageCeilings).filter((path) => !pagePaths.has(path))).toEqual([]);
+  });
+
+  it.each(pages)('keeps $path within the documentation policy limit', (page) => {
+    expect(page.words).toBeLessThan(policyWordLimit);
+  });
+
+  it.each(pages)('keeps $path within its ceiling', (page) => {
+    expect(page.words).toBeLessThanOrEqual(ceilingFor(page));
+  });
+
+  it('keeps the site within its ceiling', () => {
+    expect(pages.reduce((sum, { words }) => sum + words, 0)).toBeLessThanOrEqual(siteCeiling);
+  });
+
+  it('keeps maximum ceilings within each Diátaxis type cap', () => {
+    for (const page of pages) {
+      if (page.documentType === 'reference') {
+        continue;
+      }
+      const cap = documentTypeCaps[page.documentType];
+      const exception = documentedTypeCapExceptions[page.path];
+      if (exception) {
+        expect(ceilingFor(page), `${page.path}: ${exception}`).toBeGreaterThan(cap);
+      } else {
+        expect(ceilingFor(page), page.path).toBeLessThanOrEqual(cap);
+      }
+    }
+  });
+});

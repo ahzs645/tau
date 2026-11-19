@@ -7,8 +7,8 @@ import { useIsMutating } from '@tanstack/react-query';
 import type { SocialProvider } from 'better-auth/social-providers';
 import type { ComponentProps } from 'react';
 
-import { Button } from '#components/ui/button.js';
-import { Spinner } from '#components/ui/spinner.js';
+import { Button } from '@taucad/ui/components/button';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
 
 export type ProviderButtonProps = {
   provider: SocialProvider;
@@ -30,9 +30,11 @@ export function ProviderButton({
   variant = 'outline',
   ...props
 }: ProviderButtonProps): React.JSX.Element {
-  const { authClient, baseURL, localization, redirectTo } = useAuth();
+  const { authClient, baseURL, basePaths, localization, redirectTo, viewPaths } = useAuth();
 
   const callbackURL = `${baseURL}${redirectTo}`;
+  // Without it a refused sign-in (an unverified password account with the same email) ended on the API's JSON 404.
+  const errorCallbackURL = `${baseURL}${basePaths.auth}/${viewPaths.auth.signIn}`;
 
   const { mutate: signInSocial } = useSignInSocial(authClient, {
     onError: () => {
@@ -61,13 +63,15 @@ export function ProviderButton({
       disabled={isDisabled}
       onClick={() => {
         onActiveProviderChange(provider);
-        signInSocial({ provider, callbackURL });
+        signInSocial({ provider, callbackURL, errorCallbackURL });
       }}
       {...props}
-      aria-label={getProviderName(provider)}
+      // Only the icon-only layout has no visible text; otherwise the visible text is the name (WCAG 2.5.3).
+      aria-label={display === 'icon' ? getProviderName(provider) : undefined}
       aria-busy={isActiveProvider}
     >
-      {isActiveProvider ? <Spinner /> : ProviderIcon ? <ProviderIcon /> : null}
+      {/* The icon is `role=img` named by its provider: hidden, or the name repeats it. */}
+      {isActiveProvider ? <Spinner /> : ProviderIcon ? <ProviderIcon aria-hidden /> : null}
 
       {display === 'full'
         ? localization.auth.continueWith.replace('{{provider}}', getProviderName(provider))

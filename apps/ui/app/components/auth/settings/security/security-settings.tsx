@@ -1,32 +1,49 @@
 'use client';
 
+import { SettingsGroup, SettingsItem } from '@taucad/settings-ui/components/settings/settings-item';
+
 import { useAuth } from '@better-auth-ui/react';
-import { cn } from '#utils/ui.utils.js';
+import { cn } from '@taucad/ui/utils/cn';
 import { ActiveSessions } from '#components/auth/settings/security/active-sessions.js';
 import { ChangePassword } from '#components/auth/settings/security/change-password.js';
 import { LinkedAccounts } from '#components/auth/settings/security/linked-accounts.js';
+import { GithubPermissions } from '#components/auth/settings/security/github-permissions.js';
+import { EmailDeliverabilityBanner } from '#components/auth/settings/account/email-deliverability-banner.js';
 
 export type SecuritySettingsProps = {
   className?: string;
 };
 
 /**
- * Renders the security settings layout including password management, linked accounts, and active sessions.
+ * Renders the security settings: password, sign-in methods (social providers, GitHub and its Gist access) and active sessions.
  *
- * ChangePassword is rendered when password authentication is enabled; LinkedAccounts is rendered when social providers are present.
+ * ChangePassword is rendered when password authentication is enabled; LinkedAccounts adds a row per non-GitHub social provider.
+ * GitHub repository access is a separate connection and lives under Repositories.
  * Each registered auth plugin may contribute `securityCards` (for example passkeys, delete-user).
  *
  * @param className - Optional additional CSS class names for the outer container.
  * @returns The security settings container as a JSX element.
  */
-export function SecuritySettings({ className }: SecuritySettingsProps) {
+export function SecuritySettings({ className }: SecuritySettingsProps): React.JSX.Element {
   const { emailAndPassword, plugins, socialProviders } = useAuth();
 
   return (
-    <div className={cn('flex w-full flex-col gap-4 md:gap-6', className)}>
-      {emailAndPassword?.enabled && <ChangePassword />}
-      {(socialProviders?.length ?? 0) > 0 ? <LinkedAccounts /> : null}
-      <ActiveSessions />
+    <div className={cn('flex w-full flex-col gap-6 md:gap-8', className)}>
+      <EmailDeliverabilityBanner />
+      {emailAndPassword.enabled && (
+        <SettingsItem settingId='password'>
+          <ChangePassword />
+        </SettingsItem>
+      )}
+      <SettingsItem settingId='linked-accounts'>
+        <SettingsGroup title='Sign-in methods'>
+          {(socialProviders?.length ?? 0) > 0 ? <LinkedAccounts /> : null}
+          <GithubPermissions />
+        </SettingsGroup>
+      </SettingsItem>
+      <SettingsItem settingId='active-sessions'>
+        <ActiveSessions />
+      </SettingsItem>
       {plugins.flatMap(
         (plugin) => plugin.securityCards?.map((Card, index) => <Card key={`${plugin.id}-${index.toString()}`} />) ?? [],
       )}

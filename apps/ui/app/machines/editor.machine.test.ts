@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createActor, waitFor } from 'xstate';
-import type { EditorState } from '#types/editor.types.js';
-import { defaultPanelState } from '#constants/editor.constants.js';
+import { createActor, createCallbackLogic, waitFor } from 'xstate';
+import type {
+  WorkbenchAdapterEvent,
+  WorkbenchAdapterInput,
+  WorkbenchDockReady,
+} from '#workbench-records/workbench-adapter.js';
+import type { EditorState, EditorStateInput } from '@taucad/ui-core/types/editor.types';
+import { defaultPanelState } from '@taucad/ui-core/constants/editor.constants';
 import { editorMachine } from '#machines/editor.machine.js';
-import { fromSafeAsync } from '#lib/xstate.lib.js';
+import { fromSafeAsync } from '@taucad/ui-core/lib/xstate.lib';
+import type { MachineActors } from '@taucad/ui-core/lib/xstate.lib';
 
 // ---------------------------------------------------------------------------
 // Stubs
@@ -21,9 +27,8 @@ const stubEditorState: EditorState = {
   activePaneId: stubPaneIdMain,
   focusedChatId: 'chat-1',
   panelState: defaultPanelState,
-  editorLayout: undefined,
-  viewerLayout: undefined,
-  viewSettings: {},
+  fileSidebars: {},
+  graphicsBackendPreferences: {},
   updatedAt: Date.now(),
 };
 
@@ -41,8 +46,14 @@ function selectActivePath(context: {
 // Factory helpers
 // ---------------------------------------------------------------------------
 
-type EnsureFocusedChatInput = { projectId: string; candidateFocusedChatId: string | undefined };
-type EnsureFocusedChatResult = { type: 'focusedChatEnsured'; focusedChatId: string };
+type EnsureFocusedChatInput = {
+  projectId: string;
+  requestedChatId: string | undefined;
+  persistedChatId: string | undefined;
+};
+type EnsureFocusedChatResult =
+  | { type: 'focusedChatEnsured'; focusedChatId: string }
+  | { type: 'focusedChatDeferred'; focusedChatId?: undefined };
 
 /**
  * Default `ensureFocusedChatActor` behaviour used by the test factory:
@@ -52,7 +63,7 @@ type EnsureFocusedChatResult = { type: 'focusedChatEnsured'; focusedChatId: stri
  */
 const defaultEnsureFocusedChat = async (input: EnsureFocusedChatInput): Promise<EnsureFocusedChatResult> => ({
   type: 'focusedChatEnsured',
-  focusedChatId: input.candidateFocusedChatId ?? 'chat-default',
+  focusedChatId: input.requestedChatId ?? input.persistedChatId ?? 'chat-default',
 });
 
 function createTestActor(options?: {
@@ -60,30 +71,30 @@ function createTestActor(options?: {
   saveResult?: () => Promise<void>;
   ensureResult?: (input: EnsureFocusedChatInput) => Promise<EnsureFocusedChatResult>;
   projectId?: string;
+  requestedChatId?: string;
 }) {
   const loadResult = options?.loadResult;
   const loadFunction = typeof loadResult === 'function' ? loadResult : async () => loadResult;
   const ensureFunction = options?.ensureResult ?? defaultEnsureFocusedChat;
 
-  const machine = editorMachine.provide({
-    actors: {
-      loadEditorStateActor: fromSafeAsync(async () => {
-        const state = await loadFunction();
-        return { type: 'editorStateRetrieved', state };
-      }),
-      ensureFocusedChatActor: fromSafeAsync(async ({ input }) => ensureFunction(input)),
-      ...(options?.saveResult
-        ? {
-            saveEditorStateActor: fromSafeAsync(async () => {
-              await options.saveResult!();
-            }),
-          }
-        : {}),
-    },
-  });
+  const baseActors = {
+    loadEditorStateActor: fromSafeAsync(async () => {
+      const state = await loadFunction();
+      return { type: 'editorStateRetrieved', state };
+    }),
+    ensureFocusedChatActor: fromSafeAsync(async ({ input }) => ensureFunction(input)),
+  } satisfies Partial<MachineActors<typeof editorMachine>>;
+  const { saveResult } = options ?? {};
+  const savingActors = {
+    ...baseActors,
+    saveEditorStateActor: fromSafeAsync(async () => {
+      await saveResult?.();
+    }),
+  } satisfies Partial<MachineActors<typeof editorMachine>>;
+  const machine = editorMachine.provide({ actors: saveResult === undefined ? baseActors : savingActors });
 
   return createActor(machine, {
-    input: { projectId: options?.projectId ?? 'test-build' },
+    input: { projectId: options?.projectId ?? 'test-build', requestedChatId: options?.requestedChatId },
   });
 }
 
@@ -102,6 +113,36 @@ async function startAndLoad(options?: Parameters<typeof createTestActor>[0]) {
 describe('editorMachine', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('hydrates and edits device widths, backend preferences, and exact Restore payload without portable state', async () => {
+    const previousLayout: EditorState['previousLayout'] = {
+      layout: {
+        version: 1,
+        lanes: { chat: true, workbench: true },
+        viewer: { kind: 'group', tabs: [] },
+        workbench: { kind: 'group', tabs: [] },
+      },
+      views: {},
+    };
+    const actor = await startAndLoad({
+      loadResult: {
+        ...stubEditorState,
+        fileSidebars: { 'src/main.ts': 280 },
+        graphicsBackendPreferences: { 'v-main': 'webgpu' },
+        previousLayout,
+      },
+    });
+    expect(actor.getSnapshot().context.fileSidebars['src/main.ts']).toBe(280);
+    expect(actor.getSnapshot().context.graphicsBackendPreferences['v-main']).toBe('webgpu');
+    expect(actor.getSnapshot().context.previousLayout).toEqual(previousLayout);
+    actor.send({ type: 'setFileSidebarWidth', path: 'src/main.ts', width: 320 });
+    actor.send({ type: 'setGraphicsBackendPreference', viewId: 'v-main', preference: 'webgl' });
+    actor.send({ type: 'renameFile', oldPath: 'src/main.ts', newPath: 'src/renamed.ts' });
+    expect(actor.getSnapshot().context.fileSidebars).toEqual({ 'src/renamed.ts': 320 });
+    expect(actor.getSnapshot().context.graphicsBackendPreferences).toEqual({ 'v-main': 'webgl' });
+    expect(actor.getSnapshot().context.previousLayout).toEqual(previousLayout);
+    actor.stop();
   });
 
   // =========================================================================
@@ -147,6 +188,82 @@ describe('editorMachine', () => {
       actor.stop();
     });
 
+    it('should repair and deduplicate legacy slash-prefixed persisted tabs', async () => {
+      const actor = await startAndLoad({
+        loadResult: {
+          ...stubEditorState,
+          openFiles: [
+            { paneId: 'pane-relative', path: 'main.ts', name: 'main.ts', lastAccessedAt: 1000 },
+            { paneId: 'pane-legacy', path: '/main.ts', name: 'main.ts', lastAccessedAt: 2000 },
+          ],
+          activePaneId: 'pane-legacy',
+        },
+      });
+
+      expect(actor.getSnapshot().context.openFiles).toEqual([
+        expect.objectContaining({ paneId: 'pane-legacy', path: 'main.ts' }),
+      ]);
+      expect(actor.getSnapshot().context.activePaneId).toBe('pane-legacy');
+      actor.stop();
+    });
+
+    it('should drop library declaration tabs a previous session persisted', async () => {
+      const actor = await startAndLoad({
+        loadResult: {
+          ...stubEditorState,
+          openFiles: [
+            { paneId: 'pane-main', path: 'main.ts', name: 'main.ts', lastAccessedAt: 1000 },
+            { paneId: 'pane-lib', path: '__kcl_std__/sketch.kcl', name: 'sketch.kcl', lastAccessedAt: 2000 },
+          ],
+          activePaneId: 'pane-lib',
+        },
+      });
+
+      expect(actor.getSnapshot().context.openFiles.map((file) => file.path)).toEqual(['main.ts']);
+      expect(actor.getSnapshot().context.activePaneId).toBeUndefined();
+      actor.stop();
+    });
+
+    it('should open a library declaration read-only without persisting its tab', async () => {
+      vi.useFakeTimers();
+      try {
+        const saved: EditorStateInput[] = [];
+        const actors = {
+          loadEditorStateActor: fromSafeAsync(
+            async (): Promise<{ type: 'editorStateRetrieved'; state: EditorState | undefined }> => ({
+              type: 'editorStateRetrieved',
+              state: undefined,
+            }),
+          ),
+          ensureFocusedChatActor: fromSafeAsync(async ({ input }) => defaultEnsureFocusedChat(input)),
+          saveEditorStateActor: fromSafeAsync(async ({ input }) => {
+            saved.push(input.editorState);
+          }),
+        } satisfies Partial<MachineActors<typeof editorMachine>>;
+        const actor = createActor(editorMachine.provide({ actors }), {
+          input: { projectId: 'test-build', requestedChatId: undefined },
+        });
+        actor.start();
+        actor.send({ type: 'load' });
+        await waitFor(actor, (state) => state.matches({ ready: {} }));
+
+        actor.send({ type: 'openFile', path: 'main.ts', source: 'user' });
+        actor.send({ type: 'openFile', path: '__kcl_std__/sketch.kcl', source: 'user', readOnly: true });
+        expect(actor.getSnapshot().context.openFiles.find((file) => file.path === '__kcl_std__/sketch.kcl')).toEqual(
+          expect.objectContaining({ readOnly: true }),
+        );
+        await vi.advanceTimersByTimeAsync(500);
+        await waitFor(actor, (state) => state.matches({ ready: { storing: 'idle' } }));
+
+        const last = saved.at(-1);
+        expect(last?.openFiles.map((file) => file.path)).toEqual(['main.ts']);
+        expect(last?.activePaneId).toBeUndefined();
+        actor.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('should handle load with undefined state', async () => {
       const actor = await startAndLoad({ loadResult: undefined });
       const { context } = actor.getSnapshot();
@@ -154,20 +271,6 @@ describe('editorMachine', () => {
       expect(context.activePaneId).toBeUndefined();
       expect(selectActivePath(context)).toBeUndefined();
       expect(context.panelState).toEqual(defaultPanelState);
-      actor.stop();
-    });
-
-    it('should emit editorStateLoaded on successful load', async () => {
-      const actor = createTestActor({ loadResult: stubEditorState });
-      actor.start();
-      const emitted: unknown[] = [];
-      actor.on('editorStateLoaded', (event) => emitted.push(event));
-
-      actor.send({ type: 'load' });
-      await waitFor(actor, (s) => s.matches({ ready: {} }));
-
-      expect(emitted).toHaveLength(1);
-      expect(emitted[0]).toMatchObject({ type: 'editorStateLoaded' });
       actor.stop();
     });
 
@@ -251,6 +354,50 @@ describe('editorMachine', () => {
       actor.stop();
     });
 
+    it('should emit model component reveal requests', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      const emitted: unknown[] = [];
+      actor.on('modelComponentRevealRequested', (event) => emitted.push(event));
+
+      actor.send({
+        type: 'revealModelComponentInExplorer',
+        entryPath: 'src/main.ts',
+        unitId: 'file:src/main.ts',
+        componentId: 'component:housing',
+      });
+      expect(emitted).toEqual([
+        {
+          type: 'modelComponentRevealRequested',
+          entryPath: 'src/main.ts',
+          unitId: 'file:src/main.ts',
+          componentId: 'component:housing',
+        },
+      ]);
+      actor.stop();
+    });
+
+    it('should emit Kinematics reveal requests', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      const emitted: unknown[] = [];
+      actor.on('kinematicsRevealRequested', (event) => emitted.push(event));
+
+      actor.send({
+        type: 'revealModelComponentInKinematics',
+        entryPath: 'src/main.ts',
+        unitId: 'file:src/main.ts',
+        componentId: 'component:blocker-door-3',
+      });
+      expect(emitted).toEqual([
+        {
+          type: 'kinematicsRevealRequested',
+          entryPath: 'src/main.ts',
+          unitId: 'file:src/main.ts',
+          componentId: 'component:blocker-door-3',
+        },
+      ]);
+      actor.stop();
+    });
+
     it('should rewrite every nested tab in place on a directory rename, preserving tab identities', async () => {
       // Reproduces F22 / R3 — folder rename must move ALL open
       // tabs under that folder without remounting them. Identity is
@@ -306,16 +453,38 @@ describe('editorMachine', () => {
   // State: ready – panel state
   // =========================================================================
   describe('ready – panel state', () => {
-    /* eslint-disable @typescript-eslint/naming-convention -- file path keys in paneview test fixtures */
     it('should update panel state with deep merge', async () => {
       const actor = await startAndLoad({ loadResult: undefined });
       actor.send({
         type: 'setPanelState',
-        panelState: { openPanels: { files: true } },
+        panelState: {
+          desktopLayout: { workbenchOpen: false, workbenchWidth: 512 },
+        },
       });
       const { context } = actor.getSnapshot();
-      expect(context.panelState.openPanels.files).toBe(true);
-      expect(context.panelState.openPanels.chat).toBe(true);
+      expect(context.panelState.desktopLayout.workbenchOpen).toBe(false);
+      expect(context.panelState.desktopLayout.workbenchWidth).toBe(512);
+      expect(context.panelState.desktopLayout.chatOpen).toBe(true);
+      actor.stop();
+    });
+
+    it('should strip obsolete global Files fields while loading persisted panel state', async () => {
+      const legacyState = {
+        ...stubEditorState,
+        panelState: {
+          ...defaultPanelState,
+          desktopLayout: {
+            ...defaultPanelState.desktopLayout,
+            workbenchFilesOpen: true,
+            workbenchFilesWidth: 312,
+          },
+        },
+      };
+      const actor = await startAndLoad({ loadResult: legacyState });
+
+      expect(actor.getSnapshot().context.panelState.desktopLayout).toEqual(defaultPanelState.desktopLayout);
+      expect(actor.getSnapshot().context.panelState.desktopLayout).not.toHaveProperty('workbenchFilesOpen');
+      expect(actor.getSnapshot().context.panelState.desktopLayout).not.toHaveProperty('workbenchFilesWidth');
       actor.stop();
     });
 
@@ -358,11 +527,54 @@ describe('editorMachine', () => {
       actor.stop();
     });
 
+    it('should shallow-merge modelPaneview into panel state', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          modelPaneview: { 'main.ts': { isExpanded: true, size: 200 } },
+        },
+      });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          modelPaneview: { 'helper.ts': { isExpanded: false, size: 80 } },
+        },
+      });
+      expect(actor.getSnapshot().context.panelState.modelPaneview).toEqual({
+        'main.ts': { isExpanded: true, size: 200 },
+        'helper.ts': { isExpanded: false, size: 80 },
+      });
+      expect(actor.getSnapshot().context.panelState.parametersPaneview).toEqual({});
+      actor.stop();
+    });
+
+    it('should shallow-merge consolePaneview into panel state', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          consolePaneview: { 'main.ts': { isExpanded: true, size: 200 } },
+        },
+      });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          consolePaneview: { 'helper.ts': { isExpanded: false, size: 80 } },
+        },
+      });
+      expect(actor.getSnapshot().context.panelState.consolePaneview).toEqual({
+        'main.ts': { isExpanded: true, size: 200 },
+        'helper.ts': { isExpanded: false, size: 80 },
+      });
+      actor.stop();
+    });
+
     it('should preserve other panel state fields when merging paneview state', async () => {
       const actor = await startAndLoad({ loadResult: undefined });
       actor.send({
         type: 'setPanelState',
-        panelState: { openPanels: { files: true } },
+        panelState: { desktopLayout: { workbenchOpen: false } },
       });
       actor.send({
         type: 'setPanelState',
@@ -372,15 +584,14 @@ describe('editorMachine', () => {
       });
 
       const { panelState } = actor.getSnapshot().context;
-      expect(panelState.openPanels.files).toBe(true);
-      expect(panelState.openPanels.chat).toBe(true);
+      expect(panelState.desktopLayout.workbenchOpen).toBe(false);
+      expect(panelState.desktopLayout.chatOpen).toBe(true);
       expect(panelState.kernelPaneview).toEqual({
         'main.ts': { isExpanded: true, size: 200 },
       });
       expect(panelState.parametersPaneview).toEqual({});
       actor.stop();
     });
-    /* eslint-enable @typescript-eslint/naming-convention -- file path keys in paneview test fixtures */
   });
 
   // =========================================================================
@@ -454,6 +665,36 @@ describe('editorMachine', () => {
         vi.useRealTimers();
       }
     });
+
+    it('should acknowledge a failed save and retry it on flushNow', async () => {
+      vi.useFakeTimers();
+      try {
+        let writeCallCount = 0;
+        const actor = await startAndLoad({
+          loadResult: undefined,
+          saveResult: async () => {
+            writeCallCount += 1;
+            if (writeCallCount === 1) {
+              throw new Error('editor save failed');
+            }
+          },
+        });
+
+        actor.send({ type: 'openFile', path: 'src/a.ts', source: 'user' });
+        await vi.advanceTimersByTimeAsync(500);
+        await waitFor(actor, (state) => state.matches({ ready: { storing: 'idle' } }));
+        expect(actor.getSnapshot().context.error?.message).toBe('editor save failed');
+
+        actor.send({ type: 'flushNow' });
+        await vi.advanceTimersByTimeAsync(0);
+        await waitFor(actor, (state) => state.matches({ ready: { storing: 'idle' } }));
+        expect(writeCallCount).toBe(2);
+        expect(actor.getSnapshot().context.error).toBeUndefined();
+        actor.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // =========================================================================
@@ -472,7 +713,7 @@ describe('editorMachine', () => {
         loadResult: stubEditorState,
         ensureResult: async (input) => ({
           type: 'focusedChatEnsured',
-          focusedChatId: input.candidateFocusedChatId ?? 'chat-recovered',
+          focusedChatId: input.requestedChatId ?? input.persistedChatId ?? 'chat-recovered',
         }),
       });
       expect(actor.getSnapshot().context.focusedChatId).toBe('chat-1');
@@ -519,26 +760,6 @@ describe('editorMachine', () => {
       } finally {
         vi.useRealTimers();
       }
-    });
-  });
-
-  // =========================================================================
-  // State: ready – reload
-  // =========================================================================
-  describe('ready – reload', () => {
-    it('should reload with new projectId', async () => {
-      const loadResults = [stubEditorState, { ...stubEditorState, projectId: 'new-build', openFiles: [] }];
-      let loadIndex = 0;
-      const actor = await startAndLoad({
-        loadResult: async () => loadResults[loadIndex++],
-      });
-
-      expect(actor.getSnapshot().context.projectId).toBe('test-build');
-      actor.send({ type: 'reload', projectId: 'new-build' });
-      await waitFor(actor, (s) => s.matches({ ready: {} }));
-      expect(actor.getSnapshot().context.projectId).toBe('new-build');
-      expect(actor.getSnapshot().context.openFiles).toEqual([]);
-      actor.stop();
     });
   });
 
@@ -662,15 +883,31 @@ describe('ready – deferred model materialisation', () => {
 // State: loading.ensuringFocusedChat (load-time invariant)
 // ===========================================================================
 describe('loading.ensuringFocusedChat', () => {
+  it('keeps file operations ready while chat discovery is deferred, then focuses a discovered chat', async () => {
+    let isDiscovered = false;
+    const actor = await startAndLoad({
+      ensureResult: async () =>
+        isDiscovered ? { type: 'focusedChatEnsured', focusedChatId: 'chat_remote' } : { type: 'focusedChatDeferred' },
+    });
+    expect(actor.getSnapshot().matches({ ready: { operation: 'focusedChatDeferred' } })).toBe(true);
+    expect(actor.getSnapshot().context.focusedChatId).toBeUndefined();
+    actor.send({ type: 'openFile', path: 'gear.ts', source: 'user' });
+    expect(actor.getSnapshot().context.openFiles.some((file) => file.path === 'gear.ts')).toBe(true);
+    isDiscovered = true;
+    actor.send({ type: 'retryEnsureFocusedChat' });
+    await waitFor(actor, (snapshot) => snapshot.context.focusedChatId === 'chat_remote');
+    actor.stop();
+  });
+
   it('passes through a valid candidate focusedChatId from loaded state', async () => {
-    const ensureCalls: Array<{ projectId: string; candidateFocusedChatId: string | undefined }> = [];
+    const ensureCalls: EnsureFocusedChatInput[] = [];
     const actor = createTestActor({
       loadResult: stubEditorState,
       ensureResult: async (input) => {
         ensureCalls.push(input);
         return {
           type: 'focusedChatEnsured',
-          focusedChatId: input.candidateFocusedChatId ?? 'chat-fallback',
+          focusedChatId: input.requestedChatId ?? input.persistedChatId ?? 'chat-fallback',
         };
       },
     });
@@ -679,9 +916,48 @@ describe('loading.ensuringFocusedChat', () => {
     await waitFor(actor, (s) => s.matches({ ready: {} }));
 
     expect(ensureCalls).toHaveLength(1);
-    expect(ensureCalls[0]?.candidateFocusedChatId).toBe('chat-1');
+    expect(ensureCalls[0]).toEqual({
+      projectId: 'test-build',
+      requestedChatId: undefined,
+      persistedChatId: 'chat-1',
+    });
     expect(actor.getSnapshot().context.focusedChatId).toBe('chat-1');
     expect(actor.getSnapshot().context.focusedChatError).toBeUndefined();
+    actor.stop();
+  });
+
+  it('passes route-requested and persisted chat identities separately', async () => {
+    const ensureCalls: EnsureFocusedChatInput[] = [];
+    const actor = createTestActor({
+      loadResult: stubEditorState,
+      requestedChatId: 'chat-requested',
+      ensureResult: async (input) => {
+        ensureCalls.push(input);
+        return { type: 'focusedChatEnsured', focusedChatId: input.requestedChatId! };
+      },
+    });
+    actor.start();
+    actor.send({ type: 'load' });
+    await waitFor(actor, (state) => state.matches({ ready: {} }));
+
+    expect(ensureCalls[0]).toEqual({
+      projectId: 'test-build',
+      requestedChatId: 'chat-requested',
+      persistedChatId: 'chat-1',
+    });
+    expect(actor.getSnapshot().context.focusedChatId).toBe('chat-requested');
+    actor.stop();
+  });
+
+  it('revalidates route query changes without remounting the editor actor', async () => {
+    const actor = await startAndLoad({ loadResult: stubEditorState });
+
+    actor.send({ type: 'setRequestedChatId', chatId: 'chat-2' });
+    await waitFor(actor, (state) => state.context.focusedChatId === 'chat-2');
+    actor.send({ type: 'setRequestedChatId', chatId: 'chat-1' });
+    await waitFor(actor, (state) => state.context.focusedChatId === 'chat-1');
+
+    expect(actor.getSnapshot().context.requestedChatId).toBe('chat-1');
     actor.stop();
   });
 
@@ -759,6 +1035,78 @@ describe('loading.ensuringFocusedChat', () => {
 // State: ready.operation.ensuringFocusedChat (runtime invariant)
 // ===========================================================================
 describe('ready.operation.ensuringFocusedChat', () => {
+  it('focuses a newly created chat without revalidating the chat list', async () => {
+    let ensureInvocationCount = 0;
+    const actor = await startAndLoad({
+      loadResult: stubEditorState,
+      ensureResult: async (input) => {
+        ensureInvocationCount += 1;
+        return {
+          type: 'focusedChatEnsured',
+          focusedChatId: input.requestedChatId ?? input.persistedChatId ?? 'chat-recovered',
+        };
+      },
+    });
+    expect(ensureInvocationCount).toBe(1);
+
+    actor.send({ type: 'focusKnownChat', chatId: 'chat-created' });
+
+    expect(actor.getSnapshot().context.requestedChatId).toBe('chat-created');
+    expect(actor.getSnapshot().context.focusedChatId).toBe('chat-created');
+    expect(actor.getSnapshot().matches({ ready: { operation: 'idle' } })).toBe(true);
+    expect(ensureInvocationCount).toBe(1);
+    actor.stop();
+  });
+
+  it('keeps the focused chat for a bare project URL instead of revalidating it', async () => {
+    let ensureInvocationCount = 0;
+    const actor = await startAndLoad({
+      loadResult: stubEditorState,
+      ensureResult: async (input) => {
+        ensureInvocationCount += 1;
+        return {
+          type: 'focusedChatEnsured',
+          focusedChatId: input.requestedChatId ?? input.persistedChatId ?? 'chat-recovered',
+        };
+      },
+    });
+    expect(ensureInvocationCount).toBe(1);
+    const { focusedChatId } = actor.getSnapshot().context;
+
+    actor.send({ type: 'setRequestedChatId', chatId: undefined });
+
+    // The route reads `requestedChatId` back to know the bare URL was consumed.
+    expect(actor.getSnapshot().context.requestedChatId).toBeUndefined();
+    expect(actor.getSnapshot().context.focusedChatId).toBe(focusedChatId);
+    expect(actor.getSnapshot().matches({ ready: { operation: 'idle' } })).toBe(true);
+    expect(ensureInvocationCount).toBe(1);
+    actor.stop();
+  });
+
+  it('keeps the focused chat when the route names that same chat instead of revalidating it', async () => {
+    let ensureInvocationCount = 0;
+    const actor = await startAndLoad({
+      loadResult: stubEditorState,
+      ensureResult: async (input) => {
+        ensureInvocationCount += 1;
+        return {
+          type: 'focusedChatEnsured',
+          focusedChatId: input.requestedChatId ?? input.persistedChatId ?? 'chat-recovered',
+        };
+      },
+    });
+    expect(ensureInvocationCount).toBe(1);
+    const { focusedChatId } = actor.getSnapshot().context;
+
+    actor.send({ type: 'setRequestedChatId', chatId: focusedChatId });
+
+    expect(actor.getSnapshot().context.requestedChatId).toBe(focusedChatId);
+    expect(actor.getSnapshot().context.focusedChatId).toBe(focusedChatId);
+    expect(actor.getSnapshot().matches({ ready: { operation: 'idle' } })).toBe(true);
+    expect(ensureInvocationCount).toBe(1);
+    actor.stop();
+  });
+
   it('re-enters ensuringFocusedChat from idle when focusedChatId becomes undefined', async () => {
     let ensureInvocationCount = 0;
     const actor = await startAndLoad({
@@ -804,6 +1152,42 @@ describe('ready.operation.ensuringFocusedChat', () => {
     await waitFor(actor, (s) => s.context.focusedChatId === 'chat-after-retry');
     expect(actor.getSnapshot().context.focusedChatError).toBeUndefined();
     expect(actor.getSnapshot().matches({ ready: { operation: 'idle' } })).toBe(true);
+    actor.stop();
+  });
+});
+
+describe('dock adapters on a layout-less page (A8c)', () => {
+  // Share and preview have no workbench layout: the editor runs their workbench's adapter, which a Dockview hands over
+  // and takes back (I1, D4). A late release of a replaced mount stops nothing newer.
+  it('should run a Dockview adapter as a child until that Dockview releases it', () => {
+    const running = new Set<string>();
+    const workbenchAdapter = createCallbackLogic<WorkbenchAdapterEvent, WorkbenchAdapterInput>(({ input }) => {
+      running.add(input.api as unknown as string);
+      return () => {
+        running.delete(input.api as unknown as string);
+      };
+    });
+    const actor = createActor(editorMachine.provide({ actors: { workbenchAdapter } }), {
+      input: { projectId: 'dock-host', requestedChatId: undefined },
+    });
+    actor.start();
+    const ready = (dockId: string, api: string): void => {
+      actor.send({
+        type: 'dockReady',
+        adapter: 'workbench',
+        dockId,
+        api: api as unknown as WorkbenchDockReady['api'],
+        ports: 'ports' as unknown as WorkbenchDockReady['ports'],
+      });
+    };
+    ready('dock-1', 'api-1');
+    expect([...running]).toEqual(['api-1']);
+    ready('dock-2', 'api-2');
+    actor.send({ type: 'dockReleased', adapter: 'workbench', dockId: 'dock-1' });
+    expect([...running]).toEqual(['api-2']);
+    expect(JSON.stringify(actor.getSnapshot().context)).not.toContain('api-2');
+    actor.send({ type: 'dockReleased', adapter: 'workbench', dockId: 'dock-2' });
+    expect([...running]).toEqual([]);
     actor.stop();
   });
 });

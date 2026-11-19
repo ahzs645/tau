@@ -1,0 +1,157 @@
+// @vitest-environment node
+/**
+ * Hostile Build123d project against the real operating-system sandbox.
+ *
+ * Both the module's top level and its `main` entry point try to escape, because a
+ * watcher that imports project code executes top-level statements before any entry
+ * point runs. Every probe reports the OS outcome; the test asserts denial came from
+ * the kernel (`EPERM`/`EACCES`), that the private artifact root stayed writable, and
+ * that nothing outside the sandbox was created.
+ */
+import { randomUUID } from 'node:crypto';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { createTestRuntimeClient } from '@taucad/runtime-testing';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { installFetchTripwire } from '@taucad/runtime-testing/preparation';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+import { prepareFromSeed, seedPresent } from '#build123d-closure.fixture.js';
+import { build123d, build123dOptionsFromClosure } from '#index.js';
+
+// The closure `tau prepare build123d` installs, prepared from the dependency seed (`pnpm nx run build123d:seed`).
+const receipt = seedPresent ? await prepareFromSeed() : undefined;
+
+const runtime = defineRuntime({
+  plugins:
+    receipt === undefined
+      ? []
+      : [
+          build123d({
+            kernels: { default: { closure: build123dOptionsFromClosure(receipt), requestTimeout: 120_000 } },
+          }),
+        ],
+});
+
+type Outcomes = Record<
+  'home_read' | 'temp_read' | 'outside_write' | 'home_write' | 'socket' | 'dns' | 'subprocess' | 'artifact_write',
+  string
+>;
+const denied = ['EPERM', 'EACCES'];
+// On Linux the sandbox hides each read-denied root (user homes, /tmp) behind an empty tmpfs, so a
+// hidden file reads as ENOENT rather than a permission error. A write there lands in that
+// throwaway tmpfs, and a write to the read-only root fails with EROFS. Neither reaches the host,
+// which the existsSync checks below prove. macOS denies all of these with EPERM.
+const hiddenRead = process.platform === 'linux' ? [...denied, 'ENOENT'] : denied;
+const containedWrite = process.platform === 'linux' ? [...denied, 'ENOENT', 'EROFS', 'allowed'] : denied;
+
+const hostileSource = (paths: {
+  readonly homeCanary: string;
+  readonly tempCanary: string;
+  readonly outsideEscape: string;
+  readonly homeEscape: string;
+}): string => `import errno
+import json
+import os
+import socket
+import subprocess
+from dataclasses import dataclass
+
+
+def _probe(action):
+    try:
+        action()
+        return "allowed"
+    except OSError as error:
+        return errno.errorcode.get(error.errno, type(error).__name__)
+    except Exception as error:
+        return type(error).__name__
+
+
+def _cat_exit():
+    try:
+        completed = subprocess.run(["/bin/cat", ${JSON.stringify(paths.homeCanary)}], capture_output=True, check=False)
+    except OSError as error:
+        return errno.errorcode.get(error.errno, type(error).__name__)
+    return f"exit:{completed.returncode}"
+
+
+def _outcomes():
+    return {
+        "home_read": _probe(lambda: open(${JSON.stringify(paths.homeCanary)}).read()),
+        "temp_read": _probe(lambda: open(${JSON.stringify(paths.tempCanary)}).read()),
+        "outside_write": _probe(lambda: open(${JSON.stringify(paths.outsideEscape)}, "w").write("escaped")),
+        "home_write": _probe(lambda: open(${JSON.stringify(paths.homeEscape)}, "w").write("escaped")),
+        "socket": _probe(lambda: socket.create_connection(("1.1.1.1", 53), timeout=5)),
+        "dns": _probe(lambda: socket.gethostbyname("example.com")),
+        "subprocess": _cat_exit(),
+        "artifact_write": _probe(lambda: open(os.path.join(os.environ["TMPDIR"], "probe.txt"), "w").write("ok")),
+    }
+
+
+IMPORT_OUTCOMES = _outcomes()
+
+
+@dataclass(frozen=True)
+class Params:
+    size: float = 1.0
+
+
+def main(params: Params):
+    raise RuntimeError("TAU_SANDBOX_PROBE " + json.dumps({"import": IMPORT_OUTCOMES, "main": _outcomes()}))
+`;
+
+// The kernels run from a closure already on disk: no request may leave this file (charter D27 tripwire).
+beforeAll(() => installFetchTripwire());
+
+describe.runIf(seedPresent)('Build123d native sandbox', () => {
+  it('should deny host reads, writes, network, and subprocess escapes from module import and main', async () => {
+    const id = randomUUID();
+    const paths = {
+      homeCanary: join(homedir(), `.tau-sandbox-canary-${id}`),
+      tempCanary: join(tmpdir(), `tau-sandbox-canary-${id}`),
+      outsideEscape: `/tmp/tau-sandbox-escape-${id}`,
+      homeEscape: join(homedir(), `tau-sandbox-escape-${id}`),
+    };
+    writeFileSync(paths.homeCanary, 'secret');
+    writeFileSync(paths.tempCanary, 'secret');
+    const client = createTestRuntimeClient({ runtime, files: { 'main.py': hostileSource(paths) } });
+    const document = client.open({ source: { path: 'main.py' }, watch: false });
+    try {
+      const rendered = await document.evaluation();
+      expect(rendered.superseded).toBe(false);
+      if (rendered.superseded) {
+        throw new Error('Hostile Build123d render was unexpectedly superseded.');
+      }
+      expect(rendered.evaluation.success).toBe(false);
+      if (rendered.evaluation.success) {
+        throw new Error('Hostile Build123d project produced geometry.');
+      }
+      const report = rendered.evaluation.issues.map(({ message }) => message).join('\n');
+      const probe = /TAU_SANDBOX_PROBE (?<json>\{.*\})/u.exec(report)?.groups?.['json'];
+      expect(probe, report).toBeDefined();
+      const outcomes = JSON.parse(probe!) as { readonly import: Outcomes; readonly main: Outcomes };
+      for (const phase of ['import', 'main'] as const) {
+        const outcome = outcomes[phase];
+        expect(hiddenRead, `${phase} home_read ${outcome.home_read}`).toContain(outcome.home_read);
+        expect(hiddenRead, `${phase} temp_read ${outcome.temp_read}`).toContain(outcome.temp_read);
+        expect(containedWrite, `${phase} outside_write ${outcome.outside_write}`).toContain(outcome.outside_write);
+        expect(containedWrite, `${phase} home_write ${outcome.home_write}`).toContain(outcome.home_write);
+        expect(outcome.socket, `${phase} socket`).not.toBe('allowed');
+        expect(outcome.dns, `${phase} dns`).not.toBe('allowed');
+        expect(outcome.subprocess, `${phase} subprocess`).not.toBe('exit:0');
+        expect(outcome.artifact_write, `${phase} artifact_write`).toBe('allowed');
+      }
+      expect(existsSync(paths.outsideEscape)).toBe(false);
+      expect(existsSync(paths.homeEscape)).toBe(false);
+    } finally {
+      document.close();
+      await client.shutdown();
+      for (const path of Object.values(paths)) {
+        rmSync(path, { force: true });
+      }
+    }
+  }, 180_000);
+});

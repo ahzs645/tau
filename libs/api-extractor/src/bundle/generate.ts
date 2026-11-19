@@ -1,0 +1,833 @@
+/**
+ * The one table naming every package that owns a skill bundle, and the run that
+ * regenerates all of them.
+ *
+ * Everything an owner cannot derive from its API — slug, title, description,
+ * when to activate, and the axis its reference files are grouped along — is
+ * declared here once. Everything else is read: the corpus from its extractor or
+ * its committed artifact, the authored prose from the owner's `agent/doctrine.md`,
+ * and the version from the owner's own `package.json`, because a bundle ships in
+ * the same tarball at the same version as the API it describes (R10).
+ *
+ * The grouping axis is explicit per owner and never inferred, for the reason
+ * `shard-plan.ts` gives: no single field is populated across every language.
+ *
+ * @module
+ */
+
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import process from 'node:process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import type { TauSkillsManifest } from '#bundle/bundle.types.js';
+import { doctrineFile, skillsManifestFile } from '#bundle/bundle.types.js';
+import type { WrittenBundle } from '#bundle/write-bundle.js';
+import { readDoctrine, writeCorpusBundle, writeDoctrineBundle } from '#bundle/write-bundle.js';
+import { csharpReferenceCorpus } from '#languages/csharp/reference.js';
+import { loadKclCorpus } from '#languages/kcl/extract.js';
+import { loadOpenscadCorpus } from '#languages/openscad/extract.js';
+import { extractTypescriptApi } from '#languages/typescript/extract.js';
+import { byTscircuitGroup, loadTscircuitCorpus } from '#languages/typescript/tscircuit.js';
+import type { ApiCorpus, ApiEntry, ApiSignature } from '#model/api-corpus.types.js';
+import type { CoreApiOptions, UsageRanking } from '#render/render-core.js';
+
+/** Workspace root, from this file's own location. @internal */
+const workspaceRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+
+const generatedRoot = fileURLToPath(new URL('../generated/', import.meta.url));
+
+const readJson = <T>(path: string): T => JSON.parse(readFileSync(path, 'utf8')) as T;
+
+const resourcesModuleFile = 'resources.js';
+const resourcesTypesFile = 'resources.d.ts';
+
+const skillsTypesFile = 'skills.d.cts';
+
+const skillsTypes = `declare const manifest: {
+  readonly bundles: ReadonlyArray<{
+    readonly slug: string;
+    readonly name: string;
+    readonly description: string;
+    readonly version: string;
+    readonly whenToUse: string;
+    readonly directory: string;
+    readonly files: readonly string[];
+    readonly body: string;
+  }>;
+};
+export = manifest;
+`;
+
+const resourcesTypes = `declare const bundles: readonly {
+  readonly slug: string;
+  readonly name: string;
+  readonly description: string;
+  readonly version: string;
+  readonly whenToUse: string;
+  readonly body: string;
+  readonly fingerprint: string;
+  readonly files: readonly {
+    readonly path: string;
+    readonly url: string;
+    readonly byteLength: number;
+    readonly lineCount: number;
+    readonly contentKind: "text";
+    readonly mediaType: "text/markdown";
+    readonly sha256: string;
+  }[];
+}[];
+export default bundles;
+`;
+
+const sha256 = (bytes: Uint8Array<ArrayBuffer>): string => createHash('sha256').update(bytes).digest('hex');
+
+const lineCount = (bytes: Uint8Array<ArrayBuffer>): number => {
+  let count = 1;
+  for (const byte of bytes) {
+    if (byte === 0x0a) {
+      count++;
+    }
+  }
+  return count;
+};
+
+/** Render the browser-and-Node resource module beside one owner's manifest. */
+const renderResourcesModule = async (agentDirectory: string, declaration: TauSkillsManifest['bundles'][number]) => {
+  const files = await Promise.all(
+    declaration.files.map(async (path) => {
+      if (!path.endsWith('.md')) {
+        throw new Error(`skill resource must be Markdown: ${declaration.slug}/${path}`);
+      }
+      const bytes = new Uint8Array(await readFile(join(agentDirectory, declaration.directory, path)));
+      return {
+        path,
+        byteLength: bytes.byteLength,
+        lineCount: lineCount(bytes),
+        sha256: sha256(bytes),
+      };
+    }),
+  );
+  const fingerprint = sha256(
+    new TextEncoder().encode(JSON.stringify(files.map(({ path, sha256: digest }) => ({ path, sha256: digest })))),
+  );
+  const resourceRows = files
+    .map(
+      (file) =>
+        `      Object.freeze({ path: ${JSON.stringify(file.path)}, url: new URL(${JSON.stringify(`./${declaration.directory}/${file.path}`)}, import.meta.url).href, byteLength: ${String(file.byteLength)}, lineCount: ${String(file.lineCount)}, contentKind: 'text', mediaType: 'text/markdown', sha256: ${JSON.stringify(file.sha256)} })`,
+    )
+    .join(',\n');
+  return `/* Generated by @taucad/api-extractor. Do not edit. */\nexport default Object.freeze([\n  Object.freeze({\n    slug: ${JSON.stringify(declaration.slug)},\n    name: ${JSON.stringify(declaration.name)},\n    description: ${JSON.stringify(declaration.description)},\n    version: ${JSON.stringify(declaration.version)},\n    whenToUse: ${JSON.stringify(declaration.whenToUse)},\n    body: ${JSON.stringify(declaration.body)},\n    fingerprint: ${JSON.stringify(fingerprint)},\n    files: Object.freeze([\n${resourceRows}\n    ]),\n  }),\n]);\n`;
+};
+
+/** A package's declared version, read from the installed or workspace manifest. */
+const versionOf = (packageDirectory: string): string =>
+  readJson<{ readonly version: string }>(join(packageDirectory, 'package.json')).version;
+
+/** A committed corpus artifact under `src/generated`. */
+const committedCorpus =
+  (relativePath: string): (() => ApiCorpus) =>
+  (): ApiCorpus =>
+    readJson<ApiCorpus>(join(generatedRoot, relativePath));
+
+/**
+ * A TypeScript surface, extracted with the checker.
+ *
+ * The version always comes from the installed package, because that is what the
+ * declarations describe. `sourceRoot` redirects only the entry point, for the one
+ * owner whose declarations ship as a committed module tree rather than a package.
+ */
+const typescriptCorpus = (packageName: string, entryPoint: string, sourceRoot?: string) => (): ApiCorpus => {
+  const installed = join(workspaceRoot, 'node_modules', packageName);
+  return extractTypescriptApi({
+    packageName,
+    packageVersion: versionOf(installed),
+    entryPoints: [join(sourceRoot ?? installed, entryPoint)],
+  });
+};
+
+type BundledTypescriptPackage = {
+  readonly content: string;
+  readonly files: Readonly<Record<string, string>>;
+  readonly packageJson: {
+    readonly exports: Readonly<Record<string, { readonly types: string }>>;
+  };
+};
+
+/** Extract a TypeScript corpus from the committed declaration bundle produced for GeoSpec. */
+const bundledTypescriptCorpus =
+  (
+    relativePath: string,
+    packageName: string,
+    options: {
+      readonly packageDirectory: string;
+      readonly publicEntries?: readonly string[];
+    },
+  ) =>
+  (): ApiCorpus => {
+    const bundled = readJson<Record<string, BundledTypescriptPackage>>(join(generatedRoot, relativePath))[packageName];
+    if (bundled === undefined) {
+      throw new Error(`missing ${packageName} declaration bundle in ${relativePath}`);
+    }
+
+    const directory = mkdtempSync(join(tmpdir(), `tau-${packageName.replaceAll(/[^\dA-Za-z-]/gu, '-')}-api-`));
+    try {
+      const files = { 'index.d.ts': bundled.content, ...bundled.files };
+      for (const [file, content] of Object.entries(files)) {
+        const path = join(directory, file);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, content, 'utf8');
+      }
+      return extractTypescriptApi({
+        packageName,
+        packageVersion: versionOf(join(workspaceRoot, options.packageDirectory)),
+        entryPoints: Object.entries(bundled.packageJson.exports)
+          .filter(([entry]) => options.publicEntries === undefined || options.publicEntries.includes(entry))
+          .map(([, { types }]) => join(directory, types)),
+      });
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  };
+
+const stripSignatureProse = ({ description: _description, parameters, ...signature }: ApiSignature): ApiSignature => ({
+  ...signature,
+  parameters: parameters.map(({ description: _description, ...parameter }) => parameter),
+});
+
+/** Keep factual API shape while excluding upstream prose from a redistributable corpus. */
+const stripCorpusProse = (corpus: ApiCorpus): ApiCorpus => {
+  const stripEntry = ({ docs: _docs, deprecated, signatures, members, ...entry }: ApiEntry): ApiEntry => ({
+    ...entry,
+    ...(deprecated === undefined ? {} : { deprecated: true }),
+    ...(signatures === undefined
+      ? {}
+      : {
+          signatures: signatures.map((signature) => stripSignatureProse(signature)),
+        }),
+    ...(members === undefined ? {} : { members: members.map((member) => stripEntry(member)) }),
+  });
+  return {
+    ...corpus,
+    entries: corpus.entries.map((entry) => stripEntry(entry)),
+  };
+};
+
+/** Group label for a language whose only neutral axis is the kind of declaration. */
+const byKind = (entry: ApiEntry): string =>
+  entry.kind === 'class' ? 'Classes' : `${entry.kind.charAt(0).toUpperCase()}${entry.kind.slice(1)}s`;
+
+/** OCCT's own namespacing: the prefix before the first underscore (R14). */
+const byOcctPackage = (entry: ApiEntry): string => entry.name.split('_')[0] ?? 'other';
+
+const byCategory = (entry: ApiEntry): string => entry.category ?? 'other';
+
+/** One package that owns a bundle. @public */
+export type BundleOwner = {
+  readonly slug: string;
+  /** Owning package directory, relative to the workspace root. */
+  readonly packageDirectory: string;
+  readonly name: string;
+  readonly title: string;
+  readonly description: string;
+  readonly whenToUse: string;
+  /** Absent for an authored-procedure bundle with no API behind it. */
+  readonly corpus?: () => ApiCorpus;
+  readonly groupBy?: (entry: ApiEntry) => string;
+  /** Named groups materialize eagerly; every other group becomes cold. */
+  readonly eagerGroups?: () => readonly string[];
+  /** Source files beside doctrine to copy into the on-demand bundle tier. */
+  readonly authoredReferences?: readonly string[];
+  /** A namespaced API index for another public authoring subpath in the same package. */
+  readonly supplementalApi?: {
+    readonly corpus: () => ApiCorpus;
+    readonly prefix: string;
+    readonly groupBy: (entry: ApiEntry) => string;
+  };
+  /**
+   * The Core API section in `SKILL.md`, ranked by `src/generated/usage/<slug>.json`
+   * (written by `nx run api-extractor:collect-usage`).
+   */
+  readonly core?: CoreApiOptions;
+};
+
+/**
+ * An owner's committed usage ranking. A core section without one would quietly
+ * fall back to its pins, so a missing file fails the generation instead.
+ *
+ * @param slug - The owner's skill slug.
+ * @returns The ranking committed under `src/generated/usage/`.
+ * @public
+ */
+export const usageRanking = (slug: string): UsageRanking => {
+  const path = join(generatedRoot, 'usage', `${slug}.json`);
+  if (!existsSync(path)) {
+    throw new Error(`${slug} has a core section but no usage ranking; run nx run api-extractor:collect-usage`);
+  }
+  return readJson<UsageRanking>(path);
+};
+
+/** The import specifier a PicoVoxel declaration file belongs to, from its path in the package. */
+const picovoxelImportPath = (entry: ApiEntry, packageName: string): string => {
+  const directory = entry.source?.file.split('/').slice(0, -1).join('/');
+  // A bare path: electron-vite's esm-shim regex reads "import from '…'" inside a string as an import.
+  return `\`${directory === undefined || directory === '' ? packageName : `${packageName}/${directory}`}\``;
+};
+
+const occtCorePins = [
+  'BRepPrimAPI_MakeBox.constructor',
+  'BRepPrimAPI_MakeCylinder.constructor',
+  'BRepPrimAPI_MakeSphere.constructor',
+  'BRepPrimAPI_MakePrism.constructor',
+  'BRepPrimAPI_MakeRevol.constructor',
+  'BRepAlgoAPI_Fuse.constructor',
+  'BRepAlgoAPI_Cut.constructor',
+  'BRepAlgoAPI_Common.constructor',
+  'BRepBuilderAPI_MakeShape.Shape',
+  'BRepFilletAPI_MakeFillet.constructor',
+  'BRepFilletAPI_MakeFillet.Add',
+  'BRepFilletAPI_MakeChamfer.constructor',
+  'BRepFilletAPI_MakeChamfer.Add',
+  'TopExp_Explorer.constructor',
+  'TopExp_Explorer.More',
+  'TopExp_Explorer.Next',
+  'TopExp_Explorer.Current',
+  'TopoDS.Edge',
+  'TopoDS.Face',
+  'TopExp.FirstVertex',
+  'TopExp.LastVertex',
+  'BRep_Tool.Pnt',
+  'gp_Pnt.X',
+  'gp_Pnt.Y',
+  'gp_Pnt.Z',
+  'TopAbs_ShapeEnum',
+  'gp_Pnt.constructor',
+  'gp_Dir.constructor',
+  'gp_Vec.constructor',
+  'gp_Ax1.constructor',
+  'gp_Ax2.constructor',
+  'gp_Trsf.constructor',
+  'gp_Trsf.SetTranslation',
+  'gp_Trsf.SetRotation',
+  'BRepBuilderAPI_Transform.constructor',
+  'BRepBuilderAPI_MakeEdge.constructor',
+  'BRepBuilderAPI_MakeWire.constructor',
+  'BRepBuilderAPI_MakeWire.Add',
+  'BRepBuilderAPI_MakeFace.constructor',
+] as const;
+const occtCoreClasses = new Set(occtCorePins.map((pin) => pin.split('.')[0]));
+
+/**
+ * Every skill-owning package, and how its bundle is built.
+ *
+ * @public
+ */
+export const bundleOwners: readonly BundleOwner[] = [
+  {
+    slug: 'cad-replicad',
+    packageDirectory: 'packages/plugins/replicad',
+    name: 'Replicad authoring',
+    title: 'Replicad authoring',
+    description:
+      'Guides Replicad BRep, Tau physical materials, textures, named interfaces and kinematics. Use for Replicad models and appearance or moving-part requests.',
+    whenToUse:
+      'Use for Replicad models, including physical materials, textures, STEP interfaces and moving assemblies.',
+    corpus: typescriptCorpus('replicad', 'dist/replicad.d.ts'),
+    groupBy: byKind,
+    supplementalApi: {
+      corpus: bundledTypescriptCorpus('replicad/model.bundled.json', '@taucad/replicad', {
+        packageDirectory: 'packages/plugins/replicad',
+      }),
+      prefix: 'tau',
+      groupBy: byKind,
+    },
+    authoredReferences: ['tau-authoring-reference.md', 'kinematics-reference.md'],
+    core: {
+      budgetTokens: 4000,
+      pins: [
+        'draw',
+        'DrawingPen',
+        'drawCircle',
+        'drawRoundedRectangle',
+        'makeCylinder',
+        'makeBox',
+        'Sketch',
+        'Drawing',
+        'EdgeFinder',
+        'ShapeConfig',
+      ],
+      // `main()` returns Tau's `ShapeConfig` (`@taucad/replicad`), not replicad's own record of the same name.
+      exclude: (entry) => entry.name === 'ShapeConfig' && entry.source?.file === 'replicad/dist/replicad.d.ts',
+    },
+  },
+  {
+    slug: 'cad-jscad',
+    packageDirectory: 'packages/plugins/jscad',
+    name: 'JSCAD authoring',
+    title: 'JSCAD authoring',
+    description:
+      'Guides JSCAD modeling in main.ts with 2D-first CSG and deliberate tessellation. Use when creating or editing @jscad/modeling geometry.',
+    whenToUse: 'Use when creating or editing @jscad/modeling geometry.',
+    corpus: typescriptCorpus('@jscad/modeling', 'src/index.d.ts'),
+    // Every top-level export is a namespace, which is the axis a JSCAD author
+    // already navigates by (`primitives`, `booleans`, `transforms`).
+    groupBy: (entry) => (entry.kind === 'namespace' ? entry.name : byKind(entry)),
+    core: { budgetTokens: 3000, pins: ['primitives', 'booleans', 'transforms', 'extrusions'] },
+  },
+  {
+    slug: 'cad-manifold',
+    packageDirectory: 'packages/plugins/manifold',
+    name: 'Manifold authoring',
+    title: 'Manifold authoring',
+    description:
+      'Guides robust Manifold mesh CAD in main.ts. Use when creating or editing TypeScript geometry with manifold-3d/manifoldCAD.',
+    whenToUse: 'Use when creating or editing TypeScript geometry with manifold-3d/manifoldCAD.',
+    // `manifold-3d/manifoldCAD` is what models import; the root `manifold.d.ts` is the raw WASM module.
+    corpus: typescriptCorpus('manifold-3d', 'dist/manifoldCAD.d.ts'),
+    groupBy: byKind,
+    core: {
+      budgetTokens: 4000,
+      pins: [
+        'Manifold',
+        'Manifold.cylinder',
+        'Manifold.sphere',
+        'Manifold.extrude',
+        'Manifold.revolve',
+        'Manifold.add',
+        'Manifold.subtract',
+        'Manifold.intersect',
+        'Manifold.asOriginal',
+        'CrossSection.circle',
+        'CrossSection.square',
+        'GLTFNode',
+        'GLTFMaterial',
+        'setMaterial',
+      ],
+    },
+  },
+  {
+    slug: 'cad-opencascadejs',
+    packageDirectory: 'packages/plugins/opencascade',
+    name: 'OpenCascade.js authoring',
+    title: 'OpenCascade.js authoring',
+    description:
+      'Guides direct OpenCascade.js BRep authoring in main.ts. Use when creating or editing libcascade geometry.',
+    whenToUse: 'Use when creating or editing libcascade geometry.',
+    // The committed module tree, not `node_modules`: the surface is the shipped
+    // artifact, so the bundle regenerates identically without the kernel installed.
+    corpus: () =>
+      stripCorpusProse(
+        typescriptCorpus('libcascade', 'index.d.ts', join(generatedRoot, 'opencascade/modules/libcascade'))(),
+      ),
+    groupBy: byOcctPackage,
+    eagerGroups: () =>
+      readJson<{ readonly eager: readonly string[] }>(join(generatedRoot, 'opencascade/opencascade.shards.json')).eager,
+    // Three workspace models cannot rank OCCT's 11k-symbol surface (return types reach its internals),
+    // so the core is the authoring classes alone, each with the members a model calls.
+    core: {
+      budgetTokens: 4000,
+      pins: occtCorePins,
+      exclude: (entry) => !occtCoreClasses.has(entry.name),
+    },
+  },
+  {
+    slug: 'cad-build123d',
+    packageDirectory: 'packages/plugins/build123d',
+    name: 'Build123d authoring',
+    title: 'Build123d authoring',
+    description:
+      'Guides native Build123d BRep authoring in main.py. Use for trusted Python CAD projects in Tau Desktop, or in the Tau plugin after prepare_kernel.',
+    whenToUse:
+      'Use when creating or editing trusted Python CAD projects in Tau Desktop or from the Tau plugin after `prepare_kernel`.',
+    corpus: committedCorpus('build123d/build123d.bundled.json'),
+    groupBy: byCategory,
+    core: {
+      budgetTokens: 4000,
+      pins: [
+        'BuildPart',
+        'BuildSketch',
+        'Box',
+        'Cylinder',
+        'Rectangle',
+        'Circle',
+        'Hole',
+        'CounterBoreHole',
+        'Pos',
+        'Locations',
+        'extrude',
+        'fillet',
+        'chamfer',
+      ],
+    },
+  },
+  {
+    slug: 'cad-picogk',
+    packageDirectory: 'packages/plugins/picogk',
+    name: 'PicoGK C# authoring',
+    title: 'PicoGK C# authoring',
+    description:
+      'Guides PicoGK C# geometry, PBR materials, textures, named parts and mechanisms. Use for PicoGK in Tau Desktop, or in the Tau plugin after prepare_kernel.',
+    whenToUse:
+      'Use for PicoGK C# models, physical materials, textures, named parts and moving mechanisms in Tau Desktop or from the Tau plugin after `prepare_kernel`.',
+    corpus: () => csharpReferenceCorpus(committedCorpus('picogk/picogk.corpus.json')(), 'modeling'),
+    groupBy: (entry) => `${entry.category ?? 'CAD authoring'} — ${entry.path ?? 'other'}`,
+    supplementalApi: {
+      corpus: () => csharpReferenceCorpus(committedCorpus('picogk/picogk.corpus.json')(), 'embedding'),
+      prefix: 'embedding',
+      groupBy: (entry) => `${entry.category ?? 'Advanced embedding'} — ${entry.path ?? 'other'}`,
+    },
+    authoredReferences: ['kinematics-reference.md', 'materials-reference.md', 'runtime-reference.md'],
+    core: {
+      budgetTokens: 3000,
+      pins: ['Library.Go', 'Voxels', 'Mesh', 'Lattice'],
+      // Models already know .NET; the selected standard-library slice stays in the reference.
+      exclude: (entry) => entry.category === 'Selected BCL reference',
+    },
+  },
+  {
+    slug: 'cad-picovoxel',
+    packageDirectory: 'packages/plugins/picovoxel',
+    name: 'PicoVoxel authoring',
+    title: 'PicoVoxel authoring',
+    description:
+      'Guides PicoVoxel voxel, SDF and lattice CAD, named parts, PBR materials and mechanisms. For TypeScript geometry, appearance, textures or moving-part authoring.',
+    whenToUse: 'Use for TypeScript PicoVoxel models, named parts, physical materials, textures and moving mechanisms.',
+    corpus: bundledTypescriptCorpus('picovoxel/picovoxel.bundled.json', 'picovoxel', {
+      packageDirectory: 'packages/plugins/picovoxel',
+    }),
+    groupBy: byKind,
+    supplementalApi: {
+      corpus: bundledTypescriptCorpus('picovoxel/picovoxel.bundled.json', '@taucad/picovoxel', {
+        packageDirectory: 'packages/plugins/picovoxel',
+      }),
+      prefix: 'tau',
+      groupBy: byKind,
+    },
+    authoredReferences: ['materials-reference.md', 'kinematics-reference.md', 'characters-reference.md'],
+    core: {
+      budgetTokens: 4500,
+      pins: ['Pico', 'Voxels', 'BaseBox', 'ImplicitGyroid'],
+      // Headings name the module to import from: `picovoxel`, `picovoxel/shapekernel`, …
+      groupBy: picovoxelImportPath,
+    },
+  },
+  {
+    slug: 'cad-smlib',
+    packageDirectory: 'packages/plugins/smlib',
+    name: 'SMLib authoring',
+    title: 'SMLib authoring',
+    description:
+      'Guides SMLib NURBS BRep modeling with @classcad/smlibwasm, Tau materials, textures and kinematics. Use for SMLib models, appearance or moving parts.',
+    whenToUse:
+      'Use for TypeScript models that import @classcad/smlibwasm, including physical materials, textures and moving assemblies.',
+    corpus: bundledTypescriptCorpus('smlib/smlib.bundled.json', '@classcad/smlibwasm', {
+      packageDirectory: 'packages/plugins/smlib',
+    }),
+    groupBy: byKind,
+    supplementalApi: {
+      corpus: bundledTypescriptCorpus('smlib/smlib.bundled.json', '@taucad/smlib', {
+        packageDirectory: 'packages/plugins/smlib',
+      }),
+      prefix: 'tau',
+      groupBy: byKind,
+    },
+    authoredReferences: ['tau-authoring-reference.md', 'kinematics-reference.md'],
+    core: {
+      budgetTokens: 4500,
+      pins: [
+        'Box',
+        'Cylinder',
+        'Rectangle',
+        'Circle',
+        'Polygon',
+        'Pos',
+        'Rot',
+        'GridLocations',
+        'PolarLocations',
+        'Part.fuse',
+        'Part.cut',
+        'Part.intersect',
+        'Part.fillet',
+        'Part.chamfer',
+        'Part.shell',
+        'Sphere',
+        'Hole',
+        'CounterBoreHole',
+        'Plane.XY',
+        'Plane.XZ',
+        'Plane.offset',
+        'Location.mul',
+        'Locations.mul',
+        'Shape.translate',
+        'Shape.rotate',
+        'Shape.mirror',
+        'Shape.on',
+        'Sketch.extrude',
+        'Sketch.revolve',
+        'Sketch.sweep',
+        'Sketch.fillet',
+        'ShapeList.parallelTo',
+        'ShapeList.perpendicularTo',
+        'ShapeList.filterBy',
+        'ShapeList.sortBy',
+        'ShapeList.top',
+        'ShapeList.bottom',
+        'loft',
+        'sweep',
+        'Polyline',
+        'Spline',
+        'Helix',
+        'Text',
+        'ShapeConfig',
+        'Model',
+      ],
+    },
+  },
+  {
+    slug: 'cad-smlibpy',
+    packageDirectory: 'packages/plugins/smlibpy',
+    name: 'SMLibPy authoring',
+    title: 'SMLibPy authoring',
+    description:
+      'Guides SMLib NURBS BRep modeling in main.py with smlibpy, Tau materials, textures and kinematics. Use for Python models that import smlibpy.',
+    whenToUse:
+      'Use for Python models that import smlibpy, including physical materials, textures and moving assemblies in Tau Desktop.',
+    corpus: committedCorpus('smlibpy/smlibpy.bundled.json'),
+    groupBy: byCategory,
+    authoredReferences: ['tau-authoring-reference.md', 'kinematics-reference.md'],
+    core: {
+      budgetTokens: 4500,
+      pins: [
+        'Align',
+        'Box',
+        'Cylinder',
+        'Sphere',
+        'Rectangle',
+        'Circle',
+        'Polygon',
+        'Pos',
+        'Rot',
+        'GridLocations',
+        'PolarLocations',
+        'Part.fillet',
+        'Part.chamfer',
+        'Part.shell',
+        'Hole',
+        'CounterBoreHole',
+        'Plane.offset',
+        'Sketch.extrude',
+        'Sketch.revolve',
+        'Sketch.sweep',
+        'Sketch.fillet',
+        'ShapeList.parallel_to',
+        'ShapeList.group_by',
+        'ShapeList.sort_by',
+        'ShapeList.filter_by',
+        'ShapeList.top',
+        'Shape.translate',
+        'Shape.rotate',
+        'Shape.mirror',
+        'loft',
+        'sweep',
+        'Polyline',
+        'Spline',
+        'Text',
+      ],
+    },
+  },
+  {
+    slug: 'cad-openscad',
+    packageDirectory: 'packages/plugins/openrscad',
+    name: 'OpenSCAD authoring',
+    title: 'OpenSCAD authoring',
+    description:
+      'Guides OpenSCAD model authoring in main.scad with idiomatic CSG and adaptive tessellation. Use when creating or editing .scad geometry.',
+    whenToUse: 'Use when creating or editing .scad geometry.',
+    corpus: () => loadOpenscadCorpus(),
+    groupBy: byCategory,
+    // The whole builtin surface is smaller than one shard, so it ships whole.
+    core: { budgetTokens: 3000, includeUnused: true },
+  },
+  {
+    slug: 'cad-zoo',
+    packageDirectory: 'packages/plugins/zoo',
+    name: 'Zoo KCL authoring',
+    title: 'Zoo KCL authoring',
+    description:
+      'Guides Zoo KCL modeling in main.kcl with constrained sketch blocks, regions and extrusions. Use when creating or editing KCL models.',
+    whenToUse: 'Use when creating or editing KCL models.',
+    // The extraction timestamp never reaches a rendered file, so the default is safe.
+    corpus: () => loadKclCorpus(),
+    groupBy: byCategory,
+    core: {
+      budgetTokens: 4500,
+      pins: [
+        'solver::line',
+        'solver::arc',
+        'solver::circle',
+        'solver::coincident',
+        'solver::distance',
+        'solver::horizontal',
+        'solver::vertical',
+        'solver::parallel',
+        'solver::perpendicular',
+        'solver::radius',
+        'region',
+        'extrude',
+      ],
+    },
+  },
+  {
+    slug: 'cad-tscircuit',
+    packageDirectory: 'packages/plugins/tscircuit',
+    name: 'tscircuit TSX authoring',
+    title: 'tscircuit TSX authoring',
+    description:
+      'Guides tscircuit TSX electronics authoring in main.tsx. Use when creating or editing boards, schematics or PCB layouts in Tau.',
+    whenToUse: 'Use when creating or editing boards, schematics or PCB layouts in Tau.',
+    corpus: () => loadTscircuitCorpus(),
+    groupBy: byTscircuitGroup,
+    core: {
+      budgetTokens: 4000,
+      pins: [
+        '<board>',
+        'BaseGroupProps.width',
+        'BaseGroupProps.height',
+        'CommonComponentProps.name',
+        'CommonLayoutProps.footprint',
+        'CommonLayoutProps.schX',
+        'CommonLayoutProps.schY',
+        'PcbLayoutProps.pcbX',
+        'PcbLayoutProps.pcbY',
+        'PcbLayoutProps.pcbRotation',
+        '<chip>',
+        '<resistor>',
+        '<capacitor>',
+        '<led>',
+        '<pinheader>',
+        '<net>',
+        '<trace>',
+        '<trace>.from',
+        '<trace>.to',
+      ],
+    },
+  },
+  {
+    slug: 'workbench',
+    packageDirectory: 'packages/workbench',
+    name: 'Workbench',
+    title: 'Workbench',
+    description:
+      "Arranges the Tau workbench for a person — opens viewer views from named viewpoints or any direction, sets a view's camera, section cuts, display, grid unit and measurements, hides components and sets render timeouts per file, opens files and utility panes in workbench tabs, closes tabs — by writing the .tau/workbench records through the arrange_workbench tool. Use when a task ends with something to show, when asked to open, arrange, compare, cut open or review views or panes, or when authoring a report the person should see.",
+    whenToUse:
+      'Use when asked to show, open, arrange, compare, cut open or review views or panes, or when a task ends with something to show.',
+  },
+];
+
+/** What one owner's regeneration produced. @public */
+export type GeneratedOwner = {
+  readonly slug: string;
+  readonly packageDirectory: string;
+  readonly bundle: WrittenBundle;
+};
+
+/**
+ * Regenerate every owner's bundle and its `agent/skills.json`.
+ *
+ * Authored doctrine is always read from the workspace, which is its only source
+ * of truth; only the generated output is redirected, so the regeneration gate
+ * can write into operating-system temporary storage and diff.
+ *
+ * @param options - `outputRoot` replaces the workspace root for writes only.
+ * @returns One record per owner, in table order.
+ * @public
+ */
+export const generateBundles = async (
+  options: { readonly outputRoot?: string } = {},
+): Promise<readonly GeneratedOwner[]> => {
+  const outputRoot = options.outputRoot ?? workspaceRoot;
+  const generated: GeneratedOwner[] = [];
+
+  for (const owner of bundleOwners) {
+    const sourceAgent = join(workspaceRoot, owner.packageDirectory, 'agent');
+    const outputAgent = join(outputRoot, owner.packageDirectory, 'agent');
+    const shared = {
+      slug: owner.slug,
+      name: owner.name,
+      title: owner.title,
+      description: owner.description,
+      version: versionOf(join(workspaceRoot, owner.packageDirectory)),
+      whenToUse: owner.whenToUse,
+      // oxlint-disable-next-line no-await-in-loop -- Sequential by design: one owner compiles 12 MB of declarations, so overlapping owners would multiply peak memory for no wall-clock gain.
+      doctrine: await readDoctrine(join(sourceAgent, doctrineFile)),
+    };
+    const authoredFiles = Object.fromEntries(
+      // oxlint-disable-next-line no-await-in-loop -- Owners are generated sequentially to bound declaration memory.
+      await Promise.all(
+        (owner.authoredReferences ?? []).map(
+          async (file): Promise<readonly [string, string]> => [file, await readFile(join(sourceAgent, file), 'utf8')],
+        ),
+      ),
+    );
+
+    const bundle =
+      owner.corpus === undefined || owner.groupBy === undefined
+        ? // oxlint-disable-next-line no-await-in-loop -- See above.
+          await writeDoctrineBundle(join(outputAgent, owner.slug), shared)
+        : // oxlint-disable-next-line no-await-in-loop -- See above.
+          await writeCorpusBundle(owner.corpus(), join(outputAgent, owner.slug), {
+            ...shared,
+            groupBy: owner.groupBy,
+            authoredFiles,
+            ...(owner.eagerGroups === undefined ? {} : { eagerGroups: owner.eagerGroups() }),
+            ...(owner.core === undefined
+              ? {}
+              : {
+                  core: {
+                    options: owner.core,
+                    ranking: usageRanking(owner.slug),
+                  },
+                }),
+            ...(owner.supplementalApi === undefined
+              ? {}
+              : {
+                  supplementalApi: {
+                    ...owner.supplementalApi,
+                    corpus: owner.supplementalApi.corpus(),
+                  },
+                }),
+          });
+
+    const manifest: TauSkillsManifest = { bundles: [bundle.declaration] };
+    // oxlint-disable-next-line no-await-in-loop -- See above.
+    await writeFile(join(outputAgent, skillsManifestFile), `${JSON.stringify(manifest, undefined, 2)}\n`, 'utf8');
+    // oxlint-disable-next-line no-await-in-loop -- The declaration ships beside this owner's generated manifest.
+    await writeFile(join(outputAgent, skillsTypesFile), skillsTypes, 'utf8');
+    // oxlint-disable-next-line no-await-in-loop -- The module describes files written by this owner iteration.
+    const resourcesModule = await renderResourcesModule(outputAgent, bundle.declaration);
+    // oxlint-disable-next-line no-await-in-loop -- See above.
+    await writeFile(join(outputAgent, resourcesModuleFile), resourcesModule, 'utf8');
+    // oxlint-disable-next-line no-await-in-loop -- The declaration ships beside that generated module.
+    await writeFile(join(outputAgent, resourcesTypesFile), resourcesTypes, 'utf8');
+
+    generated.push({
+      slug: owner.slug,
+      packageDirectory: owner.packageDirectory,
+      bundle,
+    });
+  }
+
+  return generated;
+};
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const generated = await generateBundles();
+  for (const owner of generated) {
+    console.log(
+      `${owner.slug}: ${String(owner.bundle.shardCount)} shards, ${String(owner.bundle.bodyTokens)} body tokens (${String(owner.bundle.coreTokens)} core), ${String(owner.bundle.bytes)} bytes -> ${owner.packageDirectory}/agent`,
+    );
+  }
+}

@@ -1,0 +1,78 @@
+---
+title: Build123d
+description: Author native Python CAD projects for Tau's Node hosts.
+docType: reference
+wordBudgetOverride: 450
+icon: lucide:boxes
+---
+
+Tau's native Python BRep kernel runs Build123D 0.13 from a sealed closure. Browsers are unsupported.
+
+## Authoring contract
+
+Each entry defines a frozen `Params` dataclass and `main(params)`. `main` returns a `build123d.Shape` or a non-empty list or tuple of shapes. Labels are display names; repeated labels are supported.
+
+```python
+from dataclasses import dataclass
+from typing import Literal
+
+from build123d import Box, Color, Shape
+
+
+@dataclass(frozen=True)
+class Params:
+    width: float = 80.0
+    depth: float = 40.0
+    height: float = 12.0
+    finish: Literal["blue", "orange"] = "blue"
+
+
+__tau__ = {
+    "parameters": {
+        "width": {
+            "minimum": 1.0,
+            "maximum": 500.0,
+            "description": "Body width in millimeters",
+        }
+    },
+    "dependencies": ["profile.json"],
+}
+
+
+def main(params: Params) -> Shape:
+    body = Box(params.width, params.depth, params.height)
+    body.label = "Body"
+    body.color = Color(params.finish)
+    return body
+```
+
+Supported parameter annotations are `bool`, `int`, `float`, `str`, and scalar `Literal` values. Fields need literal defaults. `__tau__.parameters` may refine the generated JSON Schema with numeric bounds, string bounds/patterns, descriptions, and enums. Put non-Python files read by the model in `__tau__.dependencies` for render invalidation.
+
+Local imports are static and project-relative. Tau mirrors the project into a private directory and runs it in a warm native process. Imported Python and dependency edits trigger rerendering.
+
+## Parts, appearance, and motion
+
+Use native shapes, `Compound`, factories and domain classes for reusable assemblies. Properties may expose descendant joints without reassigning their owner. Native `connect_to` places connected parts; moving a descendant does not place its entire containing assembly.
+
+Rigid, Revolute, Linear, Cylindrical and Ball joints export attachment interfaces. `motion(model)` data declares grounding, couplings and clips, plus explicit connections when native history is insufficient. Supported graphs animate; unsupported graphs retain intent and diagnostics. No Tau Python package is required.
+
+Native `Shape.material` supplies PBR appearance. GLB retains normals, face UVs and embedded textures. Declare project images in `__tau__.dependencies`.
+
+## Geometry, topology, and export
+
+GLB carries `TAU_cad_topology`, assembly hierarchy and mechanism intent. STEP exports retained exact BRep geometry and assembly placements, without reevaluating source. STEP mechanism entities, embedded-source recovery and physical properties are outside this contract.
+
+Coordinates convert from Z-up millimeters to Y-up meters. Surface and edge tessellation share boundary samples; free curves honor linear and angular tolerances. Valid seams remain visible.
+
+## Trust and resources
+
+Python executes with the desktop user's permissions. Process isolation is not a malicious-code sandbox. Trust only known code; moved or replaced directories require a new grant.
+
+Hosts supply packaged interpreter and worker hashes plus a trust marker. Runtime execution does not install packages or fall back to system Python.
+
+## Related
+
+- [Choose a Kernel](../guides/choosing-a-kernel)
+- [Kernel Plugins](../api/kernels)
+- [Worker Model](../concepts/worker-model)
+- [Set Up the Filesystem](../guides/filesystem-setup)

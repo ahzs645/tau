@@ -1,0 +1,528 @@
+import { withNativeDeployment } from '@taucad/native-process-core/adopter';
+import { asBuffer, createKernelError, createKernelSuccess, defineKernel } from '@taucad/runtime/kernel';
+import type { ComputeAnnouncement, KernelIssue, KernelServices } from '@taucad/runtime/kernel';
+import { createExportFile } from '@taucad/runtime/types';
+import { actionDigest, canonicalizeComputeAction, contentDigest } from '@taucad/cache-core';
+import type { ActionDigest, ComputeAction } from '@taucad/cache-core';
+import { sha256StringSync } from '@taucad/utils/hash';
+import { admitMechanism, validateMechanismMotion } from '@taucad/kinematics';
+import { occtExplicitTessellationDefaults } from '@taucad/occt-core';
+import type { OcctTessellationTolerances } from '@taucad/occt-core';
+import {
+  bindPythonKernel,
+  createPythonSession,
+  createPythonWorkspaceMirror,
+  pyprojectPath,
+  PythonWorkerError,
+} from '@taucad/python-kernel-core';
+import type { PythonSession } from '@taucad/python-kernel-core';
+
+import {
+  build123dAnalysisSchema,
+  build123dArtifactSchema,
+  build123dBuildSchema,
+  build123dComputeDescriptorLimit,
+  build123dMeasureSchema,
+  build123dMeshSchema,
+} from '#build123d.protocol.js';
+import type { Build123dAnalysis, Build123dArtifact, Build123dMesh } from '#build123d.protocol.js';
+import { meshTessellation } from '#build123d-tessellation.js';
+import { build123dExportSchemas, build123dOptionsSchema, build123dRenderSchema } from '#build123d.schemas.js';
+import { createBuild123dResidentBinding } from '#build123d-resident.js';
+import { build123dWorker } from '#build123d-worker.js';
+import { build123dNative } from '#native.js';
+import { libraryVersionMismatches } from '#project-manifest.js';
+
+const computeNamespace = 'build123d.operation.v1';
+const computeProducerVersion = 'build123d@0.13.0|python@3.13|ocp@8.0.1.0.0|occt@8.0.1|worker-protocol@1|adapter@3';
+const computeEnvironment = {
+  platform: process.platform,
+  architecture: process.arch,
+  lengthUnit: 'millimeter',
+} as const;
+
+/** EQ27: retain an operation whose own kernel call took at least this many milliseconds. */
+const computeAdmissionFloor = 5;
+
+/**
+ * Recompute the worker's action identity before it can name a stored record.
+ *
+ * The worker canonicalizes the same action independently; a disagreement would
+ * key the shared store inconsistently, so it is dropped rather than announced.
+ */
+const verifiedDigest = (action: ComputeAction, claimed: string): ActionDigest | undefined => {
+  const digest = actionDigest({
+    value: `sha256:${sha256StringSync(canonicalizeComputeAction(action))}`,
+  });
+  return digest === claimed ? digest : undefined;
+};
+
+/** Opaque identity for shapes retained in one Python process generation. @public */
+export type Build123dNativeHandle = {
+  readonly sessionGeneration: number;
+  readonly handleId: string;
+};
+
+class Build123dKernelError extends Error {
+  public readonly issues: KernelIssue[];
+
+  public constructor(issues: KernelIssue[]) {
+    super(issues.map(({ message }) => message).join('; '));
+    this.issues = issues;
+    this.name = 'Build123dKernelError';
+  }
+}
+
+const issuesFrom = (error: unknown, fileName?: string): KernelIssue[] => {
+  if (error instanceof Build123dKernelError) {
+    return error.issues;
+  }
+  if (error instanceof PythonWorkerError) {
+    return error.issues.map(({ code: pythonCode, type: pythonType, ...issue }) => ({
+      ...issue,
+      code: 'RUNTIME',
+      type: pythonType === 'syntax' || pythonType === 'validation' ? 'compilation' : pythonType,
+      details: { pythonCode, pythonType },
+    }));
+  }
+  return [
+    {
+      message: error instanceof Error ? error.message : String(error),
+      code: 'RUNTIME',
+      type: 'runtime',
+      severity: 'error',
+      ...(fileName ? { location: { fileName, startLineNumber: 1, startColumn: 1 } } : {}),
+    },
+  ];
+};
+
+/**
+ * Admit authored motion independently of solver support, then expose retained intent warnings.
+ * @param artifact - Native artifact and its projected mechanical metadata.
+ * @returns Unsupported intent warnings shown by the Kinematics pane.
+ * @throws {Build123dKernelError} When intent or compiled playback violates the shared contract.
+ */
+const mechanismIssues = (artifact: Build123dArtifact): KernelIssue[] => {
+  if (artifact.mechanismIntent !== undefined) {
+    const intent = artifact.mechanismIntent;
+    const issues = validateMechanismMotion({
+      coordinates: [
+        ...new Set(intent.connections.flatMap((connection) => Object.values(connection.playbackCoordinates ?? {}))),
+      ],
+      couplings: intent.couplings,
+      animations: intent.animations,
+    });
+    if (issues.length > 0) {
+      throw new Build123dKernelError(
+        issues.map((issue) => ({
+          code: 'INVALID_ANNOTATION',
+          severity: 'error',
+          type: 'kernel',
+          message: `Mechanism intent ${issue.path}: ${issue.message} ${issue.recovery}`,
+          details: { producer: { kernelId: 'build123d' }, mechanism: issue },
+        })),
+      );
+    }
+  }
+  if (artifact.mechanism !== undefined) {
+    const admission = admitMechanism(artifact.mechanism);
+    if (admission.status === 'invalid') {
+      throw new Build123dKernelError(
+        admission.issues.map((issue) => ({
+          code: 'INVALID_ANNOTATION',
+          severity: 'error',
+          type: 'kernel',
+          message: `Mechanism ${issue.path}: ${issue.message} ${issue.recovery}`,
+          details: { producer: { kernelId: 'build123d' }, mechanism: issue },
+        })),
+      );
+    }
+  }
+  return (artifact.mechanismDiagnostics ?? []).map((issue) => ({
+    code: 'INVALID_ANNOTATION',
+    severity: 'warning',
+    type: 'kernel',
+    message: `Mechanism ${issue.path}: ${issue.message} ${issue.recovery}`,
+    details: { producer: { kernelId: 'build123d' }, mechanism: issue },
+  }));
+};
+
+/** The part of the kernel context `analyzeEntry` reads; it adds the memo field. */
+type Build123dContext = {
+  readonly session: PythonSession;
+  observedDependencies: string[];
+  analysis?: { readonly operationId: number; readonly key: string; readonly result: Promise<Build123dAnalysis> };
+};
+
+/**
+ * One analyze request per entry and runtime operation, spanned.
+ *
+ * Dependency and parameter discovery ask the worker the same question with the same arguments
+ * inside one render, so the second asks nothing. D8 wants the wire time in the trace.
+ *
+ * @param entryPath - Model entry the worker analyzes.
+ * @param runtime - Kernel runtime, for its operation, abort signal and tracer.
+ * @param context - Kernel context holding the session and its observed dependencies.
+ * @returns The worker's analysis.
+ */
+const analyzeEntry = async (
+  entryPath: string,
+  runtime: Pick<KernelServices, 'operationId' | 'signal' | 'tracer'>,
+  context: Build123dContext,
+): Promise<Build123dAnalysis> => {
+  const { operationId } = runtime;
+  const { observedDependencies } = context;
+  const key = [entryPath, ...observedDependencies].join('\0');
+  if (operationId !== undefined && context.analysis?.operationId === operationId && context.analysis.key === key) {
+    return context.analysis.result;
+  }
+  const analyze = async (): Promise<Build123dAnalysis> => {
+    const span = runtime.tracer.startSpan('build123d.analyze', { entryPath });
+    try {
+      return await context.session.request({
+        method: 'analyze',
+        params: { entryPath, observedDependencies },
+        schema: build123dAnalysisSchema,
+        signal: runtime.signal,
+      });
+    } finally {
+      span.end();
+    }
+  };
+  const result = analyze();
+  if (operationId !== undefined) {
+    context.analysis = { operationId, key, result };
+  }
+  return result;
+};
+
+/**
+ * The worker's mesh and measure requests for one retained handle, in millimetres and degrees.
+ *
+ * @param target - The retained shapes to mesh, and whether the worker writes their B-rep edge lines beside the surfaces.
+ * @param runtime - Kernel runtime, for its abort signal.
+ * @param session - The Python session holding the handle.
+ * @returns The mesh request and the diagonal measurement.
+ */
+const meshRequests = (
+  { handleId, includeEdges }: { readonly handleId: string; readonly includeEdges: boolean },
+  runtime: Pick<KernelServices, 'signal'>,
+  session: PythonSession,
+): {
+  mesh: (tolerances: OcctTessellationTolerances) => Promise<Build123dMesh>;
+  measureDiagonal: () => Promise<number>;
+} => ({
+  mesh: async (tolerances) =>
+    session.request({
+      method: 'mesh',
+      params: {
+        handleId,
+        linearTolerance: tolerances.linearTolerance,
+        angularTolerance: tolerances.angularTolerance,
+        includeEdges,
+      },
+      schema: build123dMeshSchema,
+      signal: runtime.signal,
+    }),
+  async measureDiagonal() {
+    const measured = await session.request({
+      method: 'measure',
+      params: { handleId },
+      schema: build123dMeasureSchema,
+      signal: runtime.signal,
+    });
+    return measured.diagonal;
+  },
+});
+
+const build123dKernelDefinition = defineKernel({
+  id: 'build123d',
+  extensions: ['py'],
+  name: 'Build123dKernel',
+  version: '0.13.0+python3.13.ocp8.0.1.0.0.protocol1.topology1.nativeMotion1.tessellation2.edges1',
+  optionsSchema: build123dOptionsSchema,
+  // The worker writes exact B-rep edge lines when asked, so the fallback edge pass never runs for this kernel.
+  views: {
+    model: {
+      title: 'Model',
+      mimeType: 'model/gltf-binary',
+      optionsSchema: build123dRenderSchema,
+      content: ['includeEdges'],
+    },
+  },
+  // D2: the Python worker answers `cancelMethod: 'cancel'` itself and keeps its resident prefix.
+  cancellation: 'cooperative',
+  exports: {
+    glb: {
+      title: 'glTF binary',
+      mimeType: 'model/gltf-binary',
+      extension: 'glb',
+      optionsSchema: build123dExportSchemas.glb,
+      content: ['includeEdges'],
+    },
+    step: {
+      title: 'STEP',
+      mimeType: 'application/step',
+      extension: 'step',
+      optionsSchema: build123dExportSchemas.step,
+    },
+  },
+
+  async initialize(options, runtime) {
+    // Late binding: an explicit closure, else the sealed closure the host's resolver or the dependency store gives. An
+    // unprepared kernel throws KERNEL_NOT_PREPARED here, and the runtime retries on the next operation.
+    const { options: bound } = await bindPythonKernel({ adopter: build123dNative, options });
+    const mirror = await createPythonWorkspaceMirror(build123dWorker);
+    const session = createPythonSession({
+      ...bound,
+      ...mirror,
+      worker: build123dWorker,
+      logger: runtime.logger,
+    });
+    const observedDependencies: string[] = [];
+    const warmCandidates: ActionDigest[] = [];
+    return {
+      mirror,
+      session,
+      resident: createBuild123dResidentBinding(session),
+      observedDependencies,
+      warmCandidates,
+      computeProducer: {
+        id: '@taucad/build123d',
+        version: computeProducerVersion,
+        implementationAssets: [
+          bound.pythonSha256,
+          bound.workerSha256,
+          ...bound.supportFiles.map(({ sha256 }) => sha256),
+        ].map((sha256) => contentDigest({ value: `sha256:${sha256}` })),
+      },
+    };
+  },
+
+  async resolve({ entryPath }, runtime, context) {
+    await context.mirror.sync(runtime.filesystem, runtime.fileContentCache, runtime.operationId);
+    try {
+      const analysis = await analyzeEntry(entryPath, runtime, context);
+      return { resolved: analysis.resolved, unresolved: analysis.unresolved };
+    } catch (error) {
+      throw new Build123dKernelError(issuesFrom(error, entryPath));
+    }
+  },
+
+  async describe({ entryPath }, runtime, context) {
+    await context.mirror.sync(runtime.filesystem, runtime.fileContentCache, runtime.operationId);
+    try {
+      const analysis = await analyzeEntry(entryPath, runtime, context);
+      if (!analysis.declaration) {
+        throw new Error('Build123d analyzer omitted its parameter declaration.');
+      }
+      return createKernelSuccess({ parameters: analysis.declaration });
+    } catch (error) {
+      return createKernelError(issuesFrom(error, entryPath));
+    }
+  },
+
+  async evaluate({ entryPath, parameters }, runtime, context) {
+    const paths = await context.mirror.sync(runtime.filesystem, runtime.fileContentCache, runtime.operationId);
+    // D35: the project's own pins must name the libraries this kernel runs, or it runs differently outside Tau.
+    const issues = paths.includes(pyprojectPath)
+      ? libraryVersionMismatches(await runtime.filesystem.readFile(pyprojectPath, 'utf8'))
+      : [];
+    const build = async (compute: Record<string, unknown> | undefined) => {
+      const span = runtime.tracer.startSpan('build123d.build', { entryPath });
+      try {
+        const result = await context.session.request({
+          method: 'build',
+          params: {
+            entryPath,
+            parameters,
+            ...(compute ? { compute } : {}),
+          },
+          schema: build123dBuildSchema,
+          signal: runtime.signal,
+          // G-F5: an abort stops the worker at its next funnel boundary and keeps the resident prefix.
+          cancelMethod: 'cancel',
+        });
+        context.observedDependencies = result.observedDependencies;
+        return result;
+      } finally {
+        span.end();
+      }
+    };
+
+    try {
+      if (runtime.compute.status !== 'on') {
+        // Off arm: no scope, no announcement, no publication tail, no worker-side patching.
+        const plain = await build(undefined);
+        return {
+          handle: {
+            sessionGeneration: context.session.generation,
+            handleId: plain.handleId,
+          },
+          issues,
+        };
+      }
+      const scope = runtime.compute.openScope({
+        namespace: computeNamespace,
+        producer: context.computeProducer,
+        environment: computeEnvironment,
+        discovery: { entryPath },
+        resident: context.resident,
+        admissionFloor: computeAdmissionFloor,
+      });
+      let outcome: 'delivered' | 'failed' = 'failed';
+      try {
+        // Warm discovery runs before every build, so a worker that outlives another
+        // producer's publication still picks it up (D16 refresh clause).
+        await scope.warm({
+          digests: context.warmCandidates,
+          maxEntries: build123dComputeDescriptorLimit,
+        });
+        runtime.signal.throwIfAborted();
+        const result = await build({
+          namespace: computeNamespace,
+          producer: context.computeProducer,
+          environment: computeEnvironment,
+        });
+        if (result.compute) {
+          const announcements: ComputeAnnouncement[] = [];
+          const admitted: ActionDigest[] = [];
+          for (const entry of result.compute.announcements) {
+            const action: ComputeAction = entry.action;
+            const digest = verifiedDigest(action, entry.actionDigest);
+            if (!digest) {
+              continue;
+            }
+            admitted.push(digest);
+            announcements.push({
+              kind: 'action',
+              action,
+              digest,
+              computeDuration: entry.computeDuration,
+              estimatedBytes: entry.estimatedBytes,
+            });
+          }
+          context.resident.track(admitted);
+          context.resident.observeResidentBytes(result.compute.stats.logicalBytes);
+          scope.announce({ entries: announcements });
+          context.warmCandidates = [...new Set([...context.warmCandidates, ...admitted])].slice(
+            -build123dComputeDescriptorLimit,
+          );
+        }
+        outcome = 'delivered';
+        return {
+          handle: {
+            sessionGeneration: context.session.generation,
+            handleId: result.handleId,
+          },
+          issues,
+        };
+      } finally {
+        // Seals metadata only; the runtime permits the export tail after real delivery.
+        scope.close({
+          outcome: runtime.signal.aborted ? 'cancelled' : outcome,
+        });
+      }
+    } catch (error) {
+      throw new Build123dKernelError(issuesFrom(error, entryPath));
+    }
+  },
+
+  async render({ handle, options, content }, runtime, context) {
+    if (!context.session.isHandleGenerationValid(handle.sessionGeneration)) {
+      throw new Build123dKernelError(issuesFrom(new Error('Build123d native handle is stale.')));
+    }
+    try {
+      const { mesh, measureDiagonal } = meshRequests(
+        { handleId: handle.handleId, includeEdges: content?.includeEdges === true },
+        runtime,
+        context.session,
+      );
+      // One pass at the requested tessellation: nothing coarsens a mesh (no triangle budget).
+      const meshed = await meshTessellation(
+        {
+          tessellation: options.tessellation,
+          fallback: 'medium',
+          explicitDefaults: occtExplicitTessellationDefaults.preview,
+          staleCode: 'VIEW_OPTIONS_INVALID',
+          measureDiagonal,
+        },
+        mesh,
+      );
+      return {
+        content: await context.session.readArtifact(meshed.artifact),
+        tessellation: meshed.tessellation,
+        issues: [...meshed.issues, ...mechanismIssues(meshed.artifact)],
+      };
+    } catch (error) {
+      throw new Build123dKernelError(issuesFrom(error));
+    }
+  },
+
+  async export(input, runtime, context) {
+    if (!context.session.isHandleGenerationValid(input.handle.sessionGeneration)) {
+      throw new Build123dKernelError(issuesFrom(new Error('Build123d native handle is stale.')));
+    }
+    try {
+      if (input.exportId === 'glb') {
+        const { mesh, measureDiagonal } = meshRequests(
+          { handleId: input.handle.handleId, includeEdges: input.content?.includeEdges === true },
+          runtime,
+          context.session,
+        );
+        const meshed = await meshTessellation(
+          {
+            tessellation: input.options.tessellation,
+            fallback: 'high',
+            explicitDefaults: occtExplicitTessellationDefaults.export,
+            staleCode: 'EXPORT_OPTIONS_INVALID',
+            measureDiagonal,
+          },
+          mesh,
+        );
+        const bytes = await context.session.readArtifact(meshed.artifact);
+        return {
+          files: [createExportFile('glb', 'model.glb', asBuffer(bytes))],
+          issues: [...meshed.issues, ...mechanismIssues(meshed.artifact)],
+        };
+      }
+      const artifact = await context.session.request({
+        method: 'export',
+        params: { handleId: input.handle.handleId, format: 'step' },
+        schema: build123dArtifactSchema,
+        signal: runtime.signal,
+      });
+      const bytes = await context.session.readArtifact(artifact);
+      return { files: [createExportFile('step', 'assembly.step', asBuffer(bytes))], issues: mechanismIssues(artifact) };
+    } catch (error) {
+      throw new Build123dKernelError(issuesFrom(error));
+    }
+  },
+
+  isHandleValid({ handle }, _runtime, context) {
+    return context.session.isHandleGenerationValid(handle.sessionGeneration);
+  },
+
+  releaseHandle({ handle }, _runtime, context) {
+    context.session.release(handle.handleId, handle.sessionGeneration);
+  },
+
+  // Observation only: the resident set of the worker's process tree; `heapBytes` stays unimplemented, so recycling
+  // and `rendering.heapBytes` are unchanged.
+  observedChildResidentBytes: async (context) => context.session.sampleResident?.(),
+
+  async onDispose(context) {
+    try {
+      await context.session.cleanup();
+    } finally {
+      await context.mirror.cleanup();
+    }
+  },
+});
+
+/**
+ * The `build123d` kernel capability. Every registration carries `build123dNative`, so a host that lists the plugin in a runtime
+ * definition prepares and binds the kernel from the definition alone.
+ * @public
+ */
+export const build123dKernel = withNativeDeployment(build123dKernelDefinition, build123dNative);

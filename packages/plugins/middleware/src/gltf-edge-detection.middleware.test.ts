@@ -1,0 +1,1160 @@
+/**
+ * Tests for the GLTF edge detection middleware.
+ * Tests the wrap-style hook with onion model execution, including
+ * owner-local edge primitive generation and round-trip avoidance.
+ */
+
+import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { Document, NodeIO, Accessor } from '@gltf-transform/core';
+import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
+import { EXTManifold } from 'manifold-3d/manifold-gltf';
+import type { Artifact, RenderResult, KernelExportResult } from '@taucad/runtime/types';
+import type { KernelMiddlewareServices } from '@taucad/runtime/middleware';
+
+import { gltfEdgeDetection } from '#gltf-edge-detection.middleware.js';
+import { resolveRuntimePluginDefinition } from '@taucad/runtime/plugin';
+import { createMockRuntime, createErrorResult } from '@taucad/runtime-testing';
+
+/** The removed render cap on fallback edge detection (D3); fixtures above it prove there is no cap. */
+const formerMaxTriangles = 500_000;
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const primitiveModeTriangles = 4;
+const primitiveModeLines = 1;
+const removedEdgeBundleNodeName = ['tau', 'merged', 'edges'].join('-');
+
+// =============================================================================
+// Test GLTF Factories
+// =============================================================================
+
+/**
+ * Create a minimal GLTF binary with a single cube mesh (triangles only, no lines).
+ * The cube has 90-degree dihedral angles so edge detection will find all 12 edges.
+ *
+ * @returns The binary GLTF data
+ */
+async function createCubeGltfWithoutLines(manifold = false): Promise<Uint8Array<ArrayBuffer>> {
+  const io = manifold ? new NodeIO().registerExtensions([EXTManifold]) : new NodeIO();
+  const document = new Document();
+  const buffer = document.createBuffer();
+
+  // Unit cube: 8 vertices
+  // prettier-ignore -- preserve vertex coordinate alignment
+  const positions = new Float32Array([
+    0,
+    0,
+    1, // 0 - front bottom left
+    1,
+    0,
+    1, // 1 - front bottom right
+    1,
+    1,
+    1, // 2 - front top right
+    0,
+    1,
+    1, // 3 - front top left
+    0,
+    0,
+    0, // 4 - back bottom left
+    1,
+    0,
+    0, // 5 - back bottom right
+    1,
+    1,
+    0, // 6 - back top right
+    0,
+    1,
+    0, // 7 - back top left
+  ]);
+
+  // 12 triangles for 6 faces
+  // prettier-ignore -- preserve triangle index grouping
+  const indices = new Uint32Array([
+    0,
+    1,
+    2,
+    2,
+    3,
+    0, // Front
+    5,
+    4,
+    7,
+    7,
+    6,
+    5, // Back
+    3,
+    2,
+    6,
+    6,
+    7,
+    3, // Top
+    4,
+    5,
+    1,
+    1,
+    0,
+    4, // Bottom
+    1,
+    5,
+    6,
+    6,
+    2,
+    1, // Right
+    4,
+    0,
+    3,
+    3,
+    7,
+    4, // Left
+  ]);
+
+  const positionAccessor = document
+    .createAccessor()
+    .setBuffer(buffer)
+    .setType(Accessor.Type['VEC3']!)
+    .setArray(positions);
+
+  const normals = new Float32Array(positions.length);
+  for (let index = 2; index < normals.length; index += 3) {
+    normals[index] = 1;
+  }
+  const normalAccessor = document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(normals);
+
+  const indexAccessor = document.createAccessor().setBuffer(buffer).setType(Accessor.Type['SCALAR']!).setArray(indices);
+
+  const primitive = document
+    .createPrimitive()
+    .setMode(primitiveModeTriangles)
+    .setAttribute('POSITION', positionAccessor)
+    .setAttribute('NORMAL', normalAccessor)
+    .setIndices(indexAccessor);
+
+  const mesh = document.createMesh().addPrimitive(primitive);
+  if (manifold) {
+    const topology = document
+      .createExtension(EXTManifold)
+      .createManifoldPrimitive()
+      .setIndices(indexAccessor)
+      .setRunIndex([0, indices.length]);
+    mesh.setExtension(EXTManifold.EXTENSION_NAME, topology);
+  }
+  const node = document.createNode().setMesh(mesh).setExtras({ tauComponentId: 'cube' });
+  document.createScene().addChild(node);
+
+  return io.writeBinary(document);
+}
+
+/**
+ * Create a GLTF binary with a cube mesh that already has LINE primitives.
+ * Simulates replicad's meshEdges() output embedded in the GLTF.
+ *
+ * @returns The binary GLTF data
+ */
+async function createCubeGltfWithLines(): Promise<Uint8Array<ArrayBuffer>> {
+  const io = new NodeIO();
+  const document = new Document();
+  const buffer = document.createBuffer();
+
+  // Cube triangle data (same as above)
+  // prettier-ignore -- preserve vertex coordinate alignment
+  const positions = new Float32Array([0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+
+  // prettier-ignore -- preserve triangle index grouping
+  const indices = new Uint16Array([
+    0, 1, 2, 2, 3, 0, 5, 4, 7, 7, 6, 5, 3, 2, 6, 6, 7, 3, 4, 5, 1, 1, 0, 4, 1, 5, 6, 6, 2, 1, 4, 0, 3, 3, 7, 4,
+  ]);
+
+  const positionAccessor = document
+    .createAccessor()
+    .setBuffer(buffer)
+    .setType(Accessor.Type['VEC3']!)
+    .setArray(positions);
+
+  const indexAccessor = document.createAccessor().setBuffer(buffer).setType(Accessor.Type['SCALAR']!).setArray(indices);
+
+  const trianglePrimitive = document
+    .createPrimitive()
+    .setMode(primitiveModeTriangles)
+    .setAttribute('POSITION', positionAccessor)
+    .setIndices(indexAccessor);
+
+  // Add existing LINE primitive (simulating replicad native edges)
+  // Just one edge from (0,0,0) to (1,0,0) as a minimal example
+  const linePositions = new Float32Array([0, 0, 0, 1, 0, 0]);
+  const lineIndices = new Uint32Array([0, 1]);
+
+  const linePositionAccessor = document
+    .createAccessor()
+    .setBuffer(buffer)
+    .setType(Accessor.Type['VEC3']!)
+    .setArray(linePositions);
+
+  const lineIndexAccessor = document
+    .createAccessor()
+    .setBuffer(buffer)
+    .setType(Accessor.Type['SCALAR']!)
+    .setArray(lineIndices);
+
+  const authoredLineMaterial = document
+    .createMaterial('authored-line-material')
+    .setBaseColorFactor([0.25, 0.5, 0.75, 1])
+    .setMetallicFactor(0.25)
+    .setRoughnessFactor(0.75)
+    .setDoubleSided(false)
+    .setAlphaMode('OPAQUE');
+
+  const linePrimitive = document
+    .createPrimitive()
+    .setMode(primitiveModeLines)
+    .setAttribute('POSITION', linePositionAccessor)
+    .setIndices(lineIndexAccessor)
+    .setMaterial(authoredLineMaterial);
+
+  const mesh = document.createMesh().addPrimitive(trianglePrimitive).addPrimitive(linePrimitive);
+  const node = document.createNode().setMesh(mesh);
+  document.createScene().addChild(node);
+
+  return io.writeBinary(document);
+}
+
+/**
+ * Create a GLTF with two meshes: one with existing lines (should be skipped)
+ * and one without (should get edge detection).
+ */
+async function createMixedMeshGltf(): Promise<Uint8Array<ArrayBuffer>> {
+  const io = new NodeIO();
+  const document = new Document();
+  const buffer = document.createBuffer();
+
+  // --- Mesh 1: cube WITH existing line primitive ---
+  // prettier-ignore -- preserve vertex coordinate alignment
+  const positions1 = new Float32Array([0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+  // prettier-ignore -- preserve triangle index grouping
+  const indices1 = new Uint16Array([
+    0, 1, 2, 2, 3, 0, 5, 4, 7, 7, 6, 5, 3, 2, 6, 6, 7, 3, 4, 5, 1, 1, 0, 4, 1, 5, 6, 6, 2, 1, 4, 0, 3, 3, 7, 4,
+  ]);
+
+  const trianglePrimitive1 = document
+    .createPrimitive()
+    .setMode(primitiveModeTriangles)
+    .setAttribute(
+      'POSITION',
+      document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(positions1),
+    )
+    .setIndices(document.createAccessor().setBuffer(buffer).setType(Accessor.Type['SCALAR']!).setArray(indices1));
+
+  const linePositions1 = new Float32Array([0, 0, 0, 1, 0, 0]);
+  const linePrimitive1 = document
+    .createPrimitive()
+    .setMode(primitiveModeLines)
+    .setAttribute(
+      'POSITION',
+      document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(linePositions1),
+    )
+    .setIndices(
+      document
+        .createAccessor()
+        .setBuffer(buffer)
+        .setType(Accessor.Type['SCALAR']!)
+        .setArray(new Uint32Array([0, 1])),
+    );
+
+  const mesh1 = document.createMesh().addPrimitive(trianglePrimitive1).addPrimitive(linePrimitive1);
+
+  // --- Mesh 2: cube WITHOUT line primitive ---
+  // Offset cube at (2,0,0)
+  // prettier-ignore -- preserve vertex coordinate alignment
+  const positions2 = new Float32Array([2, 0, 1, 3, 0, 1, 3, 1, 1, 2, 1, 1, 2, 0, 0, 3, 0, 0, 3, 1, 0, 2, 1, 0]);
+  // prettier-ignore -- preserve triangle index grouping
+  const indices2 = new Uint16Array([
+    0, 1, 2, 2, 3, 0, 5, 4, 7, 7, 6, 5, 3, 2, 6, 6, 7, 3, 4, 5, 1, 1, 0, 4, 1, 5, 6, 6, 2, 1, 4, 0, 3, 3, 7, 4,
+  ]);
+
+  const trianglePrimitive2 = document
+    .createPrimitive()
+    .setMode(primitiveModeTriangles)
+    .setAttribute(
+      'POSITION',
+      document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(positions2),
+    )
+    .setIndices(document.createAccessor().setBuffer(buffer).setType(Accessor.Type['SCALAR']!).setArray(indices2));
+
+  const mesh2 = document.createMesh().addPrimitive(trianglePrimitive2);
+
+  // Add both meshes to scene
+  const node1 = document.createNode().setMesh(mesh1).setName('MeshWithLines');
+  const node2 = document.createNode().setMesh(mesh2).setName('MeshWithoutLines');
+  const scene = document.createScene();
+  scene.addChild(node1);
+  scene.addChild(node2);
+
+  return io.writeBinary(document);
+}
+
+async function createIgnoredTriangleInputsGltf(): Promise<Uint8Array<ArrayBuffer>> {
+  const io = new NodeIO();
+  const document = new Document();
+  const buffer = document.createBuffer();
+  const mesh = document.createMesh();
+  mesh.addPrimitive(document.createPrimitive().setMode(primitiveModeTriangles));
+  mesh.addPrimitive(
+    document
+      .createPrimitive()
+      .setMode(primitiveModeTriangles)
+      .setAttribute(
+        'POSITION',
+        document
+          .createAccessor()
+          .setBuffer(buffer)
+          .setType(Accessor.Type['VEC3']!)
+          .setArray(new Uint16Array([0, 0, 0, 1, 0, 0, 0, 1, 0])),
+      ),
+  );
+  mesh.addPrimitive(
+    document
+      .createPrimitive()
+      .setMode(primitiveModeTriangles)
+      .setAttribute(
+        'POSITION',
+        document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(new Float32Array()),
+      ),
+  );
+  document.createScene().addChild(document.createNode().setMesh(mesh));
+  return io.writeBinary(document);
+}
+
+async function createImplicitIndexInputsGltf(): Promise<Uint8Array<ArrayBuffer>> {
+  const io = new NodeIO();
+  const document = new Document();
+  const buffer = document.createBuffer();
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const mesh = document.createMesh();
+  mesh.addPrimitive(
+    document
+      .createPrimitive()
+      .setMode(primitiveModeTriangles)
+      .setAttribute(
+        'POSITION',
+        document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(positions),
+      ),
+  );
+  mesh.addPrimitive(
+    document
+      .createPrimitive()
+      .setMode(primitiveModeTriangles)
+      .setAttribute(
+        'POSITION',
+        document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(positions),
+      )
+      .setIndices(
+        document
+          .createAccessor()
+          .setBuffer(buffer)
+          .setType(Accessor.Type['SCALAR']!)
+          .setArray(new Uint8Array([0, 1, 2])),
+      ),
+  );
+  document.createScene().addChild(document.createNode().setMesh(mesh));
+  return io.writeBinary(document);
+}
+
+/**
+ * Create a GLB with one 12-triangle cube primitive and one indexed primitive per
+ * entry of `largeTriangles`. By default the single large primitive alone sits
+ * just above the former fallback cap. Each large primitive references three
+ * vertices only, so the fixture stays a few megabytes.
+ */
+async function createLargeGltf(
+  largeTriangles: readonly number[] = [formerMaxTriangles + 1],
+): Promise<Uint8Array<ArrayBuffer>> {
+  const io = new NodeIO();
+  const document = new Document();
+  const buffer = document.createBuffer();
+  const cubePositions = new Float32Array([0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+  const cubeIndices = new Uint16Array([
+    0, 1, 2, 2, 3, 0, 5, 4, 7, 7, 6, 5, 3, 2, 6, 6, 7, 3, 4, 5, 1, 1, 0, 4, 1, 5, 6, 6, 2, 1, 4, 0, 3, 3, 7, 4,
+  ]);
+  const cube = document
+    .createPrimitive()
+    .setMode(primitiveModeTriangles)
+    .setAttribute(
+      'POSITION',
+      document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(cubePositions),
+    )
+    .setIndices(document.createAccessor().setBuffer(buffer).setType(Accessor.Type['SCALAR']!).setArray(cubeIndices));
+  const mesh = document.createMesh().addPrimitive(cube);
+  for (const triangles of largeTriangles) {
+    mesh.addPrimitive(
+      document
+        .createPrimitive()
+        .setMode(primitiveModeTriangles)
+        .setAttribute(
+          'POSITION',
+          document
+            .createAccessor()
+            .setBuffer(buffer)
+            .setType(Accessor.Type['VEC3']!)
+            .setArray(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0])),
+        )
+        .setIndices(
+          document
+            .createAccessor()
+            .setBuffer(buffer)
+            .setType(Accessor.Type['SCALAR']!)
+            .setArray(new Uint32Array(triangles * 3)),
+        ),
+    );
+  }
+  document.createScene().addChild(document.createNode().setMesh(mesh));
+  return io.writeBinary(document);
+}
+
+// =============================================================================
+// Test GLTF Analysis Utilities
+// =============================================================================
+
+/**
+ * Parse GLTF content and return primitive counts per mesh.
+ */
+async function analyzeGltfPrimitives(gltfContent: Uint8Array<ArrayBuffer>): Promise<
+  Array<{
+    meshName: string | undefined;
+    triangleCount: number;
+    lineCount: number;
+    linePrimitiveVertexCounts: number[];
+  }>
+> {
+  const io = new NodeIO().registerExtensions([KHRMaterialsUnlit]);
+  const document = await io.readBinary(gltfContent);
+
+  const meshAnalysis: Array<{
+    meshName: string | undefined;
+    triangleCount: number;
+    lineCount: number;
+    linePrimitiveVertexCounts: number[];
+  }> = [];
+
+  for (const mesh of document.getRoot().listMeshes()) {
+    let triangleCount = 0;
+    let lineCount = 0;
+    const linePrimitiveVertexCounts: number[] = [];
+
+    for (const primitive of mesh.listPrimitives()) {
+      if (primitive.getMode() === primitiveModeTriangles) {
+        triangleCount++;
+      } else if (primitive.getMode() === primitiveModeLines) {
+        lineCount++;
+        const positionAccessor = primitive.getAttribute('POSITION');
+        linePrimitiveVertexCounts.push(positionAccessor?.getCount() ?? 0);
+      }
+    }
+
+    // Get mesh name from the node that references it
+    const nodes = document.getRoot().listNodes();
+    const meshNode = nodes.find((n) => n.getMesh() === mesh);
+
+    meshAnalysis.push({
+      meshName: meshNode?.getName(),
+      triangleCount,
+      lineCount,
+      linePrimitiveVertexCounts,
+    });
+  }
+
+  return meshAnalysis;
+}
+
+async function readTriangleSnapshot(gltfContent: Uint8Array<ArrayBuffer>) {
+  const document = await new NodeIO().registerExtensions([KHRMaterialsUnlit]).readBinary(gltfContent);
+  return {
+    nodes: document
+      .getRoot()
+      .listNodes()
+      .map((node) => [...node.getMatrix()]),
+    primitives: document
+      .getRoot()
+      .listMeshes()
+      .flatMap((mesh) => mesh.listPrimitives())
+      .filter((primitive) => primitive.getMode() === primitiveModeTriangles)
+      .map((primitive) => ({
+        positions: [...primitive.getAttribute('POSITION')!.getArray()!],
+        normals: [...primitive.getAttribute('NORMAL')!.getArray()!],
+        indices: [...primitive.getIndices()!.getArray()!],
+        material: primitive.getMaterial()?.getBaseColorFactor() ?? null,
+      })),
+  };
+}
+
+// =============================================================================
+// Test Context Helpers
+// =============================================================================
+
+type EdgeDetectionOptions = { thresholdDegrees: number };
+const createRenderSuccess = (data: Artifact): Extract<RenderResult, { success: true }> => ({
+  success: true,
+  data,
+  issues: [],
+});
+const createMockRenderHandler = (result: RenderResult) => vi.fn(async () => result);
+const gltfBytes = (artifact: Artifact): Uint8Array<ArrayBuffer> => {
+  if (!(artifact.content instanceof Uint8Array)) {
+    throw new TypeError('Expected GLB bytes');
+  }
+  return artifact.content;
+};
+const renderInput = (includeEdges: boolean) => ({
+  view: 'model',
+  mimeType: 'model/gltf-binary',
+  options: {},
+  content: { includeEdges },
+});
+
+function createEdgeDetectionContext(config?: EdgeDetectionOptions): {
+  input: ReturnType<typeof renderInput>;
+  runtime: KernelMiddlewareServices<Record<string, never>, EdgeDetectionOptions> &
+    ReturnType<typeof createMockRuntime<Record<string, never>, EdgeDetectionOptions>>;
+} {
+  return {
+    input: renderInput(true),
+    runtime: createMockRuntime<Record<string, never>, EdgeDetectionOptions>({
+      options: config ?? { thresholdDegrees: 30 },
+    }),
+  };
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+describe('gltfEdgeDetection', () => {
+  const resolveGltfEdgeDetectionDefinition = async () =>
+    resolveRuntimePluginDefinition('middleware', gltfEdgeDetection());
+  let gltfEdgeDetectionDefinition: Awaited<ReturnType<typeof resolveGltfEdgeDetectionDefinition>>;
+
+  beforeAll(async () => {
+    gltfEdgeDetectionDefinition = await resolveGltfEdgeDetectionDefinition();
+  });
+
+  it('should version owner-local edge output for geometry cache invalidation', () => {
+    expect(gltfEdgeDetectionDefinition.version).toBe('3.1.0');
+  });
+
+  describe('wrapRender', () => {
+    describe('meshes without existing line primitives', () => {
+      it('should detect edges and attach them to the source mesh', async () => {
+        const gltfData = await createCubeGltfWithoutLines();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        expect(wrapRender).toBeDefined();
+
+        const result = await wrapRender!(input, handler, runtime);
+
+        expect(handler).toHaveBeenCalled();
+        expect(result.success).toBe(true);
+
+        if (result.success) {
+          const geometry = result.data;
+          expect(geometry.mimeType).toBe('model/gltf-binary');
+
+          const meshes = await analyzeGltfPrimitives(gltfBytes(geometry));
+          expect(meshes).toHaveLength(1);
+
+          const sourceMesh = meshes[0]!;
+          expect(sourceMesh.triangleCount).toBe(1);
+          expect(sourceMesh.lineCount).toBe(1);
+        }
+      });
+
+      it('should preserve source surface data and only add LINES content', async () => {
+        const gltfData = await createCubeGltfWithoutLines();
+        const before = await readTriangleSnapshot(gltfData);
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const result = await gltfEdgeDetectionDefinition.wrapRender!(
+          input,
+          createMockRenderHandler(handlerResult),
+          runtime,
+        );
+
+        expect(result.success).toBe(true);
+        if (result.success) {
+          const geometry = result.data;
+          expect(await readTriangleSnapshot(gltfBytes(geometry))).toEqual(before);
+          const meshes = await analyzeGltfPrimitives(gltfBytes(geometry));
+          expect(meshes[0]).toMatchObject({
+            triangleCount: 1,
+            lineCount: 1,
+          });
+        }
+      });
+
+      it('should detect 12 edges for a cube (all 90-degree dihedral angles)', async () => {
+        const gltfData = await createCubeGltfWithoutLines();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        if (result.success) {
+          const geometry = result.data;
+          const meshes = await analyzeGltfPrimitives(gltfBytes(geometry));
+
+          // A cube has 12 edges, each edge has 2 vertices, all in the source mesh's edge primitive.
+          const sourceMesh = meshes[0]!;
+          const edgeVertexCount = sourceMesh.linePrimitiveVertexCounts[0]!;
+          const edgeCount = edgeVertexCount / 2;
+          expect(edgeCount).toBe(12);
+        }
+      });
+
+      it('should produce a new GLTF binary (not return original)', async () => {
+        const gltfData = await createCubeGltfWithoutLines();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        if (result.success) {
+          const geometry = result.data;
+          // The content should be different from the original (re-serialized with generated edges).
+          expect(gltfBytes(geometry)).not.toBe(gltfData);
+          expect(gltfBytes(geometry).byteLength).toBeGreaterThan(gltfData.byteLength);
+        }
+      });
+
+      it('should preserve manifold surfaces and attach generated lines as an identity child', async () => {
+        const gltfData = await createCubeGltfWithoutLines(true);
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const result = await gltfEdgeDetectionDefinition.wrapRender!(
+          input,
+          createMockRenderHandler(handlerResult),
+          runtime,
+        );
+
+        expect(result.success).toBe(true);
+        if (result.success) {
+          const io = new NodeIO().registerExtensions([KHRMaterialsUnlit, EXTManifold]);
+          const document = await io.readBinary(gltfBytes(result.data));
+          const [surface, edges] = document.getRoot().listMeshes();
+          const surfaceNode = document
+            .getRoot()
+            .listNodes()
+            .find((node) => node.getMesh() === surface)!;
+          const edgeNode = surfaceNode.listChildren().find((node) => node.getMesh() === edges)!;
+
+          expect(surface!.listPrimitives().map((primitive) => primitive.getMode())).toEqual([primitiveModeTriangles]);
+          expect(surface!.getExtension(EXTManifold.EXTENSION_NAME)).not.toBeNull();
+          expect(edges!.listPrimitives().map((primitive) => primitive.getMode())).toEqual([primitiveModeLines]);
+          expect(edges!.getExtension(EXTManifold.EXTENSION_NAME)).toBeNull();
+          expect(edgeNode.getMatrix()).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+          expect(edgeNode.getExtras()).toMatchObject({ tauComponentId: 'cube' });
+        }
+      });
+    });
+
+    describe('meshes with existing line primitives', () => {
+      it('should preserve pre-existing LINES and add fallback lines for triangles', async () => {
+        const gltfData = await createCubeGltfWithLines();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        expect(result.success).toBe(true);
+
+        if (result.success) {
+          const geometry = result.data;
+          expect(geometry.mimeType).toBe('model/gltf-binary');
+
+          const meshes = await analyzeGltfPrimitives(gltfBytes(geometry));
+          expect(meshes).toHaveLength(1);
+
+          const sourceMesh = meshes[0]!;
+          expect(sourceMesh.triangleCount).toBe(1);
+          expect(sourceMesh.lineCount).toBe(2);
+          expect(sourceMesh.linePrimitiveVertexCounts[0]).toBe(2);
+          expect(sourceMesh.linePrimitiveVertexCounts[1]).toBe(24);
+
+          const io = new NodeIO().registerExtensions([KHRMaterialsUnlit]);
+          const document = await io.readBinary(gltfBytes(geometry));
+          const authoredMaterial = document
+            .getRoot()
+            .listMaterials()
+            .find((material) => material.getName() === 'authored-line-material')!;
+          const generatedMaterial = document
+            .getRoot()
+            .listMaterials()
+            .find((material) => material.getName() === 'tau-edge-material')!;
+          expect(authoredMaterial.getBaseColorFactor()).toEqual([0.25, 0.5, 0.75, 1]);
+          expect(authoredMaterial.getMetallicFactor()).toBe(0.25);
+          expect(authoredMaterial.getRoughnessFactor()).toBe(0.75);
+          expect(authoredMaterial.getDoubleSided()).toBe(false);
+          expect(authoredMaterial.getAlphaMode()).toBe('OPAQUE');
+          expect(generatedMaterial.getBaseColorFactor()).toEqual([0, 0, 0, 1]);
+          expect(generatedMaterial.getExtension('KHR_materials_unlit')).not.toBeNull();
+        }
+      });
+
+      it('should return a new object while retaining authored LINES', async () => {
+        const gltfData = await createCubeGltfWithLines();
+        const originalGeometry: Artifact = {
+          mimeType: 'model/gltf-binary',
+          content: gltfData,
+        };
+        const handlerResult = createRenderSuccess(originalGeometry);
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        if (result.success) {
+          expect(result.data).not.toBe(originalGeometry);
+          const geometry = result.data;
+          expect(gltfBytes(geometry)).not.toBe(gltfData);
+          const meshes = await analyzeGltfPrimitives(gltfBytes(geometry));
+          expect(meshes[0]!.lineCount).toBe(2);
+        }
+      });
+    });
+
+    describe('mixed meshes', () => {
+      it('should keep detection-generated edges and pre-existing edges on their source meshes', async () => {
+        const gltfData = await createMixedMeshGltf();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        expect(result.success).toBe(true);
+
+        if (result.success) {
+          const geometry = result.data;
+          const meshes = await analyzeGltfPrimitives(gltfBytes(geometry));
+
+          expect(meshes).toHaveLength(2);
+
+          const meshWithLines = meshes.find((m) => m.meshName === 'MeshWithLines');
+          expect(meshWithLines).toBeDefined();
+          expect(meshWithLines!.triangleCount).toBe(1);
+          expect(meshWithLines!.lineCount).toBe(2);
+          expect(meshWithLines!.linePrimitiveVertexCounts[0]).toBe(2);
+          expect(meshWithLines!.linePrimitiveVertexCounts[1]).toBe(24);
+
+          const meshWithoutLines = meshes.find((m) => m.meshName === 'MeshWithoutLines');
+          expect(meshWithoutLines).toBeDefined();
+          expect(meshWithoutLines!.triangleCount).toBe(1);
+          expect(meshWithoutLines!.lineCount).toBe(1);
+          expect(meshWithoutLines!.linePrimitiveVertexCounts[0]).toBe(24);
+        }
+      });
+
+      it('should produce a new GLTF binary for mixed meshes (some edges were added)', async () => {
+        const gltfData = await createMixedMeshGltf();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        if (result.success) {
+          const geometry = result.data;
+          // Should be different from original (edges were added to one source mesh).
+          expect(gltfBytes(geometry)).not.toBe(gltfData);
+        }
+      });
+    });
+
+    describe('non-GLTF geometries', () => {
+      it('should pass through SVG geometries unchanged', async () => {
+        const svgGeometry: Artifact = {
+          mimeType: 'image/svg+xml',
+          content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M0,0 L10,10"/></svg>',
+        };
+        const handlerResult = createRenderSuccess(svgGeometry);
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        expect(result.success).toBe(true);
+
+        if (result.success) {
+          expect(result.data).toEqual(svgGeometry);
+        }
+      });
+    });
+
+    describe('failed results', () => {
+      it('should pass through failed results unchanged', async () => {
+        const errorResult = createErrorResult();
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = vi.fn().mockResolvedValue(errorResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        expect(result).toEqual(errorResult);
+      });
+    });
+
+    describe('logging', () => {
+      it('should log trace message when processing GLTF geometries', async () => {
+        const gltfData = await createCubeGltfWithoutLines();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        await wrapRender!(input, handler, runtime);
+
+        expect(runtime.logger.trace).toHaveBeenCalledWith('Adding edge primitives to GLTF geometry');
+      });
+
+      it('should not log when result failed', async () => {
+        const emptyResult = createErrorResult();
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = vi.fn().mockResolvedValue(emptyResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        await wrapRender!(input, handler, runtime);
+
+        expect(runtime.logger.trace).not.toHaveBeenCalled();
+      });
+
+      it('should not log when result is an error', async () => {
+        const errorResult = createErrorResult();
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = vi.fn().mockResolvedValue(errorResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        await wrapRender!(input, handler, runtime);
+
+        expect(runtime.logger.trace).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('edge material properties', () => {
+      it('should use unlit material for generated edge primitives', async () => {
+        const gltfData = await createCubeGltfWithoutLines();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        if (result.success) {
+          const geometry = result.data;
+          const io = new NodeIO().registerExtensions([KHRMaterialsUnlit]);
+          const document = await io.readBinary(gltfBytes(geometry));
+
+          const sourceMesh = document.getRoot().listMeshes()[0]!;
+          const edgePrimitive = sourceMesh.listPrimitives().find((p) => p.getMode() === primitiveModeLines);
+          expect(edgePrimitive).toBeDefined();
+
+          const material = edgePrimitive!.getMaterial();
+          expect(material).not.toBeNull();
+          expect(material!.getName()).toBe('tau-edge-material');
+
+          expect(material!.getBaseColorFactor()).toEqual([0, 0, 0, 1]);
+          expect(material!.getMetallicFactor()).toBe(0);
+          expect(material!.getRoughnessFactor()).toBe(1);
+          expect(material!.getDoubleSided()).toBe(true);
+          expect(material!.getAlphaMode()).toBe('OPAQUE');
+
+          const unlitExtension = material!.getExtension('KHR_materials_unlit');
+          expect(unlitExtension).not.toBeNull();
+        }
+      });
+    });
+
+    describe('owner-local edge topology guarantees', () => {
+      it('emits one LINES primitive per owner mesh that has edges', async () => {
+        const gltfData = await createMixedMeshGltf();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        expect(result.success).toBe(true);
+        if (result.success) {
+          const geometry = result.data;
+          const io = new NodeIO().registerExtensions([KHRMaterialsUnlit]);
+          const document = await io.readBinary(gltfBytes(geometry));
+
+          let lineCount = 0;
+          for (const mesh of document.getRoot().listMeshes()) {
+            for (const primitive of mesh.listPrimitives()) {
+              if (primitive.getMode() === primitiveModeLines) {
+                lineCount++;
+              }
+            }
+          }
+          expect(lineCount).toBe(3);
+        }
+      });
+
+      it('does not attach a bundled merged-edges node at the scene root', async () => {
+        const gltfData = await createCubeGltfWithoutLines();
+        const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockRenderHandler(handlerResult);
+
+        const { wrapRender } = gltfEdgeDetectionDefinition;
+        const result = await wrapRender!(input, handler, runtime);
+
+        if (result.success) {
+          const geometry = result.data;
+          const io = new NodeIO().registerExtensions([KHRMaterialsUnlit]);
+          const document = await io.readBinary(gltfBytes(geometry));
+
+          const scene = document.getRoot().listScenes()[0]!;
+          const mergedNode = scene.listChildren().find((n) => n.getName() === removedEdgeBundleNodeName);
+          expect(mergedNode).toBeUndefined();
+        }
+      });
+    });
+  });
+
+  it('is a byte-identical passthrough when edges are false', async () => {
+    const gltfData = await createCubeGltfWithoutLines();
+    const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+    const input = renderInput(false);
+    const runtime = createMockRuntime<Record<string, never>, EdgeDetectionOptions>({
+      options: { thresholdDegrees: 30 },
+    });
+    const handler = createMockRenderHandler(handlerResult);
+
+    const result = await gltfEdgeDetectionDefinition.wrapRender!(input, handler, runtime);
+
+    expect(result).toBe(handlerResult);
+    expect(runtime.logger.trace).not.toHaveBeenCalled();
+  });
+
+  it('adds requested edges on the render phase', async () => {
+    const gltfData = await createCubeGltfWithoutLines();
+    const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content: gltfData });
+    const runtime = createMockRuntime<Record<string, never>, EdgeDetectionOptions>({
+      options: { thresholdDegrees: 30 },
+    });
+    const handler = vi.fn().mockResolvedValue(handlerResult);
+
+    const result = await gltfEdgeDetectionDefinition.wrapRender!(renderInput(true), handler, runtime);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const primitives = await analyzeGltfPrimitives(gltfBytes(result.data));
+      expect(primitives[0]!.lineCount).toBe(1);
+    }
+  });
+
+  describe('no triangle cap (D3)', () => {
+    it('adds render edges above the former 500,000-triangle cap without a skip warning', async () => {
+      const content = await createLargeGltf();
+      const { input, runtime } = createEdgeDetectionContext();
+
+      const result = await gltfEdgeDetectionDefinition.wrapRender!(
+        input,
+        createMockRenderHandler(createRenderSuccess({ mimeType: 'model/gltf-binary', content })),
+        runtime,
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const primitives = await analyzeGltfPrimitives(gltfBytes(result.data));
+        expect(primitives[0]).toMatchObject({ triangleCount: 2, lineCount: 1, linePrimitiveVertexCounts: [24] });
+      }
+      expect(runtime.logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('adds render edges when primitives together exceed the former cap', async () => {
+      const half = formerMaxTriangles / 2;
+      const content = await createLargeGltf([half, half + 1]);
+      const { input, runtime } = createEdgeDetectionContext();
+
+      const result = await gltfEdgeDetectionDefinition.wrapRender!(
+        input,
+        createMockRenderHandler(createRenderSuccess({ mimeType: 'model/gltf-binary', content })),
+        runtime,
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const primitives = await analyzeGltfPrimitives(gltfBytes(result.data));
+        expect(primitives[0]).toMatchObject({ triangleCount: 3, lineCount: 1 });
+      }
+      expect(runtime.logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('runs no edge pass when the call turns edges off', async () => {
+      const content = await createLargeGltf();
+      const { runtime } = createEdgeDetectionContext();
+      const handlerResult = createRenderSuccess({ mimeType: 'model/gltf-binary', content });
+
+      const result = await gltfEdgeDetectionDefinition.wrapRender!(
+        renderInput(false),
+        createMockRenderHandler(handlerResult),
+        runtime,
+      );
+
+      expect(result).toBe(handlerResult);
+      expect(runtime.logger.trace).not.toHaveBeenCalled();
+      expect(runtime.logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('adds export edges on a large mesh', async () => {
+      const content = await createLargeGltf();
+      const { runtime } = createEdgeDetectionContext();
+
+      const result = await gltfEdgeDetectionDefinition.wrapExport!(
+        {
+          exportId: 'glb',
+          extension: 'glb',
+          mimeType: 'model/gltf-binary',
+          options: {},
+          content: { includeEdges: true },
+        },
+        vi.fn(
+          async () =>
+            ({
+              success: true,
+              data: [{ name: 'model.glb', bytes: content, mimeType: 'model/gltf-binary' }],
+              issues: [],
+            }) satisfies KernelExportResult,
+        ),
+        runtime,
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const primitives = await analyzeGltfPrimitives(result.data[0].bytes);
+        expect(primitives[0]).toMatchObject({ triangleCount: 2, lineCount: 1 });
+      }
+      expect(runtime.logger.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it('returns the original GLTF when triangle inputs cannot produce edges', async () => {
+    const content = await createIgnoredTriangleInputsGltf();
+    const result = createRenderSuccess({ mimeType: 'model/gltf-binary', content });
+    const { input, runtime } = createEdgeDetectionContext();
+
+    const rendered = await gltfEdgeDetectionDefinition.wrapRender!(input, createMockRenderHandler(result), runtime);
+
+    expect(rendered.success && rendered.data).toBe(result.data);
+  });
+
+  it('supports unindexed triangles and ignores unsupported index widths', async () => {
+    const content = await createImplicitIndexInputsGltf();
+    const { input, runtime } = createEdgeDetectionContext();
+
+    const result = await gltfEdgeDetectionDefinition.wrapRender!(
+      input,
+      createMockRenderHandler(createRenderSuccess({ mimeType: 'model/gltf-binary', content })),
+      runtime,
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success && result.data.mimeType === 'model/gltf-binary') {
+      const primitives = await analyzeGltfPrimitives(gltfBytes(result.data));
+      expect(primitives[0]).toMatchObject({ triangleCount: 2, lineCount: 2 });
+    }
+  });
+
+  it('leaves mesh results unchanged when edge content is not requested', async () => {
+    const content = await createCubeGltfWithoutLines();
+    const result = createRenderSuccess({ mimeType: 'model/gltf-binary', content });
+    const { runtime } = createEdgeDetectionContext();
+
+    const rendered = await gltfEdgeDetectionDefinition.wrapRender!(
+      renderInput(false),
+      vi.fn(async () => result),
+      runtime,
+    );
+
+    expect(rendered).toBe(result);
+  });
+
+  it('adds requested edges to GLB export files and leaves other files untouched', async () => {
+    const gltfData = await createCubeGltfWithoutLines();
+    const textBytes = new Uint8Array([1, 2, 3]);
+    const handlerResult = {
+      success: true,
+      data: [
+        { name: 'model.glb', bytes: gltfData, mimeType: 'model/gltf-binary' },
+        { name: 'notes.txt', bytes: textBytes, mimeType: 'application/octet-stream' },
+      ],
+      issues: [],
+    } satisfies KernelExportResult;
+    const runtime = createMockRuntime<Record<string, never>, EdgeDetectionOptions>({
+      options: { thresholdDegrees: 30 },
+    });
+    const handler = vi.fn().mockResolvedValue(handlerResult);
+
+    const result = await gltfEdgeDetectionDefinition.wrapExport!(
+      {
+        exportId: 'glb',
+        extension: 'glb',
+        mimeType: 'model/gltf-binary',
+        options: {},
+        content: { includeEdges: true },
+      },
+      handler,
+      runtime,
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const primitives = await analyzeGltfPrimitives(result.data[0].bytes);
+      expect(primitives[0]!.lineCount).toBe(1);
+      expect(result.data[1]!.bytes).toBe(textBytes);
+    }
+  });
+
+  it('does not parse export bytes when edges are false', async () => {
+    const malformed = new Uint8Array([1, 2, 3]);
+    const handlerResult = {
+      success: true,
+      data: [{ name: 'model.glb', bytes: malformed, mimeType: 'model/gltf-binary' }],
+      issues: [],
+    } satisfies KernelExportResult;
+    const runtime = createMockRuntime<Record<string, never>, EdgeDetectionOptions>({
+      options: { thresholdDegrees: 30 },
+    });
+    const handler = vi.fn().mockResolvedValue(handlerResult);
+
+    const result = await gltfEdgeDetectionDefinition.wrapExport!(
+      {
+        exportId: 'glb',
+        extension: 'glb',
+        mimeType: 'model/gltf-binary',
+        options: {},
+        content: { includeEdges: false },
+      },
+      handler,
+      runtime,
+    );
+
+    expect(result).toBe(handlerResult);
+  });
+});

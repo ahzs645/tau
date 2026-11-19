@@ -1,0 +1,1229 @@
+/**
+ * The daemon's tool registry: the canonical chat RPC dispatcher, in process,
+ * over a rooted `NodeFsProvider` and the supervised runtime child.
+ *
+ * The tool *definitions* come from `@taucad/chat` and the registry itself from
+ * `@taucad/agent-tools` — the same two sources the browser worker reads — so a
+ * daemon-placed run sees the same names, descriptions and JSON Schemas a
+ * browser-placed run does. Only the backing clients differ: disk instead of a
+ * filesystem bridge, and the loopback runtime child instead of a kernel worker.
+ *
+ * Rendering is *not* browser-only: the runtime's image plugin renders through
+ * the native raster backend, which resolves and runs under plain Node — probed
+ * on this machine at 512² webp in 16.6 ms cold and ~2.9 ms warm on the Metal
+ * adapter (`substrate/capture/nanoraster-node-probe.txt`). `screenshot` and
+ * `export_model` are therefore offered whenever a runtime client is
+ * attached, exactly like `evaluate_model`.
+ *
+ * `test_model` and `use_skill` were the two absentees, both for the same
+ * reason: their adapters lived in `apps/ui`. They now live in
+ * `@taucad/agent-tools`, so this module only has to supply the Node halves —
+ * a disk reader for skills, and for GeoSpec the native engine running over
+ * the same runtime client the geometry tools use, so `test_model` is offered
+ * exactly when they are.
+ */
+
+import { createHash } from 'node:crypto';
+import { readFile, realpath, readdir, stat } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { z } from 'zod';
+
+import { ResourceQueue } from '@taucad/filesystem';
+import { composeView } from '@taucad/filesystem/composed-view';
+import { tauPathPolicy } from '@taucad/filesystem/path-registry';
+import type { MachineTypeId } from '@taucad/types';
+import { MachineSettingsOwner } from '@taucad/runtime/host';
+import { readManagedPreparation } from '@taucad/runtime/preparation/node';
+import { NodeFsProvider } from '@taucad/filesystem/backend/node';
+
+import { rpcClientErrorCode } from '@taucad/chat/schemas/rpc';
+import { toolName } from '@taucad/chat/constants';
+import { toRpcError } from '@taucad/chat/rpc';
+import {
+  formatTestModelHeadline as chatFormatTestModelHeadline,
+  runStatusFromCounts as chatRunStatusFromCounts,
+} from '@taucad/chat/schemas/tools/test-model-summary';
+import type { RpcGeoSpecClient, RpcSkillResolver } from '@taucad/chat/rpc';
+import type { TestModelOutput } from '@taucad/chat/schemas/tools/test-model';
+import {
+  createChatToolRegistry,
+  createGatewayWebResearchClient,
+  createProviderRpcFileSystem,
+  createRuntimeWorkbenchClient,
+  createSkillBundleOverlay,
+  createSkillBundleRegistry,
+} from '@taucad/agent-tools/registry';
+import type { ReadSkillResource } from '@taucad/agent-tools/registry';
+import { createSkillResolver } from '@taucad/agent-tools/skills';
+import {
+  createRuntimeAgentClients,
+  createRuntimeParameterAgentClient,
+  withEntryAdoption,
+} from '@taucad/agent-tools/runtime';
+import type { ModelAdmissionLimits } from '@taucad/agent-tools/runtime';
+import { createGeoSpecConfigSession, runGeoSpecTests, tauClientExporter } from '@taucad/agent-tools/geospec';
+import type { GeoSpecTestModelConfig } from '@taucad/agent-tools/geospec';
+import type { GeoSpecModelExporter } from 'geospec/model';
+import type { GeoSpecRunner } from 'geospec/runner/worker';
+import type { Engine as NativeGeoSpecEngine, HostEngineLimits } from 'geospec-engine/node';
+import { assertRootedPath } from '@taucad/utils/path';
+
+/* Not `@taucad/types`: that barrel is an `export type *` the dts bundler cannot
+ * follow, and it bundles rather than externalises. `@taucad/runtime` is a peer,
+ * and re-exports the same declaration by name, so the emitted `.d.mts` keeps it
+ * as an external import. */
+import type { ExportFile, RuntimeFileSystemBase } from '@taucad/runtime/types';
+import type { RuntimeClient, WideViewRequest } from '@taucad/runtime/client';
+import type { MachineClient } from '@taucad/runtime/machine';
+import type { RuntimeTransportFacet } from '@taucad/runtime/transport';
+import type { ActorRefFrom } from 'xstate';
+import type { parameterSetMachine } from '@taucad/parameters/set-machine';
+
+import type { JsonObject, ToolRegistry } from '@taucad/agent-host';
+import type { HostShell } from '@taucad/shell-service';
+
+import type { ProjectRevisions } from '#revisions.js';
+import { prepareKernelDescription, prepareKernelInputSchema, prepareKernelToolName } from '#prepare-kernel-tool.js';
+
+type ParameterActor = ActorRefFrom<typeof parameterSetMachine>;
+
+/** A GeoSpec run's qualification, as `test_model` reports it in `runStatus`. @public */
+export type HostTestModelRunStatus = 'passed' | 'failed' | 'unsupported' | 'inconclusive' | 'not-run';
+
+/** A GeoSpec run's requirement counts by status; `total` counts the selected requirements, skipped ones included. @public */
+export type HostTestModelCounts = {
+  readonly passed: number;
+  readonly failed: number;
+  readonly inconclusive: number;
+  readonly unsupported: number;
+  readonly notRun: number;
+  readonly skipped: number;
+  readonly total: number;
+};
+
+/**
+ * The GeoSpec run headline `test_model` prints over MCP, for a host that prints it elsewhere (`tau test`). The
+ * private `@taucad/chat` is bundled here, so a consumer of this published package reads it from this entry.
+ *
+ * @example <caption>The planetary run's headline</caption>
+ * ```typescript
+ * import { formatTestModelHeadline } from '@taucad/host/agent-tools';
+ *
+ * formatTestModelHeadline('inconclusive', { passed: 5, failed: 0, inconclusive: 5, unsupported: 0, notRun: 0, skipped: 0, total: 10 });
+ * // 'GeoSpec inconclusive: 5 passed, 0 failed, 5 inconclusive of 10.'
+ * ```
+ * @param runStatus - The run qualification; absent reads as unqualified.
+ * @param counts - The run's requirement counts.
+ * @returns The headline.
+ * @public
+ */
+export const formatTestModelHeadline = (
+  runStatus: HostTestModelRunStatus | undefined,
+  counts: HostTestModelCounts,
+): string => chatFormatTestModelHeadline(runStatus, counts);
+
+/**
+ * The run status a GeoSpec run's counts imply, ordered as `test_model`'s `runStatus`: failed, then inconclusive (or
+ * cancelled), unsupported, not run, and passed only when the run completed.
+ *
+ * @param counts - The run's requirement counts.
+ * @param run - Whether every selected requirement ran to a verdict, and whether the run was cancelled.
+ * @returns The run status.
+ * @public
+ */
+export const runStatusFromCounts = (
+  counts: HostTestModelCounts,
+  run: { readonly completed: boolean; readonly cancelled?: boolean },
+): HostTestModelRunStatus => chatRunStatusFromCounts(counts, run);
+
+/**
+ * Runtime surface the host's GeoSpec runner exports through. A connected `RuntimeClient` satisfies it;
+ * the runner borrows it and never shuts it down.
+ * @public
+ */
+export type HostGeoSpecRuntimeClient = Pick<RuntimeClient, 'connect'> &
+  Partial<Pick<RuntimeClient, 'snapshotSource' | 'describe'>> & {
+    readonly capabilities?:
+      | {
+          readonly registrations: ReadonlyArray<{ readonly kind: string; readonly extensions?: readonly string[] }>;
+          readonly routes?: readonly unknown[];
+        }
+      | undefined;
+    open: (
+      input: Pick<Parameters<RuntimeClient['open']>[0], 'source' | 'parameters' | 'watch' | 'signal'>,
+    ) => Pick<ReturnType<RuntimeClient['open']>, 'export' | 'close'>;
+  };
+
+/**
+ * The canonical host runner. Per-load source identity belongs to its finalized lineage.
+ * @public
+ */
+export type HostGeoSpecRunner = GeoSpecRunner;
+
+/**
+ * One rendered artifact returned by a runtime export route.
+ *
+ * Aliased rather than restated: the RPC contract hands these straight back to
+ * the model, and a local re-declaration would drift from the `MimeType` union
+ * the chat schemas validate against.
+ *
+ * @public
+ */
+export type HostExportFile = ExportFile;
+
+/**
+ * The runtime surface the daemon's tools need.
+ *
+ * Projected from the public runtime contract so published declarations never
+ * expose the private agent adapter. `tau serve` passes its loopback client;
+ * tests may supply a structural fake. Documents expose evaluation, export and
+ * close; views expose rendering and close without requiring plugin options.
+ *
+ * @public
+ */
+export type HostRuntimeClient = Pick<RuntimeClient, 'describe' | 'transcode' | 'connect' | 'capabilities'> & {
+  open: (input: Pick<Parameters<RuntimeClient['open']>[0], 'source' | 'parameters' | 'watch' | 'signal'>) => Pick<
+    ReturnType<RuntimeClient['open']>,
+    'evaluation' | 'export' | 'close'
+  > & {
+    view: (
+      id?: string,
+      request?: Pick<WideViewRequest, 'instance' | 'options' | 'content'>,
+    ) => Pick<ReturnType<ReturnType<RuntimeClient['open']>['view']>, 'rendering' | 'close'>;
+  };
+};
+
+/**
+ * Filesystem capability the host tool registry consumes. The project's print intent is read in bounded chunks and
+ * written with a precondition, so both are required: a filesystem without them is refused when the host is composed,
+ * rather than every print tool failing at the agent (blueprint x1c-start-confirmation F8).
+ * @public
+ */
+export type HostToolFileSystem = Omit<RuntimeFileSystemBase, 'watch'> &
+  Required<Pick<RuntimeFileSystemBase, 'readFileStream' | 'writeFileChecked'>>;
+
+/** One package-owned skill bundle accepted by the host. @public */
+export type HostSystemSkillBundle = {
+  readonly slug: string;
+  readonly name: string;
+  readonly description: string;
+  readonly version: string;
+  readonly whenToUse: string;
+  readonly body: string;
+  readonly fingerprint: string;
+  readonly files: ReadonlyArray<{
+    readonly path: string;
+    readonly url: string;
+    readonly byteLength: number;
+    readonly lineCount: number;
+    readonly contentKind: 'text';
+    readonly mediaType: 'text/markdown';
+    readonly sha256: string;
+  }>;
+};
+
+const issueMessage = (issues: ReadonlyArray<{ readonly message: string }>, fallback: string): string =>
+  issues.map((issue) => issue.message).join('; ') || fallback;
+
+/**
+ * A throw out of the runtime client is *this host's* failure, never a verdict
+ * on the model.
+ *
+ * A geometry error is not a throw — it comes back as `{ success: true, status:
+ * 'error' }` with its kernel issues — so the only way to reach this is a child
+ * that would not start, an engine that would not load, or a wire that died.
+ * Routing that through `toRpcError` classified it by *message*: the G4 live
+ * proof answered six `evaluate_model` calls and one `screenshot` with
+ * `{"errorCode":"IO_ERROR","message":"Runtime render failed"}` while the
+ * daemon's log named the real cause, and `IO_ERROR` on a file the model had
+ * just written reads as "your geometry is wrong". The reason now travels
+ * verbatim under the host's own name.
+ *
+ * @param error - Whatever the runtime client threw.
+ * @param targetFile - The file the tool was asked about.
+ * @returns The RPC failure the model sees.
+ */
+const runtimeFailure = (
+  error: unknown,
+  targetFile: string,
+): { readonly success: false; readonly errorCode: 'UNKNOWN' | 'RESULT_TOO_LARGE'; readonly message: string } => {
+  const reason = error instanceof Error ? error.message : String(error);
+  const code = error instanceof Error ? (error as Error & { readonly code?: unknown }).code : undefined;
+  const isUnavailable = code === 'RUNTIME_UNAVAILABLE';
+  return {
+    success: false,
+    errorCode: code === 'RESULT_TOO_LARGE' ? rpcClientErrorCode.resultTooLarge : rpcClientErrorCode.unknown,
+    /* `RUNTIME_UNAVAILABLE` already reads as a sentence about this host — the
+     * supervisor's own failure, verbatim — so it is not wrapped twice. */
+    message: isUnavailable ? reason : `This Tau Host could not render ${targetFile}: ${reason}`,
+  };
+};
+
+let geoSpecEngineLoads: boolean | undefined;
+
+/**
+ * The GeoSpec engine is an optional peer: a daemon shipped without it is still
+ * a complete file-and-geometry host, it just cannot verify. `list()` is
+ * synchronous and a tool must never be advertised before its engine is known to
+ * exist, so availability is probed here rather than discovered on first call.
+ * Resolving `geospec-engine/node` is not enough: its loader resolves on a
+ * platform without a prebuilt addon and only fails when the binding loads, so
+ * the entry is loaded once, synchronously, and that answer is kept (F-B3).
+ *
+ * @returns True when this installation can run GeoSpec.
+ */
+const geoSpecEngineResolves = (): boolean => {
+  if (geoSpecEngineLoads !== undefined) {
+    return geoSpecEngineLoads;
+  }
+  try {
+    /* The modules the runner imports, all this host's own declared
+     * dependencies, so its own module is the correct base — unlike the kernel
+     * plugins next door. */
+    import.meta.resolve('geospec/runner/native');
+    import.meta.resolve('geospec/runner/node');
+    createRequire(import.meta.url)('geospec-engine/node');
+    geoSpecEngineLoads = true;
+  } catch {
+    geoSpecEngineLoads = false;
+  }
+  return geoSpecEngineLoads;
+};
+
+/** One serialized native engine retains subjects only within its canonical root. */
+type NativeGeoSpecSession = {
+  readonly root: string;
+  readonly engine: NativeGeoSpecEngine;
+  readonly carried: Map<string, unknown>;
+};
+
+/**
+ * Native analysis memory per subject. The entry profile's 256 MiB decides watertight claims up to about
+ * 1.3 million triangles; 1 GiB covers the 4 million triangles the entry admission limit admits. Admission
+ * limits stay at the entry profile. The browser's WASM engine keeps the entry profile.
+ */
+const nativeGeoSpecEngineLimits: HostEngineLimits = { maxMeshBytes: 1024 * 1024 * 1024 };
+
+let nativeSession: NativeGeoSpecSession | undefined;
+let nativeTail: Promise<void> = Promise.resolve();
+/** The engine a `test_model` result names. */
+type GeoSpecEngineIdentity = NonNullable<TestModelOutput['engine']>;
+
+/** What the `test_model` engine says of itself and its limits; either is absent when the engine cannot report it. */
+type NativeEngineFacts = Readonly<{
+  admission?: ModelAdmissionLimits | undefined;
+  engine?: GeoSpecEngineIdentity | undefined;
+}>;
+
+let nativeFacts: Promise<NativeEngineFacts> | undefined;
+/** The engine's `initialize` request, in the canonical form the engine reads; its configuration names the limits. */
+const engineConfigurationRequest =
+  '{"canonicalProfile":"geospec-jcs-v1","method":"initialize","protocolVersion":3,"registryVersion":5,"requestId":"configuration"}';
+const engineLimit = z.number().int().positive();
+const engineConfigurationSchema = z.object({
+  requestId: z.literal('configuration'),
+  result: z.object({
+    configuration: z.object({
+      binaryAdmissionLimits: z.object({
+        maxTriangles: engineLimit,
+        maxVertices: engineLimit,
+        maxSubjectBytes: engineLimit,
+      }),
+    }),
+  }),
+});
+const engineIdentitySchema = z.object({
+  result: z.object({
+    protocolVersion: z.number().int().positive(),
+    numericProfile: z.string().min(1),
+    qualification: z.string().min(1),
+  }),
+});
+const engineManifestSchema = z.object({ name: z.string().min(1), version: z.string().min(1) });
+
+/**
+ * What the `test_model` engine reports of itself, read once per process from the `initialize` answer of an engine
+ * built with the same limits and closed at once, so the shared session engine and its retained subjects are never
+ * touched: the limits it admits one subject within, which `evaluate_model` estimates a whole-model load against, and
+ * its identity, which every `test_model` result names.
+ *
+ * @returns The facts it reported; each one it cannot report is absent, with one warning.
+ */
+const nativeEngineFacts = async (): Promise<NativeEngineFacts> => {
+  nativeFacts ??= (async () => {
+    let answer: unknown;
+    try {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Match the native package's constructor export.
+      const { Engine } = await import('geospec-engine/node');
+      const engine = new Engine(undefined, undefined, nativeGeoSpecEngineLimits);
+      try {
+        answer = JSON.parse(
+          new TextDecoder().decode(engine.processRequest(new TextEncoder().encode(engineConfigurationRequest))),
+        );
+      } finally {
+        try {
+          engine.close();
+        } catch (error) {
+          // The answer it already gave stands; a probe engine that fails to close leaks only itself.
+          console.warn('GeoSpec admission probe engine failed to close:', error);
+        }
+      }
+    } catch (error) {
+      answer = error;
+    }
+    const configuration = engineConfigurationSchema.safeParse(answer);
+    if (!configuration.success) {
+      console.warn(
+        'GeoSpec admission limits unavailable; evaluate_model reports no admission:',
+        answer instanceof Error ? answer : configuration.error,
+      );
+    }
+    const identity = engineIdentitySchema.safeParse(answer);
+    if (configuration.success && !identity.success) {
+      // A failed probe already warned above; this names an engine that answered without its identity.
+      console.warn('GeoSpec engine identity unavailable; test_model names no engine:', identity.error);
+    }
+    let engine: GeoSpecEngineIdentity | undefined;
+    try {
+      const manifest = engineManifestSchema.parse(
+        JSON.parse(await readFile(new URL(import.meta.resolve('geospec-engine/package.json')), 'utf8')),
+      );
+      if (identity.success) {
+        const { protocolVersion, numericProfile, qualification } = identity.data.result;
+        engine = { ...manifest, protocol: protocolVersion, numericProfile, qualification };
+      }
+    } catch (error) {
+      console.warn('GeoSpec engine version unavailable; test_model names no engine:', error);
+    }
+    if (configuration.success) {
+      const { maxTriangles, maxVertices, maxSubjectBytes } =
+        configuration.data.result.configuration.binaryAdmissionLimits;
+      return { admission: { maxTriangles, maxVertices, maxSubjectBytes }, engine };
+    }
+    return { engine };
+  })();
+  return nativeFacts;
+};
+
+/**
+ * Whether `test_model` runs on the host's own native engine here, the engine whose limits
+ * `evaluate_model` reports: the default runner over an attached runtime, with the engine installed.
+ *
+ * @param options - The registry's options.
+ * @returns True when the default native runner serves `test_model`.
+ */
+const runsNativeGeoSpec = (options: HostToolRegistryOptions): boolean =>
+  options.geospecRunner === undefined && options.runtimeClient !== undefined && geoSpecEngineResolves();
+
+const openNativeGeoSpecSession = async (root: string): Promise<NativeGeoSpecSession> => {
+  const canonicalRoot = await realpath(root);
+  if (nativeSession?.root === canonicalRoot) {
+    return nativeSession;
+  }
+  const previous = nativeSession;
+  nativeSession = undefined;
+  previous?.carried.clear();
+  previous?.engine.close();
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Match the native package's constructor export.
+  const { Engine } = await import('geospec-engine/node');
+  const cacheRoot = join(homedir() || tmpdir(), '.cache', 'geospec', 'evidence');
+  let engine: NativeGeoSpecEngine;
+  try {
+    engine = new Engine({ root: cacheRoot, projectRoot: canonicalRoot }, undefined, nativeGeoSpecEngineLimits);
+  } catch (error) {
+    console.warn('GeoSpec native cache unavailable; using a resident engine:', error);
+    engine = new Engine(undefined, undefined, nativeGeoSpecEngineLimits);
+  }
+  const session = {
+    root: canonicalRoot,
+    engine,
+    carried: new Map<string, unknown>(),
+  };
+  nativeSession = session;
+  return session;
+};
+
+/**
+ * Create a GeoSpec model exporter over a Runtime client it owns: the client is created on the first export and
+ * shut down when the exporter closes. `tau test` and `tau export`'s subprocess protocol export through it, the same
+ * route {@link createHostGeoSpecRunner} takes over a borrowed client.
+ *
+ * @param options - The client factory and the file extensions to claim.
+ * @returns The exporter.
+ * @public
+ */
+export const createHostGeoSpecExporter = async (options: {
+  /** The exporter owns what this returns, so it must say how to release it. */
+  readonly client: () => Promise<
+    HostGeoSpecRuntimeClient & (Pick<RuntimeClient, 'shutdown'> | Pick<RuntimeClient, 'terminate'>)
+  >;
+  readonly extensions: readonly string[];
+}): Promise<GeoSpecModelExporter> => tauClientExporter(options);
+
+/**
+ * Create the GeoSpec runner for one `test_model` call over the host's existing runtime.
+ *
+ * Every call in this process shares one engine and runs after the previous call's runner
+ * closes. A call keeps its subjects admitted until the next call settles, which releases
+ * those it did not load again, so repeating `test_model` on unchanged models is digest-only.
+ * The runtime is borrowed: `tauClientExporter` exports through it and never shuts it down; closing
+ * this runner hands the engine to the next call.
+ *
+ * @param workspaceRoot - Absolute project root the runner executes against.
+ * @param runtime - Existing project runtime used to export authored models.
+ * @returns The ordinary GeoSpec runner contract over the shared native engine.
+ * @public
+ */
+export const createHostGeoSpecRunner = async (
+  workspaceRoot: string,
+  runtime: HostGeoSpecRuntimeClient,
+): Promise<HostGeoSpecRunner> => {
+  const previous = nativeTail;
+  let endTurn = (): void => undefined;
+  nativeTail = new Promise<void>((resolve) => {
+    endTurn = resolve;
+  });
+  await previous;
+  try {
+    const [session, { createNativeGeoSpecRunner }, { createNodeVmFileSystem }, { createEsbuildModuleVm }, exporter] =
+      await Promise.all([
+        openNativeGeoSpecSession(workspaceRoot),
+        import('geospec/runner/native'),
+        import('geospec/runner/node'),
+        // Tau's esbuild VM resolves the npm packages a spec imports; GeoSpec's plain default does not.
+        import('@taucad/esbuild/vm'),
+        tauClientExporter({ client: runtime }),
+      ]);
+
+    const filesystem = createNodeVmFileSystem(workspaceRoot);
+    const runner = createNativeGeoSpecRunner({
+      filesystem,
+      createModuleVm: createEsbuildModuleVm,
+      // PERF-OUTPUT-01: the product reads verdicts and localized failures, so
+      // it selects the bounded success evidence (ruling 13).
+      nativeAssertions: { engine: session.engine, evidenceProfile: 'bounded' },
+      model: {
+        projectPath: workspaceRoot,
+        exporters: [exporter],
+        readSource: async (source) => {
+          if (typeof source !== 'string') {
+            throw new TypeError('Native GeoSpec file sources must be project paths.');
+          }
+          return filesystem.readFile(assertRootedPath(source));
+        },
+        carried: session.carried,
+      },
+    });
+    let closed = false;
+    return {
+      ...runner,
+      async close() {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        try {
+          await runner.close();
+        } finally {
+          endTurn();
+        }
+      },
+    };
+  } catch (error) {
+    endTurn();
+    throw error;
+  }
+};
+
+/** One progress report: bytes done of the total, strictly increasing within a call. @public */
+export type HostPrepareKernelProgress = Readonly<{ progress: number; total: number; message: string }>;
+
+/**
+ * The host's preparation behind `prepare_kernel`.
+ *
+ * Resolves with the outcome (`ready`, `blocked`, `cancelled` or `failed`, each naming the kernel); rejects for a
+ * kernel no installed package declares, with an `UNKNOWN_KERNEL` code and a message naming the kernels that can be
+ * prepared. After a `ready` outcome the kernel binds to the prepared closure on its next operation.
+ *
+ * @public
+ */
+export type HostPrepareKernel = (
+  input: Readonly<{ kernel: string }>,
+  context: Readonly<{ signal: AbortSignal; onProgress: (progress: HostPrepareKernelProgress) => void }>,
+) => Promise<JsonObject & Readonly<{ status: string }>>;
+
+/**
+ * A native kernel the host's `prepare_kernel` takes, with the extensions it handles: one row of a native kernel
+ * package's `tau-plugin.json`, which the tool's description names.
+ *
+ * @public
+ */
+export type HostPreparableKernel = Readonly<{ kernel: string; extensions: readonly string[] }>;
+
+/** Options for {@link createHostToolRegistry}. @public */
+export type HostToolRegistryOptions = {
+  /** Absolute workspace root every file tool is confined to. */
+  readonly workspaceRoot: string;
+  /**
+   * Open the host-owned filesystem view for one admitted execution root.
+   *
+   * The embedding host owns root admission and provider lifetime. Defaults to
+   * a standalone {@link NodeFsProvider} for callers that have no shared Node
+   * authority.
+   */
+  readonly filesystem?: ((workspaceRoot: string) => HostToolFileSystem) | undefined;
+  /**
+   * Resolves the loopback runtime client backing every geometry tool. A thunk,
+   * because the daemon starts its runtime child on first use. Omit it and the
+   * geometry tools are not offered rather than offered-and-failing.
+   *
+   * Takes the root the *calling turn* works in, which is the workspace root for
+   * every direct turn and the turn's checkout for a candidate one. A
+   * composition that cannot re-root its runtime ignores the argument and
+   * answers with its own; the file tools are re-rooted either way.
+   */
+  readonly runtimeClient?: ((workspaceRoot: string) => Promise<HostRuntimeClient>) | undefined;
+  /** Open the one host-owned semantic parameter client for a source target. */
+  readonly parameterActor?:
+    | ((workspaceRoot: string, targetFile: string) => ParameterActor | Promise<ParameterActor>)
+    | undefined;
+  /**
+   * Builds the GeoSpec runner one `test_model` call runs on, in the root the
+   * calling turn works in. Defaults to {@link createHostGeoSpecRunner} over
+   * `runtimeClient` when that is supplied and the GeoSpec engine resolves;
+   * otherwise `test_model` is not offered rather than offered-and-failing.
+   * Pass `false` to withhold `test_model` from an installation that has both.
+   */
+  readonly geospecRunner?: ((workspaceRoot: string) => Promise<HostGeoSpecRunner>) | false | undefined;
+  /**
+   * Where each admitted run works, by run id — the map `createProjectRevisions`
+   * publishes (V19).
+   *
+   * One registry serves every concurrent run, and a candidate turn works in its
+   * own checkout rather than in the live tree. Reading the run's root per
+   * invocation is what makes that true of Tau's own tools: without it the tools
+   * write the project folder while the turn is recorded as a branch, which is
+   * the one thing a host must never do. Omit it on a host that records every
+   * turn directly.
+   */
+  readonly checkouts?: ReadonlyMap<string, { readonly cwd: string }> | undefined;
+  /** Package-owned skills supplied by the embedding application. */
+  readonly systemSkillBundles?: readonly HostSystemSkillBundle[] | undefined;
+  /**
+   * The read-only revision history the `revisions` tool answers from (S28).
+   *
+   * `createProjectRevisions(...).history` on a disk host. Omit it and the tool
+   * is not offered rather than offered-and-failing — the same rule every other
+   * client here follows.
+   */
+  readonly revisions?: ProjectRevisions['history'] | undefined;
+  /**
+   * The machines facet this host serves its machine tools over, once the
+   * composition has negotiated and granted it — the daemon under
+   * `tau serve --machines`, the desktop services utility. Omit it and no
+   * machine tool is offered rather than offered-and-failing (the same rule
+   * every other client here follows); a facet that is present but not
+   * `available` offers none either.
+   */
+  readonly machines?: RuntimeTransportFacet<MachineClient> | undefined;
+  /**
+   * The durable identity of the project `workspaceRoot` holds: the desktop's
+   * attached project, or the daemon's served root. Every artifact `request_job`
+   * slices names it, which is how a machine host finds the file again. Omit it
+   * and the job tools are not offered: a host that cannot name its project
+   * never guesses one.
+   */
+  readonly projectId?: string | undefined;
+  /**
+   * Names the project each root holds, for a host whose calls name their own folder: `tau mcp`, where Codex names
+   * the thread's folder per call and the folder the server started in may hold no project. Asked when a job tool
+   * is called, so the slice lands in the calling root and names that root's project, which the machine host then
+   * reads it from. With it `request_job` is offered whatever `workspaceRoot` holds, a root that names no project
+   * refuses the job, and `projectId` is not used.
+   */
+  readonly projectIdOf?: ((workspaceRoot: string) => Promise<string | undefined>) | undefined;
+  /**
+   * The native kernel preparation this host offers as `prepare_kernel` (D7): `tau mcp` and the daemon, which prepare
+   * in their own process. Omit it and the tool is not offered, and an unprepared kernel's refusal names `tau prepare`.
+   */
+  readonly prepareKernel?: HostPrepareKernel | undefined;
+  /**
+   * The kernels `prepareKernel` takes, which `prepare_kernel`'s description and input schema name: a list, or a
+   * function the tool list reads each time, for a host that learns them from a runtime thread or child once it
+   * reports the native deployments its runtime definition lists.
+   */
+  readonly preparableKernels?: readonly HostPreparableKernel[] | (() => readonly HostPreparableKernel[]) | undefined;
+  /**
+   * The managed acquisition profile (D25) `install_packages` runs under. Under `locked` it refuses with a
+   * `registry-unavailable` issue, contacts no registry and writes nothing. Defaults to `TAU_ACQUISITION` in this
+   * process's environment, read fail-closed: a value other than unset, empty or `open` is `locked`.
+   */
+  readonly acquisition?: 'open' | 'locked' | undefined;
+  /**
+   * The contained shell `shell` runs on, once `probeHostShell` answered `available` (D1). Only the desktop
+   * services host passes one: `tau mcp` and the daemon mint run ids and checkouts themselves and cannot ask a person,
+   * so they never offer `shell`. It reads each call's checkout by run id, never this registry's root. A function is read
+   * at every listing and call, so the tool appears once the probe settles.
+   */
+  readonly shell?: HostShell | (() => HostShell | undefined) | undefined;
+  /**
+   * Backs `web_search` and `web_browser` through Tau's API (regression review R1). A host signed in to Tau passes
+   * {@link createHostWebResearchClient} over its credential; one with no Tau account offers neither tool.
+   */
+  readonly web?: HostWebResearchClient | undefined;
+};
+
+/**
+ * The web research client a host hands its registry (regression review R1).
+ *
+ * Declared here, structurally equal to the registry's own, so this package's published types name no bundled
+ * workspace package.
+ *
+ * @public
+ */
+export type HostWebResearchClient = Readonly<{
+  search: (
+    request: Readonly<{ query: string; signal: AbortSignal }>,
+  ) => Promise<Array<{ title: string; url: string; content: string }>>;
+  browse: (
+    request: Readonly<{ urls: readonly string[]; query?: string | undefined; signal: AbortSignal }>,
+  ) => Promise<Array<{ url: string; content: string }>>;
+}>;
+
+/**
+ * A web research client over the host's Tau credential, read at every call: a sign-in, refresh or sign-out between
+ * calls is honoured, and a call while signed out is a coded tool error rather than an unauthenticated request.
+ *
+ * @param credential - The host's current Tau API origin and `Authorization` header value, or `undefined` signed out.
+ * @param fetch - Optional fetch, for tests.
+ * @returns The client.
+ * @public
+ */
+export const createHostWebResearchClient = (
+  credential: () => Readonly<{ apiBaseUrl: string; authorization: string }> | undefined,
+  fetch?: typeof globalThis.fetch,
+): HostWebResearchClient => {
+  const current = (): HostWebResearchClient => {
+    const signedIn = credential();
+    if (signedIn === undefined) {
+      throw Object.assign(new Error('Web research needs this host to be signed in to Tau.'), {
+        code: 'WEB_RESEARCH_SIGNED_OUT',
+      });
+    }
+    return createGatewayWebResearchClient({
+      baseUrl: signedIn.apiBaseUrl,
+      auth: () => signedIn.authorization.replace(/^Bearer\s+/iu, ''),
+      ...(fetch === undefined ? {} : { fetch }),
+    });
+  };
+  return {
+    search: async (request) => current().search(request),
+    browse: async (request) => current().browse(request),
+  };
+};
+
+/**
+ * The acquisition profile a host reads from its environment. Only `TAU_ACQUISITION` is read, through the runtime's
+ * managed-profile reader; a value that reader refuses is `locked`, so a misspelt profile never opens the registry
+ * (ruling X43).
+ *
+ * @param environment - Usually `process.env`.
+ * @returns `open` or `locked`.
+ */
+const hostAcquisition = (environment: Readonly<Record<string, string | undefined>>): 'open' | 'locked' => {
+  try {
+    const variable = 'TAU_ACQUISITION';
+    return readManagedPreparation({ [variable]: environment[variable] }).profile;
+  } catch {
+    return 'locked';
+  }
+};
+
+/**
+ * One `prepare_kernel` call: the outcome as content, an error unless it is `ready`, and each progress report as a
+ * partial result the MCP projection forwards as `notifications/progress`.
+ *
+ * @param prepareKernel - The host's preparation.
+ * @param invocation - The call.
+ * @returns Its result.
+ */
+const invokePrepareKernel = async (
+  prepareKernel: HostPrepareKernel,
+  invocation: Parameters<ToolRegistry['invoke']>[0],
+): Promise<Awaited<ReturnType<ToolRegistry['invoke']>>> => {
+  const { input } = invocation;
+  const named: unknown = typeof input === 'object' && input !== null ? Reflect.get(input, 'kernel') : undefined;
+  const kernel = typeof named === 'string' ? named : '';
+  if (kernel === '') {
+    return {
+      content: { errorCode: 'INVALID_INPUT', message: 'prepare_kernel needs { "kernel": "<name>" }.' },
+      isError: true,
+    };
+  }
+  try {
+    const outcome = await prepareKernel(
+      { kernel },
+      {
+        signal: invocation.signal,
+        onProgress: (progress) => {
+          invocation.onUpdate?.({ content: { ...progress }, isError: false });
+        },
+      },
+    );
+    return { content: outcome, isError: outcome.status !== 'ready' };
+  } catch (error) {
+    const code = error instanceof Error ? (error as Error & { readonly code?: unknown }).code : undefined;
+    return {
+      content: {
+        errorCode: typeof code === 'string' ? code : 'PREPARE_KERNEL_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      },
+      isError: true,
+    };
+  }
+};
+
+/** The tools that name the project a job's artifact belongs to. */
+const projectPrintTools: ReadonlySet<string> = new Set([toolName.requestJob, toolName.checkJob]);
+
+/** The CAD tools whose `targetFile`, and GeoSpec's `loadModel({ file })`, resolve against the project root. */
+const projectRootTools: ReadonlySet<string> = new Set([
+  toolName.evaluateModel,
+  toolName.testModel,
+  toolName.screenshot,
+  toolName.exportModel,
+]);
+
+/**
+ * A CAD tool's answer with the absolute project root its paths resolved against, so the agent reads the root from
+ * the result rather than guessing it. A failure is left as it is: its message names what went wrong.
+ *
+ * @param tool - The tool that answered.
+ * @param root - The root the call worked in.
+ * @param result - Its result.
+ * @returns The result, with `projectRoot` on a CAD tool's answer.
+ */
+const withProjectRoot = (
+  tool: string,
+  root: string,
+  result: Awaited<ReturnType<ToolRegistry['invoke']>>,
+): Awaited<ReturnType<ToolRegistry['invoke']>> => {
+  const { content } = result;
+  if (
+    result.isError ||
+    !projectRootTools.has(tool) ||
+    typeof content !== 'object' ||
+    content === null ||
+    Array.isArray(content)
+  ) {
+    return result;
+  }
+  return { ...result, content: { ...content, projectRoot: root } };
+};
+
+/**
+ * Build the daemon's tool registry.
+ *
+ * @param options - Workspace root and the optional runtime client.
+ * @returns A {@link ToolRegistry} over the canonical chat RPC dispatcher.
+ * @public
+ *
+ * @example <caption>File tools only, with no runtime attached</caption>
+ * ```typescript
+ * import { createHostToolRegistry } from '@taucad/host';
+ *
+ * const registry = createHostToolRegistry({ workspaceRoot: process.cwd() });
+ * ```
+ */
+export const createHostToolRegistry = (options: HostToolRegistryOptions): ToolRegistry => {
+  const acquisition = options.acquisition ?? hostAcquisition(process.env);
+  /* Each root's registry, with the project id its print tools name. */
+  const rooted = new Map<string, Readonly<{ registry: ToolRegistry; projectId: string | undefined }>>();
+  const settingsOwners = new Map<string, MachineSettingsOwner>();
+  const liveProvider =
+    options.filesystem?.(options.workspaceRoot) ?? new NodeFsProvider(options.workspaceRoot, { policy: tauPathPolicy });
+  const liveWorkbenchView = composeView({ filesystem: liveProvider }, { consumer: 'user', policy: tauPathPolicy });
+  const liveMutations = new ResourceQueue();
+  const skillRegistry =
+    options.systemSkillBundles === undefined ? undefined : createSkillBundleRegistry(options.systemSkillBundles);
+  const systemSkills = skillRegistry?.bundles.map((bundle) => ({
+    slug: bundle.slug,
+    name: bundle.name,
+    version: bundle.version,
+    whenToUse: bundle.whenToUse,
+    skillMarkdown: bundle.body,
+    fingerprint: bundle.fingerprint,
+    files: bundle.files,
+  }));
+  const readSkillResource: ReadSkillResource = async (resource, input) => {
+    input.signal?.throwIfAborted();
+    const bytes = new Uint8Array(await readFile(new URL(resource.url)));
+    input.signal?.throwIfAborted();
+    return bytes;
+  };
+  const skillOverlay =
+    skillRegistry === undefined ? undefined : createSkillBundleOverlay(skillRegistry, readSkillResource);
+
+  /**
+   * Every tool this host serves, over one absolute root.
+   *
+   * @param workspaceRoot - The tree this registry's tools read and write.
+   * @param projectId - The durable project identity every print artifact sliced there names; without one nothing is printed.
+   * @returns The registry for that tree, and the machine settings owner it reads through.
+   */
+  const registryFor = (
+    workspaceRoot: string,
+    projectId: string | undefined,
+  ): Readonly<{ registry: ToolRegistry; settingsOwner: MachineSettingsOwner }> => {
+    /* The fence and the skill overlay are one function on every host (charter
+     * D1): this provider is the checkout, and what the agent sees over it is
+     * the composed view. The skill resolver below reads the disk directly and
+     * mutates nothing. */
+    const provider =
+      workspaceRoot === options.workspaceRoot
+        ? liveProvider
+        : (options.filesystem?.(workspaceRoot) ?? new NodeFsProvider(workspaceRoot, { policy: tauPathPolicy }));
+    const view = composeView(
+      { filesystem: provider },
+      {
+        consumer: 'agent',
+        policy: tauPathPolicy,
+        ...(skillOverlay === undefined ? {} : { overlays: [skillOverlay] }),
+      },
+    );
+    const recordView = composeView({ filesystem: provider }, { consumer: 'user', policy: tauPathPolicy });
+    const settingsOwner = new MachineSettingsOwner({ filesystem: view, definitions: [] });
+    const mutations = workspaceRoot === options.workspaceRoot ? liveMutations : new ResourceQueue();
+    const { runtimeClient } = options;
+
+    const requireRuntime = async (input: { readonly signal?: AbortSignal } = {}): Promise<HostRuntimeClient> => {
+      input.signal?.throwIfAborted();
+      if (!runtimeClient) {
+        throw Object.assign(new Error('This Tau Host has no runtime attached.'), { code: 'RUNTIME_UNAVAILABLE' });
+      }
+      const client = await runtimeClient(workspaceRoot);
+      input.signal?.throwIfAborted();
+      return client;
+    };
+
+    const { kernelClient, graphics, images } = createRuntimeAgentClients({
+      runtime: async () => requireRuntime(),
+      mapRuntimeError: runtimeFailure,
+      admissionLimits: async () => {
+        if (!runsNativeGeoSpec(options)) {
+          return undefined;
+        }
+        const { admission } = await nativeEngineFacts();
+        return admission;
+      },
+      async exportImage(job) {
+        const client = await requireRuntime(job);
+        const bytes = job.sourceFormat === 'svg' ? new TextEncoder().encode(job.content) : job.content;
+        const result = await client.transcode({
+          from: job.sourceFormat,
+          to: job.format,
+          files: [
+            {
+              name: job.sourceFormat === 'svg' ? 'drawing.svg' : 'render.glb',
+              mimeType: job.sourceFormat === 'svg' ? 'image/svg+xml' : 'model/gltf-binary',
+              bytes,
+            },
+          ],
+          options: job.exportOptions,
+          signal: job.signal,
+        });
+        if (!result.success) {
+          const message = issueMessage(result.issues, 'Image capture failed');
+          const overLimit = result.issues.some(
+            (issue) =>
+              issue.details !== null &&
+              typeof issue.details === 'object' &&
+              'type' in issue.details &&
+              issue.details.type === 'render' &&
+              'code' in issue.details &&
+              issue.details.code === 'parse' &&
+              /accessor \d+ count \d+ exceeds \d+|declared accessor values exceed \d+/u.test(issue.message),
+          );
+          throw Object.assign(new Error(message), overLimit ? { code: 'RESULT_TOO_LARGE' } : {});
+        }
+        return result.data;
+      },
+    });
+    const { parameterActor } = options;
+    const parameters = parameterActor
+      ? createRuntimeParameterAgentClient({
+          mapRuntimeError: runtimeFailure,
+          parameterActorFor: async (targetFile) => parameterActor(workspaceRoot, targetFile),
+          /* A read on unchanged sources answers from the resolved manifest, without waiting on the runtime (LRP-11). */
+          sourceDigests: async (paths) =>
+            Object.fromEntries(
+              await Promise.all(
+                paths.map(async (path): Promise<[string, string]> => {
+                  try {
+                    const bytes = await provider.readFile(assertRootedPath(path));
+                    return [path, `sha256:${createHash('sha256').update(bytes).digest('hex')}`];
+                  } catch (error) {
+                    const missing = error instanceof Error && 'code' in error && error.code === 'ENOENT';
+                    // An unreadable file matches no digest, so the read resolves and reports it.
+                    return [path, missing ? 'missing' : 'unreadable'];
+                  }
+                }),
+              ),
+            ),
+        })
+      : undefined;
+
+    /** Workspace skills remain authored files; package skills come from the injected registry. */
+    const skillReaders = {
+      readFile: async (path: string): Promise<Uint8Array<ArrayBuffer>> =>
+        new Uint8Array(await provider.readFile(assertRootedPath(path))),
+      listDirectory: async (path: string): Promise<ReadonlyArray<{ name: string; isFolder: boolean }>> => {
+        const directory = assertRootedPath(path);
+        const names = await provider.readdir(directory);
+        return Promise.all(
+          names.map(async (name) => {
+            const entry = await provider.stat(`${directory}/${name}`);
+            return { name, isFolder: entry.type === 'dir' };
+          }),
+        );
+      },
+    };
+    const skillResolver: RpcSkillResolver = {
+      resolveSkill: async (skillName) => createSkillResolver({ ...skillReaders, systemSkills }).resolveSkill(skillName),
+    };
+
+    const runnerFactory =
+      options.geospecRunner === false
+        ? undefined
+        : (options.geospecRunner ??
+          (runtimeClient !== undefined && geoSpecEngineResolves()
+            ? async () => createHostGeoSpecRunner(workspaceRoot, await runtimeClient(workspaceRoot))
+            : undefined));
+
+    /*
+     * The project's `geospec.config.*` through the spec VM, as every host reads it: its data fields are this call's
+     * defaults and its exporters never run here. Its code runs only where the project's does, which the daemon
+     * already gates behind `--trust-projects` for relayed projects.
+     */
+    const configSession = createGeoSpecConfigSession();
+    const readConfig = async (): Promise<GeoSpecTestModelConfig> => {
+      const [{ readGeoSpecConfig }, { createNodeVmFileSystem }, { createEsbuildModuleVm }] = await Promise.all([
+        import('geospec/config'),
+        import('geospec/runner/node'),
+        import('@taucad/esbuild/vm'),
+      ]);
+      return configSession(
+        await readGeoSpecConfig({
+          filesystem: createNodeVmFileSystem(workspaceRoot),
+          projectPath: '',
+          createModuleVm: createEsbuildModuleVm,
+        }),
+      );
+    };
+
+    /**
+     * `test_model` in process: discovery walks the real directory, the runner
+     * executes the selected specs, and the projection is the same one the browser
+     * worker returns — the only host-specific part is which runner ran.
+     */
+    const geospec: RpcGeoSpecClient | undefined = runnerFactory && {
+      async runTests(args, context) {
+        try {
+          context?.signal?.throwIfAborted();
+          const runner = await runnerFactory(workspaceRoot);
+          const abortRunner = (): void => {
+            runner.abort('test_model request cancelled');
+          };
+          context?.signal?.addEventListener('abort', abortRunner, { once: true });
+          try {
+            context?.signal?.throwIfAborted();
+            const onProgress = context?.onProgress;
+            let started = 0;
+            const output = await runGeoSpecTests({
+              discovery: {
+                readdir: async (path) => readdir(path),
+                stat: async (path) => {
+                  const entry = await stat(path);
+                  return { kind: entry.isDirectory() ? 'directory' : 'file' };
+                },
+              },
+              runner,
+              projectPath: workspaceRoot,
+              args,
+              config: await readConfig(),
+              /* One report as the run starts and one as each test starts, counting the tests started, so a client
+               * sees which requirement a long claim belongs to. */
+              ...(onProgress === undefined
+                ? {}
+                : {
+                    onProgress: (event) => {
+                      if (event.type === 'run-start') {
+                        onProgress({
+                          progress: 0,
+                          message: `Running ${String(event.files.length)} GeoSpec ${event.files.length === 1 ? 'file' : 'files'}`,
+                        });
+                      } else if (event.type === 'test-start') {
+                        started += 1;
+                        onProgress({ progress: started, message: `${event.test.requirement} (${event.file})` });
+                      }
+                    },
+                  }),
+            });
+            context?.signal?.throwIfAborted();
+            /* The default runner decides on this host's native engine, which names itself; another runner's is unknown. */
+            const { engine } = options.geospecRunner === undefined ? await nativeEngineFacts() : {};
+            return { success: true, ...output, ...(engine === undefined ? {} : { engine }) };
+          } finally {
+            context?.signal?.removeEventListener('abort', abortRunner);
+            await runner.close();
+          }
+        } catch (error) {
+          return toRpcError(error);
+        }
+      },
+    };
+
+    /* `request_job` needs every leg of the print path: the project id here
+     * names the artifact's project, and the registry offers the tool only when
+     * a runtime to slice with and a machine to ask are attached too. A
+     * candidate turn's slice lands in its checkout, which the machine host
+     * finds through the same project id. */
+    const { revisions, machines } = options;
+    /* An entry-less project adopts its first model as main (blueprint D3), on every surface this host serves. */
+    const adopted = withEntryAdoption(
+      { kernelClient, ...(geospec === undefined ? {} : { geospec }) },
+      { fileSystem: createProviderRpcFileSystem({ provider: recordView, mutations }) },
+    );
+    const registry = createChatToolRegistry({
+      machineSettings: {
+        readMachineSettings: async (typeId: MachineTypeId) => settingsOwner.read({ typeId }),
+      },
+      fileSystemFor: (signal) => createProviderRpcFileSystem({ provider: view, mutations, signal }),
+      recordFileSystemFor: (signal) => createProviderRpcFileSystem({ provider: recordView, mutations, signal }),
+      workbenchFileSystemFor: (signal) =>
+        createProviderRpcFileSystem({ provider: liveWorkbenchView, mutations: liveMutations, signal }),
+      workbench: createRuntimeWorkbenchClient(
+        runtimeClient === undefined ? undefined : async () => runtimeClient(options.workspaceRoot),
+      ),
+      ...(runtimeClient === undefined ? {} : { kernelClient: adopted.kernelClient, graphics, images }),
+      ...(parameters === undefined ? {} : { parameters }),
+      ...(adopted.geospec === undefined ? {} : { geospec: adopted.geospec }),
+      ...(revisions === undefined ? {} : { revisions }),
+      ...(projectId === undefined
+        ? {}
+        : {
+            print: {
+              projectId,
+              readArtifact: async ({ path, signal }) => {
+                signal.throwIfAborted();
+                const bytes = await recordView.readFile(assertRootedPath(path));
+                signal.throwIfAborted();
+                return bytes;
+              },
+            },
+          }),
+      ...(machines === undefined ? {} : { machines }),
+      skillResolver,
+      testingEnabled: geospec !== undefined,
+      acquisition,
+      ...(options.shell === undefined ? {} : { shell: options.shell }),
+      ...(options.web === undefined ? {} : { web: options.web }),
+    });
+    return { registry, settingsOwner };
+  };
+
+  /**
+   * The registry for one root, built once and kept while that root is live.
+   *
+   * Memoized rather than rebuilt per call, because a registry compiles every
+   * tool's JSON Schema and a turn invokes many tools. Bounded by the live
+   * checkouts, because a checkout lives only as long as the turns it serves: a
+   * memo that only grew would keep one registry per checkout this host has ever
+   * run, for the life of the host (5-review S4). Eviction runs where the map
+   * would grow, so a steady state costs nothing.
+   *
+   * @param workspaceRoot - The tree the calling turn works in.
+   * @param projectId - The project its print tools name.
+   * @returns That tree's registry.
+   */
+  const rootedRegistry = (workspaceRoot: string, projectId: string | undefined): ToolRegistry => {
+    const existing = rooted.get(workspaceRoot);
+    if (existing !== undefined && existing.projectId === projectId) {
+      return existing.registry;
+    }
+    const live = new Set([options.workspaceRoot, ...[...(options.checkouts?.values() ?? [])].map(({ cwd }) => cwd)]);
+    for (const cached of rooted.keys()) {
+      /* A root whose project changed is rebuilt to name the new one. */
+      if (!live.has(cached) || cached === workspaceRoot) {
+        settingsOwners.get(cached)?.dispose();
+        settingsOwners.delete(cached);
+        rooted.delete(cached);
+      }
+    }
+    const created = registryFor(workspaceRoot, projectId);
+    settingsOwners.set(workspaceRoot, created.settingsOwner);
+    rooted.set(workspaceRoot, { registry: created.registry, projectId });
+    return created.registry;
+  };
+
+  const { projectIdOf } = options;
+  /* A host whose calls name their own project lists the print tools whatever its own root holds; this registry only
+   * lists and settles answers, and the id it names is never sliced under, since every call goes to its root's own. */
+  const live =
+    projectIdOf === undefined
+      ? rootedRegistry(options.workspaceRoot, options.projectId)
+      : registryFor(options.workspaceRoot, 'proj_listed-only').registry;
+  const { prepareKernel } = options;
+  const preparable = (): readonly HostPreparableKernel[] =>
+    typeof options.preparableKernels === 'function' ? options.preparableKernels() : (options.preparableKernels ?? []);
+  return {
+    /* The tool *list* is the host's, not the turn's: every root serves the same
+     * names, descriptions and schemas, and the list is read before any run
+     * exists. */
+    list: () =>
+      prepareKernel === undefined
+        ? live.list()
+        : [
+            ...live.list(),
+            {
+              name: prepareKernelToolName,
+              description: prepareKernelDescription(preparable()),
+              inputSchema: prepareKernelInputSchema(preparable()),
+              /* It writes the shared store, outside every workspace. */
+              executionMode: 'sequential',
+            },
+          ],
+    /* An answer names no checkout: every root's registry settles it through the same machine client (D5). */
+    answerApproval: async (answer) => live.answerApproval?.(answer),
+    invoke: async (invocation) => {
+      if (prepareKernel !== undefined && invocation.toolName === prepareKernelToolName) {
+        return invokePrepareKernel(prepareKernel, invocation);
+      }
+      const root =
+        (invocation.runId === undefined ? undefined : options.checkouts?.get(invocation.runId)?.cwd) ??
+        options.workspaceRoot;
+      if (projectIdOf === undefined) {
+        const registry = rootedRegistry(root, options.projectId);
+        return withProjectRoot(invocation.toolName, root, await registry.invoke(invocation));
+      }
+      if (!projectPrintTools.has(invocation.toolName)) {
+        /* Only a print names the project; any other tool runs on whatever registry the root has. */
+        const registry = rooted.get(root)?.registry ?? rootedRegistry(root, undefined);
+        return withProjectRoot(invocation.toolName, root, await registry.invoke(invocation));
+      }
+      const projectId = await projectIdOf(root);
+      if (projectId === undefined) {
+        return {
+          content: {
+            errorCode: 'PROJECT_NOT_NAMED',
+            message: `${root} holds no tau.json, so nothing in it can run on a machine. Request jobs from a Tau project folder.`,
+          },
+          isError: true,
+        };
+      }
+      return rootedRegistry(root, projectId).invoke(invocation);
+    },
+  };
+};

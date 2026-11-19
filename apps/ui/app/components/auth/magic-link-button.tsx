@@ -4,9 +4,9 @@ import { useAuth, useAuthPlugin } from '@better-auth-ui/react';
 import { useIsMutating } from '@tanstack/react-query';
 import { Lock, Mail } from 'lucide-react';
 
-import { Button } from '#components/ui/button.js';
+import { Button } from '@taucad/ui/components/button';
 import { magicLinkPlugin } from '#utils/magic-link-plugin.js';
-import { cn } from '#utils/ui.utils.js';
+import { cn } from '@taucad/ui/utils/cn';
 
 export type MagicLinkButtonProps = {
   /** @remarks `AuthView` */
@@ -18,7 +18,7 @@ export type MagicLinkButtonProps = {
  *
  * @param view - Current auth view. On `"magicLink"` this links back to password sign-in.
  */
-export function MagicLinkButton({ view }: MagicLinkButtonProps) {
+export function MagicLinkButton({ view }: MagicLinkButtonProps): React.ReactNode {
   const { basePaths, emailAndPassword, viewPaths, localization, Link } = useAuth();
 
   const signInMutating = useIsMutating({
@@ -37,7 +37,7 @@ export function MagicLinkButton({ view }: MagicLinkButtonProps) {
   // With password auth disabled there's nowhere to switch to, so hide it.
   // (Other views — e.g. a phone-number plugin's surface — still get a
   // "Continue with Magic Link" link.)
-  if (isMagicLinkView && !emailAndPassword?.enabled) {
+  if (isMagicLinkView && !emailAndPassword.enabled) {
     return null;
   }
 

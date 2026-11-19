@@ -1,0 +1,970 @@
+/*
+ * `acpSession` over faked effects (W10 EA-S5): the connection, the lent turn and the
+ * publication are stubs, time is a `StepClock`, and every step runs through
+ * `validated(...)` under `guardActors` (MC-R30, EA-A17).
+ */
+
+import { createActor, createAsyncLogic } from 'xstate';
+import type { AnyEventObject, AnyMachineSnapshot } from 'xstate';
+import type { ContentBlock } from '@agentclientprotocol/sdk';
+import { describe, expect, it } from 'vitest';
+
+import { StepClock, flush } from '@taucad/xstate-testing/clock';
+import { createFakeCallbackActors, createFakeParent } from '@taucad/xstate-testing/fakes';
+import { guardActors, validated } from '@taucad/xstate-testing/inspect';
+import { unansweredEvents, unreachedStates } from '@taucad/xstate-testing/paths';
+import type { PathOptions } from '@taucad/xstate-testing/paths';
+
+import {
+  acpCancelSettleTimeout,
+  acpKillGrace,
+  acpSessionIgnoredEvents,
+  acpSessionMachine,
+  acpTerminateBackstop,
+} from '#acp/acp-session.machine.js';
+import type { AcpLend, AcpSessionInput } from '#acp/acp-session.machine.js';
+import type { AcpAdapter } from '#acp/registry.js';
+import type { AcpSessionEvent } from '#acp/acp-machine-schemas.js';
+import { protocolVersion } from '#acp/session.js';
+import { grokPermissionConfigId, grokPlanningConfigId } from '#acp/grok-controls.js';
+import { grokNoAutoFallback } from '#acp/acp-modes.js';
+
+const adapter: AcpAdapter = {
+  id: 'fake',
+  displayName: 'Fake',
+  package: 'fixture',
+  version: '0.0.0',
+  configEnv: [],
+  modulePath: '/nonexistent',
+};
+
+const lent: AcpLend = { requestId: 'run-1:0', prompt: { fresh: [{ type: 'text', text: 'hi' }] } };
+
+const input = (overrides: Partial<AcpSessionInput> = {}): AcpSessionInput => ({
+  key: 'fake:chat-1',
+  opening: {
+    adapter,
+    cwd: '/work',
+    mcpServers: [],
+    sessionMessageId: 'session-message',
+    sessionCommitted: false,
+    notices: true,
+  },
+  lend: lent,
+  ...overrides,
+});
+
+type Harness = ReturnType<typeof start>;
+
+const start = (overrides: Partial<AcpSessionInput> = {}, persisted: Promise<void> = Promise.resolve()) => {
+  const fakes = createFakeCallbackActors();
+  const clock = new StepClock();
+  const parent = createFakeParent();
+  const guard = guardActors({ ignore: acpSessionIgnoredEvents });
+  const logic = validated(
+    acpSessionMachine.provide({
+      actors: {
+        adapterConnection: fakes.actor('connection'),
+        lentTurn: fakes.actor('lentTurn'),
+        publishSkills: createAsyncLogic<readonly string[], undefined>({ run: async () => [] }),
+        persistPresentation: createAsyncLogic<void, unknown>({ run: async () => persisted }),
+      },
+    }),
+  );
+  const actor = createActor(logic, {
+    input: { ...input(overrides), parentRef: parent.ref },
+    clock,
+    inspect: guard.inspect,
+  });
+  actor.start();
+  /* The commands a stub received, by type, in order. */
+  const commands = (name: string): AnyEventObject[] =>
+    fakes.deliveries.filter((delivery) => delivery.name === name).map((delivery) => delivery.event);
+  const lastCall = (): AnyEventObject | undefined => commands('connection').findLast((event) => event.type === 'call');
+  /* Answer the call the child is waiting on. */
+  const answer = (result: unknown): void => {
+    const call = lastCall();
+    fakes.sendBack('connection', {
+      type: 'callSettled',
+      id: String(call?.['id']),
+      at: clock.now(),
+      answer: { method: String(call?.['method']), result },
+    });
+  };
+  return { fakes, clock, parent, guard, actor, commands, lastCall, answer };
+};
+
+/* Spawn, initialize (advertising nothing), create, and lend the opening turn. */
+const openAndLend = async (harness: Harness): Promise<void> => {
+  await flush();
+  harness.answer({ protocolVersion, agentCapabilities: {} });
+  harness.answer({ sessionId: 'acp-1' });
+  harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+  expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+};
+
+/**
+ * What current `grok agent stdio` returns from `initialize`: image and audio
+ * stay false while embedded context is on. The CLI still accepts image blocks.
+ */
+const grokPromptCapabilities = {
+  loadSession: true,
+  promptCapabilities: { image: false, audio: false, embeddedContext: true },
+};
+
+const png: ContentBlock = { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' };
+const wav: ContentBlock = { type: 'audio', mimeType: 'audio/wav', data: 'UklGRg==' };
+
+/* Initialize a native Grok session and pass its planning-mode call, stopping at the prompt decision. */
+const openGrok = async (harness: Harness): Promise<void> => {
+  await flush();
+  harness.answer({
+    protocolVersion,
+    agentCapabilities: grokPromptCapabilities,
+    _meta: { grokShell: true, agentVersion: '1.0.52' },
+  });
+  harness.answer({ sessionId: 'acp-1', configOptions: [] });
+  harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+  expect(harness.lastCall()).toMatchObject({ method: 'session/set_mode' });
+  harness.answer({});
+};
+
+describe('acpSession', () => {
+  it('should apply isolated Grok controls, keep Build planning, and downgrade permissions on the next turn', async () => {
+    const harness = start({
+      opening: { ...input().opening, adapter: { ...adapter, id: 'grok' } },
+      lend: { ...lent, configuration: { [grokPermissionConfigId]: 'always-approve', [grokPlanningConfigId]: 'plan' } },
+    });
+    try {
+      await flush();
+      expect(harness.lastCall()).toMatchObject({
+        method: 'initialize',
+        params: { _meta: { clientIdentifier: 'tau-host', clientVersion: '1' } },
+      });
+      harness.answer({ protocolVersion, agentCapabilities: {}, _meta: { grokShell: true, agentVersion: '1.0.52' } });
+      expect(harness.lastCall()).toMatchObject({
+        method: 'session/new',
+        params: { _meta: { yoloMode: true, autoMode: false } },
+      });
+      harness.answer({ sessionId: 'acp-1', configOptions: [] });
+      harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+      /* PR5: a stale Plan selection is never applied; Grok stays in Build. */
+      expect(harness.lastCall()).toMatchObject({
+        method: 'session/set_mode',
+        params: { sessionId: 'acp-1', modeId: 'default' },
+      });
+      expect(harness.commands('connection').some((event) => event['method'] === 'session/prompt')).toBe(false);
+      harness.answer({});
+      expect(harness.lastCall()).toMatchObject({
+        method: 'session/prompt',
+        params: { _meta: { promptId: 'run-1:0' } },
+      });
+      expect(harness.commands('connection')).toContainEqual(
+        expect.objectContaining({
+          type: 'notify',
+          method: '_x.ai/yolo_mode_changed',
+          params: {
+            clientIdentifier: 'tau-host',
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- Assert Grok wire field names.
+            yolo_mode: true,
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- Assert Grok wire field names.
+            auto_mode: false,
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- Assert Grok wire field names.
+            permission_mode: 'always-approve',
+          },
+        }),
+      );
+      harness.answer({ stopReason: 'end_turn' });
+      harness.fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+      harness.fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+      harness.actor.send({
+        type: 'lend',
+        lend: { ...lent, requestId: 'run-2:0', configuration: { [grokPermissionConfigId]: 'ask' } },
+      });
+      harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+      harness.answer({});
+      expect(harness.commands('connection').findLast((event) => event.type === 'notify')).toMatchObject({
+        method: '_x.ai/yolo_mode_changed',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Assert Grok wire field names.
+        params: { yolo_mode: false, auto_mode: false, permission_mode: 'ask' },
+      });
+      expect(harness.actor.getSnapshot().context.configOptions).toEqual([
+        expect.objectContaining({ id: grokPermissionConfigId, currentValue: 'ask' }),
+      ]);
+    } finally {
+      harness.actor.stop();
+    }
+  });
+
+  it('should send an image prompt to Grok when initialize leaves image support off', async () => {
+    const harness = start({
+      opening: { ...input().opening, adapter: { ...adapter, id: 'grok' } },
+      lend: { ...lent, prompt: { fresh: [png, { type: 'text', text: 'What color is this?' }] } },
+    });
+    try {
+      await openGrok(harness);
+      expect(harness.lastCall()).toMatchObject({
+        method: 'session/prompt',
+        params: { prompt: [png, { type: 'text', text: 'What color is this?' }] },
+      });
+    } finally {
+      harness.actor.stop();
+    }
+  });
+
+  it('should refuse an image when a non-Grok agent does not advertise image input', async () => {
+    const harness = start({
+      opening: { ...input().opening, adapter: { ...adapter, id: 'codex' } },
+      lend: { ...lent, prompt: { fresh: [png, { type: 'text', text: 'What color is this?' }] } },
+    });
+    try {
+      await flush();
+      harness.answer({ protocolVersion, agentCapabilities: grokPromptCapabilities });
+      harness.answer({ sessionId: 'acp-1', configOptions: [] });
+      harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+      expect(harness.commands('connection').some((event) => event['method'] === 'session/prompt')).toBe(false);
+      expect(harness.actor.getSnapshot().context['outcome']).toMatchObject({
+        ok: false,
+        failure: {
+          code: 'EXTERNAL_AGENT_CONTENT_UNSUPPORTED',
+          message:
+            'codex cannot read image content, so this turn was not sent. Describe it in text, or run it on an agent that can.',
+        },
+      });
+    } finally {
+      harness.actor.stop();
+    }
+  });
+
+  it('should refuse audio for Grok when audio input is not advertised', async () => {
+    const harness = start({
+      opening: { ...input().opening, adapter: { ...adapter, id: 'grok' } },
+      lend: { ...lent, prompt: { fresh: [wav, { type: 'text', text: 'What did I say?' }] } },
+    });
+    try {
+      await openGrok(harness);
+      expect(harness.commands('connection').some((event) => event['method'] === 'session/prompt')).toBe(false);
+      expect(harness.actor.getSnapshot().context['outcome']).toMatchObject({
+        ok: false,
+        failure: {
+          code: 'EXTERNAL_AGENT_CONTENT_UNSUPPORTED',
+          message:
+            'grok cannot read audio content, so this turn was not sent. Describe it in text, or run it on an agent that can.',
+        },
+      });
+    } finally {
+      harness.actor.stop();
+    }
+  });
+
+  it('should fall back from unverified Grok Auto to always-approve and still prompt (PR5 amendment)', async () => {
+    const harness = start({
+      opening: {
+        ...input().opening,
+        adapter: { ...adapter, id: 'grok', defaultModePreference: ['auto', grokNoAutoFallback] },
+      },
+      lend: { ...lent, configuration: { [grokPermissionConfigId]: 'auto' } },
+    });
+    try {
+      await flush();
+      harness.answer({ protocolVersion, agentCapabilities: {}, _meta: { grokShell: true, agentVersion: '1.0.52' } });
+      harness.answer({ sessionId: 'acp-1' });
+      harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+      harness.answer({});
+      expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+      expect(harness.commands('connection').findLast((event) => event.type === 'notify')).toMatchObject({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Assert Grok wire field names.
+        params: { permission_mode: grokNoAutoFallback },
+      });
+    } finally {
+      harness.actor.stop();
+    }
+  });
+
+  it('should fence Grok notifications to the live prompt and use terminal hints only when that prompt fails', async () => {
+    const harness = start({ opening: { ...input().opening, adapter: { ...adapter, id: 'grok' } } });
+    const notification = {
+      sessionId: 'acp-1',
+      update: {
+        sessionUpdate: 'retry_state',
+        type: 'exhausted',
+        attempts: 2,
+        reason: 'Quota reached',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Assert Grok wire field names.
+        is_rate_limited: true,
+      },
+      _meta: { promptId: lent.requestId },
+    } as const;
+    try {
+      harness.actor.send({ type: 'grokNotification', notification });
+      await openAndLend(harness);
+      harness.actor.send({ type: 'grokNotification', notification: { ...notification, sessionId: 'another-chat' } });
+      harness.actor.send({
+        type: 'grokNotification',
+        notification: { ...notification, _meta: { promptId: 'old-prompt' } },
+      });
+      harness.actor.send({ type: 'grokNotification', notification: { ...notification, _meta: { isReplay: true } } });
+      expect(harness.commands('lentTurn').filter((event) => event.type === 'grokNotification')).toEqual([]);
+      harness.actor.send({ type: 'grokNotification', notification });
+      expect(harness.commands('lentTurn').filter((event) => event.type === 'grokNotification')).toHaveLength(1);
+      expect(harness.actor.getSnapshot().matches({ busy: 'prompting' })).toBe(true);
+      const call = harness.lastCall();
+      harness.fakes.sendBack('connection', {
+        type: 'callSettled',
+        id: String(call?.['id']),
+        at: harness.clock.now(),
+        answer: { method: 'session/prompt', error: { message: 'Request failed', stderr: '' } },
+      });
+      expect(harness.actor.getSnapshot().context['outcome']).toMatchObject({
+        ok: false,
+        failure: { code: 'EXTERNAL_AGENT_LIMIT_REACHED', message: 'Quota reached' },
+      });
+    } finally {
+      harness.actor.stop();
+    }
+  });
+
+  it('should retain Grok per-turn usage against the prior durable session total', async () => {
+    const harness = start({
+      opening: {
+        ...input().opening,
+        adapter: { ...adapter, id: 'grok' },
+      },
+    });
+    try {
+      await openAndLend(harness);
+      harness.answer({
+        stopReason: 'end_turn',
+        _meta: {
+          usage: {
+            inputTokens: 100,
+            outputTokens: 20,
+            totalTokens: 120,
+            cachedReadTokens: 80,
+            reasoningTokens: 5,
+          },
+        },
+      });
+      harness.fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+      harness.fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+      harness.actor.send({ type: 'lend', lend: { ...lent, requestId: 'run-2:0' } });
+      harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+      harness.answer({
+        stopReason: 'end_turn',
+        _meta: {
+          usage: {
+            inputTokens: 50,
+            outputTokens: 10,
+            totalTokens: 60,
+            cachedReadTokens: 40,
+            cacheCreationTokens: 2,
+            reasoningTokens: 3,
+          },
+        },
+      });
+      expect(harness.commands('lentTurn').at(-1)).toMatchObject({
+        type: 'flush',
+        report: {
+          usage: {
+            inputTokens: 28, // Input excludes the separately reported 120 cached reads and 2 cache writes.
+            outputTokens: 30,
+            totalTokens: 180,
+            cachedReadTokens: 120,
+            cachedWriteTokens: 2,
+            thoughtTokens: 8,
+          },
+        },
+      });
+    } finally {
+      harness.actor.stop();
+      harness.parent.stop();
+    }
+  });
+
+  describe('default permission mode (PR5)', () => {
+    const claudeLike: AcpAdapter = { ...adapter, id: 'claude', defaultModePreference: ['auto', 'acceptEdits'] };
+    const allModes = ['auto', 'default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'];
+    const modeSelect = (currentValue: string, values: readonly string[] = allModes) => ({
+      id: 'mode',
+      name: 'Mode',
+      category: 'mode',
+      type: 'select',
+      currentValue,
+      options: values.map((value) => ({ value, name: `${value} name`, description: `${value} description` })),
+    });
+    const models = (currentValue: string) => ({
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue,
+      options: [
+        { value: 'opus', name: 'Opus' },
+        { value: 'haiku', name: 'Haiku' },
+      ],
+    });
+    const modeCalls = (harness: Harness) =>
+      harness
+        .commands('connection')
+        .filter((event) => event['method'] === 'session/set_config_option')
+        .map((event) => event['params'] as { configId: string; value: string })
+        .filter((params) => params.configId === 'mode')
+        .map((params) => params.value);
+    /* Open with these options and lend the first turn. */
+    const openWith = async (harness: Harness, options: readonly unknown[]): Promise<void> => {
+      await flush();
+      harness.answer({ protocolVersion, agentCapabilities: {} });
+      harness.answer({ sessionId: 'acp-1', configOptions: options });
+      harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+    };
+    /* Finish the prompted turn and lend the next one. */
+    const nextTurn = (harness: Harness, next: AcpLend): void => {
+      harness.answer({ stopReason: 'end_turn' });
+      harness.fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+      harness.fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+      harness.actor.send({ type: 'lend', lend: next });
+      harness.fakes.sendBack('lentTurn', { type: 'lentReady' });
+    };
+    const presentedValues = (harness: Harness): unknown =>
+      (
+        harness.actor.getSnapshot().context.presentation.configOptions as ReadonlyArray<{
+          id: string;
+          options?: ReadonlyArray<{ value: string }>;
+        }>
+      )
+        .find((option) => option.id === 'mode')
+        ?.options?.map((option) => option.value);
+
+    it('should start a new chat in auto, before the prompt, with plan off the menu', async () => {
+      const harness = start({ opening: { ...input().opening, adapter: claudeLike } });
+      try {
+        await openWith(harness, [modeSelect('default'), models('opus')]);
+        expect(harness.lastCall()).toMatchObject({
+          method: 'session/set_config_option',
+          params: { configId: 'mode', value: 'auto' },
+        });
+        harness.answer({ configOptions: [modeSelect('auto'), models('opus')] });
+        expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+        expect(presentedValues(harness)).toEqual(['auto', 'default', 'acceptEdits', 'dontAsk', 'bypassPermissions']);
+        expect(harness.actor.getSnapshot().context.defaultModeId).toBe('auto');
+      } finally {
+        harness.actor.stop();
+      }
+    });
+
+    it('should start in acceptEdits on a model without auto, and never in bypass', async () => {
+      const harness = start({ opening: { ...input().opening, adapter: claudeLike } });
+      try {
+        await openWith(harness, [
+          modeSelect(
+            'bypassPermissions',
+            allModes.filter((mode) => mode !== 'auto'),
+          ),
+          models('haiku'),
+        ]);
+        expect(modeCalls(harness)).toEqual(['acceptEdits']);
+      } finally {
+        harness.actor.stop();
+      }
+    });
+
+    it("should keep the person's pick, and through a model switch", async () => {
+      const harness = start({
+        opening: { ...input().opening, adapter: claudeLike },
+        lend: { ...lent, configuration: { mode: 'default' } },
+      });
+      try {
+        await openWith(harness, [modeSelect('default'), models('opus')]);
+        expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+        expect(harness.actor.getSnapshot().context.defaultModeId).toBeNull();
+        nextTurn(harness, { ...lent, requestId: 'run-2:0', model: 'haiku', configuration: { mode: 'default' } });
+        expect(harness.lastCall()).toMatchObject({ params: { configId: 'model', value: 'haiku' } });
+        harness.answer({
+          configOptions: [
+            modeSelect(
+              'default',
+              allModes.filter((mode) => mode !== 'auto'),
+            ),
+            models('haiku'),
+          ],
+        });
+        expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+        expect(modeCalls(harness)).toEqual([]);
+      } finally {
+        harness.actor.stop();
+      }
+    });
+
+    it("should keep the person's pick on a turn that names no mode", async () => {
+      const harness = start({
+        opening: { ...input().opening, adapter: claudeLike },
+        lend: { ...lent, configuration: { mode: 'default' } },
+      });
+      try {
+        await openWith(harness, [modeSelect('default'), models('opus')]);
+        expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+        nextTurn(harness, { ...lent, requestId: 'run-2:0' });
+        expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+        expect(modeCalls(harness)).toEqual([]);
+        expect(harness.actor.getSnapshot().context.defaultModeId).toBeNull();
+      } finally {
+        harness.actor.stop();
+      }
+    });
+
+    it('should move a defaulted chat to acceptEdits when a model loses auto, and back to auto when it returns', async () => {
+      const harness = start({ opening: { ...input().opening, adapter: claudeLike } });
+      try {
+        await openWith(harness, [modeSelect('default'), models('opus')]);
+        harness.answer({ configOptions: [modeSelect('auto'), models('opus')] });
+        /* The composer echoes the confirmed `auto` back; the adapter clamps it to `default` on Haiku. */
+        nextTurn(harness, { ...lent, requestId: 'run-2:0', model: 'haiku', configuration: { mode: 'auto' } });
+        harness.answer({
+          configOptions: [
+            modeSelect(
+              'default',
+              allModes.filter((mode) => mode !== 'auto'),
+            ),
+            models('haiku'),
+          ],
+        });
+        expect(harness.lastCall()).toMatchObject({ params: { configId: 'mode', value: 'acceptEdits' } });
+        harness.answer({
+          configOptions: [
+            modeSelect(
+              'acceptEdits',
+              allModes.filter((mode) => mode !== 'auto'),
+            ),
+            models('haiku'),
+          ],
+        });
+        expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+        nextTurn(harness, { ...lent, requestId: 'run-3:0', model: 'opus', configuration: { mode: 'acceptEdits' } });
+        harness.answer({ configOptions: [modeSelect('acceptEdits'), models('opus')] });
+        expect(harness.lastCall()).toMatchObject({ params: { configId: 'mode', value: 'auto' } });
+        expect(modeCalls(harness)).toEqual(['auto', 'acceptEdits', 'auto']);
+      } finally {
+        harness.actor.stop();
+      }
+    });
+
+    it('should keep a pre-PR5 chat in its recorded mode', async () => {
+      const harness = start({
+        opening: { ...input().opening, adapter: claudeLike },
+        lend: { ...lent, configuration: { mode: 'default' }, record: { acpSessionId: 'acp-1' } },
+      });
+      try {
+        await openWith(harness, [modeSelect('default'), models('opus')]);
+        expect(modeCalls(harness)).toEqual([]);
+      } finally {
+        harness.actor.stop();
+      }
+    });
+  });
+
+  it('should probe an idle model and queue a turn until the option update settles', async () => {
+    const harness = start({ lend: undefined });
+    const { actor, fakes, commands } = harness;
+    const probed: unknown[] = [];
+    actor.on('modelProbed', (event) => probed.push(event));
+    await flush();
+    harness.answer({ protocolVersion, agentCapabilities: {} });
+    harness.answer({ sessionId: 'acp-1', configOptions: [modelOption] });
+    expect(actor.getSnapshot().matches({ idle: 'resting' })).toBe(true);
+
+    actor.send({ type: 'probeModel', requestId: 'probe-1', model: 'large' });
+    expect(harness.lastCall()).toMatchObject({
+      method: 'session/set_config_option',
+      params: { sessionId: 'acp-1', configId: 'model', value: 'large' },
+    });
+    actor.send({ type: 'lend', lend: { ...lent, model: 'large' } });
+    expect(fakes.active('lentTurn')).toBe(0);
+
+    const updated = { ...modelOption, currentValue: 'large' };
+    harness.answer({ configOptions: [updated] });
+    expect(probed).toMatchObject([{ requestId: 'probe-1', configOptions: [updated] }]);
+    expect(actor.getSnapshot().context.configOptions).toEqual([updated]);
+    expect(fakes.active('lentTurn')).toBe(1);
+    fakes.sendBack('lentTurn', { type: 'lentReady' });
+    expect(harness.lastCall()).toMatchObject({ method: 'session/prompt' });
+    expect(commands('connection').filter((event) => event['method'] === 'session/set_config_option')).toHaveLength(1);
+    actor.stop();
+    harness.parent.stop();
+  });
+
+  it('should leave unsupported model discovery unanswered without a vendor call', async () => {
+    const harness = start({ lend: undefined });
+    const probed: unknown[] = [];
+    harness.actor.on('modelProbed', (event) => probed.push(event));
+    await flush();
+    harness.answer({ protocolVersion, agentCapabilities: {} });
+    harness.answer({ sessionId: 'acp-1', configOptions: [modelOption] });
+    harness.actor.send({ type: 'probeModel', requestId: 'probe-1', model: 'absent' });
+    expect(probed).toMatchObject([{ requestId: 'probe-1', configOptions: undefined }]);
+    expect(harness.lastCall()).toMatchObject({ method: 'session/new' });
+    harness.actor.stop();
+    harness.parent.stop();
+  });
+
+  it('should serve native Grok questions only for the active session', async () => {
+    const harness = start();
+    await openAndLend(harness);
+    const request = (sessionId: string): Extract<AcpSessionEvent, { type: 'vendorRequest' }> => ({
+      type: 'vendorRequest',
+      id: `question-${sessionId}`,
+      request: {
+        method: '_x.ai/ask_user_question',
+        params: { sessionId, toolCallId: 'question-1', questions: [{ question: 'Material?', options: [] }] },
+      },
+    });
+    harness.fakes.sendBack('connection', request('foreign'));
+    expect(harness.commands('connection')).toContainEqual({
+      type: 'respond',
+      id: 'question-foreign',
+      result: { outcome: 'cancelled' },
+    });
+    expect(harness.commands('lentTurn').some((event) => event['id'] === 'question-foreign')).toBe(false);
+    harness.fakes.sendBack('connection', request('acp-1'));
+    expect(harness.commands('lentTurn')).toContainEqual({
+      type: 'serve',
+      id: 'question-acp-1',
+      ...request('acp-1').request,
+    });
+    harness.actor.stop();
+    harness.parent.stop();
+  });
+
+  it('cancel answers pending permissions, waits 2 s, then answers the turn from closed after SIGKILL', async () => {
+    const harness = await (async () => {
+      const opened = start();
+      await openAndLend(opened);
+      return opened;
+    })();
+    const { fakes, clock, parent, actor, commands } = harness;
+    fakes.sendBack('connection', {
+      type: 'vendorRequest',
+      id: 'vendor-0',
+      request: {
+        method: 'session/request_permission',
+        params: { sessionId: 'acp-1', toolCall: { toolCallId: 'tool-1' }, options: [] },
+      },
+    });
+
+    actor.send({ type: 'cancel' });
+
+    expect(commands('connection')).toContainEqual({
+      type: 'notify',
+      method: 'session/cancel',
+      params: { sessionId: 'acp-1' },
+    });
+    expect(commands('connection')).toContainEqual({
+      type: 'respond',
+      id: 'vendor-0',
+      result: { outcome: { outcome: 'cancelled' } },
+    });
+    expect(actor.getSnapshot().matches({ busy: 'cancelling' })).toBe(true);
+
+    /* The vendor never answers: E22 starts the ladder while the turn drains. */
+    clock.advance(acpCancelSettleTimeout);
+    expect(commands('connection').at(-1)).toEqual({ type: 'terminate' });
+    fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+    fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+    expect(parent.events.filter((event) => event.type === 'turnEnded')).toEqual([]);
+
+    clock.advance(acpKillGrace);
+    expect(commands('connection')).toContainEqual({ type: 'kill' });
+    expect(parent.events.filter((event) => event.type === 'turnEnded')).toEqual([]);
+
+    fakes.sendBack('connection', { type: 'adapterExited', stderr: '' });
+    expect(actor.getSnapshot().status).toBe('done');
+    expect(parent.events.map((event) => event.type)).toEqual(['opened', 'turnEnded', 'closed']);
+    expect(parent.events[1]).toMatchObject({
+      requestId: 'run-1:0',
+      resting: false,
+      outcome: { ok: false, failure: { code: 'EXTERNAL_AGENT_CANCELLED' } },
+    });
+  });
+
+  it('E18 ends terminating only after SIGKILL to the group, with the binding released', async () => {
+    const harness = start();
+    await openAndLend(harness);
+    const { fakes, clock, parent, actor, commands } = harness;
+    harness.answer({ stopReason: 'end_turn' });
+    fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+    fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+    expect(actor.getSnapshot().hasTag('resting')).toBe(true);
+    /* The binding lived exactly as long as the lend (EA-R6). */
+    expect(fakes.releases('lentTurn')).toBe(1);
+
+    actor.send({ type: 'close' });
+    expect(commands('connection').at(-1)).toEqual({ type: 'terminate' });
+    clock.advance(acpKillGrace);
+    expect(commands('connection').at(-1)).toEqual({ type: 'kill' });
+    /* A group that ignores SIGKILL's exit notice: the backstop kills again, then ends. */
+    clock.advance(acpTerminateBackstop - acpKillGrace);
+    expect(commands('connection').filter((event) => event.type === 'kill')).toHaveLength(2);
+    expect(actor.getSnapshot().status).toBe('done');
+    expect(parent.events.at(-1)).toMatchObject({ type: 'closed', key: 'fake:chat-1' });
+  });
+
+  it('a timed-out cancel is answered only from closed', async () => {
+    const harness = start();
+    await openAndLend(harness);
+    const { fakes, clock, parent, actor } = harness;
+    actor.send({ type: 'cancel' });
+    clock.advance(acpCancelSettleTimeout);
+    fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+    fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+    /* Drained and recorded, but the group may still be running: no answer yet. */
+    expect(actor.getSnapshot().matches('closing')).toBe(true);
+    expect(parent.events.map((event) => event.type)).toEqual(['opened']);
+
+    fakes.sendBack('connection', { type: 'adapterExited', stderr: '' });
+
+    expect(parent.events.map((event) => event.type)).toEqual(['opened', 'turnEnded', 'closed']);
+  });
+
+  it('answers a cancel that races the adapter exiting once, and closes', async () => {
+    const harness = start();
+    await openAndLend(harness);
+    const { fakes, parent, actor } = harness;
+    actor.send({ type: 'cancel' });
+    fakes.sendBack('connection', { type: 'adapterExited', stderr: '' });
+    fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+    fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+
+    expect(actor.getSnapshot().status).toBe('done');
+    expect(parent.events.map((event) => event.type)).toEqual(['opened', 'turnEnded', 'closed']);
+    expect(parent.events[1]).toMatchObject({ outcome: { failure: { code: 'EXTERNAL_AGENT_CANCELLED' } } });
+  });
+
+  it('answers a cancel during the open at once, and closes without a vendor turn', async () => {
+    const { actor, parent, fakes, commands } = start();
+    await flush();
+
+    actor.send({ type: 'cancel' });
+
+    expect(parent.events).toMatchObject([
+      { type: 'turnEnded', resting: false, outcome: { ok: false, failure: { code: 'EXTERNAL_AGENT_CANCELLED' } } },
+    ]);
+    expect(commands('connection').at(-1)).toEqual({ type: 'terminate' });
+    expect(fakes.active('lentTurn')).toBe(0);
+    fakes.sendBack('connection', { type: 'adapterExited', stderr: '' });
+    expect(parent.events.at(-1)).toMatchObject({ type: 'closed' });
+  });
+
+  it('answers a cancel of a turn waiting on a presentation write, and never prompts it', async () => {
+    const write = Promise.withResolvers<void>();
+    const harness = start({}, write.promise);
+    await openAndLend(harness);
+    const { fakes, parent, actor, commands } = harness;
+    harness.answer({ stopReason: 'end_turn' });
+    fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+    fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+    actor.send({
+      type: 'sessionUpdate',
+      sessionId: 'acp-1',
+      update: { sessionUpdate: 'current_mode_update', currentModeId: 'm' },
+    });
+    expect(actor.getSnapshot().matches({ idle: 'persisting' })).toBe(true);
+    const prompts = (): number => commands('connection').filter((event) => event['method'] === 'session/prompt').length;
+
+    actor.send({ type: 'lend', lend: { ...lent, requestId: 'run-1:1' } });
+    actor.send({ type: 'cancel' });
+    write.resolve();
+    await flush();
+
+    /* The second turn was never lent: no second binding, no second `session/prompt`. */
+    expect(fakes.inputsFor('lentTurn')).toHaveLength(1);
+    expect(fakes.active('lentTurn')).toBe(0);
+    expect(prompts()).toBe(1);
+    expect(actor.getSnapshot().matches({ idle: 'resting' })).toBe(true);
+    expect(parent.events.filter((event) => event.type === 'turnEnded')).toMatchObject([
+      { requestId: 'run-1:0', resting: true, outcome: { ok: true } },
+      { requestId: 'run-1:1', resting: true, outcome: { ok: false, failure: { code: 'EXTERNAL_AGENT_CANCELLED' } } },
+    ]);
+  });
+
+  /* W10-F1: a cancel before the lent turn is bound (`busy.binding`) refines CancelBinding, not CancelPrompting. */
+  it('answers a cancel while the lend is binding without prompting or cancelling the vendor, then rests', async () => {
+    const harness = start();
+    const { actor, fakes, parent, commands } = harness;
+    await flush();
+    harness.answer({ protocolVersion, agentCapabilities: {} });
+    harness.answer({ sessionId: 'acp-1' });
+    expect(actor.getSnapshot().matches({ busy: 'binding' })).toBe(true);
+    const sentMethod = (method: string): number =>
+      commands('connection').filter((event) => event['method'] === method).length;
+
+    actor.send({ type: 'cancel' });
+    fakes.sendBack('lentTurn', { type: 'flushed', title: undefined, failure: undefined });
+    fakes.sendBack('lentTurn', { type: 'recorded', failure: undefined });
+    await flush();
+
+    expect(sentMethod('session/prompt')).toBe(0);
+    expect(sentMethod('session/cancel')).toBe(0);
+    expect(actor.getSnapshot().matches({ idle: 'resting' })).toBe(true);
+    expect(parent.events.filter((event) => event.type === 'turnEnded')).toMatchObject([
+      { requestId: 'run-1:0', resting: true, outcome: { ok: false, failure: { code: 'EXTERNAL_AGENT_CANCELLED' } } },
+    ]);
+
+    /* The session stayed up: the next lend binds and prompts. */
+    actor.send({ type: 'lend', lend: { ...lent, requestId: 'run-1:1' } });
+    await flush();
+    fakes.sendBack('lentTurn', { type: 'lentReady' });
+    expect(sentMethod('session/prompt')).toBe(1);
+  });
+
+  it('moves down the restore ladder on a recoverable loss and says the context was lost', async () => {
+    const { actor, answer, lastCall } = start({
+      opening: { ...input().opening, acpSessionId: 'acp-old' },
+    });
+    await flush();
+    answer({
+      protocolVersion,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
+    });
+    expect(lastCall()).toMatchObject({ method: 'session/resume', params: { sessionId: 'acp-old' } });
+    actor.send({
+      type: 'callSettled',
+      id: String(lastCall()?.['id']),
+      at: 0,
+      answer: { method: 'session/resume', error: { code: -32_002, message: 'gone', stderr: '' } },
+    });
+    expect(lastCall()).toMatchObject({ method: 'session/load' });
+    actor.send({
+      type: 'callSettled',
+      id: String(lastCall()?.['id']),
+      at: 0,
+      answer: { method: 'session/load', error: { code: -32_002, message: 'gone', stderr: '' } },
+    });
+    expect(lastCall()).toMatchObject({ method: 'session/new' });
+    answer({ sessionId: 'acp-new' });
+    expect(actor.getSnapshot().context).toMatchObject({ acpSessionId: 'acp-new', contextLost: true });
+  });
+});
+
+/* Every state node with a `timeout`, by id: its `xstate.timeout` is sampled everywhere. */
+type Node = {
+  readonly id: string;
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly states: Record<string, Node>;
+};
+const timed = (node: Node): string[] => [
+  ...(node.config['timeout'] === undefined ? [] : [node.id]),
+  ...Object.values(node.states).flatMap((child) => timed(child)),
+];
+// oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the root's public shape, read structurally.
+const timeouts = timed(acpSessionMachine.root as unknown as Node).map((stateId) => ({
+  type: 'xstate.timeout',
+  stateId,
+}));
+
+/* A model option the agent offers, so a lend that picks another value configures first. */
+const modelOption = {
+  id: 'model',
+  name: 'Model',
+  category: 'model',
+  type: 'select',
+  currentValue: 'small',
+  options: [
+    { value: 'small', name: 'Small' },
+    { value: 'large', name: 'Large' },
+  ],
+};
+
+/* Graph sampling: every public event, with answers correlated to the call the snapshot waits on. */
+const sampled = (snapshot: AnyMachineSnapshot): AnyEventObject[] => {
+  const id = String(snapshot.context.pending);
+  const ok = (method: string, result: unknown): AnyEventObject => ({
+    type: 'callSettled',
+    id,
+    at: 0,
+    answer: { method, result },
+  });
+  const lost = (method: string): AnyEventObject => ({
+    type: 'callSettled',
+    id,
+    at: 0,
+    answer: { method, error: { code: -32_002, message: 'gone', stderr: '' } },
+  });
+  /* The invoked effects settle: publication with no directories, a presentation write either way. */
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- `AnyMachineSnapshot` erases the child map to `any`; only its keys are read.
+  const children = snapshot.children as Readonly<Record<string, unknown>>;
+  const settled = Object.keys(children).flatMap((actorId) => [
+    { type: 'xstate.done.actor', actorId, output: [] },
+    { type: 'xstate.error.actor', actorId, error: new Error('storage') },
+  ]);
+  return [
+    ok('initialize', {
+      protocolVersion,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
+    }),
+    ok('initialize', { protocolVersion, agentCapabilities: { sessionCapabilities: { close: {} } } }),
+    lost('session/resume'),
+    lost('session/load'),
+    ok('session/resume', {}),
+    ok('session/new', { sessionId: 'acp-1' }),
+    ok('session/new', { sessionId: 'acp-1', configOptions: [modelOption] }),
+    ok('session/set_config_option', { configOptions: [] }),
+    ok('session/prompt', { stopReason: 'end_turn' }),
+    ok('session/close', {}),
+    ...settled,
+    { type: 'lend', lend: { ...lent, requestId: 'run-1:1' } },
+    { type: 'lend', lend: { ...lent, requestId: 'run-1:2', model: 'large' } },
+    { type: 'probeModel', requestId: 'probe-1', model: 'large' },
+    { type: 'cancel' },
+    { type: 'close' },
+    { type: 'sessionUpdate', sessionId: 'acp-1', update: { sessionUpdate: 'current_mode_update', currentModeId: 'm' } },
+    {
+      type: 'vendorRequest',
+      id: 'vendor-0',
+      request: { method: 'fs/read_text_file', params: { sessionId: 'acp-1', path: 'a' } },
+    },
+    { type: 'elicitationComplete', elicitationId: 'login-1' },
+    { type: 'adapterExited', stderr: '' },
+    { type: 'killDue' },
+    { type: 'lentReady' },
+    { type: 'lentFailed', failure: { code: 'X', message: 'x' } },
+    { type: 'vendorAnswered', id: 'vendor-0', permission: false, answer: { result: {} } },
+    { type: 'flushed', title: undefined, failure: undefined },
+    { type: 'recorded', failure: undefined },
+    ...timeouts,
+  ];
+};
+
+const graph = (withRecord: boolean): PathOptions => ({
+  input: input({
+    parentRef: undefined,
+    ...(withRecord ? { opening: { ...input().opening, acpSessionId: 'acp-old' } } : {}),
+  }),
+  events: sampled,
+  limit: 200_000,
+  serializeState: (snapshot) =>
+    JSON.stringify([
+      snapshot.value,
+      snapshot.context.pending !== undefined,
+      snapshot.context.exited,
+      snapshot.context.acpSessionId,
+      snapshot.context.facts?.agentCapabilities,
+      snapshot.context.configOptions !== undefined,
+      snapshot.context.lent?.model,
+      snapshot.context.queued !== undefined,
+      snapshot.context.stale,
+      snapshot.context.probeRequestId !== undefined,
+    ]),
+});
+
+describe('acpSession enumeration', () => {
+  it('reaches every state, the restore ladder included (EA-A15)', () => {
+    const reachedWithout = new Set(unreachedStates(acpSessionMachine, graph(false)));
+    const unreached = unreachedStates(acpSessionMachine, graph(true)).filter((id) => reachedWithout.has(id));
+    expect(unreached).toEqual([]);
+  });
+
+  it('answers or declares every sampled event in every reachable state (EA-A16)', () => {
+    expect(unansweredEvents(acpSessionMachine, { ...graph(true), ignore: acpSessionIgnoredEvents.acpSession })).toEqual(
+      [],
+    );
+  });
+});

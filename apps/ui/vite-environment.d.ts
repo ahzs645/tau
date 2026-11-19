@@ -1,18 +1,49 @@
-// oxlint-disable typescript/no-extraneous-class -- Monaco's factory export uses a PascalCase property name
-// oxlint-disable max-params -- Monaco's factory export uses a PascalCase property name
+declare const tauBuildFrontendUrl: string;
+/** Netlify `CONTEXT` of the web build (`''` elsewhere); read only through `resolveDeployContext` in `environment.config`. */
+declare const tauBuildDeployContext: string;
+declare const tauBuildId: number;
+/** Runtime telemetry's host build signal (web: always; desktop: `TAU_TELEMETRY_HOST=cloud`); read only through `#cloud/telemetry-host`. */
+declare const tauTelemetryHostCloudBuild: boolean;
+/** The build's release label (short commit or semver); `''` when the build had none. Read through `#lib/build-identity`. */
+declare const tauBuildRelease: string;
+/** The C# language server bundle `csharp-language:prepare` staged; `null` only in test runs, which carry none. */
+// oxlint-disable-next-line typescript/no-restricted-types -- JSON defines spell absence as null.
+declare const tauCsharpLanguageAssets: Readonly<{ url: string; sha256: string }> | null;
+/** The staged OpenSCAD language server's manifest URL and identity; `undefined` when the build had no stage. */
+declare const tauOpenscadLanguageAssets: Readonly<{ url: string; sha256: string }> | undefined;
+
+/*
+ * Declaration merging into `vite/client`'s own `ImportMetaEnv` only works with
+ * `interface`. As a `type` alias this collapsed the whole shape to `any`, so
+ * every `import.meta.env.PROD` / `.DEV` read leaked `any` into its expression.
+ */
+// oxlint-disable-next-line typescript/consistent-type-definitions -- merging into vite/client's `ImportMetaEnv` requires `interface`.
+interface ImportMetaEnv {
+  /**
+   * Compile-time host seam (charter D2). Substituted by `define` in
+   * `vite.config.ts` (`'web'`) and `desktop/vite.config.ts` (`'desktop'`);
+   * left undefined under `mode === 'test'` so unit tests can stub it.
+   */
+  readonly TAU_TARGET?: 'web' | 'desktop';
+  /**
+   * `'absent'` in the web build (`vite.config.ts`), whose origin is the static
+   * site and never a `tau serve` daemon, so the page skips asking it for a
+   * `/.well-known/tau-host` descriptor. Undefined elsewhere, and under
+   * `mode === 'test'`.
+   */
+  readonly TAU_ORIGIN_AGENT_HOST?: 'absent';
+  /**
+   * `'true'` once a non-prerelease Tau Desktop release exists to download (charter Q56, go-live DSK-7); `'false'`
+   * otherwise. Substituted by `define` in `vite.config.ts` from `TAU_DESKTOP_RELEASED` at build time; undefined
+   * under `mode === 'test'` so tests can stub both branches.
+   */
+  readonly TAU_DESKTOP_RELEASED?: 'true' | 'false';
+}
+
 declare module '*?base64' {
   const value: string;
   export = value;
 }
-
-/* oxlint-disable typescript/consistent-type-definitions -- Window must use interface merging */
-interface Window {
-  readonly tauBuildMetadata?: {
-    readonly buildNumber?: string;
-    readonly commit?: string;
-  };
-}
-/* oxlint-enable typescript/consistent-type-definitions */
 
 declare module 'qrcode-terminal' {
   type QrcodeTerminalGenerateOptions = {
@@ -28,47 +59,4 @@ declare module 'qrcode-terminal' {
   };
 
   export default qrcodeTerminal;
-}
-
-declare module 'monaco-editor/esm/vs/language/typescript/languageFeatures.js' {
-  import type * as Monaco from 'monaco-editor';
-
-  export class Adapter {
-    public constructor(worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
-  }
-
-  export class LibFiles {
-    public constructor(worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
-    public getOrCreateModel(fileName: string): Monaco.editor.ITextModel | undefined;
-    public fetchLibFilesIfNecessary(uris: readonly Monaco.Uri[]): Promise<void>;
-  }
-
-  export class DefinitionAdapter extends Adapter {
-    public constructor(libFiles: LibFiles, worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
-    public provideDefinition(
-      model: Monaco.editor.ITextModel,
-      position: Monaco.Position,
-      token: Monaco.CancellationToken,
-    ): Promise<Monaco.languages.Definition | undefined>;
-  }
-
-  export class ReferenceAdapter extends Adapter {
-    public constructor(libFiles: LibFiles, worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
-    public provideReferences(
-      model: Monaco.editor.ITextModel,
-      position: Monaco.Position,
-      context: Monaco.languages.ReferenceContext,
-      token: Monaco.CancellationToken,
-    ): Promise<Monaco.languages.Location[] | undefined>;
-  }
-
-  export class RenameAdapter extends Adapter {
-    public constructor(libFiles: LibFiles, worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
-    public provideRenameEdits(
-      model: Monaco.editor.ITextModel,
-      position: Monaco.Position,
-      newName: string,
-      token: Monaco.CancellationToken,
-    ): Promise<(Monaco.languages.WorkspaceEdit & Monaco.languages.Rejection) | undefined>;
-  }
 }

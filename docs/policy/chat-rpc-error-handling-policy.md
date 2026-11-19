@@ -3,10 +3,12 @@ title: 'Chat RPC Error Handling Policy'
 description: "Internal reference for the Socket.IO RPC layer connecting the API's LangGraph agent to browser-side tool execution. Covers error model, abort lifecycle, timer management, and connection handling."
 status: active
 created: '2026-02-18'
-updated: '2026-03-05'
+updated: '2026-09-22'
 related:
   - docs/policy/api-error-policy.md
   - docs/policy/rpc-policy.md
+  - docs/research/chat-client-abort-api-crash.md
+  - docs/research/chat-post-tool-abort-unhandled-rejection.md
 ---
 
 # Chat RPC Error Handling Policy
@@ -25,12 +27,12 @@ All errors produced by `ChatRpcService` are structured objects — never thrown 
 
 Infrastructure-level failures that prevent the RPC from completing. Produced by `ChatRpcService` itself.
 
-| Error Code               | Trigger                                                               | Resolution                                             |
-| ------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------ |
-| `TIMEOUT`                | No response received within 60 seconds                                | Client may be unresponsive; tool layer reports timeout |
-| `CLIENT_DISCONNECTED`    | Abort signal fired, last socket disconnected, or server shutting down | Request was cancelled or connection lost               |
-| `NO_CONNECTION`          | No connected socket exists for the chatId                             | User closed/navigated away from the page               |
-| `UNHANDLED_CLIENT_ERROR` | Client returned an `error` field in `RpcResponse`                     | Client-side execution failed; error message forwarded  |
+| Error Code               | Trigger                                                                                         | Resolution                                             |
+| ------------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `TIMEOUT`                | No response received within 60 seconds                                                          | Client may be unresponsive; tool layer reports timeout |
+| `CLIENT_DISCONNECTED`    | Abort signal had already fired, socket disconnected before acknowledgement, or server shut down | Request was cancelled or connection lost               |
+| `NO_CONNECTION`          | No connected socket exists for the chatId                                                       | User closed/navigated away from the page               |
+| `UNHANDLED_CLIENT_ERROR` | Client returned an `error` field in `RpcResponse`                                               | Client-side execution failed; error message forwarded  |
 
 ### RPC Validation Errors
 
@@ -63,6 +65,21 @@ All filesystem implementations must set `error.code` on thrown errors:
 - **Filesystem bridge**: preserves `error.code` across worker boundaries via `BridgeError`.
 
 When `error.code` is absent or unrecognized, `getErrorCode()` falls back to substring matching on `error.message` (e.g., `'not found'`, `'no such file'`, `'enoent'`). This fallback exists for defense-in-depth but should not be the primary classification path for any known filesystem implementation.
+
+### Freshness Errors
+
+`STALE_EVALUATION` is a typed client error raised by the shared tool registry when a kernel-backed result answers for bytes a recorded write has since replaced. Return staleness as an error; never as a success status such as `status: 'stale'`.
+
+| Field               | Value                                                                               |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| `isError`           | `true`                                                                              |
+| `content.errorCode` | `'STALE_EVALUATION'`                                                                |
+| `content.expected`  | `{ path, digest }` — the revision the last recorded write to that path produced     |
+| `content.actual`    | `{ path, digest }` — the revision the result's `sourceRevision` named for that path |
+
+**Why**: a verdict about superseded bytes is a host failure, not a geometry outcome; naming both digests lets the agent, the harness and a transcript reader see which bytes were answered for.
+
+Every kernel-backed read result carries `sourceRevision` (the entry path plus the content digest of each file in its closure), and every write result carries `revision` (`{ path, digest }`, with `'missing'` after a delete). Keep both through result trimming: provenance the model never sees cannot end a stale loop. Absent provenance means unproven, never fresh.
 
 ## Error Propagation Flow
 
@@ -103,7 +120,7 @@ UI (frontend)
 
 ## Abort Signal Lifecycle
 
-The abort signal connects the SSE response stream to the RPC layer, ensuring in-flight RPCs are rejected promptly when the client disconnects rather than waiting for the 60-second timeout.
+The abort signal connects the SSE response stream to the RPC layer. The implementation records aborted chats so new RPC calls fail promptly after a client stop and maintains a pending-request registry so already-awaited `emitWithAck()` calls resolve promptly on abort.
 
 ### Registration
 
@@ -117,9 +134,12 @@ The abort signal connects the SSE response stream to the RPC layer, ensuring in-
 When the signal fires:
 
 1. `chatId` is added to `abortedChats`.
-2. All pending RPC requests for that chatId are resolved with `CLIENT_DISCONNECTED`.
-3. The abort listener is removed from the signal.
-4. A 5-second cleanup timer is scheduled (see Timer Management).
+2. Pending `sendRpcRequest` calls for that chatId are resolved with `CLIENT_DISCONNECTED`.
+3. New `sendRpcRequest` calls for that chatId return `CLIENT_DISCONNECTED` during the cleanup window.
+4. The abort listener is removed from the signal.
+5. A 5-second cleanup timer is scheduled (see Timer Management).
+
+An RPC call that has already entered `socket.timeout(...).emitWithAck(...)` must race the Socket.IO acknowledgement against the pending-request abort promise. Abort wins with `CLIENT_DISCONNECTED`; late acknowledgements are caught and ignored by the already-settled outcome.
 
 ### Re-registration Invariants
 
@@ -133,12 +153,13 @@ This ensures that a user who cancels request A and immediately sends request B w
 
 ## Timer Management Rules
 
-Every `setTimeout` in `ChatRpcService` must be tracked and cancellable:
+Every Tau-owned `setTimeout` in `ChatRpcService` must be tracked and cancellable:
 
-| Timer                       | Storage                    | Cancelled by                                        |
-| --------------------------- | -------------------------- | --------------------------------------------------- |
-| RPC execution timeout (60s) | `PendingRequest.timeoutId` | Response received, disconnect, abort, shutdown      |
-| Abort cleanup (5s)          | `abortCleanupTimers` Map   | New `registerAbortSignal` for same chatId, shutdown |
+| Timer              | Storage                  | Cancelled by                                        |
+| ------------------ | ------------------------ | --------------------------------------------------- |
+| Abort cleanup (5s) | `abortCleanupTimers` Map | New `registerAbortSignal` for same chatId, shutdown |
+
+The RPC execution timeout is delegated to Socket.IO via `socket.timeout(rpcExecutionTimeout).emitWithAck(...)`; Tau does not store a `PendingRequest.timeoutId` for it. Tau does store pending request resolvers in `pendingRpcRequests` so request-level abort and shutdown can settle in-flight RPCs before the Socket.IO timeout expires.
 
 ### Invariants
 
@@ -154,17 +175,16 @@ Every `setTimeout` in `ChatRpcService` must be tracked and cancellable:
 - `connections` maps each chatId to a `Set<Socket>`.
 - Multiple browser tabs can join the same chat room.
 - RPC requests are sent to **one** connected socket (the first found), not broadcast.
-- Pending requests are only rejected when the **last** socket for a chatId disconnects.
+- In-flight `emitWithAck()` calls are also represented in Tau's `pendingRpcRequests` map so chat abort and module shutdown can resolve them promptly.
 
 ### Disconnect Ordering
 
 When a socket disconnects (`handleSocketDisconnect`):
 
 1. The socket is removed from all chat room sets.
-2. For each chat where `socketSet.size === 0` after removal:
-   a. The `connections` entry is deleted.
-   b. All pending requests for that chatId are resolved with `CLIENT_DISCONNECTED`.
-3. Chat rooms with remaining sockets are unaffected.
+2. For each chat where `socketSet.size === 0` after removal, the `connections` entry and ownership entry are deleted.
+3. In-flight `emitWithAck()` calls either observe the socket disconnect through Socket.IO and resolve as `CLIENT_DISCONNECTED`, or resolve earlier if the chat abort signal fires.
+4. Chat rooms with remaining sockets are unaffected.
 
 ### Connection vs. Abort
 
@@ -172,7 +192,7 @@ These are independent mechanisms:
 
 - **Connection tracking** handles socket-level events (join, leave, disconnect).
 - **Abort tracking** handles request-level events (SSE stream closed by client).
-- Both can reject pending requests, but for different reasons.
+- Connection tracking affects socket availability and in-flight Socket.IO acknowledgement behavior. Abort tracking blocks new RPC calls during the aborted-chat cleanup window.
 - A chat can be aborted while sockets remain connected (user clicked "stop" but the tab is still open).
 
 ## Cleanup Invariants
@@ -180,13 +200,15 @@ These are independent mechanisms:
 ### On Client Disconnect (last socket)
 
 1. Remove `connections` entry for chatId.
-2. Resolve all pending requests for chatId with `CLIENT_DISCONNECTED`.
+2. Remove chat ownership for chatId.
+3. Let in-flight `emitWithAck()` calls observe the socket disconnect and return `CLIENT_DISCONNECTED`.
 
 ### On Abort Signal
 
 1. Add chatId to `abortedChats`.
-2. Resolve all pending requests for chatId with `CLIENT_DISCONNECTED`.
-3. Schedule 5-second cleanup timer (tracked in `abortCleanupTimers`).
+2. Resolve pending RPCs for that chatId with `CLIENT_DISCONNECTED`.
+3. Block new RPC calls for that chatId with `CLIENT_DISCONNECTED`.
+4. Schedule 5-second cleanup timer (tracked in `abortCleanupTimers`).
 
 ### On New Request (re-registration)
 
@@ -196,11 +218,12 @@ These are independent mechanisms:
 
 ### On Module Destroy (shutdown)
 
-1. Resolve all pending requests with `CLIENT_DISCONNECTED` and clear timeouts.
-2. Clear `pendingRequests`.
-3. Clear `connections`.
-4. Clear all abort cleanup timers (`clearTimeout` each, then `.clear()`).
-5. Clear `abortedChats`.
+1. Clear `connections`.
+2. Clear chat ownership.
+3. Clear all abort cleanup timers (`clearTimeout` each, then `.clear()`).
+4. Remove active abort listeners.
+5. Resolve all pending RPCs with `CLIENT_DISCONNECTED`.
+6. Clear `abortedChats`.
 
 ## Pre-stream vs. Stream Errors
 
@@ -227,22 +250,25 @@ The following scenarios must have unit test coverage:
 ### Module Lifecycle
 
 - `onModuleDestroy` must clear all abort cleanup timers (no timer fires after destroy).
-- `onModuleDestroy` must resolve all pending requests with `CLIENT_DISCONNECTED`.
+- `onModuleDestroy` must remove active abort listeners.
+- `onModuleDestroy` must resolve all pending RPC requests with `CLIENT_DISCONNECTED`.
 
 ### Response Handling
 
-- `handleRpcResponse` resolves pending request with validated result.
-- `handleRpcResponse` resolves with `UNHANDLED_CLIENT_ERROR` on client error.
-- `handleRpcResponse` logs warning for unknown requestId (no crash).
+- `sendRpcRequest` validates successful `emitWithAck()` results before returning them.
+- `sendRpcRequest` resolves with `UNHANDLED_CLIENT_ERROR` when the client acknowledgement contains an `error` field.
+- `sendRpcRequest` resolves with `OUTPUT_VALIDATION_FAILED` when the acknowledgement result does not match the RPC schema.
 
 ### Disconnect Handling
 
-- `handleSocketDisconnect` rejects pending requests only when the last socket is removed.
-- `unregisterConnection` preserves other chats' pending requests.
+- `handleSocketDisconnect` removes socket registrations and deletes the chat room only when the last socket is removed.
+- `unregisterConnection` preserves other chat rooms and sockets.
+- In-flight `emitWithAck()` calls return `CLIENT_DISCONNECTED` through `sendRpcRequest` when Socket.IO surfaces the disconnect before timeout or when the chat abort signal fires first.
 
 ### Abort Signal
 
 - Already-aborted signal immediately blocks RPCs.
-- Abort during flight rejects pending requests and blocks new ones.
+- Abort during flight blocks new RPCs and resolves already in-flight RPCs with `CLIENT_DISCONNECTED`.
+- Late acknowledgements after abort must not double-record metrics or change the settled RPC outcome.
 - Cleanup timer unblocks RPCs after 5 seconds.
 - New registration clears stale abort state within the 5-second window.

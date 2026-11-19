@@ -12,19 +12,20 @@ import {
   AlertDialogHeader,
   AlertDialogMedia,
   AlertDialogTitle,
-} from '#components/ui/alert-dialog.js';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '#components/ui/input-group.js';
-import { Label } from '#components/ui/label.js';
-import { apiKeyPlugin } from '#utils/api-key-plugin.js';
+} from '@taucad/ui/components/alert-dialog';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@taucad/ui/components/input-group';
+import { Label } from '@taucad/ui/components/label';
+import { apiKeyPlugin } from '@taucad/ui-core/utils/api-key-plugin';
 
 export type NewApiKeyDialogProps = {
+  // oxlint-disable-next-line react-js/boolean-prop-naming -- mirrors Radix Dialog's controlled `open` prop API.
   open: boolean;
   onOpenChange: (open: boolean) => void;
   name: string | undefined;
   secretKey: string | undefined;
 };
 
-export function NewApiKeyDialog({ open, onOpenChange, name, secretKey }: NewApiKeyDialogProps) {
+export function NewApiKeyDialog({ open, onOpenChange, name, secretKey }: NewApiKeyDialogProps): React.JSX.Element {
   const { localization } = useAuth();
   const { localization: apiKeyLocalization } = useAuthPlugin(apiKeyPlugin);
 
@@ -62,7 +63,8 @@ export function NewApiKeyDialog({ open, onOpenChange, name, secretKey }: NewApiK
         <div className='flex flex-col gap-2'>
           <Label htmlFor='new-api-key-secret'>{name ?? apiKeyLocalization.apiKey}</Label>
 
-          <InputGroup>
+          {/* `ph-no-capture`: session replay never records an API key secret. */}
+          <InputGroup className='ph-no-capture'>
             <InputGroupInput id='new-api-key-secret' value={secretKey ?? ''} readOnly className='font-mono text-xs' />
 
             <InputGroupAddon align='inline-end'>

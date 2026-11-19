@@ -1,6 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, it, expect, beforeAll } from 'vitest';
+import ts from 'typescript';
+import { buildReplicadModelTypes } from '#extract-replicad-api.js';
 
 /**
  * Tests for the replicad bundled type declarations.
@@ -37,8 +39,10 @@ describe('extract-replicad-types', () => {
   // ---------------------------------------------------------------------------
 
   it('preserves replicad-opencascadejs imports', () => {
-    expect(output).toContain("import { gp_Pnt } from 'replicad-opencascadejs'");
-    expect(output).toContain("import { TopoDS_Shape } from 'replicad-opencascadejs'");
+    // The bundle copies replicad's declarations verbatim, so whether the
+    // `type` modifier is present depends on replicad's own declaration emitter.
+    expect(output).toMatch(/^import (?:type )?\{ gp_Pnt \} from 'replicad-opencascadejs';$/mu);
+    expect(output).toMatch(/^import (?:type )?\{ TopoDS_Shape \} from 'replicad-opencascadejs';$/mu);
   });
 
   it('preserves opentype.js import', () => {
@@ -82,23 +86,24 @@ describe('extract-replicad-types', () => {
   // ---------------------------------------------------------------------------
 
   it('exports draw function', () => {
-    expect(output).toContain('export declare function draw(');
+    expect(output).toContain('export declare const draw: typeof drawModule.draw;');
   });
 
   it('exports drawCircle function', () => {
-    expect(output).toContain('export declare function drawCircle(');
+    expect(output).toContain('export declare const drawCircle: typeof drawModule.drawCircle;');
   });
 
   it('exports drawRoundedRectangle function', () => {
-    expect(output).toContain('export declare function drawRoundedRectangle(');
+    expect(output).toContain('export declare const drawRoundedRectangle: typeof drawModule.drawRoundedRectangle;');
   });
 
   it('exports makeSolid function', () => {
-    expect(output).toContain('export declare function makeSolid(');
+    expect(output).toContain('export declare const makeSolid: typeof shapeHelpers.makeSolid;');
   });
 
   it('exports cast function', () => {
-    expect(output).toContain('export declare function cast(');
+    // Replicad 1.1 defines `cast` as a `makeCaster` constant, not a function declaration.
+    expect(output).toContain('export declare const cast: (shape: TopoDS_Shape) => AnyShape;');
   });
 
   // ---------------------------------------------------------------------------
@@ -120,4 +125,71 @@ describe('extract-replicad-types', () => {
   it('exports DrawingInterface', () => {
     expect(output).toContain('export declare interface DrawingInterface');
   });
+});
+
+describe('Replicad model authoring types', () => {
+  it('compiles the lampshade against the generated the TypeScript service package and rejects invalid materials', () => {
+    const generated = buildReplicadModelTypes();
+    expect(generated).toEqual(
+      JSON.parse(readFileSync(new URL('generated/replicad/model.bundled.json', import.meta.url), 'utf8')),
+    );
+    const root = join(import.meta.dirname, '../../..');
+    const cache = join(root, 'node_modules/.cache/replicad-model-types');
+    mkdirSync(cache, { recursive: true });
+    const directory = mkdtempSync(join(cache, 'consumer-'));
+    try {
+      const bundle = generated['@taucad/replicad']!;
+      const packageRoot = join(directory, 'node_modules/@taucad/replicad');
+      for (const [name, content] of Object.entries({
+        ...bundle.files,
+        'index.d.ts': bundle.content,
+        'package.json': JSON.stringify(bundle.packageJson),
+      })) {
+        const path = join(packageRoot, name);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, content);
+      }
+      const entry = join(directory, 'main.ts');
+      const source = readFileSync(
+        join(root, 'libs/tau-examples/src/kernels/replicad/copper-lampshade/main.ts'),
+        'utf8',
+      );
+      writeFileSync(
+        entry,
+        source +
+          `
+import { axis, face, frame, group, isValidInterfaceName } from '@taucad/replicad/annotations';
+import type { InterfaceDeclarations } from '@taucad/replicad/annotations';
+const declared: InterfaceDeclarations = {
+  top: face((finder) => finder.inPlane('XY', 0)),
+  bore: axis((finder) => finder.inPlane('XY', 0)),
+  origin: frame({ origin: [0, 0, 0] }),
+  mount: group([face((finder) => finder.inPlane('XY', 0))]),
+};
+const valid: boolean = isValidInterfaceName('motor.shaft');
+// @ts-expect-error Material factors require numbers.
+const invalid: Material = { extensions: { KHR_materials_anisotropy: { anisotropyStrength: 'bad' } } };
+// @ts-expect-error glTF alpha modes are a closed vocabulary.
+const invalidAlpha: Material = { alphaMode: 'glass' };
+`,
+      );
+      const program = ts.createProgram([entry], {
+        noEmit: true,
+        strict: true,
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        skipLibCheck: false,
+        types: [],
+      });
+      const diagnostics = ts
+        .getPreEmitDiagnostics(program)
+        .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error);
+      expect(diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual(
+        [],
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

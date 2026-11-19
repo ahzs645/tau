@@ -1,0 +1,443 @@
+import { kernelConfigurations } from '@taucad/types/constants';
+import { describe, it, expect } from 'vitest';
+import {
+  agentToolKinds,
+  clientMetricEntrySchema,
+  ingestPayloadSchema,
+  IngestEntryName,
+  retiredIngestEntryNames,
+  retiredIngestEntrySchema,
+  kernelIds,
+  tauToolNames,
+} from '#ingest.js';
+
+describe('IngestEntryName', () => {
+  it('should not name a retired entry', () => {
+    for (const name of retiredIngestEntryNames) {
+      expect(Object.values(IngestEntryName)).not.toContain(name);
+    }
+  });
+});
+
+describe('retiredIngestEntrySchema', () => {
+  it.each(retiredIngestEntryNames)('should admit %s by name and strip what it carries', (name) => {
+    const entry = { name, duration: 5, detail: { status: 'error', error: 'Kernel crash' } };
+    expect(retiredIngestEntrySchema.parse(entry)).toEqual({ name });
+  });
+
+  it('should not admit a live or unknown entry name', () => {
+    expect(retiredIngestEntrySchema.safeParse({ name: IngestEntryName.AGENT_TURN }).success).toBe(false);
+    expect(retiredIngestEntrySchema.safeParse({ name: 'unknown.metric' }).success).toBe(false);
+  });
+});
+
+describe('kernelIds', () => {
+  it('should pin exactly the product catalog kernel ids, in catalog order', () => {
+    expect(kernelIds).toEqual(kernelConfigurations.map(({ id }) => id));
+  });
+});
+
+describe('clientMetricEntrySchema', () => {
+  it.each(retiredIngestEntryNames)('should no longer accept the retired %s entry', (name) => {
+    expect(clientMetricEntrySchema.safeParse({ name, duration: 5, detail: { status: 'success' } }).success).toBe(false);
+  });
+
+  it('should accept a large-object fetch of counts only, and refuse one that names an object', () => {
+    const entry = {
+      name: IngestEntryName.LFS_FETCH,
+      duration: 17_500,
+      detail: { placement: 'browser', networkObjects: 295, networkBytes: 69_960_000, localObjects: 0, localBytes: 0 },
+    };
+    expect(clientMetricEntrySchema.parse(entry)).toEqual(entry);
+    expect(
+      clientMetricEntrySchema.safeParse({ ...entry, detail: { ...entry.detail, networkObjects: -1 } }).success,
+    ).toBe(false);
+    expect(
+      clientMetricEntrySchema.safeParse({ ...entry, detail: { ...entry.detail, placement: 'proj_1' } }).success,
+    ).toBe(false);
+  });
+
+  it('should accept a large-object fetch and a project open naming their transport, and refuse a host', () => {
+    const fetch = {
+      name: IngestEntryName.LFS_FETCH,
+      duration: 6000,
+      detail: {
+        placement: 'browser',
+        networkObjects: 295,
+        networkBytes: 69_960_000,
+        localObjects: 0,
+        localBytes: 0,
+        transport: 'files',
+      },
+    };
+    expect(clientMetricEntrySchema.parse(fetch)).toEqual(fetch);
+    const open = {
+      name: IngestEntryName.PROJECT_OPEN,
+      duration: 6100,
+      detail: { phase: 'fully_fetched', cache: 'cold', transport: 'r2_presigned' },
+    };
+    expect(clientMetricEntrySchema.parse(open)).toEqual(open);
+    expect(
+      clientMetricEntrySchema.safeParse({ ...fetch, detail: { ...fetch.detail, transport: 'files.taucad.dev' } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('should accept worker span totals by span name, and refuse an unknown name or a negative total', () => {
+    const fetch = {
+      name: IngestEntryName.LFS_FETCH,
+      duration: 6000,
+      detail: {
+        placement: 'browser',
+        networkObjects: 2,
+        networkBytes: 20,
+        localObjects: 0,
+        localBytes: 0,
+        spans: { 'lfs.store': 1200, 'queue.wait': 40 },
+      },
+    };
+    expect(clientMetricEntrySchema.parse(fetch)).toEqual(fetch);
+    const open = {
+      name: IngestEntryName.PROJECT_OPEN,
+      duration: 6100,
+      detail: { phase: 'first_view', cache: 'cold', spans: { 'apply.hold': 900 } },
+    };
+    expect(clientMetricEntrySchema.parse(open)).toEqual(open);
+    expect(
+      clientMetricEntrySchema.safeParse({ ...open, detail: { ...open.detail, spans: { 'models/a.step': 1 } } }).success,
+    ).toBe(false);
+    expect(
+      clientMetricEntrySchema.safeParse({ ...fetch, detail: { ...fetch.detail, spans: { 'lfs.store': -1 } } }).success,
+    ).toBe(false);
+  });
+
+  it('should accept a project open of two bounded words, and refuse any other word', () => {
+    const entry = {
+      name: IngestEntryName.PROJECT_OPEN,
+      duration: 4200,
+      detail: { phase: 'first_view', cache: 'cold' },
+    };
+    expect(clientMetricEntrySchema.parse(entry)).toEqual(entry);
+    expect(clientMetricEntrySchema.safeParse({ ...entry, detail: { ...entry.detail, phase: 'proj_1' } }).success).toBe(
+      false,
+    );
+    expect(clientMetricEntrySchema.safeParse({ ...entry, detail: { ...entry.detail, cache: 'partial' } }).success).toBe(
+      false,
+    );
+    expect(clientMetricEntrySchema.safeParse({ ...entry, duration: -1 }).success).toBe(false);
+  });
+
+  it('should reject an entry with unknown name', () => {
+    expect(() => clientMetricEntrySchema.parse({ name: 'unknown.metric', duration: 1 })).toThrow();
+  });
+
+  it('should reject an entry with negative duration', () => {
+    const detail = { direction: 'push', outcome: 'ok', placement: 'browser' };
+    expect(() => clientMetricEntrySchema.parse({ name: IngestEntryName.SYNC_ATTEMPT, duration: -1, detail })).toThrow();
+  });
+
+  it('should reject an entry missing duration', () => {
+    const detail = { direction: 'push', outcome: 'ok', placement: 'browser' };
+    expect(() => clientMetricEntrySchema.parse({ name: IngestEntryName.SYNC_ATTEMPT, detail })).toThrow();
+  });
+
+  it('should reject an entry missing name', () => {
+    expect(() => clientMetricEntrySchema.parse({ duration: 10 })).toThrow();
+  });
+});
+
+describe('ingestPayloadSchema', () => {
+  it('should accept a valid payload with multiple entries', () => {
+    const payload = {
+      entries: [
+        {
+          name: IngestEntryName.SYNC_ATTEMPT,
+          duration: 100,
+          detail: { direction: 'push', outcome: 'ok', placement: 'browser' },
+        },
+        { name: IngestEntryName.PROJECT_OPEN, duration: 50, detail: { phase: 'first_view', cache: 'warm' } },
+      ],
+    };
+    expect(ingestPayloadSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('should reject an empty entries array', () => {
+    expect(() => ingestPayloadSchema.parse({ entries: [] })).toThrow();
+  });
+
+  it('should reject a payload without entries field', () => {
+    expect(() => ingestPayloadSchema.parse({})).toThrow();
+  });
+
+  it('should reject a payload with invalid entry in array', () => {
+    expect(() =>
+      ingestPayloadSchema.parse({
+        entries: [{ name: 'bad.name', duration: 1 }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe('agent usage entries', () => {
+  it('should accept a Codex turn with tools and tokens', () => {
+    const entry = {
+      name: IngestEntryName.AGENT_TURN,
+      duration: 4000,
+      detail: {
+        agentId: 'codex',
+        placement: 'daemon',
+        outcome: 'completed',
+        timeToFirstUpdate: 800,
+        toolCalls: [{ kind: 'read', status: 'completed', count: 1 }],
+        tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0 },
+      },
+    };
+    expect(clientMetricEntrySchema.parse(entry)).toEqual(entry);
+  });
+
+  it('should reject a tool kind outside ACP ToolKind', () => {
+    expect(() =>
+      clientMetricEntrySchema.parse({
+        name: IngestEntryName.AGENT_TURN,
+        duration: 1,
+        detail: {
+          agentId: 'tau',
+          placement: 'browser',
+          outcome: 'completed',
+          toolCalls: [{ kind: 'shell', status: 'completed', count: 1 }],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('should accept safeguard interventions and compaction decisions in bounded vocabularies (R9)', () => {
+    const entry = {
+      name: IngestEntryName.AGENT_TURN,
+      duration: 4000,
+      detail: {
+        agentId: 'tau',
+        placement: 'browser',
+        outcome: 'completed',
+        safeguards: [{ pattern: 'identical_call', action: 'nudge', count: 2 }],
+        compactions: [{ lane: 'overflow', tier: 'summarization', outcome: 'generated', count: 1 }],
+      },
+    };
+    expect(clientMetricEntrySchema.parse(entry)).toEqual(entry);
+  });
+
+  it('should accept prefix breaks by cause and provider, with the reasoning they left out', () => {
+    const entry = {
+      name: IngestEntryName.AGENT_TURN,
+      duration: 4000,
+      detail: {
+        agentId: 'tau',
+        placement: 'browser',
+        outcome: 'completed',
+        prefixBreaks: [
+          { cause: 'attachment-eviction', provider: 'anthropic', count: 1, reasoningOmitted: 3 },
+          { cause: 'clearing', provider: 'anthropic', outcome: 'partial', count: 2, reasoningOmitted: 0 },
+        ],
+      },
+    };
+    expect(clientMetricEntrySchema.parse(entry)).toEqual(entry);
+  });
+
+  it.each([
+    [
+      'an unknown prefix-break cause',
+      { prefixBreaks: [{ cause: 'cosmic-ray', provider: 'anthropic', count: 1, reasoningOmitted: 0 }] },
+    ],
+    [
+      'an unknown prefix-break cache outcome',
+      { prefixBreaks: [{ cause: 'model', provider: 'anthropic', outcome: 'warm', count: 1, reasoningOmitted: 0 }] },
+    ],
+    [
+      'an unknown prefix-break provider',
+      { prefixBreaks: [{ cause: 'model', provider: 'acme', count: 1, reasoningOmitted: 0 }] },
+    ],
+    ['an unknown safeguard pattern', { safeguards: [{ pattern: 'doom_loop', action: 'nudge', count: 1 }] }],
+    [
+      'an unknown compaction lane',
+      { compactions: [{ lane: 'nightly', tier: 'summarization', outcome: 'generated', count: 1 }] },
+    ],
+  ])('should reject a turn with %s', (_label, extra) => {
+    expect(() =>
+      clientMetricEntrySchema.parse({
+        name: IngestEntryName.AGENT_TURN,
+        duration: 1,
+        detail: { agentId: 'tau', placement: 'browser', outcome: 'completed', ...extra },
+      }),
+    ).toThrow();
+  });
+
+  it('should clamp a turn longer than a day instead of dropping it', () => {
+    const parsed = clientMetricEntrySchema.parse({
+      name: IngestEntryName.AGENT_TURN,
+      duration: 90_000_000,
+      detail: { agentId: 'tau', placement: 'browser', outcome: 'completed' },
+    });
+    expect(parsed.duration).toBe(86_400_000);
+  });
+});
+
+describe('agent turn context', () => {
+  const context = {
+    kernelId: 'replicad',
+    skillsActivated: ['cad-replicad', 'custom'],
+    callsBeforeFirstModelWrite: 6,
+    timeToFirstModelWrite: 42_000,
+    referenceLookups: [
+      { outcome: 'ok', count: 3 },
+      { outcome: 'zero_match', count: 1 },
+    ],
+    referenceBytesRead: 20_480,
+    evaluations: [
+      { class: 'api_misuse', count: 1 },
+      { class: 'ok', count: 1 },
+    ],
+    correctionsAfterError: 1,
+    geospec: { runs: 1, passed: 4, failed: 1, runStatuses: [{ status: 'failed', count: 1 }] },
+  };
+
+  const turn = (detail: Record<string, unknown>) => ({
+    name: IngestEntryName.AGENT_TURN,
+    duration: 60_000,
+    detail: { agentId: 'tau', placement: 'browser', outcome: 'completed', ...detail },
+  });
+
+  it('should accept a turn with context and Tau tool names unchanged', () => {
+    const entry = turn({
+      toolCalls: [{ kind: 'search', tool: 'grep', status: 'completed', count: 2 }],
+      context,
+    });
+
+    expect(clientMetricEntrySchema.parse(entry)).toEqual(entry);
+  });
+
+  it('should leave context absent when the turn omits it', () => {
+    const parsed = clientMetricEntrySchema.parse(turn({}));
+
+    expect(parsed.detail).not.toHaveProperty('context');
+  });
+
+  it('should clamp every context count to its ceiling instead of dropping the turn', () => {
+    const parsed = clientMetricEntrySchema.parse(
+      turn({
+        context: {
+          ...context,
+          callsBeforeFirstModelWrite: 5000,
+          timeToFirstModelWrite: 1e12,
+          referenceLookups: [{ outcome: 'ok', count: 1e6 }],
+          referenceBytesRead: 1e12,
+          evaluations: [{ class: 'compile', count: 1000 }],
+          correctionsAfterError: 1000,
+          geospec: { runs: 1000, passed: 1e9, failed: 1e9, runStatuses: [{ status: 'passed', count: 1000 }] },
+        },
+      }),
+    );
+
+    expect(parsed.detail).toMatchObject({
+      context: {
+        callsBeforeFirstModelWrite: 1000,
+        timeToFirstModelWrite: 86_400_000,
+        referenceLookups: [{ outcome: 'ok', count: 1000 }],
+        referenceBytesRead: 10_000_000,
+        evaluations: [{ class: 'compile', count: 100 }],
+        correctionsAfterError: 100,
+        geospec: { runs: 100, passed: 10_000, failed: 10_000, runStatuses: [{ status: 'passed', count: 100 }] },
+      },
+    });
+  });
+
+  it.each([
+    ['an unknown kernel', { ...context, kernelId: 'freecad' }],
+    ['an unknown skill', { ...context, skillsActivated: ['my-private-skill'] }],
+    ['an unknown lookup outcome', { ...context, referenceLookups: [{ outcome: 'timeout', count: 1 }] }],
+    ['an unknown evaluation class', { ...context, evaluations: [{ class: 'syntax', count: 1 }] }],
+    [
+      'an unknown GeoSpec run status',
+      { ...context, geospec: { ...context.geospec, runStatuses: [{ status: 'skipped', count: 1 }] } },
+    ],
+    ['a fractional count', { ...context, correctionsAfterError: 1.5 }],
+    ['a negative count', { ...context, referenceLookups: [{ outcome: 'ok', count: -1 }] }],
+    ['more than eight skills', { ...context, skillsActivated: Array.from({ length: 9 }, () => 'custom') }],
+    [
+      'more lookup rows than outcomes',
+      { ...context, referenceLookups: Array.from({ length: 5 }, () => ({ outcome: 'ok', count: 1 })) },
+    ],
+    [
+      'more evaluation rows than classes',
+      { ...context, evaluations: Array.from({ length: 8 }, () => ({ class: 'ok', count: 1 })) },
+    ],
+  ])('should reject a context with %s', (_label, value) => {
+    expect(clientMetricEntrySchema.safeParse(turn({ context: value })).success).toBe(false);
+  });
+
+  it('should reject a tool name outside Tau tools', () => {
+    expect(
+      clientMetricEntrySchema.safeParse(
+        turn({ toolCalls: [{ kind: 'execute', tool: 'Bash', status: 'completed', count: 1 }] }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('should cap tool-call rows at two statuses per ACP kind and Tau tool', () => {
+    const cap = (agentToolKinds.length + tauToolNames.length) * 2;
+    const rows = (length: number) =>
+      Array.from({ length }, () => ({ kind: 'read', tool: 'read_file', status: 'completed', count: 1 }));
+
+    expect(clientMetricEntrySchema.safeParse(turn({ toolCalls: rows(cap) })).success).toBe(true);
+    expect(clientMetricEntrySchema.safeParse(turn({ toolCalls: rows(cap + 1) })).success).toBe(false);
+  });
+});
+
+/* Automatic kernel selection (blueprint D10): kernel ids, small enums and counts; nothing else is accepted. */
+describe('kernel selection entries', () => {
+  const resolved = (detail: Record<string, unknown>) => ({
+    name: IngestEntryName.KERNEL_AUTO_RESOLVED,
+    duration: 0,
+    detail: { hostProfile: 'web', agentId: 'tau', hadOwner: false, rubricVersion: 1, ...detail },
+  });
+
+  it('should accept Auto resolved with and without a bound kernel, and a Tau model id', () => {
+    expect(clientMetricEntrySchema.safeParse(resolved({})).success).toBe(true);
+    expect(
+      clientMetricEntrySchema.safeParse(resolved({ kernel: 'replicad', model: 'anthropic/claude-sonnet-5-5' })).success,
+    ).toBe(true);
+  });
+
+  it('should refuse a field outside the allowlist, an unknown kernel or a model that is not an id', () => {
+    expect(clientMetricEntrySchema.safeParse(resolved({ prompt: 'a bracket' })).success).toBe(false);
+    expect(clientMetricEntrySchema.safeParse(resolved({ kernel: 'freecad' })).success).toBe(false);
+    expect(clientMetricEntrySchema.safeParse(resolved({ model: 'make me a vase' })).success).toBe(false);
+    expect(clientMetricEntrySchema.safeParse(resolved({ hostProfile: 'plugin' })).success).toBe(false);
+  });
+
+  it('should accept an override and clamp its turn count', () => {
+    const parsed = clientMetricEntrySchema.parse({
+      name: IngestEntryName.KERNEL_OVERRIDE,
+      duration: 0,
+      detail: { hostProfile: 'desktop', resolved: 'openscad', manual: 'replicad', turnsSince: 5000, rubricVersion: 1 },
+    });
+    expect(parsed.detail).toMatchObject({ turnsSince: 1000 });
+  });
+
+  it('should accept the three first outcomes and refuse any other', () => {
+    for (const outcome of ['ready', 'failed', 'none']) {
+      expect(
+        clientMetricEntrySchema.safeParse({
+          name: IngestEntryName.KERNEL_FIRST_OUTCOME,
+          duration: 0,
+          detail: { hostProfile: 'web', outcome, turnsToFirstRender: 1, rubricVersion: 1 },
+        }).success,
+      ).toBe(true);
+    }
+    expect(
+      clientMetricEntrySchema.safeParse({
+        name: IngestEntryName.KERNEL_FIRST_OUTCOME,
+        duration: 0,
+        detail: { hostProfile: 'web', outcome: 'partial', turnsToFirstRender: 1, rubricVersion: 1 },
+      }).success,
+    ).toBe(false);
+  });
+});

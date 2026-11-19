@@ -9,10 +9,104 @@
  * - FileTreeNode: tree representation for /files route
  */
 
-import type { FileStat, FileStatEntry } from '@taucad/types';
+import type { BatchEntry, BatchOptions, BatchReceipt } from '#changeset.js';
+import type {
+  CheckedFileWrite,
+  CheckedFileWriteResult,
+  FileWritePrecondition,
+  FileProvenance,
+  FileStat,
+  StatContentMetadata,
+} from '@taucad/types';
 
 // oxlint-disable-next-line no-barrel-files/no-barrel-files -- re-export for internal consumers that import from #types.js
-export type { ChangeEvent, FileStat, FileStatEntry } from '@taucad/types';
+export type { ChangeEvent, ChangeSetEvent, PathChangeEvent, FileStat, FileStatEntry } from '@taucad/types';
+
+/** Rule 16's four storage classes. @public */
+export type PathClass = 'authored' | 'records' | 'cache' | 'control-plane';
+
+/** What a composed view lets an agent do with a path. @public */
+export type PathAgentAccess = 'read-write' | 'read-only' | 'hidden';
+
+/** Which watch plane observes a path. @public */
+export type PathWatchPlane = 'ui' | 'kernel' | 'none';
+
+/** Everything a path policy answers about one path. @public */
+export type PathClassification = Readonly<{
+  class: PathClass;
+  /** Whether the bytes enter a revision. */
+  versioned: boolean;
+  agentAccess: PathAgentAccess;
+  watch: PathWatchPlane;
+}>;
+
+/**
+ * The classifier a composed view is given, never the one it imports (D6).
+ *
+ * The mask is the mechanism and the project's reserved layout is data, so the
+ * classification types live here while the table that answers them is the
+ * registry subpath's. Tau's own instance is `tauPathPolicy`; a test or a future
+ * layout passes its own.
+ *
+ * @public
+ */
+export type PathPolicy = {
+  readonly classify: (path: string) => PathClassification;
+};
+
+/**
+ * Git mode supported for a regular file a provider reports and sets.
+ *
+ * Owned here, not by the revision algorithms that also speak it (D9/W8): the
+ * executable bit is a property of a file on a backend, and `getFileMode` is the
+ * only way one is read.
+ *
+ * @public
+ */
+export type FileMode = '100644' | '100755';
+
+/** One directory row with head metadata (I3: content facts only when known). @public */
+export type DirectoryStatRow = { readonly name: string } & FileStat;
+
+/**
+ * What a file's bytes are, measured once from the bytes themselves (charter D4).
+ *
+ * Recorded on the write path, where the bytes are in hand, or by an explicit
+ * lazy `facts` request; never by a metadata call. `blobOid` and `sha256` are
+ * present only when something hashed exactly these bytes.
+ *
+ * @public
+ */
+export type ContentFacts = Readonly<{
+  contentKind: 'text' | 'binary';
+  /** Exact `split('\n')` line count; text only. */
+  lineCount?: number;
+  /** Lowercase hexadecimal SHA-256 of the bytes. */
+  sha256?: string;
+  /** Git blob object id (SHA-1) of the bytes. */
+  blobOid?: string;
+}>;
+
+/** Options for a lazy {@link ContentFacts} request. @public */
+export type ContentFactsOptions = Readonly<{
+  /**
+   * Count the lines of text files. Without it a request learns the kind only,
+   * from each file's first 512 bytes.
+   */
+  lineCount?: boolean;
+  /**
+   * Largest file read in full, to count lines or digest it; omitted means no
+   * cap. A larger file answers its kind and nothing else (D4).
+   */
+  byteCap?: number;
+  /**
+   * The head metadata the caller already listed, one per requested path in
+   * request order (`undefined` where it has none): what lets facts measured
+   * from an earlier read be checked as current without another stat.
+   */
+  listed?: ReadonlyArray<Readonly<{ size: number; mtimeMs: number }> | undefined>;
+  signal?: AbortSignal;
+}>;
 
 /**
  * Capability flags describing what a storage provider supports.
@@ -22,9 +116,89 @@ export type ProviderCapabilities = {
   readonly persistent: boolean;
   readonly writable: boolean;
   readonly quotaBased: boolean;
-  /** Whether the backend treats paths as case-sensitive. Defaults to `true`. */
-  readonly caseSensitive?: boolean;
+  /**
+   * Append durability reported by current providers. Optional only so older
+   * bridge peers and third-party providers remain wire-compatible.
+   */
+  readonly durability?: 'exclusive-append' | 'stream-append' | 'transactional-rewrite' | 'ephemeral';
+  /**
+   * Whether concurrent writes are coalesced into the backend's own batched
+   * commit. A provider that declares it costs no extra handle per write in
+   * flight, so a bulk batch may hand it every file at once (Rule 34); one that
+   * does not receives them one at a time.
+   */
+  readonly coalescesWrites?: boolean;
+  /**
+   * Whether `mtimeMs` changes whenever a file's bytes do, so a Project Index
+   * may key content facts on `(size, mtimeMs)` (D5). A provider without it
+   * opts out: no snapshot is kept and every fact is re-read (closeout EQ7).
+   */
+  readonly trustworthyMtime?: boolean;
+  /**
+   * Whether programs other than Tau's authorities write this root (a folder
+   * the user picked, a checkout on disk), so an indexed digest must be
+   * compared against the provider before a cut trusts it (D5).
+   */
+  readonly externallyEdited?: boolean;
+  /**
+   * Whether `writeFileStream` holds one chunk at a time rather than gathering
+   * the whole file first (File System Access, OPFS, Node). A consumer that
+   * streams to save memory streams only where this is set (W6.4).
+   */
+  readonly streamsWrites?: boolean;
+  /**
+   * Whether `rename` of a file is a metadata operation that never reads or
+   * writes its bytes (OPFS's native `move()`, Node's `rename`). A consumer
+   * that would move many files into place asks first, and writes them where
+   * they belong instead on a provider whose rename copies (W7).
+   */
+  readonly movesInPlace?: boolean;
+  /**
+   * Whether a write may name a large object by its id (`LargeObjectWriteSource`)
+   * for the provider to clone or copy from the repository store its authority
+   * was given for this root (EQ13). Absent, such a write is refused before any
+   * I/O, and the caller writes the bytes.
+   */
+  readonly largeObjectSources?: boolean;
 };
+
+/**
+ * Directory child with its kind, so callers can branch on file-vs-directory
+ * without a `stat` round-trip per entry.
+ * @public
+ */
+export type DirectoryEntry = {
+  readonly name: string;
+  readonly kind: 'file' | 'dir';
+  /**
+   * What the enumerating surface says about this row; absent on a raw provider
+   * listing. A composed view has already computed it for every row it lists, so
+   * a caller that filters on provenance reads it here instead of asking again.
+   */
+  readonly provenance?: FileProvenance;
+};
+
+/**
+ * One normalised external-change fact: what a backend that observes its own root
+ * reports to the authority, in the authority's vocabulary rather than its own
+ * (charter D13). Paths are provider-relative, as every other port path is.
+ *
+ * `reset` carries no path: the observer lost track of this root, so every
+ * derivative of it is now untrustworthy. `unknown` names a path whose change the
+ * observer could not describe, and the authority reconciles that subtree.
+ *
+ * @public
+ */
+export type ExternalChangeFact =
+  | {
+      readonly kind: 'created' | 'modified' | 'deleted' | 'moved' | 'unknown';
+      readonly path: string;
+      /** Entry kind, when the observer reported one. */
+      readonly entry?: 'file' | 'dir';
+      /** Previous path of a `moved` entry, when the observer reported one. */
+      readonly from?: string;
+    }
+  | { readonly kind: 'reset' };
 
 /**
  * Backend-agnostic filesystem provider exposing POSIX-like operations.
@@ -33,10 +207,42 @@ export type ProviderCapabilities = {
 export type FileSystemProvider = {
   readonly id: string;
   readonly capabilities: ProviderCapabilities;
+  /** Optional batched listing: one level with head metadata, reading no file content (I3). */
+  readdirWithStats?(path: string): Promise<DirectoryStatRow[]>;
   readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
   readFile(path: string, encoding: 'utf8'): Promise<string>;
+  /** Persist a file, creating any missing parent directories. */
   writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
+  /** Atomically check current bytes and replace one file when this provider owns a real authority fence. */
+  writeFileChecked?(input: Omit<CheckedFileWrite, 'signal'>): Promise<CheckedFileWriteResult>;
+  /** Atomically check current bytes and delete one file under the same authority fence. */
+  deleteFileChecked?(input: {
+    path: string;
+    preconditions: readonly FileWritePrecondition[];
+  }): Promise<CheckedFileWriteResult>;
+  /** Append bytes in enqueue order, creating the file and missing parent directories when absent. */
+  appendFile?(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
+  /**
+   * Write one file from a stream of its bytes, creating missing parents (W6.3).
+   *
+   * An existing file keeps its old bytes until the stream ends, and then holds
+   * all the new ones: chunks land in a staged file that is moved or closed over
+   * the path only once the stream is done (I1). A new file never holds part of
+   * the stream at its path. Where the provider cannot stage it elsewhere (a
+   * picked folder, or OPFS without sync handles and a native move) it is
+   * recorded as an uncommitted create and reads as empty until the stream
+   * ends; a crash leaves that empty file for the root's recovery to remove, or,
+   * on a root that keeps no record, a temporary sibling for the sweep. A stream
+   * that errors, or a write that fails, leaves the path as it was and nothing
+   * staged behind, and the source is cancelled whenever the write stops before
+   * reading it to the end. File System Access, OPFS and Node providers hold
+   * one chunk at a time (a picked folder without a native move copies a staged
+   * sibling into place); a provider whose storage keeps a file whole (memory,
+   * IndexedDB) gathers it first.
+   */
+  writeFileStream?(path: string, source: ReadableStream<Uint8Array<ArrayBuffer>>): Promise<void>;
   readdir(path: string): Promise<string[]>;
+  /** Head metadata of one path: kind, size and time, reading no file content (I3). */
   stat(path: string): Promise<FileStat>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   unlink(path: string): Promise<void>;
@@ -44,11 +250,65 @@ export type FileSystemProvider = {
   rename(from: string, to: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   lstat(path: string): Promise<FileStat>;
+  /** Read a regular file's Git-compatible executable mode when the backend exposes it. */
+  getFileMode?(path: string): Promise<FileMode>;
+  /** Apply a Git-compatible regular-file mode without exposing an unrestricted chmod seam. */
+  setFileMode?(path: string, mode: FileMode): Promise<void>;
   dispose(): void;
   /** Optional streaming read. When present, service routes through this instead of buffered readFile. */
   readFileStream?(path: string, options?: FileReadStreamOptions): ReadableStream<Uint8Array<ArrayBuffer>>;
-  /** Optional batched readdir+stat. When present, eliminates N+1 stat calls per directory listing. */
-  readdirWithStats?(path: string): Promise<Array<{ name: string } & FileStat>>;
+  /**
+   * Optional batched digest, computed where the bytes live: each path's
+   * lowercase hexadecimal SHA-256, or `'missing'` when nothing is there. Every
+   * requested path is a key of the result; a failure other than absence
+   * rejects. A remote provider answers it in one round trip without shipping
+   * bodies; without it, callers read and digest the bodies themselves.
+   */
+  hashFiles?(paths: readonly string[]): Promise<Record<string, string>>;
+  /**
+   * Apply one changeset phase's entries for this provider, reporting each
+   * entry's outcome truthfully (charter D2). Entries name no path twice except
+   * appends, which run in entry order, and none lies inside another's subtree.
+   * Never rejects for an entry's own failure. A provider without it is driven
+   * through its primitives.
+   */
+  applyBatch?(entries: readonly BatchEntry[], options?: BatchOptions): Promise<BatchReceipt[]>;
+  /** Optional readdir carrying entry kinds. When present, tree walks skip the stat-per-child. */
+  readdirEntries?(path: string): Promise<DirectoryEntry[]>;
+  /**
+   * Refresh provider projections after an out-of-band mutation. Pass the absolute
+   * paths whose subtrees changed to scope the invalidation; omit them to drop everything.
+   */
+  refresh?(prefixes?: readonly string[]): Promise<void>;
+  /**
+   * Report this root's own external changes. Declared only by a backend that can
+   * observe itself; the authority falls back to bounded snapshot polling for one
+   * that cannot, so capability presence — never backend identity — decides how a
+   * root is watched (charter D13).
+   *
+   * Resolves with a disposer, or with `undefined` when observation exists in
+   * principle but could not be armed here and polling must cover the root. A
+   * rejection means the root has no fallback and its derivatives are stale.
+   */
+  observe?(listener: (facts: readonly ExternalChangeFact[]) => void): Promise<(() => void) | undefined>;
+};
+
+/**
+ * Options for a directory creation.
+ * @public
+ */
+export type MkdirOptions = {
+  recursive?: boolean;
+};
+
+/**
+ * Optional metadata for workspace mutations initiated from a specific client
+ * (e.g. a filesystem bridge port). Observer and direct UI paths omit this.
+ *
+ * @public
+ */
+export type WorkspaceMutationContext = {
+  originClientId?: string;
 };
 
 /**
@@ -71,42 +331,55 @@ export type FileReadStreamOptions = {
  * Also used by the `/files` route to display all backends side-by-side.
  * @public
  */
-export type FileTreeNode = {
-  id: string;
-  name: string;
-  /** File byte length; directories use `0` when unknown. */
-  size: number;
-  /** Milliseconds since Unix epoch (provider stat). */
-  mtimeMs: number;
-  children?: FileTreeNode[];
-};
+export type FileTreeNode =
+  | {
+      id: string;
+      name: string;
+      /** Directories use `0` when unknown. */
+      size: number;
+      /** Milliseconds since Unix epoch (provider stat). */
+      mtimeMs: number;
+      children: FileTreeNode[];
+      /** What a composed view says about this entry; absent on a raw authority listing. */
+      provenance?: FileProvenance;
+      /** A folder only a tree write's arriving entries make (D10): not on disk yet. */
+      pending?: true;
+    }
+  | ({
+      id: string;
+      name: string;
+      /** File byte length. */
+      size: number;
+      /** Milliseconds since Unix epoch (provider stat). */
+      mtimeMs: number;
+      children?: never;
+      /** What a composed view says about this entry; absent on a raw authority listing. */
+      provenance?: FileProvenance;
+      /** A pending entry (D9, D10): its bytes are not on the device yet; `size` is what they will be. */
+      pending?: true;
+    } & StatContentMetadata);
 
 /**
  * Directory listing row with stat metadata (worker readDirectory aggregation).
  * @public
  */
-export type TreeEntry = {
-  name: string;
-  type: 'file' | 'dir';
-  size: number;
-  mtimeMs: number;
-};
+export type TreeEntry =
+  | {
+      name: string;
+      type: 'dir';
+      size: number;
+      mtimeMs: number;
+    }
+  | ({
+      name: string;
+      type: 'file';
+      size: number;
+      mtimeMs: number;
+    } & StatContentMetadata);
 
 // =============================================================================
 // Watch API types
 // =============================================================================
-
-/**
- * Filter mask for watch event types. When a field is `true`, events of that
- * type are delivered. When omitted or `undefined`, the type is included.
- * @public
- */
-export type WatchEventFilter = {
-  added?: boolean;
-  updated?: boolean;
-  deleted?: boolean;
-  renamed?: boolean;
-};
 
 /**
  * Describes a filesystem watch subscription.
@@ -114,8 +387,6 @@ export type WatchEventFilter = {
  * - `paths`: absolute normalized watch roots
  * - `recursive`: watch subdirectories (default `false`)
  * - `includes`/`excludes`: glob patterns for path filtering
- * - `filter`: event type mask
- * - `correlationId`: echoed in outgoing events for client-side routing
  * @public
  */
 export type WatchRequest = {
@@ -123,67 +394,15 @@ export type WatchRequest = {
   recursive?: boolean;
   includes?: string[];
   excludes?: string[];
-  filter?: WatchEventFilter;
-  correlationId?: string;
 };
 
 /**
- * Events delivered to watch subscribers. `reset` and `overflow` signal that
- * the event stream is no longer reliable and consumers must resync.
+ * Events delivered to watch subscribers. `reset` signals that the event
+ * stream is no longer reliable and consumers must resync.
  * @public
  */
 export type WatchEvent =
-  | { type: 'change'; path: string; correlationId?: string }
-  | { type: 'delete'; path: string; correlationId?: string }
-  | { type: 'rename'; oldPath: string; newPath: string; correlationId?: string }
-  | { type: 'reset'; correlationId?: string }
-  | { type: 'overflow'; correlationId?: string };
-
-// =============================================================================
-// Runtime kernel facade types
-// =============================================================================
-
-/**
- * In-memory cache for file content bytes consulted by {@link FileSystemService}
- * before delegating reads to the underlying provider. Implementations include
- * an LRU heap-backed cache and a `SharedArrayBuffer` pool for cross-thread
- * sharing.
- * @public
- */
-export type FileContentCache = {
-  /** Return cached bytes for `path`, or `undefined` for cache miss. */
-  get(path: string): Uint8Array<ArrayBuffer> | undefined;
-  /** Store bytes for `path`, evicting older entries per implementation policy. */
-  put(path: string, bytes: Uint8Array<ArrayBuffer>): void;
-  /** Drop the entry for `path` so the next read re-fetches from the provider. */
-  invalidate(path: string): void;
-  /** Drop every entry. */
-  invalidateAll(): void;
-  /**
-   * Subscribe to invalidation notifications. The returned disposable detaches
-   * the handler. Implementations that share state across threads (e.g. shared
-   * pool cache) emit synthetic invalidations on remote writes.
-   */
-  on(event: 'invalidate', handler: (path: string) => void): { dispose: () => void };
-};
-
-/**
- * Kernel-side filesystem facade. Aliases {@link FileSystemProvider} with a
- * `watch` subscription and four convenience helpers that the kernel runtime
- * uses for batched I/O. Authored backends never implement these helpers
- * directly — they are decorated onto the provider primitives by
- * `createRuntimeFileSystem`.
- * @public
- */
-export type RuntimeFileSystem = FileSystemProvider & {
-  /** Subscribe to filesystem change events scoped by the request. */
-  watch(request: WatchRequest, handler: (event: WatchEvent) => void): { dispose: () => void };
-  /** Read multiple files in a single call; result keyed by path. */
-  readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
-  /** Read every file in a directory (skips subdirectories); result keyed by short name. */
-  readdirContents(directoryPath: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
-  /** List a directory and return path-stamped stats. */
-  readdirStat(directoryPath: string): Promise<FileStatEntry[]>;
-  /** Create `path` (recursive) and silently succeed if it already exists. */
-  ensureDir(path: string): Promise<void>;
-};
+  | { type: 'change'; path: string }
+  | { type: 'delete'; path: string }
+  | { type: 'rename'; oldPath: string; newPath: string }
+  | { type: 'reset' };

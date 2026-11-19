@@ -1,0 +1,92 @@
+{
+  "name": "@taucad/openrscad",
+  "version": "0.1.0-beta.9",
+  "description": "OpenRSCAD Rust WebAssembly kernel for OpenSCAD language models",
+  "type": "module",
+  "sideEffects": false,
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/plugins/openrscad"
+  },
+  "homepage": "https://github.com/taucad/tau/tree/main/packages/plugins/openrscad#readme",
+  "bugs": {
+    "url": "https://github.com/taucad/tau/issues"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist",
+    "agent",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "cad",
+    "plugin",
+    "openrscad"
+  ],
+  "author": "Richard Fontein",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent": {
+      "types": "./agent/skills.d.cts",
+      "default": "./agent/skills.json"
+    },
+    "./agent/*": "./agent/*",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
+      },
+      "./agent": {
+        "types": "./agent/skills.d.cts",
+        "default": "./agent/skills.json"
+      },
+      "./agent/*": "./agent/*",
+      "./package.json": "./package.json"
+    },
+    "imports": {}
+  },
+  "imports": {
+    "#e2e/*.js": "./e2e/*.ts",
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
+  "dependencies": {
+    "@taucad/geometry-core": "workspace:*",
+    "@taulabs/openrscad-engine": "catalog:"
+  },
+  "peerDependencies": {
+    "@taucad/runtime": "^0.1.0-beta.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "catalog:",
+    "@gltf-transform/functions": "catalog:",
+    "@taucad/assimp": "workspace:*",
+    "@taucad/runtime": "workspace:*",
+    "@taucad/runtime-testing": "workspace:*",
+    "jsdom": "catalog:",
+    "jszip": "^3.10.1",
+    "uint8array-extras": "catalog:",
+    "zod": "catalog:"
+  },
+  "taucad": {
+    "hostTarget": "browser"
+  },
+  "tau": {
+    "skills": "./agent/skills.json"
+  }
+}

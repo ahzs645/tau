@@ -8,19 +8,29 @@
   "templating": {
     "list": [
       {
+        "name": "app",
+        "label": "Application",
+        "type": "constant",
+        "query": ".*",
+        "description": "Local default matches unlabeled series. Hosted provisioning binds this to exactly one application.",
+        "current": { "text": ".*", "value": ".*" },
+        "hide": 2
+      },
+      {
         "name": "service",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(up, service_name)",
+        "label": "Service",
+        "type": "custom",
+        "query": "tau-api",
+        "description": "Tau runs one service. A constant, so panels never lose their filter when the API's own series go stale during an outage.",
         "current": { "text": "tau-api", "value": "tau-api" },
-        "includeAll": false,
-        "refresh": 1
+        "options": [{ "text": "tau-api", "value": "tau-api", "selected": true }],
+        "includeAll": false
       },
       {
         "name": "instance",
         "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(up{service_name=\"$service\"}, instance)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(process_uptime{app=~\"$app\",service_name=\"$service\"}, instance)",
         "current": { "text": "All", "value": "$__all" },
         "includeAll": true,
         "allValue": ".*",
@@ -35,20 +45,23 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=~\"$service\"}[5m])) by (gen_ai_token_type, gen_ai_request_model)",
+          "expr": "sum(rate(gen_ai_client_token_usage_sum{app=~\"$app\",service_name=~\"$service\"}[5m])) by (gen_ai_token_type, gen_ai_request_model)",
           "legendFormat": "{{gen_ai_request_model}} {{gen_ai_token_type}}"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "id": 1
     },
     {
       "title": "Prompt cache hit rate",
       "type": "timeseries",
-      "description": "Provider-agnostic prompt-cache hit rate computed as cache_read / (input + cache_read). Input tokens are recorded normalized (cache reads excluded) by `usage-tracking.middleware.ts`, so the denominator is the prompt prefix the provider had to bill in full plus the prefix it served from cache. Tracks the goal in docs/research/gemini-prompt-cache-busting.md (target: >=80% steady-state on multi-turn chats).",
+      "description": "Provider-agnostic prompt-cache hit rate computed as cache_read / (input + cache_read + cache_write). The funded invocation records `input` as uncached input only, so the denominator is the whole prompt: billed in full, written to cache, or served from it. Tracks the goal in docs/research/gemini-prompt-cache-busting.md (target: >=80% steady-state on multi-turn chats).",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
       "targets": [
         {
-          "expr": "sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{gen_ai_token_type=\"cache_read\", service_name=~\"$service\"}[5m]))\n/\n(\n  sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{gen_ai_token_type=\"cache_read\", service_name=~\"$service\"}[5m]))\n  +\n  sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{gen_ai_token_type=\"input\", service_name=~\"$service\"}[5m]))\n)",
+          "expr": "sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{app=~\"$app\",gen_ai_token_type=\"cache_read\", service_name=~\"$service\"}[5m]))\n/\n(\n  sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{app=~\"$app\",gen_ai_token_type=\"cache_read\", service_name=~\"$service\"}[5m]))\n  +\n  sum by (gen_ai_request_model, gen_ai_provider_name) (rate(gen_ai_client_token_usage_sum{app=~\"$app\",gen_ai_token_type=~\"input|cache_write\", service_name=~\"$service\"}[5m]))\n)",
           "legendFormat": "{{gen_ai_provider_name}}/{{gen_ai_request_model}}"
         }
       ],
@@ -66,15 +79,17 @@
             ]
           }
         }
-      }
+      },
+      "id": 2
     },
     {
-      "title": "Estimated Cost ($/hr)",
+      "title": "User-Charged LLM Spend (USD/h)",
+      "description": "User-charged: what Tau bills the user for the call (priced from the model catalog), not the supplier invoice.",
       "type": "stat",
       "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "sum(rate(gen_ai_client_cost_total{service_name=~\"$service\"}[1h]))",
+          "expr": "sum(rate(gen_ai_client_cost_total{app=~\"$app\",service_name=~\"$service\"}[1h]))",
           "legendFormat": "$/hr"
         }
       ],
@@ -89,7 +104,8 @@
             ]
           }
         }
-      }
+      },
+      "id": 3
     },
     {
       "title": "Model Usage Distribution",
@@ -97,10 +113,11 @@
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
       "targets": [
         {
-          "expr": "sum(gen_ai_client_token_usage_sum{service_name=~\"$service\"}) by (gen_ai_request_model)",
+          "expr": "sum(gen_ai_client_token_usage_sum{app=~\"$app\",service_name=~\"$service\"}) by (gen_ai_request_model)",
           "legendFormat": "{{gen_ai_request_model}}"
         }
-      ]
+      ],
+      "id": 4
     },
     {
       "title": "Operation Duration (p50 / p95)",
@@ -108,15 +125,18 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "p95"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "id": 5
     },
     {
       "title": "Tool Invocations",
@@ -124,10 +144,11 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         {
-          "expr": "sum(rate(gen_ai_tool_invocations_total{service_name=~\"$service\"}[5m])) by (gen_ai_tool_name)",
-          "legendFormat": "{{gen_ai_tool_name}}"
+          "expr": "sum by (agent_id, tool_kind) (rate(tau_agent_tool_calls_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{agent_id}} {{tool_kind}}"
         }
-      ]
+      ],
+      "id": 6
     },
     {
       "title": "TTFT (p50 / p95)",
@@ -135,34 +156,204 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_time_to_first_token_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_time_to_first_token_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_time_to_first_token_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_time_to_first_token_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "p95"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "id": 7
     },
     {
-      "title": "Agent Iterations by Model",
+      "title": "Agent Turns by Agent and Outcome",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "targets": [
         {
-          "expr": "sum(rate(gen_ai_agent_iterations_sum{service_name=~\"$service\"}[5m])) by (gen_ai_request_model)",
-          "legendFormat": "{{gen_ai_request_model}}"
+          "expr": "sum by (agent_id, outcome) (rate(tau_agent_turns_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{agent_id}} {{outcome}}"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "id": 8
+    },
+    {
+      "title": "Agent evidence: admission, delivery, backlog and erasure (counts and bounded codes only)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "panels": [],
+      "id": 11
+    },
+    {
+      "title": "Evidence Admissions by Outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 33 },
+      "targets": [
+        {
+          "expr": "sum by (tau_agent_evidence_authority, outcome) (rate(tau_agent_evidence_admissions_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{tau_agent_evidence_authority}} {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" }
+      },
+      "id": 12,
+      "description": "Parsed submissions. policy_stale is a superseded epoch, refused a withheld purpose, fenced a deleted or erased subject, capacity the backlog budget."
+    },
+    {
+      "title": "Evidence Deliveries by Outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(tau_agent_evidence_deliveries_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops" }
+      },
+      "id": 13,
+      "description": "acknowledged and uncertain are sends not yet proven visible; confirmed was read back; gap never became visible and is not resent; key_unavailable is held for a missing payload key."
+    },
+    {
+      "title": "Evidence Backlog Rows by State",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 },
+      "targets": [
+        {
+          "expr": "max by (tau_agent_evidence_state) (tau_agent_evidence_backlog_rows{app=~\"$app\",service_name=~\"$service\"})",
+          "legendFormat": "{{tau_agent_evidence_state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "id": 14,
+      "description": "Shared figure: every replica reports the same rows, so read with max."
+    },
+    {
+      "title": "Evidence Payload Bytes Held",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 },
+      "targets": [
+        {
+          "expr": "max(tau_agent_evidence_backlog_held_bytes{app=~\"$app\",service_name=~\"$service\"})",
+          "legendFormat": "held"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" }
+      },
+      "id": 15,
+      "description": "Sealed payload bytes awaiting delivery, against TAU_OBSERVABILITY_BACKLOG_BYTES."
+    },
+    {
+      "title": "Langfuse Erasure Steps by Outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (increase(tau_agent_evidence_erasure_traces_total{app=~\"$app\",service_name=~\"$service\"}[1h]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "id": 16,
+      "description": "Only absent settles a trace; present and retry are requested again with backoff."
+    },
+    {
+      "title": "Evidence Lifecycle and Worker Passes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+      "targets": [
+        {
+          "expr": "sum by (action) (increase(tau_agent_evidence_lifecycle_records_total{app=~\"$app\",service_name=~\"$service\"}[1h]))",
+          "legendFormat": "{{action}}"
+        },
+        {
+          "expr": "sum by (tau_worker, outcome) (increase(tau_agent_evidence_passes_total{app=~\"$app\",service_name=~\"$service\"}[1h]))",
+          "legendFormat": "pass {{tau_worker}} {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "id": 17,
+      "description": "purged payloads past retention, reaped receipts a day past it, erased subjects completed; and each worker's passes, the liveness signal."
+    },
+    {
+      "title": "Langfuse Units by Kind (31d)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "targets": [
+        {
+          "expr": "sum by (kind) (increase(tau_agent_evidence_langfuse_units_total{app=~\"$app\",service_name=~\"$service\"}[31d]))",
+          "legendFormat": "{{kind}}"
+        },
+        {
+          "expr": "sum(increase(tau_agent_evidence_langfuse_units_total{app=~\"$app\",service_name=~\"$service\"}[31d]))",
+          "legendFormat": "total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "max": 50000,
+          "min": 0,
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 35000
+              },
+              {
+                "color": "red",
+                "value": 50000
+              }
+            ]
+          }
+        }
+      },
+      "id": 18,
+      "description": "Traces, observations and scores Tau wrote to Langfuse in the trailing 31 days, against Hobby's 50k units a month; agent-evidence-langfuse-units fires at 35,000 (70%). One environment per dashboard: staging and production share the organisation's 50k, so add the other environment's total. Check monthly against Langfuse's Usage Management counts (LW9)."
     },
     {
       "title": "Error Logs",
       "type": "logs",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 100 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+      "targets": [
+        {
+          "expr": "{service_name=~\"$service\"} | detected_level=~\"error|fatal|critical\"",
+          "refId": "A"
+        }
+      ],
       "options": {
         "showTime": true,
         "showLabels": true,
@@ -171,14 +362,22 @@
         "prettifyLogMessage": false,
         "enableLogDetails": true,
         "sortOrder": "Descending"
-      }
+      },
+      "id": 9
     },
     {
       "title": "Recent Traces",
       "type": "traces",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 108 },
       "datasource": { "type": "tempo", "uid": "tempo" },
-      "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+      "targets": [
+        {
+          "query": "{resource.service.name=~\"$service\"}",
+          "refId": "A",
+          "queryType": "traceqlSearch"
+        }
+      ],
+      "id": 10
     }
   ],
   "schemaVersion": 39

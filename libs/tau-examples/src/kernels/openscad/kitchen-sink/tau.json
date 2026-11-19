@@ -1,0 +1,12 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "Parameter Kitchen Sink",
+  "description": "A comprehensive showcase of every OpenSCAD Customizer parameter type: spinboxes, sliders, dropdowns, checkboxes, text fields, color pickers, and vectors. Use this to test and validate parameter UI rendering across all supported input types.",
+  "tags": ["3d-printing", "parametric", "openscad"],
+  "assets": {
+    "main": {
+      "entryPath": "main.scad",
+      "thumbnail": "thumbnail.webp"
+    }
+  }
+}

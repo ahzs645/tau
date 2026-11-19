@@ -1,0 +1,24 @@
+{
+  "extends": "../../tools/typescript/base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "types": ["node", "vitest", "vitest/browser"]
+  },
+  "include": [
+    "vitest.config.ts",
+    "global-setup.ts",
+    "browser-command.ts",
+    "scripts/benchmark-bundler-products.mts",
+    "vite.bundler-products.config.ts",
+    "vitest.bundlers.config.ts",
+    "specs/**/*.ts",
+    "support/**/*.ts",
+    "support/**/*.tsx",
+    "apps/electron/workspace/**/*.ts"
+  ],
+  "exclude": ["apps/**/.next/**", "apps/**/.next-*/**", "apps/**/dist/**", "apps/**/dist-*/**"]
+}

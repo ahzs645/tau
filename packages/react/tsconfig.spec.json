@@ -6,11 +6,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["DOM", "DOM.Iterable", "ES2024"],
-    "target": "ESNext",
-    "jsx": "react-jsx",
-    "paths": {
-      "#*": ["./src/*"]
-    }
+    "target": "ESNext"
   },
   "include": [
     "vitest.config.ts",

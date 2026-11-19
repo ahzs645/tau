@@ -1,0 +1,496 @@
+import type { CodeLanguage } from '#types/code.types.js';
+
+/** The number of dimensions the kernel supports.
+ *
+ * @public
+ */
+export type KernelDimensions = 2 | 3;
+
+/** @public */
+export type KernelBackend =
+  | 'manifold'
+  | 'opencascade'
+  | 'zoo'
+  | 'jscad'
+  | 'build123d'
+  | 'picogk'
+  | 'smlib'
+  | 'tscircuit';
+
+/**
+ * The package ecosystem a kernel's projects belong to, which picks the project files Tau writes at creation:
+ * `npm` a `package.json`, `pypi` a `pyproject.toml` with its `pylock.toml` and `uv.lock`, `nuget` a `<name>.csproj`
+ * with its `packages.lock.json`, `kcl` Zoo's `project.toml`, and `none` nothing (OpenSCAD has no manifest).
+ *
+ * @public
+ */
+export type KernelEcosystem = 'npm' | 'pypi' | 'nuget' | 'kcl' | 'none';
+
+/**
+ * The geometry family a kernel's models are made of; it names the kernel's group in the selector and in the routing
+ * rubric. `brep` is exact boundary representation, `mesh` constructive or mesh-first solids exported as triangles,
+ * `implicit` signed distance and other implicit fields, voxelised to evaluate, `electronics` circuit boards.
+ *
+ * @public
+ */
+export type KernelRepresentation = 'brep' | 'mesh' | 'implicit' | 'electronics';
+
+/**
+ * Product catalog entry for a kernel offering, not an engine registry.
+ *
+ * `name`, `description`, `longDescription`, `recommended`, `tags`, and
+ * `features` are user-facing copy. `id` is a persisted and wire identity
+ * (the `cadKernel` cookie, the chat `agent-config` enum, and the
+ * `publications.kernels` column), so it changes only when the offering
+ * itself changes.
+ *
+ * The engine that executes a kernel's files is chosen in
+ * `apps/ui/app/runtime/ui-runtime.definition.ts` and matched by file
+ * extension, never by this `id`. Swapping the engine package behind
+ * an offering should not touch this file.
+ *
+ * @public
+ */
+export type KernelConfiguration = {
+  id: string;
+  name: string;
+  language: CodeLanguage;
+  /** The package ecosystem of this offering's projects; it picks the manifest a new project gets. */
+  ecosystem: KernelEcosystem;
+  dimensions: KernelDimensions[];
+  description: string;
+  mainFile: string;
+  backendProvider: KernelBackend;
+  longDescription: string;
+  emptyCode: string;
+  recommended: string;
+  tags: string[];
+  features: string[];
+  /** Runtime capability required before this offering may be selected. */
+  requiresRuntimeKernelId?: string;
+  /** The geometry family of this kernel's models. */
+  representation: KernelRepresentation;
+  /** Whether its exports include analytic STEP, which standards-based or toleranced mating geometry needs. */
+  exactGeometry: boolean;
+};
+
+/** @public */
+export const kernelConfigurations = [
+  {
+    id: 'picogk',
+    name: 'PicoGK',
+    dimensions: [3],
+    language: 'csharp',
+    ecosystem: 'nuget',
+    description: 'Native C# voxel CAD for computational engineering',
+    mainFile: 'main.cs',
+    backendProvider: 'picogk',
+    longDescription:
+      'A native C# computational-engineering workflow backed by PicoGK and OpenVDB. Author strongly typed voxel models with live desktop rendering and mesh export.',
+    emptyCode: `using System.ComponentModel.DataAnnotations;
+using PicoGK;
+
+Library.Go(Params.VoxelSizeMm, () => { });
+
+public static class Params
+{
+    [Range(0.05, 5.0)]
+    [Display(Name = "Voxel size", Description = "OpenVDB voxel size in millimetres", Order = 0)]
+    public static float VoxelSizeMm { get; set; } = 0.5f;
+}
+`,
+    recommended: 'Native C# Voxel Engineering',
+    tags: ['C#', 'PicoGK', 'OpenVDB', 'Voxels', 'Desktop'],
+    features: ['CoreCLR JIT', 'Upstream PicoGK API', 'Interactive parameters', 'Topology-aware GLB'],
+    requiresRuntimeKernelId: 'picogk',
+    representation: 'implicit',
+    exactGeometry: false,
+  },
+  {
+    id: 'picovoxel',
+    name: 'PicoVoxel',
+    dimensions: [3],
+    language: 'typescript',
+    ecosystem: 'npm',
+    description: 'TypeScript voxel and implicit CAD that runs in the browser',
+    mainFile: 'main.ts',
+    // PicoVoxel is the PicoGK engine compiled to WebAssembly; the field is display-only.
+    backendProvider: 'picogk',
+    longDescription:
+      "PicoGK's OpenVDB voxel engine compiled to WebAssembly. Author voxel, implicit and lattice models in TypeScript with ShapeKernel and LatticeLibrary, in the browser, the desktop app or the CLI. The viewer shows a fast preview; exports and GeoSpec checks replay the model exactly.",
+    emptyCode: `import type { Pico, Voxels } from 'picovoxel';
+
+// voxelSize: about one third of the thinnest wall or strut. For voxel size h, time scales with
+// 1/h³, memory and triangles with 1/h². To iterate, pass { "voxelSize": 1.5 } as parameters to
+// evaluate_model, screenshot or export_model rather than editing this value.
+export const defaultParams = { voxelSize: 0.5 };
+
+export default function main(pico: Pico, params = defaultParams): Voxels[] {
+  return [];
+}
+`,
+    recommended: 'Voxel & Lattice CAD in the Browser',
+    tags: ['TypeScript', 'PicoGK', 'OpenVDB', 'Voxels', 'Implicit', 'Lattices', 'Browser'],
+    features: [
+      'ShapeKernel & LatticeLibrary',
+      'SDF expressions',
+      'Fast preview with exact export',
+      'Interactive parameters',
+    ],
+    representation: 'implicit',
+    exactGeometry: false,
+  },
+  {
+    id: 'build123d',
+    name: 'Build123d',
+    dimensions: [2, 3],
+    language: 'python',
+    ecosystem: 'pypi',
+    description: 'Native Python BRep CAD for desktop engineering',
+    mainFile: 'main.py',
+    backendProvider: 'build123d',
+    longDescription:
+      'A best-in-class Python CAD API backed by native OpenCascade. Build precise parametric parts and assemblies with direct STEP export and topology-aware rendering in the Tau desktop app.',
+    emptyCode: `from dataclasses import dataclass
+from build123d import Shape
+
+@dataclass(frozen=True)
+class Params:
+    pass
+
+def main(params: Params) -> Shape | None:
+    return None
+`,
+    recommended: 'Native Python Engineering CAD',
+    tags: ['Python', 'OpenCascade', 'BRep', 'Desktop', 'Precision'],
+    features: ['Native performance', 'Python CAD API', 'Topology-aware GLB', 'STEP export'],
+    requiresRuntimeKernelId: 'build123d',
+    representation: 'brep',
+    exactGeometry: true,
+  },
+  {
+    id: 'smlibpy',
+    name: 'SMLibPy',
+    dimensions: [2, 3],
+    language: 'python',
+    ecosystem: 'pypi',
+    description: 'Native Python NURBS CAD with a build123d-style API',
+    mainFile: 'main.py',
+    backendProvider: 'smlib',
+    longDescription:
+      'The SMLib NURBS kernel in native Python through smlibpy, the API SMLib WebAssembly mirrors. Build exact B-rep parts with sketches, extrusions, fillets and booleans in the Tau desktop app or the CLI, with PBR materials, mechanisms and STEP, STL and glTF export.',
+    emptyCode: `from dataclasses import dataclass
+import smlibpy
+
+@dataclass(frozen=True)
+class Params:
+    pass
+
+def main(params: Params) -> smlibpy.Part | None:
+    return None
+`,
+    recommended: 'Native Python NURBS CAD',
+    tags: ['Python', 'SMLib', 'NURBS', 'Boundary Representation', 'Desktop'],
+    features: ['build123d-style API', 'Exact NURBS geometry', 'PBR materials', 'STEP export'],
+    requiresRuntimeKernelId: 'smlibpy',
+    representation: 'brep',
+    exactGeometry: true,
+  },
+  {
+    id: 'openscad',
+    name: 'OpenSCAD',
+    dimensions: [3],
+    language: 'openscad',
+    ecosystem: 'none',
+    description: 'Simple prints and customisers',
+    mainFile: 'main.scad',
+    backendProvider: 'manifold',
+    longDescription:
+      'Constructive Solid Geometry (CSG) — build complex geometries by combining primitives with boolean operations. Supports customizer parameters, dependency resolution, and native GLB and 3MF output for 3D printing.',
+    emptyCode: ``,
+    recommended: 'Simple Prints & Customisers',
+    tags: ['Constructive Solid Geometry', 'Mesh Export', 'Scripting', '3D Printing'],
+    features: ['Boolean operations', 'Parametric design', 'GLB export', '3MF export'],
+    representation: 'mesh',
+    exactGeometry: false,
+  },
+  {
+    id: 'replicad',
+    name: 'Replicad',
+    dimensions: [2, 3],
+    language: 'typescript',
+    ecosystem: 'npm',
+    description: 'TypeScript CAD for precise engineering',
+    mainFile: 'main.ts',
+    backendProvider: 'opencascade',
+    longDescription:
+      'Boundary Representation (BRep) for mathematically exact geometry. Perfect for engineering applications requiring precise measurements and tolerances.',
+    emptyCode: `import {} from 'replicad';
+
+export const defaultParams = {};
+
+export default function main(p = defaultParams) {}
+`,
+    recommended: 'Engineering & Manufacturing',
+    tags: ['Boundary Representation', 'OpenCascade', 'Exact Geometry', 'TypeScript', 'Precision'],
+    features: ['Exact geometry', 'TypeScript API', 'CAD operations', 'STEP export'],
+    representation: 'brep',
+    exactGeometry: true,
+  },
+  {
+    id: 'manifold',
+    name: 'Manifold',
+    dimensions: [2, 3],
+    language: 'typescript',
+    ecosystem: 'npm',
+    description: 'Fast mesh-focused CAD with robust booleans',
+    mainFile: 'main.ts',
+    backendProvider: 'manifold',
+    longDescription:
+      'Manifold is a high-performance geometry kernel focused on topological robustness and mesh-first workflows. It is ideal for boolean-heavy modeling, procedural generation, and browser-native CAD experiences.',
+    emptyCode: `import {} from 'manifold-3d/manifoldCAD';
+
+export const defaultParams = {};
+
+export default function main(p = defaultParams) {}
+`,
+    recommended: 'Procedural & Mesh-First CAD',
+    tags: ['TypeScript', 'Robust Booleans', 'Mesh Kernel', 'WASM', 'Browser-Native'],
+    features: ['Fast booleans', 'Robust topology', 'WASM runtime', 'GLTF-native scene output'],
+    representation: 'mesh',
+    exactGeometry: false,
+  },
+  {
+    id: 'zoo',
+    name: 'Zoo (KCL)',
+    dimensions: [3],
+    language: 'kcl',
+    ecosystem: 'kcl',
+    description: 'Server-side engine for heavy models',
+    mainFile: 'main.kcl',
+    backendProvider: 'zoo',
+    longDescription:
+      "Geometry runs on Zoo's GPU-accelerated engine in the cloud rather than in your browser, so model complexity is bounded by the server, not by the tab. Best for large assemblies and detailed parts that stall a WASM kernel, with precise parametric geometry and STEP export.",
+    emptyCode: `@settings(defaultLengthUnit = mm, kclVersion = 3.0)
+`,
+    recommended: 'Large Assemblies & Complex Parts',
+    tags: ['GPU-Accelerated', 'Cloud Engine', 'Large Assemblies', 'Parametric', 'KCL'],
+    features: [
+      'GPU-accelerated cloud execution',
+      'Scales past browser memory limits',
+      'Precise parametric geometry',
+      'Modern KCL syntax',
+      'STL/STEP export',
+    ],
+    representation: 'brep',
+    exactGeometry: true,
+  },
+  {
+    id: 'jscad',
+    name: 'JSCAD',
+    dimensions: [2, 3],
+    language: 'typescript',
+    ecosystem: 'npm',
+    description: 'JavaScript CSG modelling',
+    mainFile: 'main.ts',
+    backendProvider: 'jscad',
+    longDescription:
+      'Open-source modular CAD toolkit using JavaScript. Creates parametric 2D & 3D designs with CSG operations. Perfect for browser-based modeling, 3D printing, and programmatic design generation.',
+    emptyCode: `import {} from '@jscad/modeling';
+
+export const defaultParams = {};
+
+export default function main(p = defaultParams) {}
+`,
+    recommended: 'JavaScript CSG Modelling',
+    tags: ['TypeScript', 'CSG', 'Browser-Native', '3D Printing'],
+    features: [
+      'Constructive Solid Geometry (CSG)',
+      'Parametric 2D & 3D modeling',
+      'Browser & CLI support',
+      'ES module architecture',
+    ],
+    representation: 'mesh',
+    exactGeometry: false,
+  },
+  {
+    id: 'opencascadejs',
+    name: 'OpenCascade',
+    dimensions: [2, 3],
+    language: 'typescript',
+    ecosystem: 'npm',
+    description: 'Direct OpenCASCADE API for advanced CAD',
+    mainFile: 'main.ts',
+    backendProvider: 'opencascade',
+    longDescription:
+      'Direct access to the OpenCASCADE Technology (OCCT) kernel via libcascade. Full control over BRep operations, precise geometry, and advanced CAD algorithms without abstraction layers.',
+    emptyCode: `import {} from 'libcascade';
+
+export const defaultParams = {};
+
+export default function main(p = defaultParams) {}
+`,
+    recommended: 'Advanced CAD & Full Kernel Access',
+    tags: ['OpenCASCADE', 'BRep', 'TypeScript', 'WASM', 'Precision'],
+    features: [
+      'Full OpenCascade API access',
+      'BRep kernel',
+      'STEP/STL export',
+      'Advanced boolean operations',
+      'Precise tolerancing',
+    ],
+    representation: 'brep',
+    exactGeometry: true,
+  },
+  {
+    id: 'smlib',
+    name: 'SMLib',
+    dimensions: [2, 3],
+    language: 'typescript',
+    ecosystem: 'npm',
+    description: 'TypeScript NURBS CAD with a build123d-style API',
+    mainFile: 'main.ts',
+    backendProvider: 'smlib',
+    longDescription:
+      "The SMLib NURBS kernel compiled to WebAssembly by ClassCAD's smlibwasm: smlibpy's build123d-style modeling API in TypeScript. Build exact B-rep parts with sketches, extrusions, fillets and booleans in the browser, the desktop app or the CLI, and export STEP, STL and glTF.",
+    emptyCode: `import {} from '@classcad/smlibwasm';
+
+export const defaultParams = {};
+
+export default function main(p = defaultParams) {}
+`,
+    recommended: 'NURBS Modeling in TypeScript',
+    tags: ['TypeScript', 'SMLib', 'NURBS', 'Boundary Representation', 'Exact Geometry'],
+    features: ['build123d-style API', 'Exact NURBS geometry', 'STEP export', 'Interactive parameters'],
+    representation: 'brep',
+    exactGeometry: true,
+  },
+  {
+    id: 'tscircuit',
+    name: 'tscircuit',
+    dimensions: [2, 3],
+    language: 'tsx',
+    ecosystem: 'npm',
+    description: 'Electronics design in TSX: boards, schematics, PCB layouts and BOM',
+    mainFile: 'main.tsx',
+    backendProvider: 'tscircuit',
+    longDescription:
+      'Describe circuits as React-style TSX with tscircuit. Place resistors, capacitors, LEDs and chips on a board, wire them with traces and nets, then render the 3D board, the schematic or the PCB layout and export the BOM, netlist and circuit JSON.',
+    emptyCode: `export default () => (
+  <board width="20mm" height="20mm">
+    <resistor name="R1" resistance="1k" footprint="0402" pcbX={-4} pcbY={0} />
+    <led name="LED1" color="red" footprint="0603" pcbX={4} pcbY={0} />
+    <trace name="R1_LED1" from=".R1 > .pin2" to=".LED1 > .anode" />
+  </board>
+);
+`,
+    recommended: 'Electronics & PCB Design',
+    tags: ['tscircuit', 'TSX', 'Electronics', 'PCB', 'Schematic'],
+    features: ['3D board preview', 'Schematic and PCB SVG', 'Offline autorouting', 'BOM and netlist export'],
+    representation: 'electronics',
+    exactGeometry: false,
+  },
+] as const satisfies KernelConfiguration[];
+
+/** @public */
+export type KernelId = (typeof kernelConfigurations)[number]['id'];
+
+/**
+ * What a person or chat asks for: `auto`, which lets the working agent choose under the routing rubric, or one kernel.
+ * `auto` is never a {@link KernelId}: the runtime binds a concrete kernel from the entry file.
+ *
+ * @public
+ */
+export type KernelPreference = 'auto' | KernelId;
+
+/** @public */
+export type KernelBackendProvider = (typeof kernelConfigurations)[number]['backendProvider'];
+
+/** @public */
+export const kernelProviders = kernelConfigurations.map((option) => option.id) as [KernelId];
+
+/** @public */
+export const backendProviders = kernelConfigurations.map((option) => option.backendProvider) as [KernelBackendProvider];
+
+/**
+ * Narrow per-kernel entry type preserving the literal `id` union and all
+ * other const-asserted field literals. Prefer this over
+ * {@link KernelConfiguration} (which widens `id` to `string`) when the
+ * value participates in typed-id consumers like `SvgIcon` or
+ * `KernelTierBadge`.
+ *
+ * @public
+ */
+export type KernelEntry = (typeof kernelConfigurations)[number];
+
+const kernelById = new Map<KernelId, KernelEntry>(kernelConfigurations.map((k) => [k.id, k]));
+
+/**
+ * Resolve a {@link KernelId} to its {@link KernelEntry}. The lookup cannot
+ * miss because `id` is the closed union literally derived from
+ * `kernelConfigurations[number]['id']`, so the non-null assertion is safe
+ * by construction. Encapsulating it here removes the fallback class at every
+ * consumer site.
+ *
+ * Preferred over a `Record<KernelId, KernelEntry>` lookup because the
+ * repo runs with `noUncheckedIndexedAccess: true`, which widens dynamic
+ * indexed access to `T | undefined` regardless of key narrowness.
+ *
+ * @public
+ */
+export function resolveKernel(id: KernelId): KernelEntry {
+  // oxlint-disable-next-line @typescript-eslint/no-non-null-assertion -- safe by construction: `id` is the closed union of registered kernel ids
+  return kernelById.get(id)!;
+}
+
+/**
+ * Type guard for {@link KernelId}. Use at every external-data boundary
+ * (cookies, IndexedDB rows, Postgres rows, wire payloads) to heal stale
+ * ids — e.g. ids referencing a kernel that was retired from
+ * {@link kernelConfigurations} after the value was persisted.
+ *
+ * @public
+ */
+export const isKernelId = (v: unknown): v is KernelId =>
+  typeof v === 'string' && (kernelProviders as readonly string[]).includes(v);
+
+/**
+ * Every {@link KernelPreference}, `auto` first, for schema enums.
+ *
+ * @public
+ */
+export const kernelPreferences = ['auto', ...kernelProviders] as const satisfies readonly KernelPreference[];
+
+/**
+ * Type guard for {@link KernelPreference}, for the same external-data boundaries as {@link isKernelId}.
+ *
+ * @public
+ */
+export const isKernelPreference = (v: unknown): v is KernelPreference => v === 'auto' || isKernelId(v);
+
+/** Runtime kernel ids that differ from their catalog id. Every other authoring kernel shares its id. */
+const catalogKernelIdByRuntimeKernelId: Readonly<Record<string, KernelId>> = {
+  openrscad: 'openscad',
+  opencascade: 'opencascadejs',
+};
+
+/**
+ * The catalog kernel a runtime kernel authors: the id a binding (`describe`'s `kernelId`) maps to in
+ * {@link kernelConfigurations}. Undefined for an import-only kernel (gltf, brep, assimp) or an unknown id.
+ *
+ * @param runtimeKernelId - A runtime kernel id.
+ * @returns Its catalog id.
+ * @public
+ */
+export const catalogKernelOfRuntimeKernel = (runtimeKernelId: string): KernelId | undefined =>
+  catalogKernelIdByRuntimeKernelId[runtimeKernelId] ?? (isKernelId(runtimeKernelId) ? runtimeKernelId : undefined);
+
+/** @public */
+// oxlint-disable-next-line unicorn/no-array-reduce -- we know the keys are unique
+export const languageFromKernel = kernelConfigurations.reduce(
+  (accumulator, option: KernelConfiguration) => {
+    accumulator[option.id as KernelId] = option.language;
+    return accumulator;
+  },
+  {} as Record<KernelId, CodeLanguage>,
+);

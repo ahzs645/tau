@@ -1,6 +1,9 @@
 {
-  "extends": "./tsconfig.base.json",
+  "extends": "./tools/typescript/base.json",
   "compilerOptions": {
+    // Nx's secondary-entrypoint resolver reads root options without following extends.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "outDir": "./out-tsc"
   },
   "references": [
@@ -9,12 +12,6 @@
     },
     {
       "path": "./apps/api"
-    },
-    {
-      "path": "./packages/converter"
-    },
-    {
-      "path": "./libs/tau-examples"
     },
     {
       "path": "./apps/api-e2e"
@@ -26,13 +23,10 @@
       "path": "./libs/api-extractor"
     },
     {
-      "path": "./packages/types"
+      "path": "./libs/types"
     },
     {
-      "path": "./packages/json-schema"
-    },
-    {
-      "path": "./packages/js"
+      "path": "./libs/json-schema"
     },
     {
       "path": "./packages/runtime"
@@ -41,19 +35,112 @@
       "path": "./packages/units"
     },
     {
-      "path": "./libs/billing"
+      "path": "./apps/libs/api-agent-observability"
+    },
+    {
+      "path": "./apps/libs/api-auth"
+    },
+    {
+      "path": "./apps/libs/api-billing"
+    },
+    {
+      "path": "./apps/libs/api-chat"
+    },
+    {
+      "path": "./apps/libs/api-core"
+    },
+    {
+      "path": "./apps/libs/api-database"
+    },
+    {
+      "path": "./apps/libs/api-email"
+    },
+    {
+      "path": "./apps/libs/api-git-core"
+    },
+    {
+      "path": "./apps/libs/api-git-mirror"
+    },
+    {
+      "path": "./apps/libs/api-hosts"
+    },
+    {
+      "path": "./apps/libs/api-lifecycle"
+    },
+    {
+      "path": "./apps/libs/api-llm-gateway"
+    },
+    {
+      "path": "./apps/libs/api-object-storage"
+    },
+    {
+      "path": "./apps/libs/api-observability"
+    },
+    {
+      "path": "./apps/libs/api-projects"
+    },
+    {
+      "path": "./apps/libs/api-redis"
+    },
+    {
+      "path": "./apps/libs/api-testing"
+    },
+    {
+      "path": "./apps/libs/billing"
     },
     {
       "path": "./libs/chat"
     },
     {
-      "path": "./packages/utils"
+      "path": "./libs/utils"
     },
     {
       "path": "./libs/vite"
+    },
+    {
+      "path": "./tools/workspace-plugin"
+    },
+    {
+      "path": "./packages/filesystem"
+    },
+    {
+      "path": "./apps/libs/fs-client"
+    },
+    {
+      "path": "./libs/telemetry"
+    },
+    {
+      "path": "./examples/electron"
+    },
+    {
+      "path": "./packages/plugins/openrscad"
+    },
+    {
+      "path": "./libs/events"
+    },
+    {
+      "path": "./libs/memory"
+    },
+    {
+      "path": "./packages/react"
+    },
+    {
+      "path": "./packages/cli"
+    },
+    {
+      "path": "./packages/rpc"
+    },
+    {
+      "path": "./libs/fs-bridge"
+    },
+    {
+      "path": "./apps/libs/lsp-fs"
+    },
+    {
+      "path": "./apps/libs/lsp"
     }
   ],
   "files": [],
-  "include": ["vitest.workspace.ts", "eslint.config.mjs", "scripts/**/*", "tools/**/*"],
+  "include": ["eslint.config.mjs", "scripts/**/*", "tools/**/*"],
   "exclude": ["node_modules", "tmp"]
 }

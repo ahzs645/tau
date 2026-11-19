@@ -1,7 +1,9 @@
 import type { Express, RequestHandler } from 'express';
 import express from 'express';
+import compression from 'compression';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeSync as fsWriteSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync, writeSync as fsWriteSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -10,8 +12,11 @@ import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { pipeline } from 'node:stream/promises';
+import { constants as zlibConstants, createBrotliCompress, createGzip } from 'node:zlib';
 
 import { createRequestHandler } from '@react-router/express';
+import type { ServerBuild } from 'react-router';
 import { coiMiddleware } from '@taucad/runtime/cross-origin-isolation/express';
 import qrcodeTerminal from 'qrcode-terminal';
 
@@ -179,15 +184,190 @@ export type CreateAppOptions = {
   exposeDevHttpsCaAttachments?: boolean;
 };
 
+/** The SSR build produced by `react-router build`; absent until `nx build ui` has run. */
+const serverBuildUrl = new URL('build/server/index.js', import.meta.url);
+
+/**
+ * Re-read the SSR build whenever a new one lands under a running serve.
+ *
+ * `react-router build` empties `build/` and rewrites it with fresh content
+ * hashes, but `express.static` below reads `build/client` live from disk. A
+ * serve that pinned the SSR module at boot therefore keeps emitting HTML that
+ * points at chunk filenames the rebuild deleted: every route module 404s,
+ * hydration never completes, and the page renders as an empty body with no
+ * error anywhere. Anything that rebuilds `ui` while `nx serve ui` is up (a
+ * manual `nx build ui`, an `ui-e2e` run, another target depending on
+ * `ui:build`) triggers it.
+ *
+ * Keying on mtime costs one `stat` per request and re-imports only after a
+ * build lands. Each re-import leaves the superseded module graph in the ESM
+ * registry — a few MB per rebuild, bounded by how often a serve is rebuilt
+ * under, and untouched by a normal single-build serve.
+ */
+export const loadServerBuild = (() => {
+  let cached: { build: ServerBuild; mtimeMs: number } | undefined;
+
+  return async (): Promise<ServerBuild> => {
+    const { mtimeMs } = statSync(serverBuildUrl);
+    if (cached?.mtimeMs !== mtimeMs) {
+      // A build in flight can expose a half-written file; keep serving the last good one until it settles.
+      try {
+        // The build output is deliberately excluded from typecheck: it does not exist before `nx build ui`.
+        cached = { build: (await import(`${serverBuildUrl.href}?mtime=${mtimeMs}`)) as ServerBuild, mtimeMs };
+      } catch (error) {
+        if (cached === undefined) {
+          throw error;
+        }
+        // oxlint-disable-next-line no-console -- serve-time skew diagnostic
+        console.warn('[tau-serve] Ignoring an unreadable SSR build; still serving the previous one.', error);
+      }
+    }
+
+    return cached.build;
+  };
+})();
+
+/** Static types that compress well; images and fonts are already compressed. */
+const compressibleExtensions = new Set(['.css', '.js', '.json', '.map', '.mjs', '.svg', '.txt', '.wasm']);
+
+/**
+ * Serve a compressible static file Brotli- or gzip-encoded when the client
+ * accepts it, otherwise fall through to `express.static` (identity, ranges).
+ *
+ * Every compressible response varies on `Accept-Encoding`, and each encoding
+ * has its own validator so a cache never swaps representations.
+ *
+ * @param root - Directory served at the mount point.
+ * @param cacheControl - The `Cache-Control` the identity route sends.
+ * @returns Middleware to mount before the matching `express.static`.
+ */
+// The measured large KCL WASM is precompressed at build; other files retain this streaming fallback.
+export const compressedStatic =
+  (root: string, cacheControl: string): RequestHandler =>
+  // oxlint-disable-next-line complexity -- Negotiation, validators, ranges, and streaming fallbacks share this route.
+  async (request, response, next) => {
+    const extension = path.extname(request.path);
+    if ((request.method !== 'GET' && request.method !== 'HEAD') || !compressibleExtensions.has(extension)) {
+      next();
+      return;
+    }
+    response.vary('Accept-Encoding');
+    const encoding = request.acceptsEncodings('br', 'gzip');
+    const resolvedRoot = path.resolve(root);
+    let file: string;
+    try {
+      file = path.resolve(resolvedRoot, `.${decodeURIComponent(request.path)}`);
+    } catch {
+      next();
+      return;
+    }
+    if (encoding === false || request.headers.range !== undefined || !file.startsWith(resolvedRoot + path.sep)) {
+      next();
+      return;
+    }
+    const fileStat = await stat(file).catch(() => undefined);
+    if (!fileStat?.isFile() || fileStat.size < 1024) {
+      next();
+      return;
+    }
+    response.type(extension);
+    response.setHeader('Cache-Control', cacheControl);
+    response.setHeader('Content-Encoding', encoding);
+    response.setHeader('Last-Modified', fileStat.mtime.toUTCString());
+    response.setHeader(
+      'ETag',
+      `W/"${fileStat.size.toString(16)}-${fileStat.mtime.getTime().toString(16)}-${encoding}"`,
+    );
+    if (request.fresh) {
+      response.status(304).end();
+      return;
+    }
+    const sidecar = `${file}.${encoding === 'br' ? 'br' : 'gz'}`;
+    const sidecarStat = /^kcl_wasm_lib_bg-[A-Za-z0-9_-]{8,}\.wasm$/u.test(path.basename(file))
+      ? await stat(sidecar).catch(() => undefined)
+      : undefined;
+    // A client that left during the metadata awaits has closed the response; piping into it rejects with
+    // ERR_STREAM_UNABLE_TO_PIPE before `pipeline` registers cleanup, stranding the source and encoder streams.
+    if (response.closed || response.destroyed) {
+      return;
+    }
+    const precompressedStat =
+      sidecarStat?.isFile() && sidecarStat.mtimeMs >= fileStat.mtimeMs ? sidecarStat : undefined;
+    if (precompressedStat) {
+      response.setHeader('Content-Length', precompressedStat.size);
+    }
+    if (request.method === 'HEAD') {
+      response.end();
+      return;
+    }
+    if (precompressedStat) {
+      try {
+        await pipeline(createReadStream(sidecar), response);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+          throw error;
+        }
+      }
+      return;
+    }
+    const encoder =
+      encoding === 'br'
+        ? createBrotliCompress({
+            params: {
+              [zlibConstants.BROTLI_PARAM_QUALITY]: 5,
+              [zlibConstants.BROTLI_PARAM_SIZE_HINT]: fileStat.size,
+            },
+          })
+        : createGzip();
+    try {
+      await pipeline(createReadStream(file), encoder, response);
+    } catch (error) {
+      // `pipeline` has destroyed the response either way; a client abort is routine, anything else is logged by Express.
+      if ((error as NodeJS.ErrnoException).code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+        throw error;
+      }
+    }
+  };
+
+/**
+ * The web app's service worker (progressive loading PL7, `scripts/build-service-worker.ts`), and the retiring worker
+ * at the retired `/usage` worker's URL.
+ */
+const serviceWorkerPaths = ['/service-worker.js', '/offline-shell-worker.js'];
+
+/** Never stored, as `netlify.toml` serves it, so a new build's worker, the kill switch's included, reaches the next page load. */
+const serviceWorkerCacheControl = 'no-cache, no-store, must-revalidate';
+
+/**
+ * Serve a built worker with {@link serviceWorkerCacheControl}; a build without one falls through.
+ *
+ * @param root - The client build directory.
+ * @returns Middleware for `GET` of each of `serviceWorkerPaths`.
+ */
+const serveServiceWorker =
+  (root: string): RequestHandler =>
+  (request, response, next) => {
+    response.sendFile(
+      path.resolve(root, request.path.slice(1)),
+      { cacheControl: false, headers: { 'Cache-Control': serviceWorkerCacheControl } },
+      (error) => {
+        if (error !== undefined && !response.headersSent) {
+          next();
+        }
+      },
+    );
+  };
+
 export async function createApp(options: CreateAppOptions = {}): Promise<Express> {
-  // The SSR build is produced by `react-router build` into ./build/server/index.js
-  // and is intentionally excluded from typecheck (it does not exist before `nx build ui`).
-  // @ts-expect-error -- runtime-only import; declared by react-router build output
-  const build = (await import('./build/server/index.js')) as Parameters<typeof createRequestHandler>[0]['build'];
+  // Load eagerly so a serve started without a build fails at boot rather than per request.
+  await loadServerBuild();
   const app = express();
   app.disable('x-powered-by');
-  app.use(coiMiddleware() as RequestHandler);
+  app.use(coiMiddleware());
+  app.use('/assets', compressedStatic('build/client/assets', 'public, max-age=31536000, immutable'));
   app.use('/assets', express.static('build/client/assets', { immutable: true, maxAge: '1y' }));
+  app.get(serviceWorkerPaths, serveServiceWorker('build/client'));
+  app.use(compressedStatic('build/client', 'public, max-age=3600'));
   app.use(express.static('build/client', { maxAge: '1h' }));
 
   if (options.exposeDevHttpsCaAttachments === true) {
@@ -198,7 +378,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Express
     });
   }
 
-  app.all('*splat', createRequestHandler({ build }));
+  // Static files negotiate their own encodings above. Compress streamed SSR and
+  // loader responses too, preserving their content type and cache policy.
+  app.use(compression());
+  app.all('*splat', createRequestHandler({ build: loadServerBuild }));
   return app;
 }
 
@@ -218,11 +401,10 @@ const ensureHttpsCertsBootstrapped = (): void => {
 
   /*
    * `bootstrap-https-certs.ts` is patched to omit mkcert's `-install` flag when
-   * `MKCERT_TRUST_INSTALL=false` (see `patches/vite-plugin-mkcert@2.0.0.patch`)
+   * `MKCERT_TRUST_INSTALL=false` (see `tools/pnpm/patches/vite-plugin-mkcert@2.0.0.patch`)
    * so we never trip a `sudo` keychain prompt during a non-interactive serve.
-   * Set/restore on `process.env` rather than passing a typed `env` literal —
-   * the app augments `NodeJS.ProcessEnv` via `apps/ui/app/types/environment.d.ts`,
-   * which makes plain object literals fight the spawnSync type.
+   * Set/restore on `process.env` so the child inherits every existing variable
+   * while this one scoped override is active.
    */
   const previousMkcertTrustInstall = process.env['MKCERT_TRUST_INSTALL'];
   process.env['MKCERT_TRUST_INSTALL'] = 'false';

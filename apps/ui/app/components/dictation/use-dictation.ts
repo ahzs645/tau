@@ -1,0 +1,239 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { dictationMaxAudioBytes } from '@taucad/chat/schemas';
+import { captureDictation } from '#components/dictation/dictation-capture.js';
+import type { DictationCapture } from '#components/dictation/dictation-capture.js';
+import { toast } from 'sonner';
+import { fetchDictationStatus, transcribeDictation } from '#components/dictation/dictation-client.js';
+import {
+  SilentDictationError,
+  dictationMessages,
+  microphoneErrorMessage,
+  transcriptionErrorMessage,
+} from '#components/dictation/dictation-errors.js';
+
+export type DictationPhase = 'idle' | 'requesting' | 'recording' | 'stopping' | 'transcribing';
+
+export const dictationLabels: Record<DictationPhase, string> = {
+  idle: 'Dictate',
+  requesting: 'Requesting microphone…',
+  recording: 'Recording…',
+  stopping: 'Stopping dictation…',
+  transcribing: 'Transcribing',
+};
+
+/** Samples the API accepts: 24 kHz mono PCM16 after the 44-byte WAV header (about 8.6 minutes). */
+const maxDictationSamples = Math.floor((dictationMaxAudioBytes - 44) / 2);
+
+/** Bounded history with silent leading slots to fill a wide composer from the first frame. */
+const waveformHistoryLength = 256;
+const silentLevels = Array.from<number>({ length: waveformHistoryLength }).fill(0);
+
+/** Recent microphone levels, oldest first, and how many batches have shifted them this session. */
+export type DictationWaveform = {
+  readonly levels: readonly number[];
+  /** Advances with every batch, including silent ones whose levels look unchanged. */
+  readonly batch: number;
+};
+
+const emptyWaveform: DictationWaveform = { levels: [], batch: 0 };
+
+type Session = {
+  readonly owner: unknown;
+  readonly abort: AbortController;
+  readonly done: Promise<boolean>;
+  readonly settle: (success: boolean) => void;
+  capture?: DictationCapture;
+  phase: DictationPhase;
+};
+
+/** A page has one dictation destination, even when several inputs offer a microphone. */
+let activeSession: Session | undefined;
+
+export type Dictation = {
+  /** Whether the Tau API offers dictation to this user; undefined while checking. */
+  readonly available: boolean | undefined;
+  readonly phase: DictationPhase;
+  /** Streamed text while the provider transcribes; replaced by the final transcript. */
+  readonly transcript: string;
+  readonly waveform: DictationWaveform;
+  start(): Promise<void>;
+  stop(): Promise<boolean>;
+  cancel(): void;
+};
+
+/**
+ * Records and transcribes for one input owner. Only final text reaches `onTranscript`;
+ * preview text stays separate. Changing the owner or unmounting cancels pending work.
+ * Keep the owner stable across edits and change it when the destination changes.
+ */
+export function useDictation(onTranscript: (text: string) => void, draftOwner: unknown): Dictation {
+  const [available, setAvailable] = useState<boolean>();
+  const [phase, setPhase] = useState<DictationPhase>('idle');
+  const [transcript, setTranscript] = useState('');
+  const [waveform, setWaveform] = useState(emptyWaveform);
+  const current = useRef<Session | undefined>(undefined);
+  const receiveTranscript = useRef(onTranscript);
+  useLayoutEffect(() => {
+    receiveTranscript.current = onTranscript;
+  }, [onTranscript]);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    const check = async (): Promise<void> => {
+      try {
+        const status = await fetchDictationStatus(abort.signal);
+        setAvailable(status.available);
+      } catch {
+        if (!abort.signal.aborted) {
+          setAvailable(false);
+        }
+      }
+    };
+    // async-iife: bootstrap
+    void check();
+    return () => {
+      abort.abort();
+    };
+  }, []);
+
+  /** Ends the session; a failure's message, when there is one, shows as a toast. */
+  const reset = useCallback((session: Session, success: boolean, message?: string): void => {
+    if (current.current !== session) {
+      return;
+    }
+    current.current = undefined;
+    if (activeSession === session) {
+      activeSession = undefined;
+    }
+    session.abort.abort();
+    session.capture?.cancel();
+    session.settle(success);
+    setPhase('idle');
+    setTranscript('');
+    setWaveform(emptyWaveform);
+    if (message !== undefined) {
+      // One dictation error at a time: a newer failure replaces the toast instead of stacking.
+      toast.error(message, { id: 'dictation-error' });
+    }
+  }, []);
+
+  const cancel = useCallback((): void => {
+    if (current.current) {
+      reset(current.current, false);
+    }
+  }, [reset]);
+
+  useLayoutEffect(() => {
+    return () => {
+      const session = current.current;
+      if (session && session.owner === draftOwner) {
+        reset(session, false);
+      }
+    };
+  }, [draftOwner, reset]);
+
+  const transcribe = useCallback(
+    async (session: Session): Promise<void> => {
+      try {
+        const wav = await session.capture!.finish();
+        if (current.current !== session) {
+          return;
+        }
+        session.phase = 'transcribing';
+        setPhase('transcribing');
+        const final = await transcribeDictation(wav, {
+          signal: session.abort.signal,
+          onPreview: (preview) => {
+            if (current.current === session) {
+              setTranscript(preview);
+            }
+          },
+        });
+        const text = final.trim();
+        if (current.current !== session) {
+          return;
+        }
+        if (text === '') {
+          // Silence transcribes to nothing; people know they did not speak, so it ends quietly.
+          reset(session, false);
+          return;
+        }
+        receiveTranscript.current(text);
+        reset(session, true);
+      } catch (stopError) {
+        if (!session.abort.signal.aborted) {
+          reset(
+            session,
+            false,
+            stopError instanceof SilentDictationError ? undefined : transcriptionErrorMessage(stopError),
+          );
+        }
+      }
+    },
+    [reset],
+  );
+
+  const stop = useCallback(async (): Promise<boolean> => {
+    const session = current.current;
+    if (!session) {
+      return false;
+    }
+    if (session.phase === 'recording') {
+      session.phase = 'stopping';
+      setPhase('stopping');
+      void transcribe(session);
+    }
+    return session.phase === 'requesting' ? false : session.done;
+  }, [transcribe]);
+
+  const start = useCallback(async (): Promise<void> => {
+    if (current.current !== undefined || !available) {
+      return;
+    }
+    if (activeSession !== undefined) {
+      // Another input is already dictating; its pill is in view, so starting again does nothing.
+      return;
+    }
+    let settle: (success: boolean) => void = () => undefined;
+    const done = new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
+    const session: Session = { owner: draftOwner, abort: new AbortController(), done, settle, phase: 'requesting' };
+    current.current = session;
+    activeSession = session;
+    setTranscript('');
+    setWaveform({ levels: silentLevels, batch: 0 });
+    setPhase('requesting');
+    try {
+      session.capture = await captureDictation({
+        signal: session.abort.signal,
+        maxSamples: maxDictationSamples,
+        onLevel: (level) => {
+          if (current.current === session) {
+            setWaveform((previous) => ({
+              levels: [...previous.levels.slice(-(waveformHistoryLength - 1)), level],
+              batch: previous.batch + 1,
+            }));
+          }
+        },
+        onLimit: () => {
+          toast.info(dictationMessages.recordingLimit, { id: 'dictation-limit' });
+          void stop();
+        },
+        onError: (captureError) => {
+          reset(session, false, microphoneErrorMessage(captureError));
+        },
+      });
+      if (current.current !== session) {
+        session.capture.cancel();
+        return;
+      }
+      session.phase = 'recording';
+      setPhase('recording');
+    } catch (captureError) {
+      reset(session, false, microphoneErrorMessage(captureError));
+    }
+  }, [available, draftOwner, reset, stop]);
+
+  return { available, phase, transcript, waveform, start, stop, cancel };
+}

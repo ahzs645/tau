@@ -1,0 +1,198 @@
+import { Copy, Pencil, Trash, ArrowUpRightSquare } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { useState } from 'react';
+import type { ProjectListItem } from '@taucad/files-ui/types/project-library.types';
+import type { CloudProject } from '#hooks/use-cloud-projects.js';
+import { ProjectActionMenu } from '#components/project-library/project-cloud-delete.js';
+import { DropdownMenuItem, DropdownMenuSeparator } from '@taucad/ui/components/dropdown-menu';
+import { Button } from '@taucad/ui/components/button';
+import type { ProjectActions } from '#components/project-library/project-library.js';
+import { Popover, PopoverContent } from '@taucad/ui/components/popover';
+import { Input } from '@taucad/ui/components/input';
+import { CloseProjectDialog } from '#components/nav/project-close-dialogs.js';
+import { useProjectSidebarRow, useSidebarCommands } from '#hooks/use-sidebar-status.js';
+import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
+import type { ProjectClosePlan } from '#services/chat-session-store.js';
+import { toast } from '@taucad/ui/components/sonner';
+import { NativeFileManagerIcon, useOpenProjectInFileManager } from '#hooks/use-native-file-manager.js';
+
+type ProjectActionDropdownProps = {
+  readonly project: ProjectListItem & { readonly cloud?: CloudProject };
+  readonly actions: ProjectActions;
+  readonly onRename?: () => void;
+};
+
+export function ProjectActionDropdown({ project, actions, onRename }: ProjectActionDropdownProps): ReactNode {
+  const isDeleted = Boolean(project.deletedAt);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [isConfirmingClose, setIsConfirmingClose] = useState(false);
+  const [closePlan, setClosePlan] = useState<ProjectClosePlan | undefined>();
+  const [newName, setNewName] = useState(project.name);
+  const row = useProjectSidebarRow(project.id);
+  const { closeProject } = useSidebarCommands();
+  const chatSessions = useChatSessionStore();
+  const openInFileManager = useOpenProjectInFileManager(project);
+
+  const requestTrash = async (): Promise<void> => {
+    try {
+      const plan = await chatSessions.getProjectClosePlan(project.id);
+      if (plan.continuingRuns.length > 0) {
+        toast.error(`Can’t move ${project.name} to Trash while work continues in another window or build.`);
+        return;
+      }
+      if (plan.liveChatIds.length > 0) {
+        setClosePlan(plan);
+        setIsConfirmingClose(true);
+        return;
+      }
+      await actions.handleDelete(project);
+    } catch {
+      toast.error(`Couldn’t check running work in ${project.name}. Try again.`);
+    }
+  };
+
+  const handleRename = async (event: React.SubmitEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (newName.trim() && newName !== project.name) {
+      try {
+        await actions.handleRename(project.id, newName);
+        setIsRenaming(false);
+      } catch {
+        // Error is already handled in the action
+      }
+    } else {
+      setIsRenaming(false);
+    }
+  };
+
+  return (
+    <>
+      <ProjectActionMenu
+        name={project.name}
+        cloud={project.cloud}
+        onCloseAutoFocus={(event) => {
+          if (isRenaming && onRename) {
+            event.preventDefault();
+            setIsRenaming(false);
+            onRename();
+          }
+        }}
+      >
+        {isDeleted ? (
+          <>
+            <DropdownMenuItem
+              data-action='restore'
+              data-id={project.id}
+              data-name={project.name}
+              onClick={() => {
+                actions.handleRestore(project);
+              }}
+            >
+              <ArrowUpRightSquare />
+              <span>Restore</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              variant='destructive'
+              data-action='permanent-delete'
+              data-id={project.id}
+              data-name={project.name}
+              onClick={() => {
+                actions.handlePermanentlyDelete(project);
+              }}
+            >
+              <Trash />
+              <span>Delete permanently</span>
+            </DropdownMenuItem>
+          </>
+        ) : (
+          <>
+            {openInFileManager ? (
+              <>
+                <DropdownMenuItem
+                  data-action='open-in-file-manager'
+                  disabled={openInFileManager.isOpening}
+                  aria-busy={openInFileManager.isOpening}
+                  onClick={() => {
+                    void openInFileManager.open();
+                  }}
+                >
+                  <NativeFileManagerIcon icon={openInFileManager.icon} />
+                  <span>{openInFileManager.label}</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            ) : null}
+            <DropdownMenuItem
+              data-action='duplicate'
+              data-id={project.id}
+              data-name={project.name}
+              onClick={async () => actions.handleDuplicate(project)}
+            >
+              <Copy />
+              <span>Duplicate</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              data-action='rename'
+              data-id={project.id}
+              data-name={project.name}
+              onClick={() => {
+                setNewName(project.name);
+                setIsRenaming(true);
+              }}
+            >
+              <Pencil />
+              <span>Rename</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              variant='destructive'
+              data-action='delete'
+              data-id={project.id}
+              data-name={project.name}
+              onClick={() => {
+                void requestTrash();
+              }}
+            >
+              <Trash />
+              <span>Move to Trash</span>
+            </DropdownMenuItem>
+          </>
+        )}
+      </ProjectActionMenu>
+
+      <Popover open={isRenaming && !onRename} onOpenChange={setIsRenaming}>
+        <PopoverContent align='end' className='w-64 p-1'>
+          <form className='flex items-center gap-2 align-middle' onSubmit={handleRename}>
+            <Input
+              autoFocus
+              autoComplete='off'
+              value={newName}
+              className='h-7'
+              onChange={(event) => {
+                setNewName(event.target.value);
+              }}
+              onFocus={(event) => {
+                event.target.select();
+              }}
+            />
+            <Button type='submit' size='sm' disabled={!newName.trim() || newName === project.name}>
+              Save
+            </Button>
+          </form>
+        </PopoverContent>
+      </Popover>
+      {isConfirmingClose ? (
+        <CloseProjectDialog
+          row={row}
+          name={project.name}
+          closePlan={closePlan}
+          isBeforeDelete
+          isOpen
+          onOpenChange={setIsConfirmingClose}
+          onConfirm={() => {
+            closeProject(project.id);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}

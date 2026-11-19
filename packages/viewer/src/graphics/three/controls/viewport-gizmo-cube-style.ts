@@ -1,0 +1,109 @@
+import { Color, SRGBColorSpace } from 'three';
+import { axesHelperColors } from '#graphics/three/overlay-colors.constants.js';
+import { sectionPlaneTileTints } from '#constants/axes-colors.js';
+import { timeViewerCanvas2d } from '#lib/viewer-load-timing.js';
+
+/** The cube's dimensions and texture density, independent of canvas pixel ratio. @internal */
+export const viewportGizmoMetrics = { radius: 0.3, segments: 4, textureSize: 256, fontSize: 64 } as const;
+
+/** Display colors resolved from the host's Tau tokens. @internal */
+export type ViewportGizmoStyle = {
+  readonly face: number;
+  readonly bevel: number;
+  readonly label: number;
+  readonly hover: number;
+  readonly hoverLabel: number;
+  /** The label on an axis ball: a dark neutral, legible on every axis hue in both themes. */
+  readonly ballLabel: number;
+  readonly font: string;
+  readonly axes: Readonly<{ x: string; y: string; z: string }>;
+  /** The section plane picker's tile tints, by the axis normal to each tile's plane. */
+  readonly planeTiles: Readonly<Record<'x' | 'y' | 'z', ViewportGizmoPlaneTileStyle>>;
+};
+
+/** One section plane tile's tints, as sRGB hex. @internal */
+export type ViewportGizmoPlaneTileStyle = Readonly<{ edge: number; strong: number; deep: number }>;
+
+// Achromatic OKLCH lightness maps to linear RGB as L³. These token-scale fallbacks also
+// serve embedders that supply ViewerEnvironment without loading the Tau stylesheet.
+const neutral = (lightness: number): number => new Color().setScalar(lightness ** 3).getHex();
+
+/**
+ * Resolve CSS colors to sRGB before passing them to Three, which cannot parse OKLCH.
+ * @internal
+ * @returns The host's neutral surfaces, accent, and legible label colors.
+ */
+const resolveViewportGizmoStyle = ({
+  container,
+  colorScheme,
+  isHighContrast,
+  accentColor,
+}: {
+  readonly container: HTMLElement;
+  readonly colorScheme: 'light' | 'dark';
+  readonly isHighContrast: boolean;
+  readonly accentColor: string;
+}): ViewportGizmoStyle => {
+  const styles = getComputedStyle(container);
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  // Environments without `CSS.supports` (jsdom) keep the fallback.
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the DOM lib types `CSS.supports` as always present.
+  const supportsColor = (value: string): boolean => typeof CSS.supports === 'function' && CSS.supports('color', value);
+  const parseColor = (value: string, fallback: number): number => {
+    if (!context || !value || !supportsColor(value)) {
+      return fallback;
+    }
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = value;
+    context.fillRect(0, 0, 1, 1);
+    const [red = 0, green = 0, blue = 0] = context.getImageData(0, 0, 1, 1).data;
+    return new Color().setRGB(red / 255, green / 255, blue / 255, SRGBColorSpace).getHex();
+  };
+  const readColor = (token: string, fallback: number): number =>
+    parseColor(styles.getPropertyValue(token).trim(), fallback);
+  // A browser without OKLCH keeps the axis helper's own tint for every state.
+  const planeTile = (axis: 'x' | 'y' | 'z'): ViewportGizmoPlaneTileStyle => {
+    const fallback = new Color(axesHelperColors[axis]).getHex();
+    const tints = sectionPlaneTileTints[axis];
+    return {
+      edge: parseColor(tints.edge, fallback),
+      strong: parseColor(tints.strong, fallback),
+      deep: parseColor(tints.deep, fallback),
+    };
+  };
+  const isDark = colorScheme === 'dark';
+  const hover = new Color(accentColor);
+  const luminance = 0.2126 * hover.r + 0.7152 * hover.g + 0.0722 * hover.b;
+  const label = readColor('--foreground', neutral(isDark ? (isHighContrast ? 1 : 0.95) : 0.16));
+  // Preserve Tau's XYZ hues and lift their luminance on dark canvases so the small
+  // orientation labels remain legible; the face palette stays achromatic.
+  const axisColor = (value: string): string => new Color(value).lerp(new Color(label), isDark ? 0.3 : 0).getStyle();
+  return {
+    face: readColor(
+      isDark ? (isHighContrast ? '--border' : '--accent') : '--border',
+      neutral(isDark ? (isHighContrast ? 0.55 : 0.295) : 0.9),
+    ),
+    bevel: readColor(isDark ? '--neutral' : '--muted', neutral(isDark ? 0.47 : 0.965)),
+    label,
+    hover: hover.getHex(),
+    // Choose the higher-contrast neutral for every user-selected accent, including very pale hues.
+    hoverLabel: neutral(luminance > 0.179 ? 0 : 1),
+    ballLabel: neutral(0.16),
+    font: styles.getPropertyValue('--font-sans').trim() || "'Geist Sans', ui-sans-serif, system-ui, sans-serif",
+    axes: { x: axisColor(axesHelperColors.x), y: axisColor(axesHelperColors.y), z: axisColor(axesHelperColors.z) },
+    planeTiles: { x: planeTile('x'), y: planeTile('y'), z: planeTile('z') },
+  };
+};
+
+/**
+ * Read the gizmo's display colors from the host's tokens, through a 1×1 2D canvas, timed as a viewer 2D context.
+ *
+ * @param input - The container whose tokens apply, its color scheme, contrast preference and accent.
+ * @returns The resolved style.
+ * @internal
+ */
+export const readViewportGizmoStyle = (input: Parameters<typeof resolveViewportGizmoStyle>[0]): ViewportGizmoStyle =>
+  timeViewerCanvas2d('gizmo.style', () => resolveViewportGizmoStyle(input));

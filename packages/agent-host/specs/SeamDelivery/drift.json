@@ -1,0 +1,32 @@
+{
+  "alphabet": [
+    "ef:cursor-ahead",
+    "ef:identity-mismatch",
+    "ef:owner-fenced",
+    "ef:unreadable",
+    "effect:durable",
+    "effect:not-applied",
+    "effect:unknown",
+    "frame:lh",
+    "frame:lk",
+    "listen:catchUp",
+    "listen:liveEvents",
+    "listen:revisionEvents",
+    "status:applied",
+    "status:refused",
+    "status:replayed",
+    "verb:attach",
+    "verb:cancel",
+    "verb:interrupt",
+    "verb:read",
+    "verb:resolve-interrupt",
+    "verb:resume",
+    "verb:start",
+    "verb:steer"
+  ],
+  "specs": {
+    "SeamDelivery.tla": "c718e5ae93e8bfb972086b7194db754d8ff050b4297bd9dfa0dfd197f9cb5dab",
+    "SeamDeliveryTrace.tla": "1b068abdf2b34904b4a35c4b94f1f67577e90fc91bd69d4385d568c7ee5fbcba"
+  },
+  "tables": {}
+}

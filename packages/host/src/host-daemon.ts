@@ -1,0 +1,2022 @@
+import { createHash } from 'node:crypto';
+import { mkdir, readdir, realpath } from 'node:fs/promises';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { MessageChannel } from 'node:worker_threads';
+
+import { WebSocket } from 'ws';
+
+import { createGatewayModelTransport } from '@taucad/agent-host';
+import type { AgentSessionModel } from '@taucad/agent-host';
+import { credentialPrincipal } from '@taucad/agent-host/launcher';
+import type { AgentLauncher, CredentialState } from '@taucad/agent-host/launcher';
+import type { ExternalAgentDescriptor, GatewayHostLabels } from '@taucad/agent-host/wire';
+import { NodeFsChannel, NodeFsProviderClient } from '@taucad/filesystem/backend';
+import {
+  NodeFsAuthorityHost,
+  repositoryLargeObjectStore,
+  serveNodeFsProvider,
+  toNodeFsPort,
+} from '@taucad/filesystem/backend/node';
+import { composeView } from '@taucad/filesystem/composed-view';
+import { tauPathPolicy } from '@taucad/filesystem/path-registry';
+import { createRuntimeClient } from '@taucad/runtime';
+import { MachineHostStartInFlightError } from '@taucad/runtime/host/node';
+import type { CreateNodeMachineHostInput } from '@taucad/runtime/host/node';
+import { createFileSystemBridgePort, fromFileSystemBridge } from '@taucad/runtime/filesystem';
+import { nodeGrepMatcherWorker } from '@taucad/runtime/filesystem/node';
+import { webSocketTransport } from '@taucad/runtime/transport/websocket';
+import type { RevisionUserActor } from '@taucad/revisions';
+import { createDeploymentModeResolver } from '@taucad/utils/deployment-mode';
+import type { RuntimeClient } from '@taucad/runtime/client';
+import type { ComputeBinding, ComputeStoreControl } from '@taucad/runtime/types';
+
+import { startAgentServer } from '#agent-server.js';
+import type { AgentServerHandle } from '#agent-server.js';
+import type { StaticUiWasmMount } from '#static-ui.js';
+import { discoverAcpAgents, externalAgentDescriptors } from '#acp/index.js';
+import { runtimeTranscodePort } from '#acp/media.js';
+import type { AcpAdapterRefusal } from '#acp/index.js';
+import { chatToReport, startRunReporter } from '#run-reporter.js';
+import type { RunReporter } from '#run-reporter.js';
+import type {
+  HostPreparableKernel,
+  HostPrepareKernel,
+  HostSystemSkillBundle,
+  HostToolFileSystem,
+} from '#agent-tools.js';
+import { hostControlInboundSchema, pairingResponseSchema, pairingTokenResponseSchema } from '#host.schemas.js';
+import type { HostControlInbound, HostControlOutbound } from '#host.schemas.js';
+import {
+  defaultConfigDirectory,
+  readHostCredential,
+  removeHostCredential,
+  writeHostCredential,
+} from '#credential-store.js';
+import type { HostCredential } from '#credential-store.js';
+import type { CreateNodeMachineRuntimeOptions } from '#machine-host.js';
+import { keepAwakeWhileStreaming, platformKeepAwakeBlocker } from '#keep-awake.js';
+import type { KeepAwakeBlocker } from '#keep-awake.js';
+import { agentMachineFacet, openSharedMachineHost } from '#local-machines.js';
+import type { OpenSharedMachineHostOptions, SharedMachineHost } from '#local-machines.js';
+import { spliceFrameSockets } from '#frame-splice.js';
+import type { FrameSpliceCloseResult, FrameSpliceHandle } from '#frame-splice.js';
+import type { HostJobWorkerFactory, HostJobWorkerHandle } from '#job-worker.js';
+import { keyedResource } from '#keyed-resource.js';
+import { resolveNodeProjectIdentity } from '#project-identity.js';
+import { createProjectHost } from '#project-host.js';
+import type { ProjectHost, ProjectHostOptions } from '#project-host.js';
+import { daemonRevisionVia } from '#revision-actor.js';
+import { startRuntimeChild } from '#runtime-child-supervisor.js';
+import { createZooProxyChildCredential } from '#zoo-proxy-child.js';
+import type { HostZooProxyOptions } from '#zoo-proxy-child.js';
+import type { RuntimeChildHandle, RuntimeChildNativeKernels } from '#runtime-child-supervisor.js';
+import { createTauIdentityReader } from '#telemetry.js';
+import type { ReportingConsent } from '#telemetry.js';
+
+/** Milliseconds. */
+const socketOpenTimeout = 15_000;
+/** Milliseconds. */
+const reconnectDelayMaximum = 30_000;
+/**
+ * Milliseconds a control connection must stay open before its close resets the
+ * reconnect backoff. A server that keeps accepting and then closing (a replica
+ * failing every control frame) would otherwise be redialled about once a second
+ * forever; a connection that lived this long closed for a reason worth an
+ * immediate reconnect, such as a deploy.
+ */
+const stableControlConnection = 30_000;
+/** Milliseconds allowed for a child exit to explain its closing loopback routes. */
+const childExitAttributionGrace = 50;
+
+/**
+ * Why a relayed session ended.
+ *
+ * `ROUTE_UNUSED` is its own outcome rather than a flavour of `RELAY_CLOSED`:
+ * the relay reaps a route whose browser peer never connected, and a session
+ * every one of whose routes died that way was minted and never dialled — which
+ * is not the same event as the relay dropping a live wire.
+ *
+ * @public
+ */
+export type HostSessionCloseCode = 'CHILD_EXIT' | 'RELAY_CLOSED' | 'REVOKED' | 'ROUTE_UNUSED';
+
+/** Events emitted by a running Tau Host daemon. @public */
+export type HostDaemonEvent =
+  | {
+      readonly type: 'pairing';
+      readonly userCode: string;
+      readonly verificationUri: string;
+      readonly expiresAt: string;
+    }
+  | { readonly type: 'control'; readonly state: 'connecting' | 'connected' | 'disconnected' }
+  | {
+      readonly type: 'session';
+      readonly sessionId: string;
+      readonly state: 'connecting' | 'connected' | 'disconnected';
+      readonly code?: HostSessionCloseCode;
+    }
+  | {
+      readonly type: 'jobs';
+      readonly state: 'starting' | 'ready' | 'draining' | 'stopped';
+      readonly runnerId?: string;
+      readonly slots?: number;
+      readonly capabilities?: Readonly<Record<string, boolean | number | string>>;
+      readonly profiles?: readonly string[];
+    }
+  | {
+      readonly type: 'agent';
+      readonly state: 'ready' | 'stopped';
+      /** Origin the agent channel — and any served UI — answers on. */
+      readonly url?: string;
+      /**
+       * Every external ACP agent this daemon knows about (W4-ACP), as the one
+       * canonical descriptor (VSC1): the startable ones carry their probed
+       * model list, and one that could not be started carries its refusal code
+       * instead of vanishing.
+       */
+      readonly externalAgents?: readonly ExternalAgentDescriptor[];
+      /**
+       * Why each refused external agent was refused, with the message the
+       * descriptor leaves out because it holds local paths. In-process only,
+       * for the terminal that launched this daemon (`tau serve`); never a wire
+       * field.
+       */
+      readonly externalAgentRefusals?: readonly AcpAdapterRefusal[];
+    }
+  | {
+      readonly type: 'warning';
+      readonly code:
+        | 'JOB_WORKER_FAILED'
+        | 'TRUSTED_PROJECTS_ONLY'
+        | 'AGENT_SERVER_FAILED'
+        /* The machine host or one of its providers reported a problem; the
+         * route keeps serving and the person sees it in the directory. */
+        | 'MACHINE_HOST'
+        | 'MACHINE_PROVIDER'
+        /* The runtime child's Zoo-scoped token could not be minted; KCL refuses until the next refresh succeeds. */
+        | 'ZOO_TOKEN'
+        /* Another Tau app holds the per-user machine store's writer lock, so
+         * this host serves without machines rather than exiting. */
+        | 'MACHINE_STORE_OWNED_ELSEWHERE'
+        /* Retriable, never fatal: runtime children back the relay sessions and
+         * the geometry tools, and nothing else. The agent channel and its file
+         * tools keep serving while the loop retries a child. */
+        | 'RUNTIME_CHILD_FAILED'
+        /* Retriable, never fatal: the relay could not pair this host yet. The
+         * agent channel keeps serving unpaired while the daemon retries. */
+        | 'PAIRING_FAILED'
+        /* The turn ran and is durable in its own log; only its revision is
+         * missing (V17). Retriable in the sense that the next turn records. */
+        | 'REVISION_NOT_RECORDED'
+        | 'REVISION_UNAVAILABLE'
+        /* Housekeeping, reported because it deletes: turn workspaces a previous
+         * host left behind were removed at start (V19, SR4). */
+        | 'TURN_WORKSPACES_SWEPT';
+      readonly message: string;
+    };
+
+/**
+ * Launcher-1 configuration: the daemon's own agent-host capability.
+ *
+ * Present, the daemon serves `${pathPrefix}/agent` on a loopback port of its
+ * own — a third channel concern beside the runtime child's `/runtime` and
+ * `/fs`, never multiplexed onto either — and answers the T0 event-log
+ * vocabulary there. Absent, `tau serve` stays the remote-compute daemon it was.
+ *
+ * @public
+ */
+export type HostDaemonAgentOptions = {
+  /**
+   * A managed Cloud host: a local-only (`relay: false`) daemon then still authenticates model calls with its paired
+   * device credential rather than the CLI account session. It no longer selects the billing layer: the gateway API's
+   * deployment answer does, per run (D1).
+   */
+  readonly tauCloudEnabled?: boolean | undefined;
+  /** Absolute workspace root; `.tau/chats/<chatId>/events.jsonl` lives under it. */
+  readonly workspaceRoot: string;
+  /** Host-admitted compute binding shared by direct and candidate execution roots. */
+  readonly compute?: ComputeBinding | (() => ComputeBinding);
+  readonly computeControl?: ComputeStoreControl;
+  /** Base the model gateway hangs off, e.g. the Tau API origin. */
+  readonly gatewayBaseUrl: string;
+  /**
+   * The host kind and build every model call from this daemon names (LW17), as `tau serve` knows them: `daemon`, or
+   * `cloud` on a provisioned cloud host. The transport adds each call's model. Absent, a call sends no labels.
+   */
+  readonly hostLabels?: GatewayHostLabels | undefined;
+  /**
+   * Account session token for project backup and local-only model requests.
+   *
+   * Absent, a served project still knows *where* its Tau Cloud repository is
+   * and says so when a remote refuses it; present, *Connect Tau Cloud*
+   * registers the project (P51) and its pushes authenticate. Never persisted
+   * here and never written under a project.
+   */
+  readonly tauApiToken?: string | undefined;
+  /**
+   * The Tau account `tauApiToken` belongs to, which every project this daemon serves records as (A1).
+   *
+   * Absent, a served project records this device's pseudonym until a renderer names its session with `setActor`.
+   */
+  readonly revisionActor?: RevisionUserActor | undefined;
+  /** Default model row; one admission may override it. */
+  readonly model: AgentSessionModel;
+  /** Default system prompt; one admission may override it. */
+  readonly systemPrompt: string;
+  /**
+   * The native kernel preparation behind `prepare_kernel` (D7, D37), in this process with its unrestricted network.
+   * A kernel asks this daemon for its closure on every operation until it binds, so the next call after a `ready`
+   * outcome runs the prepared kernel in the child that refused it. Omit it and the tool is not offered.
+   */
+  readonly prepareKernel?: HostPrepareKernel | undefined;
+  /**
+   * The kernels `prepareKernel` takes, which `prepare_kernel`'s description names: a list, or a function read each
+   * time the tool list is, for a daemon that learns them from the deployments its runtime children report.
+   */
+  readonly preparableKernels?: readonly HostPreparableKernel[] | (() => readonly HostPreparableKernel[]) | undefined;
+  /**
+   * Offer the `test_model` tool. Defaults to `true`, which still yields the
+   * tool only where the native GeoSpec engine resolves — `false` withholds it
+   * from an installation that has the engine, so the surface is this host's
+   * own decision rather than a resolution accident.
+   */
+  readonly testModel?: boolean | undefined;
+  /** Channel admission secret; at least 32 characters. */
+  readonly token: string;
+  /** Human-readable name published on `/.well-known/tau-host`; defaults to the machine hostname. */
+  readonly label?: string | undefined;
+  /** Loopback port. Defaults to `0` (ephemeral). */
+  readonly port?: number | undefined;
+  /** Absolute directory of a prebuilt Tau UI served at `/` (serve mode). */
+  readonly uiRoot?: string | undefined;
+  /** WebAssembly directories served beside the UI, such as the installed `cadmpeg-ts` engines. */
+  readonly uiWasmMounts?: readonly StaticUiWasmMount[] | undefined;
+  /** Extra browser origins admitted on the upgrade; own origins always are. */
+  readonly allowedOrigins?: readonly string[] | undefined;
+  /**
+   * External ACP agents (W4-ACP). Present, the daemon resolves its pinned
+   * adapters from `resolveFrom`, probes their CLIs, advertises whatever
+   * survives, and mounts the host-local MCP endpoint those agents call back
+   * into. Absent, `tau serve` runs Tau's own agent only.
+   */
+  readonly externalAgents?: { readonly resolveFrom: string } | undefined;
+  /**
+   * Machine providers served on the `/machines` route (`tau serve --machines`).
+   * Absent, the route answers 404 and a client's machines facet negotiates
+   * `unsupported`. Printers live in the per-user machine store,
+   * `<config>/machines`, which the desktop app opens too; while another Tau
+   * app holds it, the daemon warns `MACHINE_STORE_OWNED_ELSEWHERE` and serves
+   * without machines. Machine credentials resolve from the host's secret vault (the
+   * macOS keychain, else that directory). The binding ceremony's native half
+   * (the secret) has no daemon surface yet, so only providers that bind
+   * without one — the simulator — complete here.
+   *
+   * While a streamed run is feeding a machine, the daemon keeps the computer
+   * awake with `keepAwake`, by default {@link platformKeepAwakeBlocker}: a
+   * computer that sleeps leaves the machine waiting mid-run. Where it cannot,
+   * it warns `MACHINE_HOST` once.
+   */
+  readonly machines?:
+    | {
+        readonly providers: CreateNodeMachineHostInput['providers'];
+        readonly keepAwake?: KeepAwakeBlocker | undefined;
+      }
+    | undefined;
+};
+
+/** Options for {@link startHostDaemon}. @public */
+export type HostDaemonOptions = {
+  readonly relayUrl: URL;
+  readonly runtimeHost: {
+    readonly modulePath: string;
+    readonly args?: readonly string[];
+    /**
+     * The native kernels the runtime children's definitions list (D37): each child reports its deployments and asks
+     * this daemon for each kernel's sealed closure, since it cannot read the dependency store. The child may not spawn,
+     * so this daemon starts each native worker on its behalf, only from a closure it answered and only through the OS
+     * sandbox. Absent, every native kernel in a child refuses as not prepared.
+     */
+    readonly native?: RuntimeChildNativeKernels;
+  };
+  /**
+   * The runtime child's Zoo proxy. With a session token, the daemon sends the
+   * child a Zoo-scoped token (never the session) and keeps it current.
+   */
+  readonly zooProxy?: HostZooProxyOptions;
+  /** Optional durable-job worker started after device pairing and drained during shutdown. */
+  readonly jobWorker?: HostJobWorkerFactory;
+  /** Optional agent-host capability (Launcher 1); omit to keep the daemon compute-only. */
+  readonly agent?: HostDaemonAgentOptions;
+  readonly maxSessions?: number;
+  readonly onEvent?: (event: HostDaemonEvent) => void;
+  /** Package-owned skills supplied by the embedding application. */
+  readonly systemSkillBundles?: readonly HostSystemSkillBundle[];
+  /**
+   * Whether this daemon may pair interactively (default `true`).
+   *
+   * `false` for a provisioned cloud host (`tau serve --no-pair`, set by its
+   * entrypoint): it was never paired, so a refused or missing credential means
+   * it was revoked, and it exits rather than offering a pairing code from a
+   * container that still holds a clone (D21).
+   */
+  readonly pair?: boolean;
+  /**
+   * Whether this daemon pairs with and connects to the relay at `relayUrl` (default `true`).
+   *
+   * `false` is a local-first daemon (`tau serve` without `--relay`, charter D29): it serves its agent channel and any
+   * UI on loopback, never pairs and never opens the control connection, and is `ready` once the agent channel is.
+   * `relayUrl` stays the Tau API origin its gateway, Zoo proxy and Tau Cloud sync talk to. A credential this
+   * machine already stored or an account session in `agent.tauApiToken` admits Tau runs; without either they are
+   * refused `HOST_NOT_PAIRED`.
+   */
+  readonly relay?: boolean;
+  /**
+   * Runtime telemetry (runtime observability PR-3): told each agent runtime client this daemon opens, under the
+   * `agent` caller, and returns its unsubscribe. The cloud host container composes it with route `cloud`; every other
+   * `tau serve` leaves it out.
+   */
+  readonly observeRuntimeClient?: (client: RuntimeClient, caller: 'agent') => () => void;
+  /**
+   * Sync telemetry consent (runtime observability PR-7, AR-W6-02): the runtime telemetry composition's
+   * `status().consent`, read per settled push or pull. Only `granted` reports; a daemon that leaves it out (every
+   * `tau serve` but the cloud host container) reports no sync attempts.
+   */
+  readonly syncTelemetryConsent?: () => ReportingConsent;
+  /**
+   * Runtime telemetry for `--machines` (T19): told each new machine operation and each request the shared store's
+   * admission refuses. The cloud host container composes it from the same reporter as `observeRuntimeClient`; every
+   * other `tau serve` leaves it out.
+   */
+  readonly machineTelemetry?: Pick<OpenSharedMachineHostOptions, 'onOperation' | 'onAdmissionRefusal'>;
+  /**
+   * Agent observability (T11): observe the chats the agent's project host leads, given that project's id and its
+   * own-row read. It must not throw and never affects a run. The cloud host container composes it from a module its
+   * image carries; every other `tau serve` leaves it out.
+   */
+  readonly observeChats?: (
+    projectId: string,
+    read: Parameters<NonNullable<ProjectHostOptions['observeChats']>>[0],
+    sources: Parameters<NonNullable<ProjectHostOptions['observeChats']>>[1],
+  ) => ReturnType<NonNullable<ProjectHostOptions['observeChats']>>;
+};
+
+/** Final daemon closure result. @public */
+export type HostDaemonCloseResult =
+  | { readonly cause: 'requested' }
+  | { readonly cause: 'fatal'; readonly error: Error };
+
+/** Lifecycle handle returned by {@link startHostDaemon}. @public */
+export type HostDaemonHandle = {
+  readonly ready: Promise<void>;
+  readonly closed: Promise<HostDaemonCloseResult>;
+  close(): Promise<void>;
+};
+
+class HostAuthenticationError extends Error {}
+
+type ActiveSession = {
+  readonly close: (code?: Exclude<HostSessionCloseCode, 'ROUTE_UNUSED'>) => void;
+  readonly closed: Promise<void>;
+  /** True once this session has lost a route or been asked to close. */
+  isDraining: () => boolean;
+};
+
+type AgentFileSystemAuthority = Readonly<{
+  channel: NodeFsChannel;
+  /** Always admitted. */
+  workspaceRoot: string;
+  /** Candidate and linked checkout roots, by how many holders admitted each. */
+  admissions: Map<string, number>;
+  /**
+   * The large-object store each root lands objects from (W11.3): the live
+   * root's own, and an admitted checkout's for as long as it is admitted. A
+   * root with none takes no large-object source.
+   */
+  largeObjectStores: Map<string, string>;
+  stopServer: () => Promise<void>;
+  /** The in-process channel between the two; held open only while a close is in flight (R5). */
+  ports: MessageChannel;
+}>;
+
+/**
+ * The relay's reap of a route no browser ever dialled.
+ *
+ * `host-frame-relay.ts` closes a peerless route with exactly this code and
+ * reason after 15 s, and it is the only 1008 the host side of a route can
+ * receive that does not mirror a browser's own close.
+ *
+ * @param result - How one splice ended.
+ * @returns True when the relay reaped that route for want of a peer.
+ */
+const isPeerlessReap = (result: FrameSpliceCloseResult): boolean =>
+  result.cause === 'peer-closed' && result.code === 1008 && result.reason === 'route peer did not connect';
+
+/**
+ * A route the API closed because this device is revoked: 4003, the code the
+ * control socket also treats as final. (A host route is never closed 4401;
+ * the API refuses a bad grant with 1008.)
+ *
+ * A browser can close with any 3000–4999 code and the relay mirrors it, so
+ * this ends only the one session; device-wide finality stays with the control
+ * socket, which only the API writes.
+ *
+ * @param result - How one splice ended.
+ * @returns True when the route was closed for a revoked device.
+ */
+const isRevokedRoute = (result: FrameSpliceCloseResult): boolean =>
+  result.cause === 'peer-closed' && result.code === 4003;
+
+const asHttpUrl = (relayUrl: URL, path: string): URL => {
+  const url = new URL(path, relayUrl);
+  if (url.protocol === 'ws:') {
+    url.protocol = 'http:';
+  } else if (url.protocol === 'wss:') {
+    url.protocol = 'https:';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new TypeError('Tau Host relay URL must use https:, http:, wss:, or ws:.');
+  }
+  return url;
+};
+
+const asWebSocketUrl = (relayUrl: URL, path: string): URL => {
+  const url = new URL(path, relayUrl);
+  if (url.protocol === 'http:') {
+    url.protocol = 'ws:';
+  } else if (url.protocol === 'https:') {
+    url.protocol = 'wss:';
+  }
+  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+    throw new TypeError('Tau Host relay URL must use https:, http:, wss:, or ws:.');
+  }
+  return url;
+};
+
+const jsonRequest = async (url: URL, body: unknown, signal: AbortSignal): Promise<Response> =>
+  fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+const pairDevice = async (
+  relayUrl: URL,
+  signal: AbortSignal,
+  onEvent: (event: HostDaemonEvent) => void,
+): Promise<HostCredential> => {
+  const pairingResponse = await jsonRequest(
+    asHttpUrl(relayUrl, '/v1/agents/pairings'),
+    { deviceLabel: hostname() },
+    signal,
+  );
+  if (!pairingResponse.ok) {
+    throw new Error(`Tau Host pairing request failed with HTTP ${String(pairingResponse.status)}.`);
+  }
+  const pairing = pairingResponseSchema.parse(await pairingResponse.json());
+  onEvent({
+    type: 'pairing',
+    userCode: pairing.userCode,
+    verificationUri: pairing.verificationUri,
+    expiresAt: pairing.expiresAt,
+  });
+
+  while (Date.now() < Date.parse(pairing.expiresAt)) {
+    // oxlint-disable-next-line no-await-in-loop -- device-code polling is ordered and server-paced.
+    await delay(pairing.pollInterval, undefined, { signal });
+    // oxlint-disable-next-line no-await-in-loop -- each poll depends on the preceding server response.
+    const tokenResponse = await jsonRequest(
+      asHttpUrl(relayUrl, '/v1/agents/pairings/token'),
+      { deviceCode: pairing.deviceCode },
+      signal,
+    );
+    if (tokenResponse.status === 202) {
+      continue;
+    }
+    if (!tokenResponse.ok) {
+      throw new Error(`Tau Host pairing token exchange failed with HTTP ${String(tokenResponse.status)}.`);
+    }
+    // oxlint-disable-next-line no-await-in-loop -- decode the response belonging to this ordered poll.
+    const token = pairingTokenResponseSchema.parse(await tokenResponse.json());
+    const credential: HostCredential = { v: 1, ...token };
+    // oxlint-disable-next-line no-await-in-loop -- persist the accepted credential before returning it.
+    await writeHostCredential(credential);
+    return credential;
+  }
+  throw new Error('Tau Host pairing code expired before it was approved.');
+};
+
+const waitForOpen = async (socket: WebSocket): Promise<void> => {
+  if (socket.readyState === WebSocket.OPEN) {
+    return;
+  }
+  const opened = Promise.withResolvers<void>();
+  const onOpen = (): void => {
+    opened.resolve();
+  };
+  const onError = (error: Error): void => {
+    opened.reject(error);
+  };
+  const onClose = (code: number): void => {
+    opened.reject(new Error(`WebSocket closed before opening (${String(code)}).`));
+  };
+  socket.once('open', onOpen);
+  socket.once('error', onError);
+  socket.once('close', onClose);
+  try {
+    const timeout = async (): Promise<never> => {
+      await delay(socketOpenTimeout, undefined, { ref: false });
+      throw new Error('WebSocket did not open within 15 seconds.');
+    };
+    await Promise.race([opened.promise, timeout()]);
+  } finally {
+    socket.off('open', onOpen);
+    socket.off('error', onError);
+    socket.off('close', onClose);
+  }
+};
+
+const authorizedSocket = (url: URL, credential: string): WebSocket =>
+  new WebSocket(url, { headers: { authorization: `Bearer ${credential}` } });
+
+const rawDataText = (raw: WebSocket.RawData): string => {
+  if (Array.isArray(raw)) {
+    return Buffer.concat(raw).toString('utf8');
+  }
+  if (raw instanceof ArrayBuffer) {
+    return Buffer.from(raw).toString('utf8');
+  }
+  return raw.toString('utf8');
+};
+
+const assertRelayRoute = (route: string, relayUrl: URL): URL => {
+  const url = new URL(route);
+  const expected = asWebSocketUrl(relayUrl, '/');
+  if (url.protocol !== expected.protocol || url.host !== expected.host) {
+    throw new Error('Tau Host refused a session route outside the configured relay origin.');
+  }
+  return url;
+};
+
+const localRoute = (childUrl: URL, route: 'runtime' | 'fs' | 'agent', sessionId: string): URL => {
+  const base = new URL(childUrl);
+  if (!base.pathname.endsWith('/')) {
+    base.pathname += '/';
+  }
+  const url = new URL(route, base);
+  url.searchParams.set('session', sessionId);
+  return url;
+};
+
+/**
+ * Start an outbound Tau Host daemon.
+ *
+ * @param options - Relay, runtime child, capacity, and event configuration.
+ * @returns A lazy lifecycle handle; inspect `ready` and `closed` for outcomes.
+ * @public
+ *
+ * @example <caption>Start and stop a host daemon</caption>
+ * ```typescript
+ * import { startHostDaemon } from '@taucad/host';
+ *
+ * const daemon = startHostDaemon({
+ *   relayUrl: new URL('https://api.tau.new'),
+ *   runtimeHost: { modulePath: '/opt/tau/host-runtime-child.mjs' },
+ * });
+ * await daemon.ready;
+ * await daemon.close();
+ * ```
+ */
+export const startHostDaemon = (options: HostDaemonOptions): HostDaemonHandle => {
+  const maxSessions = options.maxSessions ?? 1;
+  /* The API's deployment answer, asked at each run's admission (D1): it, not this process's environment, chooses
+   * whether a run carries the billing layer, so a Cloud host the provisioner started without `TAU_CLOUD_ENABLED` is
+   * funded too. One per daemon, in memory, keyed by the gateway's origin. */
+  const deployment = createDeploymentModeResolver();
+  if (!Number.isInteger(maxSessions) || maxSessions < 1) {
+    throw new TypeError('startHostDaemon: maxSessions must be a positive integer');
+  }
+  asWebSocketUrl(options.relayUrl, '/');
+
+  const ready = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<HostDaemonCloseResult>();
+  const shutdown = new AbortController();
+  const sessions = new Map<string, ActiveSession>();
+  let controlSocket: WebSocket | undefined;
+  /* One sandboxed runtime child per agent root and per relay session (operator ruling Q8): roots and sessions never
+   * share a realm, and a child that exits or hangs costs only its own. */
+  const runtimeChildren = new Set<RuntimeChildHandle>();
+  /* Starts still in flight. Release waits for them too: a child that finishes starting after release closed the
+   * others closes itself (see `startChild`), and `close()` must not resolve while it still runs. */
+  const startingChildren = new Set<Promise<unknown>>();
+  /* What the control `ready` frame advertises: the runtime version of the last child that started. */
+  let runtimeVersion: string | undefined;
+  let jobWorker: HostJobWorkerHandle | undefined;
+  let jobWorkerObserver: Promise<void> | undefined;
+  let isClosing = false;
+  let isReady = false;
+  /*
+   * RH-R13 / RH-S6: whether this daemon may admit a Tau run, read at every admission and by the gateway per request.
+   * Pairing moves it to `paired`; a rejected device credential moves it to `unpaired` before the credential is
+   * removed, so nothing is admitted on a revoked credential while the daemon re-pairs.
+   */
+  let credentialState: CredentialState = { mode: 'unpaired' };
+  const pairedWith = (stored: HostCredential): void => {
+    credentialState = {
+      mode: 'paired',
+      bearer: stored.credential,
+      ...(stored.accountId === undefined ? {} : { principal: stored.accountId }),
+    };
+  };
+  const bearer = (): string | undefined => (credentialState.mode === 'paired' ? credentialState.bearer : undefined);
+  let agentProject: ProjectHost | undefined;
+  let agentServer: AgentServerHandle | undefined;
+  let agentExternalAgents: readonly ExternalAgentDescriptor[] = [];
+  let agentRunReporter: RunReporter | undefined;
+  let agentFileSystem: AgentFileSystemAuthority | undefined;
+  let agentMachines: SharedMachineHost | undefined;
+  /* Releases the computer when the agent stops; set while a machine host serves. */
+  let stopKeepingAwake: (() => void) | undefined;
+  /* Close failures of a released candidate root's runtime, reported by the next `stopAgent`. */
+  const agentRuntimeCloseFailures: unknown[] = [];
+
+  const emit = (event: HostDaemonEvent): void => {
+    try {
+      options.onEvent?.(event);
+    } catch {
+      // Observability callbacks cannot own daemon lifecycle.
+    }
+  };
+
+  const zooCredential =
+    options.zooProxy === undefined
+      ? undefined
+      : createZooProxyChildCredential({
+          zooProxy: options.zooProxy,
+          onWarning: (message) => {
+            emit({ type: 'warning', code: 'ZOO_TOKEN', message });
+          },
+        });
+
+  const resolveReady = (): void => {
+    if (!isReady) {
+      isReady = true;
+      ready.resolve();
+    }
+  };
+
+  const closeSessions = (code: Exclude<HostSessionCloseCode, 'ROUTE_UNUSED'>): void => {
+    for (const session of sessions.values()) {
+      session.close(code);
+    }
+  };
+
+  const isAgentRootAdmitted = (filesystem: AgentFileSystemAuthority, root: string): boolean =>
+    root === filesystem.workspaceRoot || filesystem.admissions.has(root);
+
+  const providerForAgentRoot = (workspaceRoot: string): NodeFsProviderClient => {
+    const filesystem = agentFileSystem;
+    if (!filesystem || !isAgentRootAdmitted(filesystem, workspaceRoot)) {
+      throw Object.assign(new Error(`Tau Host refused an unadmitted agent filesystem root: ${workspaceRoot}`), {
+        code: 'EACCES',
+      });
+    }
+    return new NodeFsProviderClient(filesystem.channel, workspaceRoot, {
+      largeObjectSources: filesystem.largeObjectStores.has(workspaceRoot),
+    });
+  };
+
+  /**
+   * The agent's view of one admitted root, for whatever executes project code.
+   *
+   * Typed as {@link HostToolFileSystem} for the same reason the tool registry is:
+   * the client arms its watcher asynchronously, a shape `WatchableFileSystem`
+   * does not describe, and a view composes over the provider's unwatched face
+   * while the bridge keeps serving the client's own watch.
+   */
+  const executorViewFor = (workspaceRoot: string) => {
+    const checkout: HostToolFileSystem = providerForAgentRoot(workspaceRoot);
+    return composeView({ filesystem: checkout }, { consumer: 'agent', policy: tauPathPolicy });
+  };
+
+  /**
+   * Stop a child; one that refuses is gone or killed by its supervisor, and its exit is observed through `closed`.
+   *
+   * @param child - The child to stop.
+   */
+  const closeChild = async (child: RuntimeChildHandle): Promise<void> => {
+    try {
+      await child.close();
+    } catch {
+      /* A child that refuses to close is already gone or was killed; its exit settles `closed`. */
+    }
+  };
+
+  /**
+   * Start one child and admit it to the daemon's set, or close it when the daemon is already releasing its children.
+   *
+   * @returns A ready child that has the latest Zoo credential and keeps receiving it until it exits.
+   */
+  const startAdmittedChild = async (): Promise<RuntimeChildHandle> => {
+    const child = await startRuntimeChild(options.runtimeHost);
+    runtimeVersion = child.runtimeVersion;
+    runtimeChildren.add(child);
+    const detach = zooCredential?.attach(child);
+    // async-iife: bootstrap -- bookkeeping for the child's own exit; nothing awaits it.
+    void (async (): Promise<void> => {
+      await child.closed;
+      runtimeChildren.delete(child);
+      detach?.();
+    })();
+    /* A child that became ready after the daemon released its children would outlive it. */
+    if (shutdown.signal.aborted || closeResult !== undefined) {
+      await closeChild(child);
+      throw new Error('Tau Host is stopping.');
+    }
+    return child;
+  };
+
+  /**
+   * Start a runtime child for one agent root or relay session. Its owner closes it; daemon release closes any left.
+   *
+   * @returns A ready child that has the latest Zoo credential and keeps receiving it until it exits.
+   */
+  const startChild = async (): Promise<RuntimeChildHandle> => {
+    const starting = startAdmittedChild();
+    startingChildren.add(starting);
+    try {
+      return await starting;
+    } finally {
+      startingChildren.delete(starting);
+    }
+  };
+
+  /**
+   * The runtime version the control `ready` frame carries. A child is started to learn it once, so a child that
+   * cannot start still keeps the daemon off the relay with a retriable warning.
+   *
+   * @returns The runtime children's version.
+   */
+  const ensureRuntimeVersion = async (): Promise<string> => {
+    if (runtimeVersion !== undefined) {
+      return runtimeVersion;
+    }
+    const probe = await startChild();
+    await closeChild(probe);
+    return probe.runtimeVersion;
+  };
+
+  /**
+   * The geometry tools' runtime client, one per root a turn works in, each over its own runtime child: a candidate
+   * turn works in its own checkout (V19), so each root needs its own client over the files that turn writes, and its
+   * own realm. A client that a wire failure or its child's exit terminated is replaced, with a new child, on its next
+   * use; closing a root's client closes its child.
+   */
+  const agentRuntimes = keyedResource<string, { readonly child: RuntimeChildHandle; readonly client: RuntimeClient }>(
+    async (workspaceRoot) => {
+      let child: RuntimeChildHandle;
+      try {
+        child = await startChild();
+      } catch (error) {
+        /* The geometry tools' typed refusal, not a bare supervisor error: a
+         * daemon whose child is down still answers every file tool. The failed
+         * creation leaves no entry, so the next tool call retries the child. */
+        throw Object.assign(
+          new Error(`This Tau Host has no runtime attached: ${error instanceof Error ? error.message : String(error)}`),
+          { code: 'RUNTIME_UNAVAILABLE' },
+        );
+      }
+      const client = createRuntimeClient({
+        transport: webSocketTransport({
+          url: child.url,
+          /* The runtime child executes project code the agent wrote, so it reads
+           * the agent's view of the checkout and never the working copy, which
+           * only the parameter authority and the revisions engine hold
+           * (invariant CI1, W14). */
+          fileSystem: fromFileSystemBridge(() =>
+            createFileSystemBridgePort(executorViewFor(workspaceRoot), { grepMatcherWorker: nodeGrepMatcherWorker }),
+          ),
+          createSocket: (url) =>
+            new WebSocket(url, { headers: { authorization: `Bearer ${child.authorizationToken}` } }),
+          ...(options.agent?.compute
+            ? {
+                compute: typeof options.agent.compute === 'function' ? options.agent.compute() : options.agent.compute,
+              }
+            : {}),
+        }),
+      });
+      const unobserve = options.observeRuntimeClient?.(client, 'agent');
+      /* The client is bound to this child's port: once the child is gone, its next use gets a new child. */
+      // async-iife: bootstrap -- the child's exit only retires its client.
+      void (async (): Promise<void> => {
+        await child.closed;
+        unobserve?.();
+        client.terminate();
+      })();
+      return { child, client };
+    },
+    async ({ child, client }) => {
+      try {
+        await client.shutdown();
+      } finally {
+        await closeChild(child);
+      }
+    },
+    ({ child, client }) => {
+      if (client.lifecycleState !== 'terminated') {
+        return true;
+      }
+      /* Evicted without a close: a client the wire terminated must not leave its child running. */
+      void closeChild(child);
+      return false;
+    },
+  );
+
+  /**
+   * Admit a candidate or linked checkout's root until its release runs. The last release closes the root's runtime
+   * client, and the root stays admitted until that close ends, because the client's shutdown still reads through it.
+   *
+   * @param filesystem - The agent's authority.
+   * @param root - The checkout root.
+   * @param options - The repository store the root lands large objects from, which must be the workspace's own.
+   * @returns The release.
+   */
+  const admitAgentRoot = (
+    filesystem: AgentFileSystemAuthority,
+    root: string,
+    options?: Readonly<{ largeObjectStore?: string }>,
+  ): (() => void) => {
+    const { admissions, largeObjectStores } = filesystem;
+    /* Checked before anything is admitted: only the repository's own LFS store, never a path the caller chose (I6). */
+    const store =
+      options?.largeObjectStore === undefined || root === filesystem.workspaceRoot
+        ? undefined
+        : repositoryLargeObjectStore(filesystem.workspaceRoot, options.largeObjectStore);
+    admissions.set(root, (admissions.get(root) ?? 0) + 1);
+    if (store !== undefined) {
+      largeObjectStores.set(root, store);
+    }
+    const drop = (): void => {
+      const remaining = (admissions.get(root) ?? 1) - 1;
+      if (remaining === 0) {
+        admissions.delete(root);
+        if (root !== filesystem.workspaceRoot) {
+          largeObjectStores.delete(root);
+        }
+      } else {
+        admissions.set(root, remaining);
+      }
+    };
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      if ((admissions.get(root) ?? 0) > 1 || !agentRuntimes.keys().includes(root)) {
+        drop();
+        return;
+      }
+      // async-iife: bootstrap -- the release is synchronous; `stopAgent` awaits the close through `agentRuntimes.closeAll`.
+      void (async (): Promise<void> => {
+        try {
+          await agentRuntimes.close(root);
+        } catch (error) {
+          agentRuntimeCloseFailures.push(error);
+        } finally {
+          drop();
+        }
+      })();
+    };
+  };
+
+  /**
+   * Open the per-user machine store, `<config>/machines`, shared with the desktop app and every other Tau host here.
+   * While another Tau app holds the store's writer lock, this host warns and serves without machines instead of
+   * exiting.
+   *
+   * @param providers - The providers `--machines` admitted.
+   * @param readArtifact - Finds a job's file in the served project.
+   * @returns What the agent server needs to answer the machines route, or `undefined` while the store is owned elsewhere.
+   */
+  const openMachineHost = async (
+    providers: CreateNodeMachineHostInput['providers'],
+    readArtifact: CreateNodeMachineRuntimeOptions['readArtifact'],
+  ): Promise<SharedMachineHost | undefined> => {
+    const shared = await openSharedMachineHost({
+      providers,
+      readArtifact,
+      actorId: 'daemon',
+      onWarning: ({ code, message }) => {
+        emit({ type: 'warning', code, message });
+      },
+      ...options.machineTelemetry,
+    });
+    if (shared === undefined) {
+      emit({
+        type: 'warning',
+        code: 'MACHINE_STORE_OWNED_ELSEWHERE',
+        message:
+          'machines.unavailable (owned-elsewhere): printers are in use by another Tau app on this computer, so this host serves without them. Quit it and restart `tau serve --machines` to use them here.',
+      });
+    }
+    return shared;
+  };
+
+  /**
+   * Bring up Launcher 1: the always-on agent host and its `/agent` channel.
+   *
+   * @param agent - Workspace, gateway, model, admission secret, and binding.
+   */
+  const startAgent = async (agent: HostDaemonAgentOptions): Promise<void> => {
+    const localAccountSession =
+      options.relay === false && agent.tauCloudEnabled !== true && agent.tauApiToken ? agent.tauApiToken : undefined;
+    /* The CLI session's account (`session.user.id`, as the web and desktop hosts name theirs): a funded run stamps its
+     * attempts with it, so another account's resume is refused (GI-Q6). Never an anonymous pseudonym. */
+    let sessionPrincipal =
+      localAccountSession === undefined || agent.revisionActor?.anonymous === true
+        ? undefined
+        : agent.revisionActor?.id;
+    /* Without it (an anonymous actor, or the CLI's startup lookup failed), the token's account is looked up on demand
+     * through `get-session` and kept once known. */
+    const readSessionIdentity =
+      localAccountSession === undefined || sessionPrincipal !== undefined
+        ? undefined
+        : createTauIdentityReader({
+            apiOrigin: agent.gatewayBaseUrl,
+            readToken: async () => ({ kind: 'token', token: localAccountSession }),
+          });
+    const resolveSessionPrincipal = async (): Promise<string | undefined> => {
+      if (sessionPrincipal === undefined && readSessionIdentity !== undefined) {
+        const identity = await readSessionIdentity();
+        sessionPrincipal = identity.kind === 'signed-in' ? identity.principalId : undefined;
+      }
+      return sessionPrincipal;
+    };
+    const canonicalWorkspaceRoot = await realpath(agent.workspaceRoot);
+    const authorityRoot = join(
+      defaultConfigDirectory(),
+      'filesystem-authority',
+      createHash('sha256').update(canonicalWorkspaceRoot).digest('hex'),
+    );
+    await mkdir(authorityRoot, { recursive: true, mode: 0o700 });
+    const authority = new NodeFsAuthorityHost({
+      authorityDirectory: () => authorityRoot,
+      /* Candidate checkouts belong to this project's writer. A second daemon
+       * over another workspace hashes to another stable authority directory. */
+      authorityIdentity: () => canonicalWorkspaceRoot,
+    });
+    const ports = new MessageChannel();
+    const filesystem: AgentFileSystemAuthority = {
+      channel: new NodeFsChannel(toNodeFsPort(ports.port2)),
+      workspaceRoot: agent.workspaceRoot,
+      admissions: new Map(),
+      /* The live root lands objects from its own repository's store, which the native port fills. */
+      largeObjectStores: new Map([[agent.workspaceRoot, join(agent.workspaceRoot, '.git', 'lfs', 'objects')]]),
+      stopServer: serveNodeFsProvider(toNodeFsPort(ports.port1), {
+        authority,
+        allowRoot: (root) => isAgentRootAdmitted(filesystem, root),
+        /* Resolved here, by root, never from the wire: a write names an object, not a path (I6). */
+        largeObjectStore: (root) => filesystem.largeObjectStores.get(root),
+        /* A checkout on disk can hold a symlink, so an ordinary name may not
+         * resolve into a path the views above hide (CI1). */
+        policy: tauPathPolicy,
+      }).close,
+      ports,
+    };
+    agentFileSystem = filesystem;
+    /* Resolution *and* the CLI probe happen before the channel answers, because
+     * the descriptor and the control `ready` frame both carry the list: a client
+     * must never see an agent this machine cannot actually start. */
+    const discovery = agent.externalAgents
+      ? await discoverAcpAgents({ resolveFrom: agent.externalAgents.resolveFrom })
+      : { agents: [], refused: [] };
+    /* Named here rather than left to the revision port's default, because a
+     * job's slice can sit in one of these checkouts: the machine
+     * host's artifact reader looks in the same directory the port writes. */
+    const projectId = (await resolveNodeProjectIdentity({
+      workspaceRoot: agent.workspaceRoot,
+      bootstrap: true,
+      filesystem: providerForAgentRoot(agent.workspaceRoot),
+    }))!;
+    const checkoutsDirectory = join(defaultConfigDirectory(), 'checkouts', projectId);
+    /* Explicit host admission establishes the stable identity every job names,
+     * including an intentionally empty workspace before its first manifest. */
+    /**
+     * Find a job's file: only this project's, in the served root and
+     * then its checkouts, where a candidate turn's slice lands. The digest
+     * decides; a checkout is admitted only for the read.
+     *
+     * @param artifact - The job's reference.
+     * @returns The first candidate's bytes whose digest matches.
+     */
+    const readArtifact: CreateNodeMachineRuntimeOptions['readArtifact'] = async (artifact) => {
+      if (artifact.projectId !== projectId) {
+        throw new Error('MACHINE_ARTIFACT_NOT_FOUND');
+      }
+      const checkoutRoots = await readdir(checkoutsDirectory, { withFileTypes: true }).then(
+        (entries) =>
+          entries.filter((entry) => entry.isDirectory()).map((entry) => join(checkoutsDirectory, entry.name)),
+        () => [],
+      );
+      for (const root of [agent.workspaceRoot, ...checkoutRoots]) {
+        const release = root === agent.workspaceRoot ? undefined : admitAgentRoot(filesystem, root);
+        try {
+          // oxlint-disable-next-line eslint/no-await-in-loop -- the served root first; the first digest match wins.
+          const bytes = await providerForAgentRoot(root).readFile(artifact.path);
+          if (`sha256:${createHash('sha256').update(bytes).digest('hex')}` === artifact.digest) {
+            return bytes;
+          }
+        } catch {
+          /* Not in this tree. */
+        } finally {
+          release?.();
+        }
+      }
+      throw new Error('MACHINE_ARTIFACT_NOT_FOUND');
+    };
+    /* Before the tools: the machine tools are offered only over a facet the
+     * host already serves, the same rule the revisions history follows. */
+    const machines = agent.machines ? await openMachineHost(agent.machines.providers, readArtifact) : undefined;
+    const { observeChats } = options;
+    const project = createProjectHost({
+      workspaceRoot: agent.workspaceRoot,
+      checkoutsDirectory,
+      projectId,
+      /* The agent's facet rides an agent session of its own, so the host applies the agent rules whatever a call
+       * claims; the route's session stays the person's. */
+      ...(machines ? { machines: agentMachineFacet(machines, 'tau') } : {}),
+      fileSystem: {
+        open: providerForAgentRoot,
+        admit: (root, admission) => admitAgentRoot(filesystem, root, admission),
+        /* Native Git derives the physical worktree target before this callback.
+         * Claiming its existing parent plus the absent/existing target excludes
+         * ordinary candidate writes; Git keeps its own repository metadata
+         * ordered with the same command while this daemon holds the writer. */
+        mutate: async (target, mutation) =>
+          authority.run({ root: target.parentRoot, paths: [target.targetPath] }, async () => mutation()),
+      },
+      /* Per root, not per host: a candidate turn's kernel must read the tree
+       * that turn is writing, which is its checkout and not the project. */
+      runtimeClient: async (root) => {
+        const { client } = await agentRuntimes.get(root);
+        return client;
+      },
+      /* Agent media the chat cannot store as sent is converted by the served root's runtime child, started only when
+       * such an image arrives, from the formats that child's runtime reports converting to JPEG (WP6). */
+      mediaTranscoder: async () => {
+        const { child, client } = await agentRuntimes.get(agent.workspaceRoot);
+        return child.transcodeSources.length === 0
+          ? undefined
+          : { transcode: runtimeTranscodePort(client), transcodeSources: child.transcodeSources };
+      },
+      /*
+       * Where this project's Tau Cloud repository is (C67, P51).
+       *
+       * The relay *is* the Tau API: it is the origin this daemon paired
+       * against, and `tauRemoteUrl` hangs the Hosted Remote off it. Without
+       * this the connect actor throws `INVALID_TRANSPORT` and a project served
+       * by `tau serve --ui` shows the Sync region it can never use.
+       */
+      apiBaseUrl: options.relayUrl.origin,
+      syncTelemetryPlacement: 'daemon',
+      ...(options.syncTelemetryConsent === undefined ? {} : { syncTelemetryConsent: options.syncTelemetryConsent }),
+      via: daemonRevisionVia(),
+      ...(agent.revisionActor === undefined ? {} : { revisionActor: agent.revisionActor }),
+      ...(observeChats === undefined
+        ? {}
+        : { observeChats: (read, sources) => observeChats(projectId, read, sources) }),
+      /* The session, not this daemon's device credential: the Git endpoints and
+       * `PUT /v1/projects/<id>` authenticate an account, and a paired device
+       * credential is only ever offered to the agent relay. A terminal has no
+       * cookie jar, so it is the same `TAU_AUTH_TOKEN` `tau publish` uses. */
+      ...(agent.tauApiToken === undefined
+        ? {}
+        : {
+            tauCredential: () => ({
+              apiBaseUrl: options.relayUrl.origin,
+              authorization: `Bearer ${agent.tauApiToken}`,
+            }),
+          }),
+      model: agent.model,
+      systemPrompt: agent.systemPrompt,
+      /* The bearer is read per request from the credential state, never captured: pairing replaces it. */
+      modelTransport: createGatewayModelTransport({
+        baseUrl: agent.gatewayBaseUrl,
+        model: agent.model,
+        // Local-only serving does not pair a device. Use its CLI account session;
+        // relayed hosts retain their live device credential, including revocation.
+        auth: localAccountSession === undefined ? bearer : () => localAccountSession,
+        /* No `projectId`: a `tau serve` workspace is a directory, not a
+         * cloud project, so its receipts name no project by design. */
+        ...(agent.hostLabels === undefined ? {} : { hostLabels: agent.hostLabels }),
+        billing: {
+          /* The gateway's API answers whether a run is funded; an unknown answer refuses the run (I1). A funded run on
+           * the CLI session whose account cannot be learned is refused the same way, never run unstamped (GI-Q6). */
+          deployment: async () => {
+            const mode = await deployment.mode(agent.gatewayBaseUrl);
+            return mode === 'funded' &&
+              localAccountSession !== undefined &&
+              (await resolveSessionPrincipal()) === undefined
+              ? 'unknown'
+              : mode;
+          },
+          /* The account the credential port names: the paired device's, or the CLI session's, which a resumed funded
+           * attempt needs as much as a new one; unknown, the prepare is refused rather than left unstamped. */
+          principal: async () => {
+            if (localAccountSession === undefined) {
+              return credentialPrincipal(credentialState);
+            }
+            const principal = await resolveSessionPrincipal();
+            if (principal === undefined) {
+              throw new Error('The account of this Tau session could not be looked up.');
+            }
+            return principal;
+          },
+        },
+      }),
+      credential: () =>
+        localAccountSession === undefined
+          ? credentialState
+          : { mode: 'session', ...(sessionPrincipal === undefined ? {} : { principal: sessionPrincipal }) },
+      ...(options.systemSkillBundles === undefined ? {} : { systemSkillBundles: options.systemSkillBundles }),
+      /* The host's own decision, not a resolution accident: `false` withholds
+       * `test_model` from an installation whose GeoSpec engine resolves. */
+      ...(agent.testModel === false ? { geospecRunner: false } : {}),
+      /* A kernel that refused asks for its closure again on its next operation, so a prepared kernel reaches every
+       * root's child without replacing it (D7, D37). */
+      ...(agent.preparableKernels === undefined ? {} : { preparableKernels: agent.preparableKernels }),
+      ...(agent.prepareKernel === undefined ? {} : { prepareKernel: agent.prepareKernel }),
+      /* The MCP url is only known once the server is listening, so it is read per run. */
+      ...(discovery.agents.length > 0
+        ? {
+            externalAgents: {
+              agents: discovery.agents,
+              mcpUrl: () => (agentServer ? new URL('mcp', agentServer.url()).href : ''),
+            },
+          }
+        : {}),
+      /* A turn that ran but could not be recorded is a warning, never a fatal:
+       * the run itself is already durable in its own log, and a host that
+       * stopped answering over a settlement failure would lose the next turn
+       * too. W5 puts `turn.finalized` on the wire for the client. */
+      onRevisionEvent: (event) => {
+        /* An engine failure already reaches the verb that ran it; the daemon has no field reporter to tell. */
+        if (event.type === 'turn.finalized' || event.type === 'revision.engine-failed') {
+          return;
+        }
+        if (event.type === 'revision.unavailable') {
+          /* A fact about the machine, not about one turn: this host will record
+           * nothing at all until the named binaries are installed (OQ-B8). */
+          emit({ type: 'warning', code: 'REVISION_UNAVAILABLE', message: event.reason });
+          return;
+        }
+        emit({
+          type: 'warning',
+          code: 'REVISION_NOT_RECORDED',
+          message:
+            event.type === 'turn.conflicted'
+              ? `Chat ${event.chatId} run ${event.runId}: the turn's writes conflicted with the live workspace.`
+              : event.type === 'turn.failed'
+                ? `Chat ${event.chatId} run ${event.runId}: the turn recorded no revision — ${event.reason}`
+                : `The ${event.operation} of a checkout failed: ${event.reason}`,
+        });
+      },
+    });
+    /* The run reporter follows every chat a parsed, unrefused command names,
+     * once the command is answered, so the rows it wrote are there to read.
+     * Durable rows are only pulled per chat (SC-R14), so it learns the chats
+     * here. `attach` only reads, unless it took over a run a restart left open
+     * and recorded it `failed` (`chatToReport`, W4.r2). */
+    const launcher: AgentLauncher = {
+      ...project.launcher,
+      execute: async (command) => {
+        const answer = await project.launcher.execute(command);
+        const chatId = chatToReport(command, answer);
+        if (chatId !== undefined) {
+          agentRunReporter?.watch(chatId);
+        }
+        return answer;
+      },
+    };
+    const externalAgents = externalAgentDescriptors(discovery);
+    /* R3: a workspace whose store refused at open can never record anything, so
+     * the daemon fails at start instead of serving it and refusing its close. */
+    try {
+      await project.revisions.opened();
+    } catch (error) {
+      await project.close().catch(() => undefined);
+      await machines?.host.close();
+      throw error;
+    }
+    const server = startAgentServer({
+      launcher,
+      revisions: project.revisions.channel,
+      token: agent.token,
+      workspaceRoot: agent.workspaceRoot,
+      ...(machines ? { machines } : {}),
+      ...(agent.label ? { label: agent.label } : {}),
+      ...(agent.port === undefined ? {} : { port: agent.port }),
+      ...(agent.uiRoot ? { uiRoot: agent.uiRoot } : {}),
+      ...(agent.uiWasmMounts ? { uiWasmMounts: agent.uiWasmMounts } : {}),
+      ...(agent.allowedOrigins ? { allowedOrigins: agent.allowedOrigins } : {}),
+      ...(project.mcp ? { mcp: project.mcp } : {}),
+      ...(externalAgents.length > 0 ? { externalAgents } : {}),
+      ...(agent.computeControl ? { computeControl: agent.computeControl } : {}),
+    });
+    try {
+      await server.ready;
+    } catch (error) {
+      await project.close();
+      await machines?.host.close();
+      throw error;
+    }
+    agentProject = project;
+    agentServer = server;
+    agentMachines = machines;
+    if (machines) {
+      const warnMachineHost = (message: string): void => {
+        emit({ type: 'warning', code: 'MACHINE_HOST', message });
+      };
+      stopKeepingAwake = keepAwakeWhileStreaming({
+        streamingMachines: async () => machines.host.streamingMachines(),
+        blocker: agent.machines?.keepAwake ?? platformKeepAwakeBlocker({ warn: warnMachineHost }),
+        log: (level, event, detail) => {
+          if (level === 'error') {
+            warnMachineHost(`${event}: ${detail instanceof Error ? detail.message : String(detail)}`);
+          }
+        },
+      });
+    }
+    agentExternalAgents = externalAgents;
+    /* PH19 ruling 2: the API keeps a run *directory*. The reporter reads the
+     * launcher's own durable rows — the rows the log is written from — and
+     * puts identity and state on the control socket, never content. It is
+     * started here rather than beside the control connection because a run
+     * outlives every relay reconnect, and `sendControl` is a no-op while the
+     * socket is down. */
+    agentRunReporter = startRunReporter({ read: project.launcher.read, send: sendControlOrThrow });
+    emit({
+      type: 'agent',
+      state: 'ready',
+      url: server.url().href,
+      externalAgents,
+      externalAgentRefusals: discovery.refused,
+    });
+    /* A daemon with the agent capability is *useful* the moment this channel
+     * answers: pairing, the relay, and the compute child are all downstream of
+     * it, and `tau serve --ui` must not block on any of them. */
+    resolveReady();
+  };
+
+  /**
+   * Stop the channel first, then the runs, then release their shared filesystem
+   * authority.
+   *
+   * Each handle is retired only once its own release has *succeeded* (C70,
+   * R13's pattern). The project host's close records this project's close
+   * revision and genuinely rejects when the store refuses it; a daemon that had
+   * already cleared the handle could never re-attempt that cut. Failures are
+   * collected rather than thrown at the first one, so a refusal in the channel
+   * still leaves the runs and the authority released.
+   */
+  const stopAgent = async (): Promise<void> => {
+    const server = agentServer;
+    const project = agentProject;
+    const machines = agentMachines;
+    const filesystem = agentFileSystem;
+    /* A retried close is live work: its cut reads through this channel. */
+    filesystem?.ports.port1.ref();
+    filesystem?.ports.port2.ref();
+    const failures: unknown[] = [];
+    const settle = async (operation: Promise<unknown> | undefined, retire: () => void): Promise<void> => {
+      try {
+        await operation;
+        retire();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    /* No job starts from here on: a start the closing channel still admits would begin as the host goes away. The
+     * gate is up at the call; the wait lets a start already past it settle before the host closes under it. A start
+     * that outlasts the wait keeps the gate up, and the stop carries on to close the host: said, not failed. */
+    await settle(
+      machines?.host.quiesce().catch((error: unknown) => {
+        if (!(error instanceof MachineHostStartInFlightError)) {
+          throw error;
+        }
+        emit({
+          type: 'warning',
+          code: 'MACHINE_HOST',
+          message: 'A machine job was still starting when Tau Host stopped; check the machine.',
+        });
+      }),
+      () => undefined,
+    );
+    agentRunReporter?.close();
+    agentRunReporter = undefined;
+    agentExternalAgents = [];
+    /* The runs end with the host; nothing streams once it closes. */
+    stopKeepingAwake?.();
+    stopKeepingAwake = undefined;
+    await settle(server?.close(), () => {
+      agentServer = undefined;
+    });
+    await settle(machines?.host.close(), () => {
+      agentMachines = undefined;
+    });
+    await settle(project?.close(), () => {
+      agentProject = undefined;
+    });
+    await settle(agentRuntimes.closeAll(), () => undefined);
+    failures.push(...agentRuntimeCloseFailures.splice(0));
+    /* Only once the project host itself is retired: a close cut the store refused
+     * is re-attempted by the next `close()`, and that attempt still has to read
+     * this project's files through the same authority (C70). */
+    if (agentProject === undefined) {
+      filesystem?.channel.close();
+      await settle(filesystem?.stopServer(), () => {
+        agentFileSystem = undefined;
+      });
+    } else {
+      /* Kept for a retry nobody may ask for: `tau serve` closes once and says
+       * so. A ref'd port would hold the process open forever after a refused
+       * close; the next `close()` refs it again before its cut. */
+      filesystem?.ports.port1.unref();
+      filesystem?.ports.port2.unref();
+    }
+    if (server) {
+      emit({ type: 'agent', state: 'stopped' });
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Tau Host could not release every agent resource.');
+    }
+  };
+
+  const stopJobWorker = async (): Promise<void> => {
+    const active = jobWorker;
+    if (!active) {
+      return;
+    }
+    jobWorker = undefined;
+    emit({
+      type: 'jobs',
+      state: 'draining',
+      runnerId: active.registration.runnerId,
+      slots: active.registration.slots,
+    });
+    await active.close();
+    await active.closed;
+    await jobWorkerObserver;
+    emit({ type: 'jobs', state: 'stopped', runnerId: active.registration.runnerId });
+  };
+
+  const observeJobWorker = async (worker: HostJobWorkerHandle): Promise<void> => {
+    const result = await worker.closed;
+    if (shutdown.signal.aborted || jobWorker !== worker) {
+      return;
+    }
+    jobWorker = undefined;
+    emit({ type: 'jobs', state: 'stopped', runnerId: worker.registration.runnerId });
+    if (result.cause === 'fatal') {
+      emit({
+        type: 'warning',
+        code: 'JOB_WORKER_FAILED',
+        message: `Tau Host job worker stopped unexpectedly: ${result.error.message}`,
+      });
+      return;
+    }
+    emit({
+      type: 'warning',
+      code: 'JOB_WORKER_FAILED',
+      message: 'Tau Host job worker stopped without a daemon shutdown request.',
+    });
+  };
+
+  const ensureJobWorker = async (credential: HostCredential): Promise<void> => {
+    if (!options.jobWorker || jobWorker) {
+      return;
+    }
+    emit({ type: 'jobs', state: 'starting' });
+    const worker = await options.jobWorker.start({
+      apiUrl: asHttpUrl(options.relayUrl, '/'),
+      credential,
+    });
+    jobWorker = worker;
+    await worker.ready;
+    emit({
+      type: 'jobs',
+      state: 'ready',
+      runnerId: worker.registration.runnerId,
+      slots: worker.registration.slots,
+      capabilities: worker.registration.capabilities,
+      profiles: worker.profiles.map((profile) => profile.name),
+    });
+    jobWorkerObserver = observeJobWorker(worker);
+  };
+
+  const sendControl = (message: HostControlOutbound): void => {
+    if (controlSocket?.readyState === WebSocket.OPEN) {
+      controlSocket.send(JSON.stringify(message));
+    }
+  };
+
+  /**
+   * Like {@link sendControl}, but says so when there is nowhere to send.
+   *
+   * The offer/accept frames are answers to something the relay just asked, so
+   * dropping them when the socket is gone is right. A run-state frame is not an
+   * answer — it is the only thing that will ever tell the directory this run
+   * exists — so the reporter has to learn that it was dropped and re-send it on
+   * the next connection.
+   *
+   * @param message - The control frame to send.
+   */
+  const sendControlOrThrow = (message: HostControlOutbound): void => {
+    if (controlSocket?.readyState !== WebSocket.OPEN) {
+      throw new Error('Tau Host has no control connection.');
+    }
+    controlSocket.send(JSON.stringify(message));
+  };
+
+  const rejectOffer = (
+    offer: Extract<HostControlInbound, { type: 'offer' }>,
+    code: Extract<HostControlOutbound, { type: 'reject' }>['code'],
+  ): void => {
+    sendControl({ v: 1, type: 'reject', sessionId: offer.sessionId, code });
+  };
+
+  const openSession = async (offer: Extract<HostControlInbound, { type: 'offer' }>): Promise<void> => {
+    /* Capacity counts sessions that can still carry frames. A session whose
+     * client has gone — one of its routes closed, or a revoke asked it to —
+     * serves nobody, and holding its slot until every splice has drained (a
+     * relay round trip plus the child-exit attribution grace) refused the next
+     * offer with `BUSY`: exactly the 409 the live proof's seeded first turn hit
+     * 325 ms after its own reattach dial.
+     * ponytail: an agent placement still parks a slot for the 15 s its
+     * un-dialled compute routes take to be reaped; the upgrade is an offer that
+     * carries only the routes the caller will dial, which needs the API's
+     * session DTO and `apps/ui/app/lib/remote-host-client.ts`. */
+    const openSessions = [...sessions.values()].filter((session) => !session.isDraining());
+    if (openSessions.length >= maxSessions) {
+      rejectOffer(offer, 'BUSY');
+      return;
+    }
+    emit({ type: 'session', sessionId: offer.sessionId, state: 'connecting' });
+    let child: RuntimeChildHandle;
+    try {
+      child = await startChild();
+    } catch {
+      rejectOffer(offer, 'CHILD_UNAVAILABLE');
+      return;
+    }
+    if (child.runtimeVersion !== offer.runtimeVersion) {
+      void closeChild(child);
+      rejectOffer(offer, 'VERSION_MISMATCH');
+      return;
+    }
+
+    let runtimeSplice: FrameSpliceHandle | undefined;
+    let fileSystemSplice: FrameSpliceHandle | undefined;
+    let agentSplice: FrameSpliceHandle | undefined;
+    let expiryTimer: NodeJS.Timeout | undefined;
+    let sessionClosed: Promise<void> | undefined;
+    try {
+      const publicFileSystem = authorizedSocket(
+        assertRelayRoute(offer.fileSystemUrl, options.relayUrl),
+        offer.fileSystemAuthorization,
+      );
+      const localFileSystem = authorizedSocket(localRoute(child.url, 'fs', offer.sessionId), child.authorizationToken);
+      fileSystemSplice = spliceFrameSockets(publicFileSystem, localFileSystem);
+
+      const publicRuntime = authorizedSocket(
+        assertRelayRoute(offer.runtimeUrl, options.relayUrl),
+        offer.runtimeAuthorization,
+      );
+      const localRuntime = authorizedSocket(
+        localRoute(child.url, 'runtime', offer.sessionId),
+        child.authorizationToken,
+      );
+      runtimeSplice = spliceFrameSockets(publicRuntime, localRuntime);
+
+      /* Rung 2. The relay carries the agent channel's frames exactly like the
+       * other two routes — directory and relay only, so no chat content ever
+       * lands in the API's database (PH19). Spliced only when both sides have
+       * it: an API without rung 2, or a daemon without `--agent-port`, still
+       * gets a working runtime session. */
+      const agentOpens: Array<Promise<void>> = [];
+      const agentServerUrl = agentServer && options.agent ? agentServer.url() : undefined;
+      if (offer.agentUrl && offer.agentAuthorization && agentServerUrl && options.agent) {
+        const publicAgent = authorizedSocket(
+          assertRelayRoute(offer.agentUrl, options.relayUrl),
+          offer.agentAuthorization,
+        );
+        const localAgent = authorizedSocket(
+          localRoute(new URL(`ws://${agentServerUrl.host}`), 'agent', offer.sessionId),
+          options.agent.token,
+        );
+        agentSplice = spliceFrameSockets(publicAgent, localAgent);
+        agentOpens.push(waitForOpen(publicAgent), waitForOpen(localAgent));
+      }
+
+      let closeCode: Exclude<HostSessionCloseCode, 'ROUTE_UNUSED'> | undefined;
+      let isDraining = false;
+      const splices: readonly FrameSpliceHandle[] = [
+        runtimeSplice,
+        fileSystemSplice,
+        ...(agentSplice ? [agentSplice] : []),
+      ];
+      const closeSession = (code?: Exclude<HostSessionCloseCode, 'ROUTE_UNUSED'>): void => {
+        closeCode = code;
+        isDraining = true;
+        for (const splice of splices) {
+          splice.close();
+        }
+      };
+      sessionClosed = (async (): Promise<void> => {
+        const closures = splices.map(async (splice) => {
+          const result = await splice.closed;
+          /* A revoked route is final for the session: its sibling routes would
+           * otherwise idle until the relay reaps them 15 s later. */
+          if (isRevokedRoute(result) && closeCode === undefined) {
+            closeSession('REVOKED');
+          }
+          return result;
+        });
+        /* Each route lives and dies on its own two sockets. Racing them bound
+         * three routes to one fate, so the relay's 15 s reap of a route the
+         * page never dialled ended the agent channel that *was* streaming —
+         * the whole rung-2 defect. The session is over when its last route is,
+         * unless one route reported a revocation, which closes the rest above. */
+        await Promise.race(closures);
+        isDraining = true;
+        const results = await Promise.all(closures);
+        /* The exit itself, not `closed`: removing the child's temp directory can outlast the grace on a loaded disk. */
+        const observedChildExit = async (): Promise<true> => {
+          await child.exited;
+          return true;
+        };
+        const childExited = await Promise.race([
+          observedChildExit(),
+          delay(childExitAttributionGrace, false, { ref: false }),
+        ]);
+        if (childExited) {
+          closeCode = 'CHILD_EXIT';
+        }
+        for (const splice of splices) {
+          splice.close();
+        }
+        if (expiryTimer) {
+          clearTimeout(expiryTimer);
+        }
+        sessions.delete(offer.sessionId);
+        emit({
+          type: 'session',
+          sessionId: offer.sessionId,
+          state: 'disconnected',
+          code: closeCode ?? (results.every((result) => isPeerlessReap(result)) ? 'ROUTE_UNUSED' : 'RELAY_CLOSED'),
+        });
+        /* The session's child serves nobody else. */
+        await closeChild(child);
+      })();
+      const session: ActiveSession = {
+        close: closeSession,
+        closed: sessionClosed,
+        isDraining: () => isDraining,
+      };
+      sessions.set(offer.sessionId, session);
+      // async-iife: bootstrap -- a child exit ends only the session it served.
+      void (async (): Promise<void> => {
+        await child.exited;
+        if (!session.isDraining()) {
+          closeSession('CHILD_EXIT');
+        }
+      })();
+      /* Bounds the *unclaimed* offer: a splice whose sockets never finish
+       * opening must not park them for ever. It is cleared the moment the
+       * session is accepted, because from then on the API refreshes the
+       * session's record for as long as it has a parked socket
+       * (`HostsService.touchSession`) and a hard close here would end a
+       * streaming agent channel 120 s after its offer was minted, for a reason
+       * that has nothing to do with its own sockets. */
+      const remainingLifetime = Math.max(0, Date.parse(offer.expiresAt) - Date.now());
+      expiryTimer = setTimeout(() => {
+        session.close('RELAY_CLOSED');
+      }, remainingLifetime);
+      expiryTimer.unref();
+
+      await Promise.all([
+        waitForOpen(publicFileSystem),
+        waitForOpen(localFileSystem),
+        waitForOpen(publicRuntime),
+        waitForOpen(localRuntime),
+        ...agentOpens,
+      ]);
+      clearTimeout(expiryTimer);
+      expiryTimer = undefined;
+      sendControl({ v: 1, type: 'accept', sessionId: offer.sessionId });
+      emit({ type: 'session', sessionId: offer.sessionId, state: 'connected' });
+    } catch {
+      runtimeSplice?.close();
+      fileSystemSplice?.close();
+      agentSplice?.close();
+      sessions.delete(offer.sessionId);
+      /* A started session closes its own child once it has reported why it ended; closing it here first would
+       * read as `CHILD_EXIT`. */
+      if (sessionClosed === undefined) {
+        void closeChild(child);
+      }
+      rejectOffer(offer, 'CHILD_UNAVAILABLE');
+    }
+  };
+
+  const handleControlMessage = async (raw: WebSocket.RawData): Promise<void> => {
+    let value: unknown;
+    try {
+      value = JSON.parse(rawDataText(raw));
+    } catch {
+      controlSocket?.close(1008, 'invalid control message');
+      return;
+    }
+    const parsed = hostControlInboundSchema.safeParse(value);
+    if (!parsed.success) {
+      controlSocket?.close(1008, 'invalid control message');
+      return;
+    }
+    if (parsed.data.type === 'revoke') {
+      sessions.get(parsed.data.sessionId)?.close('REVOKED');
+      return;
+    }
+    await openSession(parsed.data);
+  };
+
+  const runControlConnection = async (credential: HostCredential, version: string): Promise<number> => {
+    /*
+     * `close()` closes whatever `controlSocket` holds *at the instant it
+     * aborts*, so a connection dialled after that instant is one nothing ever
+     * closes: `disconnected` never resolves, `run()` never returns, and
+     * `close()` waits on it forever — with the project's close cut, the last
+     * thing that records what a served project changed, never attempted (C74).
+     *
+     * The loop re-checks the signal only at its top, and both `ensureJobWorker`
+     * and `ensureRuntimeVersion` await between that check and this call, so the
+     * abort lands inside that window whenever a caller closes a daemon shortly
+     * after `ready`. Everything from here to `controlSocket = socket` is
+     * synchronous, so this guard and `close()` cannot interleave.
+     */
+    if (shutdown.signal.aborted) {
+      return 0;
+    }
+    emit({ type: 'control', state: 'connecting' });
+    const socket = authorizedSocket(asWebSocketUrl(options.relayUrl, '/v1/agents/control'), credential.credential);
+    controlSocket = socket;
+    const opened = Promise.withResolvers<void>();
+    const disconnected = Promise.withResolvers<{ readonly code?: number }>();
+    let didOpen = false;
+    let messageChain = Promise.resolve();
+    socket.once('open', () => {
+      didOpen = true;
+      opened.resolve();
+    });
+    socket.once('unexpected-response', (_request, response) => {
+      if (response.statusCode === 401) {
+        opened.reject(new HostAuthenticationError('Tau Host device credential was rejected.'));
+      } else {
+        opened.reject(new Error(`Tau Host control upgrade failed with HTTP ${String(response.statusCode)}.`));
+      }
+    });
+    socket.on('message', (message) => {
+      const previousMessage = messageChain;
+      messageChain = (async () => {
+        await previousMessage;
+        await handleControlMessage(message);
+      })();
+    });
+    socket.once('error', (error) => {
+      if (!didOpen) {
+        opened.reject(error);
+      }
+      disconnected.resolve({});
+    });
+    socket.once('close', (code) => {
+      if (!didOpen) {
+        opened.reject(new Error('Tau Host control socket closed before opening.'));
+      }
+      disconnected.resolve({ code });
+    });
+
+    try {
+      await opened.promise;
+    } catch (error) {
+      if (controlSocket === socket) {
+        controlSocket = undefined;
+      }
+      socket.terminate();
+      throw error;
+    }
+    emit({ type: 'control', state: 'connected' });
+    const connectedAt = Date.now();
+    /* Ruling 4: the API mints the agent grant and the offer's `agentUrl` only
+     * for a device that advertised the capability, so an older daemon — or this
+     * one started without `--agent-port` — still pairs and gets no agent route. */
+    const agentCapability =
+      agentServer && options.agent
+        ? {
+            workspaceRoot: options.agent.workspaceRoot,
+            ...(agentExternalAgents.length > 0 ? { externalAgents: agentExternalAgents } : {}),
+          }
+        : undefined;
+    sendControl({
+      v: 1,
+      type: 'ready',
+      deviceId: credential.deviceId,
+      runtimeVersion: version,
+      capacity: maxSessions,
+      ...(agentCapability ? { capabilities: { agent: agentCapability } } : {}),
+    });
+    /* Directly after `ready`, because a run that changed state while this
+     * daemon had no relay — the whole point of always-on — has no other way of
+     * reaching the API's run directory. */
+    agentRunReporter?.flush();
+    resolveReady();
+    const closeResult = await disconnected.promise;
+    await messageChain;
+    if (controlSocket === socket) {
+      controlSocket = undefined;
+    }
+    emit({ type: 'control', state: 'disconnected' });
+    /* Sessions ride their own relay sockets, which may sit on a Machine that is
+     * staying while this control socket's Machine restarts (1012), so losing
+     * control alone ends none of them: each ends when its own relay closes. Only
+     * a close that says this device is gone ends them all: a refused credential
+     * (4401) or a revocation (4003). */
+    if (closeResult.code === 4401 || closeResult.code === 4003) {
+      closeSessions('RELAY_CLOSED');
+    }
+    if (closeResult.code === 4401) {
+      throw new HostAuthenticationError('Tau Host device credential was rejected.');
+    }
+    return Date.now() - connectedAt;
+  };
+
+  const run = async (): Promise<HostDaemonCloseResult> => {
+    const relayed = options.relay !== false;
+    if (relayed) {
+      emit({
+        type: 'warning',
+        code: 'TRUSTED_PROJECTS_ONLY',
+        message:
+          'Remote project code, including its tau.config.* and geospec.config.*, executes on this machine. Connect only projects you trust.',
+      });
+    }
+    // async-iife: bootstrap -- a failed mint is a warning and retries on the source's interval.
+    void (async (): Promise<void> => {
+      try {
+        await zooCredential?.start();
+      } catch (error) {
+        emit({ type: 'warning', code: 'ZOO_TOKEN', message: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+    /* A stored credential is a local read, so a host that is already paired is
+     * paired before its agent channel opens: a Tau run sent the moment the
+     * channel is ready is never refused `HOST_NOT_PAIRED`. */
+    const storedCredential = await readHostCredential();
+    if (storedCredential) {
+      pairedWith(storedCredential);
+    }
+    /* Before pairing: the local agent channel and any served UI are reachable
+     * the moment the daemon starts. Until pairing lands the credential state of
+     * a host with no stored credential is `unpaired`, so reads and external
+     * agents serve and a Tau run is refused `HOST_NOT_PAIRED` (RH-R13). */
+    if (options.agent) {
+      await startAgent(options.agent);
+    }
+    /* Local-first: nothing to pair with and no control connection to hold, so the daemon is ready once its agent
+     * channel is, and runs until it is closed. */
+    if (!relayed) {
+      resolveReady();
+      if (!shutdown.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          shutdown.signal.addEventListener(
+            'abort',
+            () => {
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      }
+      return { cause: 'requested' };
+    }
+    const pair = async (): Promise<HostCredential> => {
+      if (options.pair === false) {
+        throw new HostAuthenticationError('Tau Host device credential was revoked; a provisioned host does not pair.');
+      }
+      /* Retriable, never fatal, like the relay below it: pairing is downstream
+       * of the agent channel, so a relay that cannot pair yet must not close a
+       * channel this daemon already reported ready. */
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- pairing attempts are deliberately sequential.
+          return await pairDevice(options.relayUrl, shutdown.signal, emit);
+        } catch (error) {
+          if (shutdown.signal.aborted) {
+            throw error;
+          }
+          emit({
+            type: 'warning',
+            code: 'PAIRING_FAILED',
+            message: `${error instanceof Error ? error.message : String(error)} Retrying pairing with ${options.relayUrl.origin}.`,
+          });
+        }
+        // oxlint-disable-next-line no-await-in-loop -- backoff orders and bounds pairing attempts.
+        await delay(Math.min(1000 * 2 ** attempt, reconnectDelayMaximum), undefined, { signal: shutdown.signal });
+      }
+    };
+    let hostCredential = storedCredential ?? (await pair());
+    pairedWith(hostCredential);
+    let reconnectAttempt = 0;
+    while (!shutdown.signal.aborted) {
+      // oxlint-disable-next-line no-await-in-loop -- the credential-bound job worker must be ready before relay admission.
+      await ensureJobWorker(hostCredential);
+      /* The control `ready` frame carries `runtimeVersion`, so a control
+       * connection is only attempted once a child has started. A child that will
+       * not start is a retriable warning: relay offers are rejected
+       * `CHILD_UNAVAILABLE` and the geometry tools answer `RUNTIME_UNAVAILABLE`,
+       * while the agent channel and its file tools keep serving. */
+      let version: string | undefined;
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- reconnect attempts are deliberately sequential.
+        version = await ensureRuntimeVersion();
+      } catch (error) {
+        /* A start that the daemon's own close interrupted is not a failure to report. */
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- close can abort while ensureRuntimeVersion awaits.
+        if (!shutdown.signal.aborted) {
+          emit({
+            type: 'warning',
+            code: 'RUNTIME_CHILD_FAILED',
+            message: `Tau Host runtime child could not start; retrying: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
+      try {
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- close can abort while ensureRuntimeVersion awaits.
+        if (version !== undefined && !shutdown.signal.aborted) {
+          // oxlint-disable-next-line no-await-in-loop -- one control connection owns the current attempt.
+          const lived = await runControlConnection(hostCredential, version);
+          if (lived >= stableControlConnection) {
+            reconnectAttempt = 0;
+          }
+        }
+      } catch (error) {
+        if (error instanceof HostAuthenticationError) {
+          /* The relay revoked this credential: nothing is admitted on it from here, and the gateway is offered no
+           * bearer, until pairing returns a new one (RH-S6). */
+          credentialState = { mode: 'unpaired' };
+          // oxlint-disable-next-line no-await-in-loop -- credential-scoped projections must drain before credential replacement.
+          await stopJobWorker();
+          // oxlint-disable-next-line no-await-in-loop -- credential replacement must complete before reconnecting.
+          await removeHostCredential();
+          // oxlint-disable-next-line no-await-in-loop -- pairing is the next ordered authentication attempt.
+          hostCredential = await pair();
+          pairedWith(hostCredential);
+          reconnectAttempt = 0;
+          continue;
+        }
+      }
+      const backoff = Math.min(1000 * 2 ** reconnectAttempt, reconnectDelayMaximum);
+      const jitter = Math.floor(Math.random() * Math.max(1, backoff / 4));
+      reconnectAttempt += 1;
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- backoff orders and bounds reconnect attempts.
+        await delay(backoff + jitter, undefined, { signal: shutdown.signal });
+      } catch (error) {
+        if (!(error instanceof Error) || error.name !== 'AbortError') {
+          throw error;
+        }
+      }
+    }
+    return { cause: 'requested' };
+  };
+
+  /** The outcome this daemon closes with, once the run itself has settled. */
+  let closeResult: HostDaemonCloseResult | undefined;
+
+  /**
+   * Release everything this daemon owns, and stay retryable (C70).
+   *
+   * Every step here is idempotent and each keeps its own handle until it
+   * succeeds, so a second call re-attempts exactly what the first could not
+   * finish — which for the agent launcher is the project's close revision.
+   *
+   * @returns Nothing, once the last capability has stopped.
+   */
+  const releaseCapabilities = async (): Promise<void> => {
+    const failures: unknown[] = [];
+    /* Every step runs even when an earlier one refuses: a close cut the store
+     * rejected must not leave the job worker and the runtime child running. */
+    const settle = async (operation: () => Promise<unknown> | undefined): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    await settle(async () => stopAgent());
+    await settle(async () => stopJobWorker());
+    await settle(async () => jobWorkerObserver);
+    zooCredential?.dispose();
+    await Promise.all([...runtimeChildren].map(async (child) => closeChild(child)));
+    await Promise.allSettled(startingChildren);
+    if (failures.length > 0) {
+      const aggregate = new AggregateError(failures, 'Tau Host shutdown did not release every accepted resource.');
+      ready.reject(aggregate);
+      closed.resolve({ cause: 'fatal', error: aggregate });
+      /* A single refusal keeps its own reason, so a caller can act on it; the
+       * release stays retryable either way (C70). */
+      throw failures.length === 1 ? failures[0] : aggregate;
+    }
+    if (closeResult !== undefined) {
+      closed.resolve(closeResult);
+    }
+  };
+
+  const execute = async (): Promise<HostDaemonCloseResult> => {
+    let result: HostDaemonCloseResult;
+    try {
+      result = await run();
+    } catch (error) {
+      if (shutdown.signal.aborted) {
+        result = { cause: 'requested' };
+      } else {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        ready.reject(normalized);
+        result = { cause: 'fatal', error: normalized };
+      }
+    }
+    const activeControlSocket = controlSocket;
+    controlSocket = undefined;
+    try {
+      activeControlSocket?.close(
+        result.cause === 'fatal' ? 1011 : 1000,
+        result.cause === 'fatal' ? 'host worker failed' : 'host stopping',
+      );
+    } catch {
+      activeControlSocket?.terminate();
+    }
+    closeSessions('RELAY_CLOSED');
+    /* A session that could not close is its own owner's failure to report; it
+     * must not skip the capability release that follows. */
+    await Promise.allSettled([...sessions.values()].map(async (session) => session.closed));
+    closeResult = result;
+    await releaseCapabilities();
+    return result;
+  };
+  const runPromise = execute();
+  /* The release can reject (a close cut the store refused) and `close()` is the
+   * caller that sees it; this only keeps an unobserved rejection from ending the
+   * process before it asks.
+   *
+   * async-iife: bootstrap -- the settlement belongs to `close()`, never here. */
+  void (async (): Promise<void> => {
+    try {
+      await runPromise;
+    } catch {
+      /* Answered by `close()`. */
+    }
+  })();
+
+  return {
+    ready: ready.promise,
+    closed: closed.promise,
+    async close(): Promise<void> {
+      if (isClosing) {
+        /* The run is over either way; what may not be is the release. A close
+         * cut the store refused keeps its project, so this asks again rather
+         * than answering with the first rejection forever (C70). */
+        try {
+          await runPromise;
+        } catch {
+          /* The first attempt's reason; this call re-attempts and reports its own. */
+        }
+        await releaseCapabilities();
+        return;
+      }
+      isClosing = true;
+      shutdown.abort();
+      try {
+        controlSocket?.close(1000, 'host stopping');
+      } catch {
+        controlSocket?.terminate();
+      }
+      closeSessions('RELAY_CLOSED');
+      void jobWorker?.close();
+      await runPromise;
+    },
+  };
+};

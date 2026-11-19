@@ -1,0 +1,722 @@
+/**
+ * The daemon's third channel concern: `${pathPrefix}/agent`.
+ *
+ * `/runtime` and `/fs` already exist on the runtime child's `webSocketHost`,
+ * each on its own socket — the two-sockets-per-concern ruling. The agent wire
+ * is a third concern with its own socket, never multiplexed onto either, and it
+ * is served here rather than inside `webSocketHost` because the agent host
+ * lives in the daemon parent (it owns the workspace root and the paired
+ * credential) while the runtime host lives in a permission-limited child.
+ * `@taucad/runtime/transport/websocket-host` sanctions exactly this shape: it
+ * re-exports its upgrade guards "for a consumer writing its own upgrade handler
+ * beside this host".
+ *
+ * The wire is a `@taucad/rpc` channel with the msgpack codec carrying the T0
+ * event-log vocabulary — byte-identical to what the browser worker speaks over
+ * a MessagePort, so a client projection cannot tell the two apart.
+ *
+ * Nothing here owns run lifetime. A socket close tears down one channel and
+ * leaves every run executing; a later client re-attaches with a cursor.
+ */
+
+import { timingSafeEqual } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
+import { hostname } from 'node:os';
+import process from 'node:process';
+import type { Duplex } from 'node:stream';
+
+import { WebSocketServer } from 'ws';
+import type { WebSocket } from 'ws';
+
+import { packageVersion } from '@taucad/runtime/metadata';
+import { isOriginAllowed } from '@taucad/runtime/transport/websocket-host';
+import { serveAgentChannel } from '@taucad/agent-host/launcher';
+import type { AgentLauncher, ServeAgentChannelOptions } from '@taucad/agent-host/launcher';
+
+import type { ExternalAgentDescriptor } from '@taucad/agent-host/wire';
+import type { HostSessionHandle } from '@taucad/runtime/host';
+import type { NodeMachineChannelHandle, NodeMachineHost } from '@taucad/runtime/host/node';
+import type { ComputeStoreControl } from '@taucad/runtime/types';
+import { agentSubprotocol, createLoopbackHandOff, sessionOfSubprotocols } from '#hand-off.js';
+import { isolationHeaders, serveStaticUi } from '#static-ui.js';
+import type { StaticUiHandler, StaticUiWasmMount } from '#static-ui.js';
+
+/** Cookie the daemon-served UI presents on its same-origin upgrade. @public */
+export const hostSessionCookieName = 'tau_host_session';
+
+/**
+ * Same-origin discovery for rung 1.
+ *
+ * A page served by this daemon fetches this one path to learn that its own
+ * origin is an agent host and which directory that host owns. It carries no
+ * secret — admission still rides the `HttpOnly` session cookie — and it is
+ * answered before the static UI, because a UI build has no such file and the
+ * SPA fallback would otherwise hand the discovery fetch an HTML shell.
+ *
+ * @public
+ */
+export const hostDescriptorPath = '/.well-known/tau-host';
+
+/**
+ * Where the token holder mints a one-time hand-off code (X54). Beside the descriptor, so no UI route can shadow it.
+ *
+ * @public
+ */
+export const handOffMintPath = `${hostDescriptorPath}/hand-off`;
+
+/**
+ * Where a listed origin redeems a hand-off code for a session bound to that origin (X54).
+ *
+ * @public
+ */
+export const handOffSessionPath = `${hostDescriptorPath}/session`;
+
+/** Longest hand-off redemption body read, in bytes: `{"code":"<43 characters>"}` with room to spare. */
+const redemptionBodyLimit = 1024;
+
+/** Milliseconds a socket has to answer the server's close frame. */
+const closeGrace = 1000;
+
+const refuseUpgrade = (socket: Duplex, status: string): void => {
+  socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+  socket.destroy();
+};
+
+const constantTimeEquals = (supplied: string, expected: string): boolean => {
+  const suppliedBytes = Buffer.from(supplied);
+  const expectedBytes = Buffer.from(expected);
+  return suppliedBytes.byteLength === expectedBytes.byteLength && timingSafeEqual(suppliedBytes, expectedBytes);
+};
+
+const bearerOf = (authorization: string | undefined): string =>
+  authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
+
+const cookieOf = (cookieHeader: string | undefined, name: string): string => {
+  for (const part of cookieHeader?.split(';') ?? []) {
+    const separator = part.indexOf('=');
+    if (separator !== -1 && part.slice(0, separator).trim() === name) {
+      return part.slice(separator + 1).trim();
+    }
+  }
+  return '';
+};
+
+/** Options for {@link startAgentServer}. @public */
+export type AgentServerOptions = {
+  /** The always-on host answering the T0 vocabulary. */
+  readonly launcher: AgentLauncher;
+  /** Optional authenticated machines route owned by this host process. */
+  readonly machines?:
+    | Readonly<{
+        host: NodeMachineHost;
+        session: HostSessionHandle;
+      }>
+    | undefined;
+  /** The launcher workspace's single revision root. */
+  readonly revisions?: ServeAgentChannelOptions['revisions'];
+  /**
+   * Shared secret admitting an upgrade, as `Authorization: Bearer` (a Node
+   * client, including the daemon's own relay splice) or as the
+   * `tau_host_session` cookie the served UI was handed on its first HTML
+   * response. At least 32 characters.
+   */
+  readonly token: string;
+  /** Absolute workspace root this host owns; published on {@link hostDescriptorPath}. */
+  readonly workspaceRoot: string;
+  /** Human-readable name for this host. Defaults to the machine hostname. */
+  readonly label?: string | undefined;
+  /** Port to listen on. Defaults to `0` (ephemeral). */
+  readonly port?: number | undefined;
+  /**
+   * Interface to bind. Defaults to `127.0.0.1` — a daemon is loopback-only.
+   *
+   * `TAU_HOST_AGENT_BIND` overrides the default for a caller that cannot pass
+   * this option, which today is exactly one: a containerised host being driven
+   * *directly* by a test on the machine outside it, with no relay in between. A
+   * real cloud host never needs it — it reaches Tau by dialling out — so the
+   * variable is deliberately absent from the image's own environment.
+   */
+  readonly host?: string | undefined;
+  /** Path the route is mounted under: `${pathPrefix}/agent`. Defaults to `/`. */
+  readonly pathPrefix?: string | undefined;
+  /**
+   * Extra exact-match browser origins. This server's *own* origins are always
+   * admitted, so the rung-1 same-origin UI needs no configuration; a
+   * cross-origin browser (rung 5, behind Local Network Access) must be listed.
+   * A listed origin may also read {@link hostDescriptorPath} across origins:
+   * its answers echo that origin in `Access-Control-Allow-Origin`, and its
+   * preflight is answered. An unlisted origin gets no CORS grant and its
+   * `/agent` upgrade is refused with 403. Admission still needs the token, or a
+   * session the listed origin redeemed from a one-time hand-off code (X54): the
+   * token holder mints the code at {@link handOffMintPath}, the page redeems it
+   * at {@link handOffSessionPath}, and offers the session as the
+   * `tau-session.<session>` subprotocol on its upgrade.
+   */
+  readonly allowedOrigins?: readonly string[] | undefined;
+  /** Absolute directory of a prebuilt Tau UI to serve at `/`. */
+  readonly uiRoot?: string | undefined;
+  /** WebAssembly directories served beside the UI (`tau serve`'s same-origin engines); ignored without `uiRoot`. */
+  readonly uiWasmMounts?: readonly StaticUiWasmMount[] | undefined;
+  /**
+   * Host-local Tau MCP endpoint served at `${pathPrefix}/mcp` (X4).
+   *
+   * Answered ahead of the static UI, and admitted by its *own* run-scoped
+   * capability rather than {@link AgentServerOptions.token}: this route's
+   * secret travels into a vendor adapter's process.
+   */
+  readonly mcp?: { handle(request: IncomingMessage, response: ServerResponse): Promise<void> } | undefined;
+  /**
+   * Every external ACP agent this daemon knows about, as the one canonical
+   * descriptor (VSC1); published on {@link hostDescriptorPath}. A same-origin
+   * page reads its model lists and refusal codes from here, exactly as a paired
+   * client reads them off the `ready` frame.
+   */
+  readonly externalAgents?: readonly ExternalAgentDescriptor[] | undefined;
+  /** Bounded host-authority controls; absent when this host has no durable store. */
+  readonly computeControl?: ComputeStoreControl;
+};
+
+/** Handle returned by {@link startAgentServer}. @public */
+export type AgentServerHandle = {
+  readonly ready: Promise<void>;
+  /** Bound address; throws until `ready` resolves. */
+  address(): { readonly port: number; readonly host: string };
+  /** `http://<host>:<port>` — the origin the served UI runs on. */
+  url(): URL;
+  close(): Promise<void>;
+};
+
+const routeOfPath = (pathname: string, pathPrefix: string): string | undefined => {
+  const trimmed = pathPrefix.replaceAll(/^\/+|\/+$/gu, '');
+  const base = trimmed === '' ? '/' : `/${trimmed}/`;
+  return pathname.startsWith(base) ? pathname.slice(base.length) : undefined;
+};
+
+/**
+ * Serve the agent channel — and optionally a prebuilt UI — on one loopback port.
+ *
+ * @param options - Launcher, admission secret, binding, and optional UI root.
+ * @returns The {@link AgentServerHandle}.
+ * @public
+ *
+ * @example <caption>Serve the agent channel on an ephemeral loopback port</caption>
+ * ```typescript
+ * import { randomBytes } from 'node:crypto';
+ * import { startAgentServer } from '@taucad/host';
+ * import type { AgentLauncher } from '@taucad/agent-host/launcher';
+ *
+ * declare const launcher: AgentLauncher;
+ * const server = startAgentServer({
+ *   launcher,
+ *   token: randomBytes(32).toString('base64url'),
+ *   workspaceRoot: process.cwd(),
+ * });
+ * await server.ready;
+ * await server.close();
+ * ```
+ */
+export const startAgentServer = (options: AgentServerOptions): AgentServerHandle => {
+  if (options.token.length < 32) {
+    throw new TypeError('startAgentServer: token must contain at least 32 characters');
+  }
+  const pathPrefix = options.pathPrefix ?? '/';
+  const httpServer: HttpServer = createServer();
+  /* A page admitted by a hand-off session offers `tau-agent` beside it; the answer is always `tau-agent`, so the
+   * session is never echoed back. A client that offers no subprotocol (rung 1, the relay) is not asked. */
+  const agentSocketServer = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols) => (protocols.has(agentSubprotocol) ? agentSubprotocol : false),
+  });
+  const handOff = createLoopbackHandOff();
+  const machineSocketServer = new WebSocketServer({ noServer: true, maxPayload: 1_048_576 });
+  const channels = new Set<ReturnType<typeof serveAgentChannel>>();
+  const sockets = new Set<WebSocket>();
+  const staticUi: StaticUiHandler | undefined = options.uiRoot
+    ? serveStaticUi({
+        root: options.uiRoot,
+        cookieName: hostSessionCookieName,
+        cookieValue: options.token,
+        wasmMounts: options.uiWasmMounts,
+      })
+    : undefined;
+
+  const ownOrigins = (): readonly string[] => {
+    const bound = httpServer.address();
+    if (bound === null || typeof bound === 'string') {
+      return [];
+    }
+    const port = String(bound.port);
+    return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`];
+  };
+
+  /* Listed cross-origin pages (rung 5, behind Local Network Access): exact strings, as `isOriginAllowed` matches. */
+  const crossOrigins = new Set(options.allowedOrigins ?? []);
+
+  /**
+   * The CORS answer for one request: the request's origin echoed when it is listed, and `Vary: Origin` whenever any
+   * origin is, so a cache never hands one origin's answer to another. An unlisted origin gets no grant at all.
+   * @param request - The request whose `Origin` is checked.
+   * @returns The headers to add to its answer.
+   */
+  const corsHeaders = (request: IncomingMessage): Record<string, string> => {
+    if (crossOrigins.size === 0) {
+      return {};
+    }
+    const { origin } = request.headers;
+    return origin !== undefined && crossOrigins.has(origin)
+      ? { 'access-control-allow-origin': origin, vary: 'Origin' }
+      : { vary: 'Origin' };
+  };
+
+  const isAdmitted = (request: IncomingMessage): boolean => {
+    const supplied = bearerOf(request.headers.authorization) || cookieOf(request.headers.cookie, hostSessionCookieName);
+    return supplied !== '' && constantTimeEquals(supplied, options.token);
+  };
+
+  const serveAgentSocket = (socket: WebSocket): void => {
+    sockets.add(socket);
+    /* `ws` sockets are EventEmitters: an unlistened `'error'` throws out of the
+     * event loop. Kill this socket only — never the daemon, and never a run. */
+    socket.on('error', () => {
+      socket.terminate();
+    });
+    /* The binding lives in the launcher, not here: the Electron services
+     * utility hands the same launcher a `MessagePortMain` and gets the same
+     * channel, so launcher 2 consumes this host rather than forking it. */
+    const channel = serveAgentChannel(socket, options.launcher, {
+      build: packageVersion,
+      revisions: options.revisions,
+    });
+    channels.add(channel);
+    socket.on('close', () => {
+      sockets.delete(socket);
+      channels.delete(channel);
+      /* Disposing the channel ends this client's streams. The runs it started
+       * keep executing: always-on lives in the launcher, not on this socket. */
+      channel.dispose('agent socket closed');
+    });
+  };
+
+  const admitMachinesRoute = (): void => {
+    const { machines } = options;
+    if (!machines) {
+      throw new Error('machines capability is unavailable');
+    }
+    machines.host.admitRoute({ session: machines.session });
+  };
+
+  const serveMachineSocket = (socket: WebSocket): void => {
+    const { machines } = options;
+    if (!machines) {
+      socket.close(1008, 'machines capability is unavailable');
+      return;
+    }
+    sockets.add(socket);
+    socket.on('error', () => {
+      socket.terminate();
+    });
+    let released = false;
+    let removeClose = (): void => undefined;
+    let channel: NodeMachineChannelHandle;
+    try {
+      channel = machines.host.serve({ port: socket, session: machines.session });
+    } catch {
+      socket.close(1011, 'machines channel unavailable');
+      return;
+    }
+    const release = (): void => {
+      if (released) {
+        return;
+      }
+      released = true;
+      sockets.delete(socket);
+      removeClose();
+    };
+    removeClose = channel.onClose(() => {
+      release();
+      if (socket.readyState !== socket.CLOSED) {
+        socket.close(1001, 'machines channel closed');
+      }
+    });
+    socket.on('close', () => {
+      release();
+      channel.dispose('machines socket closed');
+    });
+  };
+
+  const onUpgrade = (
+    request: IncomingMessage,
+    socket: Duplex,
+    head: Parameters<WebSocketServer['handleUpgrade']>[2],
+  ): void => {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    const route = routeOfPath(url.pathname, pathPrefix);
+    if (route !== 'agent' && (route !== 'machines' || !options.machines)) {
+      refuseUpgrade(socket, '404 Not Found');
+      return;
+    }
+    if (!isOriginAllowed(request.headers.origin, [...ownOrigins(), ...(options.allowedOrigins ?? [])])) {
+      refuseUpgrade(socket, '403 Forbidden');
+      return;
+    }
+    const redeemed =
+      route === 'agent' &&
+      handOff.admits(sessionOfSubprotocols(request.headers['sec-websocket-protocol']), request.headers.origin);
+    if (!redeemed && !isAdmitted(request)) {
+      refuseUpgrade(socket, '401 Unauthorized');
+      return;
+    }
+    if (route === 'machines') {
+      try {
+        admitMachinesRoute();
+      } catch {
+        refuseUpgrade(socket, '403 Forbidden');
+        return;
+      }
+    }
+    const socketServer = route === 'agent' ? agentSocketServer : machineSocketServer;
+    socketServer.handleUpgrade(request, socket, head, (accepted) => {
+      if (route === 'agent') {
+        serveAgentSocket(accepted);
+      } else {
+        serveMachineSocket(accepted);
+      }
+    });
+  };
+
+  const serveDescriptor = (request: IncomingMessage, response: ServerResponse): void => {
+    const cors = corsHeaders(request);
+    /* A listed origin's preflight. The descriptor carries no secret, so the grant is the read alone: no credentials,
+     * no extra headers, and the private-network grant Chromium's preflight asks a loopback answer for. */
+    if (request.method === 'OPTIONS' && 'access-control-allow-origin' in cors) {
+      response.writeHead(204, {
+        ...cors,
+        'access-control-allow-methods': 'GET, HEAD',
+        'access-control-allow-headers': 'accept',
+        'access-control-max-age': '600',
+        ...(request.headers['access-control-request-private-network'] === 'true'
+          ? { 'access-control-allow-private-network': 'true' }
+          : {}),
+      });
+      response.end();
+      return;
+    }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.writeHead(405, { ...isolationHeaders, ...cors, allow: 'GET, HEAD' });
+      response.end();
+      return;
+    }
+    const body = JSON.stringify({
+      v: 1,
+      agent: true,
+      label: options.label ?? hostname(),
+      workspaceRoot: options.workspaceRoot,
+      ...(options.externalAgents?.length ? { externalAgents: [...options.externalAgents] } : {}),
+    });
+    response.writeHead(200, {
+      ...isolationHeaders,
+      ...cors,
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+      'content-length': String(Buffer.byteLength(body)),
+    });
+    response.end(request.method === 'HEAD' ? undefined : body);
+  };
+
+  /**
+   * `POST` {@link handOffMintPath}: the token holder mints one single-use code (X54). A page never holds the token, so
+   * a page never reaches this.
+   * @param request - The mint request.
+   * @param response - Its answer.
+   */
+  const serveHandOffMint = (request: IncomingMessage, response: ServerResponse): void => {
+    const headers = { 'cache-control': 'no-store' };
+    if (request.method !== 'POST') {
+      response.writeHead(405, { ...headers, allow: 'POST' }).end();
+      return;
+    }
+    if (!isAdmitted(request)) {
+      response.writeHead(401, headers).end();
+      return;
+    }
+    const body = JSON.stringify({ v: 1, ...handOff.mint() });
+    response.writeHead(200, {
+      ...headers,
+      'content-type': 'application/json',
+      'content-length': String(Buffer.byteLength(body)),
+    });
+    response.end(body);
+  };
+
+  /**
+   * `POST` {@link handOffSessionPath}: a listed origin redeems a hand-off code, once, for a session bound to that origin.
+   * @param request - The redemption, or its preflight.
+   * @param response - Its answer.
+   */
+  const serveHandOffRedemption = (request: IncomingMessage, response: ServerResponse): void => {
+    const cors = corsHeaders(request);
+    const headers = { ...cors, 'cache-control': 'no-store' };
+    const { origin } = request.headers;
+    if (origin === undefined || !('access-control-allow-origin' in cors)) {
+      response.writeHead(403, headers).end();
+      return;
+    }
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204, {
+        ...cors,
+        'access-control-allow-methods': 'POST',
+        'access-control-allow-headers': 'content-type',
+        'access-control-max-age': '600',
+        ...(request.headers['access-control-request-private-network'] === 'true'
+          ? { 'access-control-allow-private-network': 'true' }
+          : {}),
+      });
+      response.end();
+      return;
+    }
+    if (request.method !== 'POST') {
+      response.writeHead(405, { ...headers, allow: 'POST, OPTIONS' }).end();
+      return;
+    }
+    const answer = async (): Promise<void> => {
+      let code: unknown;
+      try {
+        let bytes = 0;
+        const chunks: Array<Uint8Array<ArrayBuffer>> = [];
+        for await (const chunk of request) {
+          if (!Buffer.isBuffer(chunk)) {
+            throw new TypeError('invalid request chunk');
+          }
+          bytes += chunk.byteLength;
+          if (bytes > redemptionBodyLimit) {
+            throw new Error('request too large');
+          }
+          chunks.push(Uint8Array.from(chunk));
+        }
+        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        code = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'code') : undefined;
+      } catch {
+        response.writeHead(400, headers).end();
+        return;
+      }
+      const session = typeof code === 'string' && code !== '' ? handOff.redeem(code, origin) : undefined;
+      if (session === undefined) {
+        response.writeHead(401, headers).end();
+        return;
+      }
+      const body = JSON.stringify({ v: 1, session });
+      response.writeHead(200, {
+        ...headers,
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+    };
+    void answer();
+  };
+
+  const onRequest = (request: IncomingMessage, response: ServerResponse): void => {
+    /* Ahead of the static UI: the SPA fallback answers every extension-less path
+     * with the shell, which would turn discovery into an HTML parse error, and
+     * an MCP POST into a 200 nobody can parse. */
+    const { pathname } = new URL(request.url ?? '/', 'http://localhost');
+    if (routeOfPath(pathname, pathPrefix) === 'machines') {
+      const headers = { 'cache-control': 'no-store' };
+      if (!options.machines) {
+        response.writeHead(404, headers).end();
+        return;
+      }
+      if (request.method !== 'GET') {
+        response.writeHead(405, { ...headers, allow: 'GET' }).end();
+        return;
+      }
+      if (!isOriginAllowed(request.headers.origin, [...ownOrigins(), ...(options.allowedOrigins ?? [])])) {
+        response.writeHead(403, headers).end();
+        return;
+      }
+      if (!isAdmitted(request)) {
+        response.writeHead(401, headers).end();
+        return;
+      }
+      try {
+        admitMachinesRoute();
+        response.writeHead(204, headers).end();
+      } catch {
+        response.writeHead(403, headers).end();
+      }
+      return;
+    }
+    if (pathname === hostDescriptorPath) {
+      serveDescriptor(request, response);
+      return;
+    }
+    if (pathname === handOffMintPath) {
+      serveHandOffMint(request, response);
+      return;
+    }
+    if (pathname === handOffSessionPath) {
+      serveHandOffRedemption(request, response);
+      return;
+    }
+    const computeOperation = routeOfPath(pathname, pathPrefix)?.match(/^compute\/(inspect|clear|collect)$/u)?.[1];
+    if (computeOperation) {
+      if (!isAdmitted(request)) {
+        response.writeHead(401).end();
+        return;
+      }
+      if (request.method !== 'POST' || !options.computeControl) {
+        response.writeHead(options.computeControl ? 405 : 404).end();
+        return;
+      }
+      const answer = async (): Promise<void> => {
+        try {
+          let bytes = 0;
+          const chunks: Array<Uint8Array<ArrayBuffer>> = [];
+          for await (const chunk of request) {
+            if (!Buffer.isBuffer(chunk)) {
+              throw new TypeError('invalid request chunk');
+            }
+            const value = Uint8Array.from(chunk);
+            bytes += value.byteLength;
+            if (bytes > 4096) {
+              throw new Error('request too large');
+            }
+            chunks.push(value);
+          }
+          const body = chunks.length > 0 ? (JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown) : {};
+          const input = body as { readonly budget?: unknown; readonly cursor?: unknown };
+          let result: unknown;
+          if (computeOperation === 'inspect') {
+            result = await options.computeControl!.inspect({});
+          } else if (computeOperation === 'clear') {
+            result = await options.computeControl!.clear({});
+          } else {
+            if (
+              !Number.isSafeInteger(input.budget) ||
+              (input.budget as number) < 1 ||
+              (input.budget as number) > 1000
+            ) {
+              throw new Error('invalid budget');
+            }
+            if (input.cursor !== undefined && (typeof input.cursor !== 'string' || input.cursor.length > 1024)) {
+              throw new Error('invalid cursor');
+            }
+            result = await options.computeControl!.collect({
+              budget: input.budget as number,
+              ...(input.cursor ? { cursor: input.cursor } : {}),
+            });
+          }
+          const encoded = JSON.stringify({ v: 1, operation: computeOperation, result });
+          response.writeHead(200, {
+            'content-type': 'application/json',
+            'content-length': String(Buffer.byteLength(encoded)),
+          });
+          response.end(encoded);
+        } catch {
+          response.writeHead(400).end();
+        }
+      };
+      void answer();
+      return;
+    }
+    const { mcp } = options;
+    if (mcp && routeOfPath(pathname, pathPrefix) === 'mcp') {
+      /* async-iife: bootstrap. The endpoint owns its own refusals; a throw here
+       * would take the daemon down over one adapter's malformed frame. */
+      const answer = async (): Promise<void> => {
+        try {
+          await mcp.handle(request, response);
+        } catch {
+          if (!response.headersSent) {
+            response.writeHead(500, { 'content-type': 'application/json' });
+          }
+          response.end();
+        }
+      };
+      void answer();
+      return;
+    }
+    if (staticUi) {
+      staticUi.handle(request, response);
+      return;
+    }
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end('Tau Host serves only the /agent channel; start it with --ui to serve a UI.\n');
+  };
+
+  httpServer.on('upgrade', onUpgrade);
+  httpServer.on('request', onRequest);
+
+  const ready = new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    /* Node rethrows an unlistened `'error'`; `ready` only covers the listen
+     * attempt, so keep a persistent listener for post-listen socket errors. */
+    httpServer.on('error', () => undefined);
+    httpServer.listen(options.port ?? 0, options.host ?? process.env['TAU_HOST_AGENT_BIND'] ?? '127.0.0.1', () => {
+      resolve();
+    });
+  });
+
+  const address = (): { readonly port: number; readonly host: string } => {
+    const bound = httpServer.address();
+    if (bound === null || typeof bound === 'string') {
+      throw new Error('startAgentServer: server is not listening on a TCP port (await `ready` first)');
+    }
+    return { port: bound.port, host: bound.address };
+  };
+
+  const closeSocket = async (socket: WebSocket): Promise<void> => {
+    if (socket.readyState === socket.CLOSED) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        socket.terminate();
+        resolve();
+      }, closeGrace);
+      socket.once('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.close(1001, 'host stopping');
+    });
+  };
+
+  let closePromise: Promise<void> | undefined;
+
+  return {
+    ready,
+    address,
+    url: () => {
+      const bound = address();
+      const host = bound.host === '::' || bound.host === '0.0.0.0' ? '127.0.0.1' : bound.host;
+      return new URL(`http://${host.includes(':') ? `[${host}]` : host}:${String(bound.port)}`);
+    },
+    async close(): Promise<void> {
+      closePromise ??= (async () => {
+        httpServer.off('upgrade', onUpgrade);
+        httpServer.off('request', onRequest);
+        await Promise.all([...sockets].map(async (socket) => closeSocket(socket)));
+        await Promise.all(
+          [agentSocketServer, machineSocketServer].map(
+            async (socketServer) =>
+              new Promise<void>((resolve) => {
+                socketServer.close(() => {
+                  resolve();
+                });
+              }),
+          ),
+        );
+        if (httpServer.listening) {
+          await new Promise<void>((resolve) => {
+            httpServer.close(() => {
+              resolve();
+            });
+          });
+        }
+      })();
+      return closePromise;
+    },
+  };
+};

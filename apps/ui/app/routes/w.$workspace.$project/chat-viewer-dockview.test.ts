@@ -1,0 +1,622 @@
+/* oxlint-disable @typescript-eslint/consistent-type-assertions -- Dockview structural test doubles cover only exercised fields */
+/* oxlint-disable typescript/no-restricted-types -- Checked file absence is null in the filesystem contract. */
+import { describe, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import type { DockviewApi, DockviewDidDropEvent, DockviewGroupPanel } from 'dockview-react';
+import type { CapabilitiesManifest } from '@taucad/runtime';
+import type { FileEntry, FileProvenanceSource, FileStatEntry, CheckedFileWriteResult } from '@taucad/types';
+import { workbenchRecords } from '@taucad/workbench';
+import type { WorkbenchView } from '@taucad/workbench';
+import { tauEditorPanelDragMime, tauFileDragMime } from '@taucad/types/constants';
+import {
+  createViewerNewTab,
+  createViewerFileDataSource,
+  handleViewerDrop,
+  listViewerSelectableFiles,
+  listViewerSourceFiles,
+  replaceViewerNewTabWithFile,
+  newViewRecordFrom,
+  recordNewView,
+  ViewerEmptyFilePicker,
+} from '#routes/w.$workspace.$project/chat-viewer-dockview.js';
+import { adoptViewerRecordNode, ensureViewerGroup, viewSourceOf } from '#workbench-records/viewer-adapter.js';
+import { defaultGraphicsSettings } from '@taucad/viewer/graphics/graphics-settings';
+import { createWorkbenchViewStore } from '#workbench-records/view-store.js';
+import { deleteViewFile } from '#workbench-records/view-actions.js';
+import { exceptionsForView, viewExceptions, viewExceptionsStore } from '#workbench-records/view-exceptions.js';
+
+describe('record-driven viewer adoption', () => {
+  it('deletes an interim recreated view after a tool delete followed by layout close', async () => {
+    const viewId = 'v-1234abcd';
+    const record = workbenchRecords.view.schema.parse({ version: 1, entryPath: 'models/other.ts' });
+    let bytes: Uint8Array<ArrayBuffer> | null = new TextEncoder().encode(workbenchRecords.view.serialize(record));
+    const gate = Promise.withResolvers<void>();
+    const files = {
+      exists: async () => bytes !== null,
+      readFile: async () => bytes!,
+      writeFileChecked: vi.fn(async ({ data }: { data: string }): Promise<CheckedFileWriteResult> => {
+        await gate.promise;
+        bytes = new TextEncoder().encode(data);
+        return { status: 'applied', content: bytes };
+      }),
+      deleteFileChecked: vi.fn(async (): Promise<CheckedFileWriteResult> => {
+        bytes = null;
+        return { status: 'applied', content: new Uint8Array() };
+      }),
+    };
+    const owner = createWorkbenchViewStore({
+      root: '/root',
+      viewId,
+      files,
+      onChange: () => undefined,
+      onError: vi.fn(),
+    });
+    await owner.read();
+    bytes = null; // Tool deletes the view file before publishing its layout change.
+    await owner.read();
+    expect(files.writeFileChecked).not.toHaveBeenCalled();
+    // Deletion clears the durable baseline; the person's live view is what an edit writes.
+    expect(owner.snapshot().record).toBeUndefined();
+    const persisting = owner.edit({ ...record, name: 'Interim person edit' });
+    await vi.waitFor(() => {
+      expect(files.writeFileChecked).toHaveBeenCalledOnce();
+    });
+    const api = {
+      panels: [{ id: viewId, params: { viewId, entryPath: 'models/other.ts' } }],
+      width: 800,
+      height: 600,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Dockview defines this method name.
+      fromJSON: vi.fn(),
+    } as unknown as DockviewApi;
+    const removed = adoptViewerRecordNode(api, { kind: 'group', tabs: [] });
+    expect(removed).toEqual([viewId]);
+    expect(api.fromJSON).toHaveBeenCalledWith(expect.any(Object), { reuseExistingPanels: true });
+    const closing = deleteViewFile({ root: '/root', viewId, files, onError: vi.fn() });
+    gate.resolve();
+    expect(await persisting).toBe(true);
+    expect(await closing).toBe(true);
+    expect(bytes).toBeNull();
+    owner.dispose();
+  });
+});
+
+describe('ensureViewerGroup', () => {
+  it('keeps one header/action group available after the final viewer closes', () => {
+    const groups: DockviewGroupPanel[] = [];
+    const addGroup = vi.fn(() => {
+      const group = { id: 'viewer-empty' } as DockviewGroupPanel;
+      groups.push(group);
+      return group;
+    });
+    const api = { groups, addGroup } as unknown as DockviewApi;
+
+    ensureViewerGroup(api);
+    ensureViewerGroup(api);
+
+    expect(addGroup).toHaveBeenCalledOnce();
+    expect(groups).toHaveLength(1);
+  });
+});
+
+describe('viewer split launchers', () => {
+  const formatView = workbenchRecords.view.schema.parse({ version: 1, entryPath: 'models/new.ts' });
+
+  it('keeps the leaves a source view sets, its grid unit included, and leaves its geometry state behind (V8)', () => {
+    const source = workbenchRecords.view.schema.parse({
+      version: 1,
+      entryPath: 'models/old.ts',
+      fieldOfView: 42,
+      upDirection: 'y',
+      grid: { unit: 'in' },
+      display: { ...formatView.display, grid: false },
+      camera: {
+        kind: 'pose',
+        frameId: 'tau:root',
+        target: [3, 4, 5],
+        direction: [1, 0, 0],
+        up: [0, 0, 1],
+        verticalSpan: 12,
+        perspectiveZoom: 1,
+      },
+      measurements: [
+        { id: 'measurement-1', frameId: 'tau:root', startPoint: [0, 0, 0], endPoint: [1, 0, 0], distance: 1 },
+      ],
+      section: { active: true, cuts: [{ kind: 'plane', plane: 'xz', offset: 2, isFlipped: true }] },
+    });
+
+    const created = newViewRecordFrom('models/new.ts', source);
+
+    expect(created).toEqual({
+      ...formatView,
+      fieldOfView: 42,
+      upDirection: 'y',
+      grid: { ...formatView.grid, unit: 'in' },
+      display: { ...formatView.display, grid: false },
+    });
+  });
+
+  it('keeps an inheriting source inheriting: its format values are copied, never a resolved value (V8)', () => {
+    const source = workbenchRecords.view.schema.parse({ version: 1, entryPath: 'models/old.ts' });
+    expect(newViewRecordFrom('models/new.ts', source)).toEqual(formatView);
+  });
+
+  it('holds the format value for every leaf with no active viewer (V11)', () => {
+    expect(newViewRecordFrom('models/new.ts', undefined)).toEqual(formatView);
+  });
+
+  it("copies the source's exceptions to the new id before the record is written (V8)", async () => {
+    globalThis.localStorage.clear();
+    viewExceptions.add('p', 'v-source', 'display.grid');
+    const source = workbenchRecords.view.schema.parse({ version: 1, entryPath: 'models/old.ts' });
+    const written: WorkbenchView[] = [];
+    const edit = vi.fn(async (_viewId: string, change: (current: WorkbenchView | undefined) => WorkbenchView) => {
+      // The exception is already there when the record lands.
+      expect(exceptionsForView(viewExceptionsStore.read(), 'p', 'v-new')).toEqual(['display.grid']);
+      written.push(change(undefined));
+      return true;
+    });
+
+    await recordNewView({
+      projectId: 'p',
+      viewId: 'v-new',
+      entryPath: 'models/new.ts',
+      source: { viewId: 'v-source', record: source },
+      edit,
+    });
+
+    expect(edit).toHaveBeenCalledOnce();
+    expect(written).toEqual([formatView]);
+    globalThis.localStorage.clear();
+  });
+
+  it('writes no record when the copy of the exceptions is not saved', async () => {
+    globalThis.localStorage.clear();
+    viewExceptions.add('p', 'v-source', 'display.grid');
+    const refused = vi.spyOn(viewExceptions, 'copy').mockReturnValue('refused');
+    const edit = vi.fn(async () => true);
+    try {
+      await expect(
+        recordNewView({
+          projectId: 'p',
+          viewId: 'v-new',
+          entryPath: 'models/new.ts',
+          source: { viewId: 'v-source', record: workbenchRecords.view.schema.parse({ version: 1, entryPath: 'a.ts' }) },
+          edit,
+        }),
+      ).resolves.toBe(false);
+    } finally {
+      refused.mockRestore();
+    }
+    expect(edit).not.toHaveBeenCalled();
+    globalThis.localStorage.clear();
+  });
+
+  it.each([
+    ['refuses', async () => false],
+    [
+      'fails',
+      async () => {
+        throw new Error('The record store is closed.');
+      },
+    ],
+  ])('puts the new view id exceptions back when the record store %s the write after the copy', async (name, write) => {
+    globalThis.localStorage.clear();
+    viewExceptions.add('p', 'v-source', 'display.grid');
+    viewExceptions.add('p', 'v-new', 'display.axes');
+    const outcome = recordNewView({
+      projectId: 'p',
+      viewId: 'v-new',
+      entryPath: 'models/new.ts',
+      source: { viewId: 'v-source', record: workbenchRecords.view.schema.parse({ version: 1, entryPath: 'a.ts' }) },
+      edit: async () => {
+        expect(exceptionsForView(viewExceptionsStore.read(), 'p', 'v-new')).toEqual(['display.grid']);
+        return write();
+      },
+    });
+    await (name === 'fails' ? expect(outcome).rejects.toThrow('closed') : expect(outcome).resolves.toBe(false));
+    expect(exceptionsForView(viewExceptionsStore.read(), 'p', 'v-new')).toEqual(['display.axes']);
+    globalThis.localStorage.clear();
+  });
+
+  it("takes the source from the dock's active viewer panel, and none from another panel or a viewer with no record", () => {
+    const record = workbenchRecords.view.schema.parse({ version: 1, entryPath: 'a.ts' });
+    const records = new Map([['v1', record]]);
+    expect(viewSourceOf({ id: 'v1', params: { viewId: 'v1' } }, records)).toEqual({ viewId: 'v1', record });
+    expect(viewSourceOf({ id: 'editor', params: { path: 'a.ts' } }, records)).toBeUndefined();
+    expect(viewSourceOf({ id: 'v2', params: { viewId: 'v2' } }, records)).toBeUndefined();
+    expect(viewSourceOf(undefined, records)).toBeUndefined();
+  });
+
+  it('copies no exceptions with no active viewer', async () => {
+    globalThis.localStorage.clear();
+    await recordNewView({
+      projectId: 'p',
+      viewId: 'v-new',
+      entryPath: 'models/new.ts',
+      source: undefined,
+      edit: async () => true,
+    });
+    expect(exceptionsForView(viewExceptionsStore.read(), 'p', 'v-new')).toEqual([]);
+  });
+
+  it('opens a Viewer launcher in the newly split group', () => {
+    const addPanel = vi.fn();
+    const group = { id: 'viewer-split' } as DockviewGroupPanel;
+
+    createViewerNewTab({ api: { addPanel } as unknown as DockviewApi, group, id: 'pane:new' });
+
+    expect(addPanel).toHaveBeenCalledExactlyOnceWith({
+      id: 'pane:new',
+      component: 'newTab',
+      title: 'Viewer',
+      params: { mode: 'launcher' },
+      position: { direction: 'within', referenceGroup: group },
+    });
+  });
+
+  it('replaces the launcher in place when a viewer file is selected', () => {
+    const close = vi.fn();
+    const placeholder = {
+      id: 'pane:new',
+      api: { close },
+    };
+    const group = {
+      panels: [{ id: 'before' }, placeholder, { id: 'after' }],
+    } as unknown as DockviewGroupPanel;
+    Object.assign(placeholder.api, { group });
+    const addPanel = vi.fn();
+    const onViewCreated = vi.fn();
+
+    replaceViewerNewTabWithFile({
+      api: { addPanel, panels: [placeholder] } as unknown as DockviewApi,
+      placeholderId: 'pane:new',
+      path: 'models/main.scad',
+      viewId: 'view:new',
+      onViewCreated,
+    });
+
+    expect(addPanel).toHaveBeenCalledExactlyOnceWith({
+      id: 'view:new',
+      component: 'viewer',
+      title: 'main.scad',
+      params: { viewId: 'view:new', entryPath: 'models/main.scad' },
+      position: { direction: 'within', referenceGroup: group, index: 1 },
+    });
+    expect(onViewCreated).toHaveBeenCalledExactlyOnceWith('view:new', 'models/main.scad');
+    expect(close).toHaveBeenCalledOnce();
+  });
+});
+
+describe('listViewerSelectableFiles', () => {
+  const entry = (path: string, type: 'dir' | 'file'): FileEntry =>
+    ({
+      path,
+      name: path.split('/').pop() ?? path,
+      type,
+      size: 0,
+      isLoaded: true,
+      mtimeMs: 0,
+    }) as FileEntry;
+
+  const capabilities = (...registrations: CapabilitiesManifest['registrations']): CapabilitiesManifest => ({
+    registrations,
+    routes: [],
+    renderCapabilities: {},
+  });
+
+  it('returns kernel-supported files in stable path order without directories', () => {
+    const tree = new Map([
+      ['src/z.scad', entry('src/z.scad', 'file')],
+      ['src', entry('src', 'dir')],
+      ['main.scad', entry('main.scad', 'file')],
+      ['thumbnail.webp', entry('thumbnail.webp', 'file')],
+    ]);
+
+    expect(
+      listViewerSelectableFiles(
+        tree.values(),
+        capabilities({ kind: 'kernel', id: 'openrscad', extensions: ['scad'] }, { kind: 'transcoder', id: 'image' }),
+      ),
+    ).toEqual([
+      { name: 'main.scad', path: 'main.scad', size: 0 },
+      { name: 'z.scad', path: 'src/z.scad', size: 0 },
+    ]);
+  });
+
+  it('supports compound declarations and excludes GeoSpec files even from wildcard kernels', () => {
+    const tree = new Map([
+      ['main.ts', entry('main.ts', 'file')],
+      ['model.MESH.XML', entry('model.MESH.XML', 'file')],
+      ['notes.xml', entry('notes.xml', 'file')],
+      ['checks/sample.geospec.ts', entry('checks/sample.geospec.ts', 'file')],
+      ['checks/sample.GEOSPEC.JS', entry('checks/sample.GEOSPEC.JS', 'file')],
+    ]);
+
+    expect(
+      listViewerSelectableFiles(
+        tree.values(),
+        capabilities(
+          { kind: 'kernel', id: 'replicad', extensions: ['ts', 'js'] },
+          { kind: 'kernel', id: 'assimp', extensions: ['mesh.xml'] },
+          { kind: 'kernel', id: 'catch-all', extensions: ['*'] },
+        ),
+      ),
+    ).toEqual([
+      { name: 'main.ts', path: 'main.ts', size: 0 },
+      { name: 'model.MESH.XML', path: 'model.MESH.XML', size: 0 },
+      { name: 'notes.xml', path: 'notes.xml', size: 0 },
+    ]);
+  });
+});
+
+describe('listViewerSourceFiles', () => {
+  const stat = (path: string): FileStatEntry => ({
+    path,
+    name: path.split('/').pop() ?? path,
+    type: 'file',
+    size: 1,
+    mtimeMs: 0,
+  });
+  const capabilities = (...registrations: CapabilitiesManifest['registrations']): CapabilitiesManifest => ({
+    registrations,
+    routes: [],
+    renderCapabilities: {},
+  });
+  type SearchFiles = (
+    query: string,
+    options?: { maxResults?: number; includeDirectories?: boolean },
+  ) => Promise<FileStatEntry[]>;
+
+  it('lists sources under folders the tree never expanded, one name glob per kernel extension', async () => {
+    const searchFiles = vi.fn<SearchFiles>(async (query) =>
+      query === '*.ts' ? [stat('src/main.ts'), stat('src/checks/main.geospec.ts')] : [stat('parts/a.scad')],
+    );
+
+    await expect(
+      listViewerSourceFiles(
+        { searchFiles },
+        capabilities(
+          { kind: 'kernel', id: 'replicad', extensions: ['ts', 'js'] },
+          { kind: 'kernel', id: 'openscad', extensions: ['scad'] },
+          { kind: 'transcoder', id: 'image' },
+        ),
+      ),
+    ).resolves.toEqual([
+      { name: 'a.scad', path: 'parts/a.scad', size: 1 },
+      { name: 'main.ts', path: 'src/main.ts', size: 1 },
+    ]);
+    expect(searchFiles.mock.calls.map(([query, options]) => [query, options])).toEqual([
+      ['*.ts', { maxResults: 200, includeDirectories: false }],
+      ['*.js', { maxResults: 200, includeDirectories: false }],
+      ['*.scad', { maxResults: 200, includeDirectories: false }],
+    ]);
+  });
+
+  it('searches every file once for a wildcard kernel', async () => {
+    const searchFiles = vi.fn<SearchFiles>(async () => [stat('notes.xml')]);
+
+    await expect(
+      listViewerSourceFiles(
+        { searchFiles },
+        capabilities(
+          { kind: 'kernel', id: 'replicad', extensions: ['ts'] },
+          { kind: 'kernel', id: 'catch-all', extensions: ['*'] },
+        ),
+      ),
+    ).resolves.toEqual([{ name: 'notes.xml', path: 'notes.xml', size: 1 }]);
+    expect(searchFiles).toHaveBeenCalledOnce();
+    expect(searchFiles).toHaveBeenCalledWith('', { maxResults: 200, includeDirectories: false });
+  });
+});
+
+describe('ViewerEmptyFilePicker', () => {
+  it('distinguishes pending capabilities from a resolved empty candidate list', () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(createElement(ViewerEmptyFilePicker, { files: undefined, onSelect, onClose }));
+
+    expect(screen.getByText('Loading runtime formats…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close tab' })).toBeInTheDocument();
+
+    rerender(createElement(ViewerEmptyFilePicker, { files: [], onSelect, onClose }));
+    expect(screen.getByText('No runtime-supported viewer files found.')).toBeInTheDocument();
+  });
+
+  it('scrolls from ten files and keeps selection and close actions direct', () => {
+    const files = Array.from({ length: 10 }, (_, index) => ({
+      name: `part-${index}.scad`,
+      path: `parts/part-${index}.scad`,
+    }));
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+
+    const { rerender } = render(createElement(ViewerEmptyFilePicker, { files, onSelect, onClose }));
+
+    expect(screen.getByTestId('viewer-empty-file-list')).toHaveClass('overflow-y-auto');
+    expect(screen.getAllByText('Open')).toHaveLength(10);
+    fireEvent.click(screen.getByRole('button', { name: 'part-0.scad' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close tab' }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('parts/part-0.scad');
+    expect(onClose).toHaveBeenCalledOnce();
+
+    rerender(createElement(ViewerEmptyFilePicker, { files: files.slice(0, 9), onSelect, onClose }));
+    expect(screen.getByTestId('viewer-empty-file-list')).not.toHaveClass('overflow-y-auto');
+  });
+});
+
+describe('handleViewerDrop', () => {
+  const settings = { ...defaultGraphicsSettings, cameraFov: 50 };
+
+  it('opens an editor tab drop in the target Viewer split and creates its runtime state', () => {
+    const addPanel = vi.fn();
+    const onViewCreated = vi.fn();
+    const group = { id: 'viewer-group', panels: [] } as unknown as DockviewGroupPanel;
+    const dataTransfer = {
+      getData: (type: string) =>
+        type === tauEditorPanelDragMime ? JSON.stringify({ filePath: 'src/assembly.scad' }) : '',
+    } as DataTransfer;
+
+    handleViewerDrop({
+      event: {
+        api: { addPanel } as unknown as DockviewApi,
+        nativeEvent: { dataTransfer } as DragEvent,
+        position: 'right',
+        group,
+      } as DockviewDidDropEvent,
+      getViewSource: () => settings,
+      onViewCreated,
+    });
+
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        component: 'viewer',
+        title: 'assembly.scad',
+        position: { direction: 'right', referenceGroup: group },
+      }),
+    );
+    const added = addPanel.mock.calls[0]![0] as { id: string; params: { entryPath: string } };
+    expect(added.params.entryPath).toBe('src/assembly.scad');
+    expect(onViewCreated).toHaveBeenCalledExactlyOnceWith(added.id, 'src/assembly.scad', settings);
+  });
+
+  it('activates an existing Viewer for a file-tree drop instead of duplicating it', () => {
+    const setActive = vi.fn();
+    const addPanel = vi.fn();
+    const group = {
+      id: 'viewer-group',
+      panels: [{ params: { entryPath: 'src/assembly.scad' }, api: { setActive } }],
+    } as unknown as DockviewGroupPanel;
+    const dataTransfer = {
+      getData: (type: string) =>
+        type === tauFileDragMime ? JSON.stringify(['src/assembly.scad', 'src/ignored.scad']) : '',
+    } as DataTransfer;
+
+    handleViewerDrop({
+      event: {
+        api: { addPanel } as unknown as DockviewApi,
+        nativeEvent: { dataTransfer } as DragEvent,
+        position: 'center',
+        group,
+      } as DockviewDidDropEvent,
+      getViewSource: () => settings,
+      onViewCreated: vi.fn(),
+    });
+
+    expect(setActive).toHaveBeenCalledOnce();
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+});
+
+describe('createViewerFileDataSource', () => {
+  const capabilities = { registrations: [{ kind: 'kernel', id: 'jscad', extensions: ['js'] }] } satisfies Pick<
+    CapabilitiesManifest,
+    'registrations'
+  >;
+  const entry = (path: string, source: FileProvenanceSource = 'project') =>
+    ({
+      type: 'file',
+      path,
+      name: path.split('/').pop() ?? path,
+      size: 12,
+      mtimeMs: 0,
+      contentKind: 'text',
+      lineCount: 1,
+      provenance: { source, versioned: source === 'project', agentAccess: 'read-only' },
+    }) as const;
+
+  it('should search unopened nested directories through the rooted index and retain viewer exclusions', async () => {
+    const nested = entry('public/models/touch-parameters.js');
+    const searchFiles = vi.fn(async () => [
+      nested,
+      entry('public/check.geospec.js'),
+      entry('thumbnail.webp'),
+      entry('node_modules/hidden.js', 'dependencies'),
+      entry('.agents/skills/example.js', 'system-skills'),
+    ]);
+    const listDirectory = vi.fn(async () => []);
+    const source = createViewerFileDataSource(
+      { listDirectory, searchFilesDebounced: searchFiles, getTreeSnapshot: () => new Map() },
+      capabilities,
+    );
+    expect(await source.searchFiles('touch-parameters')).toEqual([
+      { name: nested.name, path: nested.path, size: 12, isFolder: false },
+    ]);
+    expect(searchFiles).toHaveBeenCalledExactlyOnceWith('touch-parameters', {
+      maxResults: 100,
+      includeDirectories: false,
+      caller: 'quick-open',
+    });
+    expect(listDirectory).not.toHaveBeenCalled();
+  });
+
+  it('should browse one requested directory and apply provenance from its loaded snapshot', async () => {
+    const visible = entry('public/model.js');
+    const overlay = entry('public/overlay.js', 'dependencies');
+    const excluded = entry('public/check.geospec.js');
+    const snapshot = new Map<string, FileEntry>(
+      [visible, overlay, excluded].map((file) => [file.path, { ...file, isLoaded: true }]),
+    );
+    const folder = { name: 'models', path: 'public/models', isFolder: true, size: 0, mtimeMs: 0 } as const;
+    const listed = [
+      folder,
+      ...[visible, overlay, excluded].map(
+        ({ name, path, size, mtimeMs, contentKind, lineCount }) =>
+          ({
+            name,
+            path,
+            size,
+            mtimeMs,
+            contentKind,
+            lineCount,
+            isFolder: false,
+          }) as const,
+      ),
+    ];
+    const listDirectory = vi.fn(async () => listed);
+    const searchFiles = vi.fn(async () => []);
+    const source = createViewerFileDataSource(
+      { listDirectory, searchFilesDebounced: searchFiles, getTreeSnapshot: () => snapshot },
+      capabilities,
+    );
+    expect(await source.loadDirectory('public')).toEqual([folder, listed[1]]);
+    expect(listDirectory).toHaveBeenCalledExactlyOnceWith('public');
+    expect(searchFiles).not.toHaveBeenCalled();
+  });
+
+  it('should require refinement when the bounded search cannot establish complete supported results', async () => {
+    const valid = entry('parts/wheel.js');
+    const candidates = [...Array.from({ length: 100 }, (_, index) => entry(`notes/wheel-${index}.txt`)), valid];
+    const source = createViewerFileDataSource(
+      {
+        listDirectory: async () => [{ ...valid, isFolder: false }],
+        searchFilesDebounced: async (query, options) =>
+          query === 'wheel.js' ? [valid] : candidates.slice(0, options?.maxResults),
+        getTreeSnapshot: () => new Map(),
+      },
+      capabilities,
+    );
+    await expect(source.searchFiles('wheel')).rejects.toThrow(
+      'Refine your search or browse folders to see supported files.',
+    );
+    expect(await source.searchFiles('wheel.js')).toEqual([
+      { name: 'wheel.js', path: valid.path, size: 12, isFolder: false },
+    ]);
+    expect(await source.loadDirectory('parts')).toEqual([{ ...valid, isFolder: false }]);
+  });
+
+  it('should preserve a directory read failure for the picker retry boundary', async () => {
+    const failure = new Error('Directory unavailable');
+    const source = createViewerFileDataSource(
+      {
+        listDirectory: async () => {
+          throw failure;
+        },
+        searchFilesDebounced: async () => [],
+        getTreeSnapshot: () => new Map(),
+      },
+      capabilities,
+    );
+    await expect(source.loadDirectory('public')).rejects.toBe(failure);
+  });
+});

@@ -1,16 +1,65 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { CrossTabCoordinator, isNavigatorLocksSupported } from '#cross-tab-coordinator.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CrossTabCoordinator, withCrossTabLocks } from '#cross-tab-coordinator.js';
 
-describe('isNavigatorLocksSupported', () => {
-  it('should return true when navigator.locks exists', () => {
-    if (typeof navigator !== 'undefined' && 'locks' in navigator) {
-      expect(isNavigatorLocksSupported()).toBe(true);
-    }
+/** Any sending tab's id: a string the receiver does not interpret. */
+const anyTabId: unknown = expect.any(String);
+
+it('should request each token once in its strongest mode, in sorted order', async () => {
+  const acquired: Array<[string, LockMode | undefined]> = [];
+  const request = vi.fn(async (name: string, options: LockOptions, run: () => Promise<unknown>) => {
+    acquired.push([name, options.mode]);
+    return run();
   });
+  vi.stubGlobal('navigator', { locks: { request } });
+  try {
+    await withCrossTabLocks(
+      [{ token: '/b', shared: true }, { token: '/a', shared: true }, '/b', { token: '/c', shared: true }],
+      async () => undefined,
+    );
+    expect(acquired).toEqual([
+      ['tau-fs-write:/a', 'shared'],
+      ['tau-fs-write:/b', 'exclusive'],
+      ['tau-fs-write:/c', 'shared'],
+    ]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('should acquire a chain longer than a synchronous lock manager can nest', async () => {
+  const request = vi.fn(async (_name: string, _options: LockOptions, run: () => Promise<unknown>) => run());
+  vi.stubGlobal('navigator', { locks: { request } });
+  try {
+    const tokens = Array.from({ length: 5000 }, (_, index) => `/file-${String(index).padStart(5, '0')}`);
+    await expect(withCrossTabLocks(tokens, async () => 'held')).resolves.toBe('held');
+    expect(request).toHaveBeenCalledTimes(5000);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('shares sorted unique lock tokens without creating a notification channel', async () => {
+  const channel = vi.fn();
+  const acquired: string[] = [];
+  const request = vi.fn(async (name: string, options: LockOptions, run: () => Promise<unknown>) => {
+    expect(options).toEqual({ mode: 'exclusive' });
+    acquired.push(name);
+    return run();
+  });
+  vi.stubGlobal('navigator', { locks: { request } });
+  vi.stubGlobal('BroadcastChannel', channel);
+  try {
+    await expect(withCrossTabLocks(['/b', '/a', '/b'], async () => 'written')).resolves.toBe('written');
+    expect(acquired).toEqual(['tau-fs-write:/a', 'tau-fs-write:/b']);
+    expect(channel).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 describe('CrossTabCoordinator', () => {
   let coordinator: CrossTabCoordinator;
+  const authority = { storageRootKey: 'indexeddb:test', providerBasePath: '' };
 
   beforeEach(() => {
     coordinator = new CrossTabCoordinator();
@@ -20,119 +69,158 @@ describe('CrossTabCoordinator', () => {
     coordinator.dispose();
   });
 
-  it('should execute write operation and return result', async () => {
-    const result = await coordinator.withWriteLock('/test.txt', async () => {
-      return 'written';
-    });
-    expect(result).toBe('written');
+  it('should execute an operation and return its result without Web Locks', async () => {
+    await expect(coordinator.withLocks(['/test.txt'], async () => 'written')).resolves.toBe('written');
   });
 
-  it('should serialize concurrent writes to the same path when locks available', async () => {
-    const order: number[] = [];
+  it('should propagate operation errors', async () => {
+    await expect(
+      coordinator.withLocks(['/fail.txt'], async () => {
+        throw new TypeError('write failed');
+      }),
+    ).rejects.toThrow(new TypeError('write failed'));
+  });
 
-    const write1 = coordinator.withWriteLock('/same.txt', async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 10);
+  it('should publish a successful mutation to sibling channels', async () => {
+    const sibling = new BroadcastChannel('tau-fs-changes');
+    try {
+      const received = new Promise<unknown>((resolve) => {
+        sibling.addEventListener('message', (event) => {
+          resolve(event.data);
+        });
       });
-      order.push(1);
-    });
 
-    const write2 = coordinator.withWriteLock('/same.txt', async () => {
-      order.push(2);
-    });
+      await coordinator.withMutationLocks(
+        ['/remote.txt'],
+        { type: 'write', path: '/remote.txt', authority },
+        async () => undefined,
+      );
 
-    await Promise.all([write1, write2]);
-
-    if (isNavigatorLocksSupported()) {
-      expect(order).toEqual([1, 2]);
-    } else {
-      // Without locks, both execute concurrently (progressive enhancement no-op)
-      expect(order).toHaveLength(2);
+      await expect(received).resolves.toEqual({
+        tabId: anyTabId,
+        seq: 1,
+        changes: [{ type: 'write', path: '/remote.txt', authority }],
+      });
+    } finally {
+      sibling.close();
     }
   });
 
-  it('should allow parallel writes to different paths', async () => {
-    const started: string[] = [];
-    const finished: string[] = [];
-
-    const write1 = coordinator.withWriteLock('/a.txt', async () => {
-      started.push('a');
-      await new Promise((resolve) => {
-        setTimeout(resolve, 5);
-      });
-      finished.push('a');
-    });
-
-    const write2 = coordinator.withWriteLock('/b.txt', async () => {
-      started.push('b');
-      await new Promise((resolve) => {
-        setTimeout(resolve, 5);
-      });
-      finished.push('b');
-    });
-
-    await Promise.all([write1, write2]);
-
-    expect(started).toContain('a');
-    expect(started).toContain('b');
-    expect(finished).toContain('a');
-    expect(finished).toContain('b');
-  });
-
-  it('should propagate errors from write operations', async () => {
-    await expect(
-      coordinator.withWriteLock('/fail.txt', async () => {
-        throw new Error('write failed');
-      }),
-    ).rejects.toThrow('write failed');
-  });
-
-  it('should listen for remote changes via BroadcastChannel', async () => {
+  it('should not publish a failed mutation', async () => {
+    const sibling = new BroadcastChannel('tau-fs-changes');
     const received: unknown[] = [];
-    coordinator.onRemoteChange((notification) => {
-      received.push(notification);
-    });
-
-    const otherChannel = new BroadcastChannel('tau-fs-changes');
-    otherChannel.postMessage({
-      type: 'write',
-      path: '/remote.txt',
-      tabId: 'other-tab-id',
-    });
-
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-
-    expect(received).toHaveLength(1);
-    expect(received[0]).toMatchObject({ type: 'write', path: '/remote.txt' });
-
-    otherChannel.close();
+    sibling.addEventListener('message', (event) => received.push(event.data));
+    try {
+      await expect(
+        coordinator.withMutationLocks(['/failed.txt'], { type: 'write', path: '/failed.txt', authority }, async () => {
+          throw new Error('failed');
+        }),
+      ).rejects.toThrow('failed');
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      expect(received).toEqual([]);
+    } finally {
+      sibling.close();
+    }
   });
 
-  it('should not receive own change notifications', async () => {
+  it('should receive directory invalidations with their canonical physical authority', async () => {
     const received: unknown[] = [];
-    coordinator.onRemoteChange((notification) => {
-      received.push(notification);
-    });
+    coordinator.onRemoteChange((notification) => received.push(notification));
+    const sibling = new BroadcastChannel('tau-fs-changes');
+    try {
+      const change = {
+        type: 'directory-change',
+        path: '/projects/proj_aaaaaaaaaaaaaaaaaaaaa',
+        authority: { storageRootKey: 'opfs:origin', providerBasePath: 'model' },
+      };
+      sibling.postMessage({ tabId: 'sibling', seq: 1, changes: [change] });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
 
-    await coordinator.withWriteLock('/self.txt', async () => {
-      /* No-op */
-    });
-
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-
-    expect(received).toHaveLength(0);
+      expect(received).toEqual([{ tabId: 'sibling', seq: 1, changes: [change] }]);
+    } finally {
+      sibling.close();
+    }
   });
 
-  it('should clean up on dispose', () => {
-    coordinator.onRemoteChange(vi.fn());
-    coordinator.dispose();
+  it('should publish every fact of one changeset as one notice with an increasing sequence', async () => {
+    const sibling = new BroadcastChannel('tau-fs-changes');
+    const received: unknown[] = [];
+    sibling.addEventListener('message', (event) => received.push(event.data));
+    try {
+      coordinator.notifyChanges([
+        { type: 'write', path: '/a.txt', authority },
+        { type: 'delete', path: '/b.txt', authority },
+      ]);
+      coordinator.notifyDirectoryChange('/c', authority);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
 
-    expect(() => {
-      coordinator.dispose();
-    }).not.toThrow();
+      expect(received).toEqual([
+        {
+          tabId: anyTabId,
+          seq: 1,
+          changes: [
+            { type: 'write', path: '/a.txt', authority },
+            { type: 'delete', path: '/b.txt', authority },
+          ],
+        },
+        { tabId: anyTabId, seq: 2, changes: [{ type: 'directory-change', path: '/c', authority }] },
+      ]);
+    } finally {
+      sibling.close();
+    }
+  });
+
+  it('should mark a notice that follows a lost one from the same tab', async () => {
+    const received: Array<{ gap?: boolean }> = [];
+    coordinator.onRemoteChange((notice) => received.push(notice));
+    const sibling = new BroadcastChannel('tau-fs-changes');
+    const changes = [{ type: 'write', path: '/a.txt', authority }];
+    try {
+      sibling.postMessage({ tabId: 'sibling', seq: 1, changes });
+      sibling.postMessage({ tabId: 'sibling', seq: 2, changes });
+      sibling.postMessage({ tabId: 'sibling', seq: 4, changes });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+
+      expect(received.map(({ gap }) => gap === true)).toEqual([false, false, true]);
+    } finally {
+      sibling.close();
+    }
+  });
+
+  it('should drop malformed change notifications with a diagnostic', async () => {
+    const received: unknown[] = [];
+    const diagnostic = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    coordinator.onRemoteChange((notification) => received.push(notification));
+    const sibling = new BroadcastChannel('tau-fs-changes');
+    try {
+      for (const notification of [
+        { type: 'write', path: 42, authority },
+        { type: 'write', path: 'relative.txt', authority },
+        { type: 'write', path: '/src/../main.ts', authority },
+        { type: 'write', path: '/main.ts', authority: { ...authority, storageRootKey: '' } },
+        { type: 'write', path: '/main.ts', authority: { ...authority, providerBasePath: '/rooted' } },
+        { type: 'write', path: '/main.ts', authority: { ...authority, providerBasePath: 'src/../main' } },
+      ]) {
+        sibling.postMessage({ tabId: 'sibling', seq: 1, changes: [notification] });
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+
+      expect(received).toEqual([]);
+      expect(diagnostic).toHaveBeenCalledTimes(6);
+      expect(diagnostic).toHaveBeenCalledWith('[CrossTabCoordinator] Dropped invalid change notice.');
+    } finally {
+      sibling.close();
+      diagnostic.mockRestore();
+    }
   });
 });

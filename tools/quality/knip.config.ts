@@ -1,0 +1,499 @@
+import type { KnipConfig } from 'knip';
+
+const config: KnipConfig = {
+  // Blind spot worth knowing before trusting a clean run: this flag plus a broad
+  // entry glob hides exports whose only remaining importers are tests. Knip
+  // reported neither `consumeSseBody` (re-exported from a non-test file that is
+  // itself reachable) nor `TokenBudgetService` (reached from an `apps/api`
+  // `*.module.ts` entry) while both were dead. A dead-code sweep still needs a
+  // per-export importer scan that partitions test from non-test importers.
+  ignoreExportsUsedInFile: true,
+
+  // Build output is not a source of truth. Knip follows published `exports`
+  // fields into `dist/`, so a built tree reports every emitted file and export
+  // as unused (~970 phantom issues locally). CI checks out fresh and never
+  // builds before the knip job, so this only ever bit local runs.
+  ignore: ['**/dist/**', '**/build/**', 'repos/**', 'docs/research/**', '.claude/**'],
+
+  rules: {
+    optionalPeerDependencies: 'off',
+    duplicates: 'off',
+  },
+
+  // ponytail: kept literal — deriving from `type:tool` would also ignore libs/oxlint, libs/vite and scripts
+  // (which has its own `workspaces` entry below) and lose knip coverage; see mdx-package-boundary blueprint R2 status.
+  // Named one by one rather than as `tools/*`: knip turns each ignored workspace pattern into a negated
+  // project glob (`tools/*` → `!tools/**`), which also hid `tools/pkgcheck.ts` — and with it every
+  // dependency that file is the only consumer of — from the root workspace.
+  ignoreWorkspaces: ['tools/nx', 'tools/workspace-plugin', 'libs/tau-examples'],
+
+  vitest: {
+    config: ['vitest*.config.{js,ts,mts}', 'vite.config.{js,ts}'],
+  },
+
+  ignoreBinaries: [
+    'fly',
+    'docker-compose',
+    // OS and toolchain executables the scripts and tests shell out to on purpose; none is an npm package.
+    // macOS packaging and signing (apps/desktop/scripts, scripts/src/rtf-transcript-to-html.ts).
+    'codesign',
+    'ditto',
+    'lipo',
+    'otool',
+    'security',
+    'spctl',
+    'textutil',
+    'xcrun',
+    // Desktop installer tools provisioned by the native OS/CI fixtures, not npm packages.
+    '7z',
+    'dpkg',
+    'dpkg-deb',
+    'du',
+    'gpg',
+    // POSIX/Windows process and file utilities.
+    'cmp',
+    'make',
+    'mkfifo',
+    'openssl',
+    'ps',
+    'strip',
+    'taskkill',
+    'uptime',
+    'which',
+    // A shell builtin inside a multi-line Nx command (`unset GEOSPEC_…`), not an executable.
+    'unset',
+    // Language toolchains provisioned outside pnpm (Rust, Python, uv).
+    'python3',
+    'rustup',
+    'uv',
+    // External CLIs the opt-in acceptance tests drive: Stripe/ngrok webhooks and the Codex ACP agent.
+    'codex',
+    'ngrok',
+    'stripe',
+    // macOS/BSD utilities used by the Quick Look build, CI artifact locking and the PicoGK benchmark.
+    'getconf',
+    'lockf',
+    'lsof',
+    'plutil',
+  ],
+
+  ignoreDependencies: [
+    // The docs collections generate under the root node_modules/.cache and import
+    // fumadocs-mdx/runtime from there, so it must resolve from the workspace root.
+    'fumadocs-mdx',
+    'oxlint',
+    'oxlint-tsgolint',
+    'copy-files-from-to',
+    // ESLint plugins loaded via .oxlintrc.json (not traceable by Knip)
+    '@eslint-community/eslint-plugin-eslint-comments',
+    '@protontech/eslint-plugin-enforce-uint8array-arraybuffer',
+    'eslint-plugin-jsdoc',
+    'eslint-plugin-n',
+    'eslint-plugin-no-barrel-files',
+    'eslint-plugin-no-use-extend-native',
+    'eslint-plugin-unicorn',
+    'eslint-plugin-react',
+    // Workspace protocol references needed by pnpm
+    '@taucad/chat',
+    '@taucad/filesystem',
+    '@taucad/fs-client',
+    '@taucad/utils',
+    // Loaded by Nx plugin or build tooling, not direct imports
+    '@typescript/native-preview',
+    '@tailwindcss/typography',
+  ],
+
+  // Nx runs a target command from the workspace root (or a root-relative `cwd`), but knip's Nx
+  // plugin resolves it from the project directory. Scripts that targets invoke with
+  // `packages/<name>/…` paths are therefore registered per workspace below.
+  workspaces: {
+    '.': {
+      // The workspace-root scripts Nx targets and build configs run; `pkgcheck.ts`
+      // is the only consumer of `@taucad/nx`, `madge`, and `@types/madge`.
+      nx: {
+        config: [
+          'nx.json',
+          'project.json',
+          '{apps,libs,packages,tools}/**/project.json',
+          'scripts/project.json',
+          'package.json',
+        ],
+      },
+      entry: [
+        'tools/*.ts',
+        '{apps,libs,packages,scripts,tools}/**/*.{test,spec,test-d}.{ts,tsx,mts}',
+        // Nx targets of the package-less e2e projects (`cwd: "{workspaceRoot}"`). The Nx plugin
+        // lists these commands, yet the scripts still came out unreached, so they are named here
+        // together with the files those scripts and specs start by path.
+        'apps/desktop-e2e/scripts/run-completed-artifact.mts',
+        'apps/react-e2e/scripts/benchmark-bundler-products.mts',
+        'apps/ui-e2e/scripts/verify-safari-remote-host.mts',
+        // `benchmark-bundler-products.mts` builds with this file as Vite's `configFile`.
+        'apps/react-e2e/vite.bundler-products.config.ts',
+        // `global-setup.ts` boots it for snapshot runs; `browser-command.ts` and
+        // `open-to-frame-observation.test.ts` spawn the other two.
+        'apps/ui-e2e/production-server.ts',
+        'apps/ui-e2e/src/support/{host-fixture,open-to-frame}.ts',
+        // Serialized into page and worker realms by the project-open measurement harness in Brain
+        // (`installProjectOpenCounters.toString()`), so nothing in the repository imports it.
+        'apps/ui-e2e/src/support/project-open-counters.ts',
+        // The isolated deletion race target selects this nested Vitest configuration.
+        'apps/api-e2e/src/git/project-deletion-race.vitest.config.ts',
+      ],
+      project: ['**/*.{ts,tsx,mts}'],
+      ignore: [
+        '.agents/skills/create-repo/templates/**',
+        '.claude/skills/**',
+        'tarballs/**',
+        'tools/eslint-fixtures/**',
+      ],
+      // Nx invokes the canvas config from the root; it requires a selected private artifact.
+      vite: false,
+      ignoreDependencies: [
+        'replicad-opencascadejs',
+        'libcascade',
+        '@arethetypeswrong/cli',
+        '@nx/nest',
+        '@nx/node',
+        '@nx/web',
+        '@nx/webpack',
+        '@nestjs/schematics',
+      ],
+    },
+    'apps/api': {
+      entry: [
+        'app/main.ts',
+        'app/*-command.ts',
+        // tau-storage (DC1): the Dockerfile `storage` target runs it, built by vite.storage-worker.config.ts.
+        'app/storage-worker.ts',
+        'app/api/**/*.module.ts',
+        'app/types/**/*.d.ts',
+        'scripts/*.mts',
+        // The e2e Tau-cloud fixtures spawn the development billing account by this path.
+        'app/testing/development-billing-account.ts',
+        // The deletion recovery integration test spawns this process by path.
+        'app/testing/project-deletion-process.ts',
+      ],
+      ignoreDependencies: [
+        // Imported by the source-consumed `api-observability`, `api-email` and `api-object-storage` libraries
+        // the server bundle inlines; they stay external, so `pnpm deploy` must install them beside the app.
+        '@aws-sdk/s3-request-presigner',
+        '@pyroscope/nodejs',
+        '@sentry/node',
+        'react-email',
+        'resend',
+      ],
+    },
+    'apps/libs/api-observability': {
+      // `otel.ts` and `sentry.ts` are side-effect entries; the rest are its exported modules.
+      entry: ['src/**/*.ts'],
+      ignoreDependencies: [
+        // `logger/logger-factory.ts` names it as a pino transport target, which knip cannot see.
+        'pino-pretty',
+      ],
+    },
+    'apps/libs/api-email': {
+      entry: ['scripts/*.mts'],
+    },
+    'apps/libs/api-database': {
+      // Schema, migration job and test helpers are reached by subpath, and `drizzle.config.ts` by drizzle-kit.
+      entry: ['src/**/*.ts', 'drizzle.config.ts'],
+    },
+    'apps/libs/api-billing': {
+      entry: [
+        'scripts/*.mts',
+        // Started by path: `test:billing-load` runs `run.ts`, which forks `driver.ts` and boots
+        // `cluster.ts`; the foundation tests fork the remaining children.
+        'src/testing/billing-load/{run,driver,cluster}.ts',
+        'src/testing/{billable-invocation-child,billing-payments-process-worker}.ts',
+      ],
+    },
+    'apps/libs/ui-kit': {
+      // Module declaration for `svg-sprite`, used by scripts/generate-svg-sprite.mts.
+      entry: ['scripts/svg-sprite.d.ts'],
+    },
+    'apps/libs/desktop-services-host': {
+      // Ambient `tauCloudBuildEnabled` and `tauDesktopHostBuild`, defined by the desktop's electron.vite.config.ts.
+      entry: ['src/build-environment.d.ts'],
+    },
+    'apps/libs/api-lifecycle': {
+      // The graceful-shutdown signal test spawns this fixture by path.
+      entry: ['src/graceful-shutdown.signal-fixture.ts'],
+    },
+    'apps/desktop': {
+      // Electron's main/preload and utility-process bundles are separate entry points.
+      entry: [
+        'electron.vite.config.ts',
+        // Compiled by desktop: typecheck's tsconfig.spec.json.
+        'src/**/*.test-d.ts',
+        'src/main/index.ts',
+        'src/preload/**/*.ts',
+        // The utility-process entries (`kernel-host`, `services-host`, `geometry-host`) over desktop-services-host.
+        'src/utility/*.entry.ts',
+        // Bundled and launched by the native authority-writer Electron test.
+        'src/main/fixtures/authority-writer-electron*.fixture.ts',
+        'scripts/*.mts',
+        // `apps/desktop/macos/project.json` runs both with paths from the workspace root.
+        'macos/scripts/*.mts',
+        // Ambient `tauCloudBuildEnabled`, defined by electron.vite.config.ts.
+        'src/build-environment.d.ts',
+      ],
+      ignoreDependencies: [
+        // The externalization test resolves this platform package from a synthetic install tree it writes.
+        'geospec-engine-darwin-arm64',
+        // Externalized by electron.vite.config.ts and staged for the host's lazy provider imports.
+        '@taucad/bambu',
+        '@taucad/carvera',
+        '@taucad/grbl',
+        // `desktopExternalizedDependencies` (electron.vite.config.ts): loaded from node_modules at run
+        // time and copied in by the packaging script; the ACP adapters are resolved by name through
+        // `discoverAcpAgents({ resolveFrom: import.meta.url })` (packages/host/src/acp/registry.ts).
+        '@agentclientprotocol/claude-agent-acp',
+        '@agentclientprotocol/codex-acp',
+        '@anthropic-ai/sandbox-runtime',
+        'nanoraster',
+        // Imported only by desktop-services-host, which the app bundles. The app is the bundle owner, so it
+        // declares them: electron-vite externalizes the app's dependencies and the packaging script copies
+        // them in. Dropping one inlines it into the bundle instead (fflate's own `require` then collides
+        // with the CommonJS shim, and the main process fails to load).
+        '@taucad/agent-observability',
+        '@taucad/agent-tools',
+        '@taucad/assimp',
+        '@taucad/brep',
+        '@taucad/build123d',
+        '@taucad/desktop-terminal',
+        '@taucad/esbuild',
+        '@taucad/events',
+        '@taucad/gltf',
+        '@taucad/image',
+        '@taucad/jscad',
+        '@taucad/manifold',
+        '@taucad/middleware',
+        '@taucad/opencascade',
+        '@taucad/openrscad',
+        '@taucad/picovoxel',
+        '@taucad/replicad',
+        '@taucad/rpc',
+        '@taucad/shell-service',
+        '@taucad/skills',
+        '@taucad/smlib',
+        '@taucad/smlibpy',
+        '@taucad/tscircuit',
+        '@taulabs/openrscad-engine',
+        'fflate',
+        // The `shell-supervisor` input of electron.vite.config.ts is the sandbox's supervisor entry, by path.
+        '@taucad/sandbox',
+      ],
+    },
+    'apps/react-e2e/apps/electron': {
+      // electron-vite inputs (main, kernel host, preload) and the renderer's index.html script.
+      entry: [
+        'electron.vite.config.ts',
+        'src/main/{index,kernel-host}.ts',
+        'src/preload/preload.ts',
+        'src/renderer/main.tsx',
+      ],
+      // CAD project the app opens as TAU_PROJECT_ROOT; the Replicad kernel evaluates it.
+      ignore: ['workspace/**'],
+    },
+    'apps/react-e2e/apps/react-router': {
+      entry: [
+        // `apps/react-e2e/vitest.bundlers.config.ts` runs this spec from the parent project.
+        'app/bundlers.browser.test.ts',
+        // `vite.bundler-products.config.ts` builds bundler-benchmark/index.html (→ main.ts) and
+        // aliases the selected `bundler-<mode>.ts`.
+        'bundler-benchmark/{main,bundler-esbuild,bundler-rolldown}.ts',
+      ],
+      // That config's `resolve.alias` points `#benchmark-bundler` at the mode's bundler file;
+      // bundler-benchmark/bundler.d.ts declares its type.
+      ignoreUnresolved: ['#benchmark-bundler'],
+    },
+    'apps/cli-e2e': {
+      // The Build123d suites read its `tau-plugin.json` through `createRequire(...).resolve`.
+      ignoreDependencies: ['@taucad/build123d'],
+    },
+    'apps/runtime-e2e': {
+      entry: [
+        // `runner.ts` spawns `run-arm.mts` behind the `hooks.mjs` loader, which registers `hook-impl.mjs`.
+        'src/compute-baseline/harness/{run-arm.mts,hooks.mjs,hook-impl.mjs}',
+        // Child processes the two-process tests start by path.
+        'src/fixtures/{parameter-set-close,websocket-api-server}.ts',
+        // Workers the benchmark scripts fork by path.
+        'scripts/benchmark-bundler-{product-worker,worker}.mts',
+      ],
+    },
+    'apps/ui': {
+      entry: [
+        'app/routes/**/*.tsx',
+        'app/types/**/*.d.ts',
+        'vite-environment.d.ts',
+        'app/offline/service-worker-env.d.ts',
+        // Built into `service-worker.js` by `scripts/build-service-worker.ts`; no page imports them.
+        'app/offline/service-worker.ts',
+        'app/offline/service-worker-kill-switch.ts',
+        // Netlify bundles every edge function in this directory; `config` names its paths.
+        'netlify/edge-functions/*.ts',
+        // `apps/ui/project.json` runs every calibration script with a workspace-root path.
+        'scripts/render-calibration/*.mts',
+        // `build*` targets run it as a runtime cache input.
+        'geospec-mt-assets-cache-key.ts',
+        // Script of calibration-preview.html, served by vite.calibration.config.ts.
+        'app/calibration-preview.tsx',
+        // `tau-ui-source-alias` (vite.config.ts) swaps these in for their `#…` facades per build
+        // target (cloud, self-host, desktop); knip only follows the facade import.
+        'app/**/*.{cloud,self-host,adaptive,desktop}.{ts,tsx}',
+        // The same resolver substitutes these no-op modules when the staging harness is disabled.
+        'app/lib/observability-harness-disabled.ts',
+        'app/lib/observability-harness-hydration-disabled.ts',
+        // Vite alias replacement for `@resvg/resvg-js` in the browser bundle.
+        'app/lib/browser-stubs/resvg-js.ts',
+        // The deletion component browser suite selects this nested config with --config.
+        'app/components/project-library/project-cloud-delete.vitest.browser.config.ts',
+        // The project-open browser suite selects this nested config with --config.
+        'app/machines/project-open.vitest.browser.config.ts',
+      ],
+      ignore: ['public/**'],
+      // The desktop and serve builds are separate React Router apps (`build:desktop`,
+      // `build:serve`) whose route manifests point back into `app/routes`.
+      'react-router': {
+        config: ['react-router.config.ts', 'desktop/react-router.config.ts', 'serve/react-router.config.ts'],
+      },
+      vite: {
+        config: ['vite.config.ts', 'desktop/vite.config.ts', 'serve/vite.config.ts'],
+      },
+      // React Router typegen writes `./+types/*` into the gitignored `.react-router/types`
+      // (tsconfig `rootDirs`), which a fresh checkout does not have.
+      ignoreUnresolved: [/^\.\/\+types\//u],
+    },
+    'apps/www': {
+      entry: ['app/routes/**/*.{ts,tsx}', 'scripts/*.ts'],
+      project: ['app/**/*.{ts,tsx}', 'src/**/*.{ts,tsx,css}', 'scripts/**/*.ts', 'tests/**/*.{ts,tsx}'],
+    },
+    'apps/docs': {
+      entry: ['app/routes/**/*.{ts,tsx}', 'vite-environment.d.ts'],
+      // Content-side modules are referenced from MDX (auto-type-table props,
+      // worker examples) and server-compat is wired through a vitest alias —
+      // neither is a reference knip can follow.
+      ignore: ['content/**', 'app/lib/fumadocs/server-compat.ts'],
+      // Kernel and runtime packages are imported by MDX code samples and by the
+      // type generator behind auto-type-table.
+      ignoreDependencies: ['@taucad/*'],
+    },
+    'examples/electron': {
+      // electron-vite inputs (main, kernel host, preload) and the renderer's index.html script.
+      entry: [
+        'electron.vite.config.ts',
+        'src/main/index.ts',
+        'src/tau/kernel-host.ts',
+        'src/preload/preload.ts',
+        'src/renderer/main.tsx',
+      ],
+    },
+    'libs/agent-tools': {
+      // Tau project sources the C2 export generator evaluates through the Replicad kernel.
+      ignore: ['host-tests/tau-project-c2/fixtures/**'],
+    },
+    'libs/api-extractor': {
+      // Generated declarations are catalog data read from disk by extraction tools.
+      ignore: ['src/generated/**'],
+    },
+    'libs/oxlint': {
+      // RuleTester inputs: the tests read and lint these files, nothing imports them.
+      ignore: ['src/rules/fixtures/**'],
+    },
+    'libs/types': {
+      // The `generate-project-manifest-schema` target runs it from the workspace root.
+      entry: ['scripts/generate-project-manifest-schema.mts'],
+    },
+    'packages/agent-host': {
+      // Vitest `typecheck.include`; knip's Vitest plugin reads only `test.include`.
+      entry: ['src/**/*.test-d.ts'],
+    },
+    'packages/cli': {
+      // The `stage-acp` target runs the first from the workspace root; runtime-e2e, warehouse and
+      // the example-packaging skill spawn the second, `geospec run` with Tau's exporter, by path.
+      entry: ['scripts/stage-acp-adapters.mts', 'scripts/geospec.mts'],
+      // `stage-acp` copies the pinned ACP adapters into `dist-acp` by name, and `tau serve`
+      // resolves them there (`acpAdapterResolveFrom`, packages/host/src/acp/registry.ts).
+      ignoreDependencies: ['@agentclientprotocol/claude-agent-acp', '@agentclientprotocol/codex-acp'],
+    },
+    'packages/filesystem': {
+      // `authority-writer-lock.test.ts` forks these by path.
+      entry: ['src/backend/node/*.fixture.ts'],
+    },
+    'packages/host': {
+      // `runtime-child-render.integration.test.ts` spawns it by path; the `qualify-x1c` target runs the script
+      // from the workspace root.
+      entry: ['src/fixtures/render-child-probe.ts', 'scripts/qualify-x1c.mts'],
+      // `pose_model` in the bundled `@taucad/agent-tools` imports it at runtime. The shell qualification fixtures
+      // resolve `@taucad/sandbox/shell` with `createRequire` to reach the sandbox's fixture files on disk.
+      ignoreDependencies: ['@taucad/kinematics', '@taucad/sandbox'],
+    },
+    'packages/plugins/bambu': {
+      // Replicad model sources that `render-plates` exports through the Tau CLI.
+      ignore: ['models/**'],
+    },
+    'packages/plugins/brep': {
+      // Module declaration for `occt-import-js` and the Emscripten types it reads through `import('…')`.
+      entry: ['src/types/{occt-import-js,emscripten}.d.ts'],
+    },
+    'packages/core/python-kernel': {
+      // Every Python kernel's Nx targets run these scripts from the workspace root with `--package <dir>`.
+      entry: ['scripts/{generate-tau-plugin,generate-project-template,test-python}.mts'],
+    },
+    'packages/plugins/build123d': {
+      // Nx targets run every script from the workspace root.
+      entry: ['scripts/*.mts'],
+    },
+    'packages/plugins/esbuild': {
+      // `esbuild-core.{permission,release}.test.ts` run these under Node flags in a child process.
+      entry: ['src/vm/*.test.child.ts'],
+    },
+    'packages/plugins/image': {
+      // copy-files-from-to.cjson (run by the copy-files-from-to Nx plugin) copies Geist's TTF.
+      ignoreDependencies: ['geist'],
+    },
+    'packages/plugins/openrscad': {
+      // The e2e global setup runs `vite build`/`vite preview` from `e2e/`, which loads this config.
+      entry: ['e2e/vite.config.ts'],
+    },
+    'packages/plugins/picogk': {
+      // Nx targets run every script from the workspace root.
+      entry: ['scripts/*.mts'],
+    },
+    'packages/plugins/replicad': {
+      // copy-files-from-to.cjson (run by the copy-files-from-to Nx plugin) copies Geist's TTF.
+      ignoreDependencies: ['geist'],
+    },
+    'packages/react': {
+      // Vitest `typecheck.include`; knip's Vitest plugin reads only `test.include`.
+      entry: ['src/**/*.test-d.ts'],
+    },
+    'packages/warehouse': {
+      // CAD programs and assertions are loaded from tau.json and GeoSpec manifests.
+      // `warehouse:generate` copies each definition's `model.ts` into its generated parts.
+      entry: ['parts/**/main.ts', 'parts/**/main.geospec.ts', 'definitions/**/{catalog,model}.ts', 'scripts/*.mts'],
+    },
+    'packages/ui': {
+      // A design system publishes its whole surface; consumption by the apps in
+      // this repo is not what makes a component reachable.
+      entry: ['src/**/*.{ts,tsx}'],
+    },
+    scripts: {
+      // `canvas-vite.config.ts` aliases and injects the canvas sources.
+      entry: [
+        'src/**/*.{ts,tsx,mts}',
+        'canvas/{api-guide.tsx,review-layer.ts,styles.css}',
+        // Charter spike scripts the spike-*.yml workflows run by path; deleted with their W packages.
+        'spikes/**/*.{ts,mts}',
+      ],
+      // Fixture package that `check-registry-dependencies.test.ts` inspects on disk.
+      ignore: ['src/fixtures/registry-gate-artifact/**'],
+      // The canvas config requires a selected private artifact at execution time.
+      // Its source remains an entry; static analysis must not start that config.
+      vite: false,
+    },
+  },
+};
+
+export default config;

@@ -1,0 +1,156 @@
+---
+title: Create a Custom Kernel
+description: Build a kernel plugin using defineKernel to integrate a new CAD engine.
+docType: how-to
+icon: lucide:package-plus
+---
+
+Integrate a new CAD engine by implementing the kernel lifecycle with `defineKernel` from `@taucad/runtime/kernel`. The returned [`KernelPlugin`](../api/kernels) factory registers the executable implementation.
+
+## Prerequisites
+
+- [Install @taucad/runtime](../getting-started/installation)
+- [Plugin System](../concepts/plugin-system) — how plugins are loaded
+
+## Steps
+
+### 1. Implement the kernel definition
+
+Declare static `views` and `exports`. Provide `initialize`, `resolve`, `describe`, and `evaluate`; declared views require `render`, exports require `export`. Evaluation returns a handle and offered IDs, default view first. Render returns selected content; export returns nonempty files:
+
+```typescript
+import {
+  createKernelParameterDeclaration,
+  createKernelSuccess,
+  defineKernel,
+  nonemptyExportFiles,
+} from '@taucad/runtime/kernel';
+
+const toSvg = (source: string): string =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><text>${source.length}</text></svg>`;
+
+export const myKernel = defineKernel({
+  id: 'my-kernel',
+  extensions: ['myformat'],
+  name: 'MyKernel',
+  version: '1.0.0',
+  views: { drawing: { title: 'Drawing', mimeType: 'image/svg+xml' } },
+  exports: { drawing: { title: 'Drawing', mimeType: 'image/svg+xml', extension: 'svg' } },
+
+  async initialize() {
+    return {};
+  },
+  async resolve({ entryPath }) {
+    return { resolved: [entryPath], unresolved: [] };
+  },
+  async describe() {
+    return createKernelSuccess({
+      parameters: createKernelParameterDeclaration(
+        {},
+        { type: 'object', properties: {}, additionalProperties: false },
+        { id: 'urn:taucad:docs:my-kernel', name: 'MyKernelParameters' },
+      ),
+    });
+  },
+  async evaluate({ entryPath }, services) {
+    const source = await services.filesystem.readFile(entryPath, 'utf8');
+    return { handle: { source }, views: ['drawing'], exports: ['drawing'] };
+  },
+  async render({ handle }) {
+    return { content: toSvg(handle.source) };
+  },
+  async export({ handle }) {
+    return {
+      files: nonemptyExportFiles([
+        {
+          name: 'model.svg',
+          mimeType: 'image/svg+xml',
+          bytes: new TextEncoder().encode(toSvg(handle.source)),
+        },
+      ]),
+    };
+  },
+});
+```
+
+Lifecycle methods receive `KernelServices` second and initialized context third. The inferred handle flows from `evaluate` into `render`, `export`, and `releaseHandle`.
+
+### 2. Register and use the kernel
+
+Declare the executable runtime in the worker or host process, then connect a client:
+
+```typescript
+import { createRuntimeClient } from '@taucad/runtime';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { esbuild } from '@taucad/esbuild';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { myKernel } from './examples/my-kernel.kernel';
+
+const runtime = defineRuntime({
+  plugins: [esbuild()],
+  kernels: [myKernel()],
+});
+
+const client = createRuntimeClient({
+  transport: inProcessTransport({ runtime, fileSystem: fromMemoryFs() }),
+});
+try {
+  const document = client.open({
+    source: { files: { 'model.myformat': '/* my custom format */' } },
+  });
+  const result = await document.export('drawing');
+  if (result.success) {
+    for (const file of result.files) {
+      console.log(`${file.name}: ${file.bytes.byteLength} bytes`);
+    }
+  }
+} finally {
+  await client.shutdown();
+}
+```
+
+The `myformat` extension selects the kernel. `document.view('drawing')` projects its SVG independently of export. See [Live Rendering](./live-rendering).
+
+### 3. Report real dependencies
+
+Return dependencies for watches and cache identity, including missing paths needed for recovery. Resolve relative imports with `resolveImportPath`:
+
+```typescript
+import { resolveImportPath } from '@taucad/runtime/kernel';
+import type { KernelFileSystem } from '@taucad/runtime/kernel';
+
+export async function resolve(
+  { entryPath }: { entryPath: string },
+  { filesystem }: { filesystem: KernelFileSystem },
+): Promise<{ resolved: string[]; unresolved: string[] }> {
+  const code = await filesystem.readFile(entryPath, 'utf8');
+  const specifiers = [...code.matchAll(/from '(\.[^']+)'/g)].map((m) => resolveImportPath(m[1] ?? '', entryPath));
+  const availability = await Promise.all(specifiers.map((path) => filesystem.exists(path)));
+  return {
+    resolved: [entryPath, ...specifiers.filter((_path, index) => availability[index])],
+    unresolved: specifiers.filter((_path, index) => !availability[index]),
+  };
+}
+```
+
+Entries and dependencies share the canonical, root-relative [runtime-path namespace](../concepts/path-namespaces). The rooted boundary rejects escaping paths.
+
+### 4. Extract parameters for parametric models
+
+`describe` returns a parameter declaration built by `createKernelParameterDeclaration(defaults, schema, identity)` and wrapped in `createKernelSuccess`; hosts generate parameter UI from the JSON Schema. Parse your format's parameter declarations however the engine defines them — the Replicad and JSCAD kernel sources show complete implementations.
+
+## Variations
+
+- **optionsSchema**: Add a Zod schema to validate kernel options; the inferred type flows to `initialize(options)`.
+- **views / exports**: Colocate each route's title, MIME type, options schema, and content declaration. Exports also declare an extension; views may declare `instances: true` and return named instances from `evaluate`. Only offer routes the current handle can fulfill.
+- **evaluateOptionsSchema**: Add a Zod object schema for construction-affecting evaluation options; the inferred value reaches `evaluate({ options })`. Route-specific options belong on the selected view or export declaration.
+- **onDispose**: Implement `onDispose(context)` to release WASM instances or temporary resources when the worker is disposed. Render the same handle without changing it; release retained handles through `releaseHandle` when needed.
+- **Realm-shared backends**: Declare a library bound at module scope once, `const engine = createRealmGroup<Engine>('@acme/kernel/engine')`; hold it via `services.realm.hold({ group: engine, key, create })` and release it in `onDispose`.
+- **JS/TS kernels**: add `detectImport` or `builtinModuleNames` and use `services.bundler` ([Configure the Bundler](./bundler-configuration)). Set `sourceIdentity: 'bundle'` when hooks read sources only as bundle output. Snapshot bundle code with `portableKernelModuleCode`; restore with `bindKernelModuleCode`.
+
+## Related
+
+- [Plugin System](../concepts/plugin-system) — How kernels are loaded and selected
+- [API Reference: Kernels](../api/kernels) — KernelPlugin and kernel factory functions
+- [API Reference: Types](../api/types) — KernelServices, EvaluateInput, RenderInput, and ExportInput

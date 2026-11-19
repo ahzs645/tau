@@ -25,6 +25,9 @@ const summarize = (frame: WireMessage): string => {
     case 'rc': {
       return `rc i=${frame.i}`;
     }
+    case 'rp': {
+      return frame.d === undefined ? `rp i=${frame.i}` : `rp i=${frame.i} progress`;
+    }
     case 'nt': {
       return `nt n=${frame.n}`;
     }
@@ -48,6 +51,9 @@ const summarize = (frame: WireMessage): string => {
     }
     case 'lb': {
       return frame.r === undefined ? 'lb' : `lb r=${frame.r}`;
+    }
+    case 'lk': {
+      return 'lk';
     }
     case 'fa': {
       return `fa i=${frame.i}`;

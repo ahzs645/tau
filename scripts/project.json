@@ -3,12 +3,60 @@
   "$schema": "../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "scripts/src",
   "projectType": "library",
-  "tags": ["scope:tooling", "type:scripts"],
+  "tags": ["scope:shared", "type:tool", "ci:standalone"],
   "targets": {
+    "validate-agent-config": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node scripts/src/validate-agent-config.ts"
+      }
+    },
+    "populate-ui-env": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register scripts/src/populate-env.ts apps/ui/.env.example apps/ui/.env"
+      }
+    },
     "validate-frontmatter": {
       "executor": "nx:run-commands",
       "options": {
         "command": "node scripts/src/validate-frontmatter.ts"
+      }
+    },
+    "validate-brain-evidence": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node scripts/src/validate-brain-evidence.ts"
+      }
+    },
+    "validate-workspace-root": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node scripts/src/validate-workspace-root.ts"
+      }
+    },
+    "validate-cross-root-reads": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Rejects fs reads, require calls and relative imports that leave the reading file's Nx project root outside the graph, except entries in scripts/src/cross-root-reads.allowlist.json. Uncached: it scans every tracked source file."
+      },
+      "options": {
+        "command": "node scripts/src/validate-cross-root-reads.ts"
+      }
+    },
+    "validate-expected-failures": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Rejects an expected-failure marker (it.fails, test.fails, a known-defect row's expectedFailure: true) without a `// Expected-failure: @<owner> until YYYY-MM-DD` label at most 28 days ahead, and a malformed scripts/src/flake-ledger.json (taucad/tau#1281). The weekly CI health report raises a marker or ledger entry once its day has passed. Uncached: it scans every tracked test file."
+      },
+      "options": {
+        "command": "node scripts/src/validate-expected-failures.ts"
       }
     },
     "validate-project-names": {
@@ -17,10 +65,361 @@
         "command": "node scripts/src/validate-project-names.ts"
       }
     },
+    "validate-project-tags": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/validate-project-tags.ts"
+      }
+    },
+    "validate-timeouts": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "vitest run --root packages/agent-host src/test/timeout-inventory.test.ts"
+      }
+    },
+    "validate-tsgo-runtime-references": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/validate-tsgo-runtime-references.ts"
+      }
+    },
     "validate-quickstart-budget": {
       "executor": "nx:run-commands",
       "options": {
         "command": "node scripts/src/validate-quickstart-budget.ts"
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/apps/docs/content/docs/runtime/getting-started/quick-start.mdx"
+      ]
+    },
+    "validate-prose": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/ensure-vale.ts && node_modules/@vvago/vale/bin/vale --config apps/docs/.vale.ini apps/docs/content",
+        "cwd": "."
+      }
+    },
+    "validate-license-partitions": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/validate-license-partitions.ts"
+      }
+    },
+    "validate-format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "oxfmt --check"
+      }
+    },
+    "validate-formatter-load-order": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --root scripts src/formatter-load-order.test.ts"
+      }
+    },
+    "validate-dead-code": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "knip --config tools/quality/knip.config.ts --max-issues 316",
+        "env": {
+          "NX_DAEMON": "false"
+        }
+      }
+    },
+    "test": {
+      "metadata": {
+        "description": "Suites that read only scripts, its dependencies and the workspace files listed here: the workflows and actions they pin, the Grafana rules, the agent skills and policies, the repository catalog and the root manifests. Suites that read other projects or the Nx graph are in validate-workspace-tests (scripts/vitest.config.ts)."
+      },
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/.github/**/*",
+        "{workspaceRoot}/infra/grafana/**/*",
+        "{workspaceRoot}/.agents/skills/**/*",
+        "{workspaceRoot}/AGENTS.md",
+        "{workspaceRoot}/docs/policy/**/*",
+        "{workspaceRoot}/tools/repositories/**/*",
+        "{workspaceRoot}/package.json",
+        "{workspaceRoot}/pnpm-workspace.yaml"
+      ]
+    },
+    "validate-workspace-tests": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "The scripts suites that read other projects' files, the Nx project graph or sibling directories (workspaceTests in scripts/vitest.config.ts). Uncached and without workspace-root inputs, so it selects nothing; scripts:validate runs it in Validate workspace on every landing."
+      },
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "vitest run",
+        "env": {
+          "TAU_SCRIPTS_TEST_SET": "workspace"
+        }
+      }
+    },
+    "typecheck": {
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/tools/formal.plugin.ts",
+        "{workspaceRoot}/tools/tsgo.plugin.ts"
+      ]
+    },
+    "test:e2e:queue": {
+      "executor": "nx:noop",
+      "dependsOn": ["test:e2e"],
+      "metadata": {
+        "description": "The merge-queue e2e ratchet: the suites of this project that passed two consecutive e2e-nightly runs. ci.yml's e2e-queue lane runs each one as its own job in the merge queue whenever this project is affected, and e2e-nightly.yml leaves every suite listed here out of its matrix. A suite joins by being added to dependsOn (a target of this project) once green on two consecutive nightlies, and never moves back. Running this target runs them all."
+      }
+    },
+    "test:e2e": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "Suites that launch Playwright Chromium or run Pandoc (canvas Vite config, HTML reference capture). Named test:e2e so `nx affected -t test:e2e` selects them on the CI lane that installs Chromium and Pandoc."
+      },
+      "inputs": ["default", "^production"],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "vitest run",
+        "env": {
+          "TAU_SCRIPTS_TEST_SET": "browser"
+        }
+      }
+    },
+    "validate-license-deps": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --import tsx scripts/src/update-license-deps.mts --check"
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/docs/licensing/third-party-licenses.md"]
+    },
+    "validate-open-source-notices": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --import tsx scripts/src/update-open-source-notices.mts --check"
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/apps/www/content/legal/desktop-runtime-notices.json",
+        "{workspaceRoot}/apps/www/content/legal/open-source.md"
+      ]
+    },
+    "prepare-geospec-test-consumer": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": [
+        {
+          "target": "build",
+          "projects": [
+            "cache-core",
+            "project-core",
+            "units",
+            "parameters",
+            "runtime",
+            "archive-core",
+            "bundler-core",
+            "esbuild",
+            "camera",
+            "spatial",
+            "geometry-core",
+            "occt-core",
+            "openrscad",
+            "assimp",
+            "brep",
+            "gltf",
+            "image",
+            "heif",
+            "jscad",
+            "manifold",
+            "middleware",
+            "opencascade",
+            "picovoxel",
+            "replicad",
+            "smlib",
+            "tscircuit",
+            "tscircuit",
+            "rpc",
+            "kinematics",
+            "filesystem",
+            "revisions",
+            "picogk",
+            "dotnet-kernel-core",
+            "python-kernel-core",
+            "build123d",
+            "smlibpy",
+            "native-process-core",
+            "jobs",
+            "workbench",
+            "agent-host",
+            "bambu",
+            "carvera",
+            "grbl",
+            "mcp",
+            "slicer",
+            "zoo",
+            "cadmpeg",
+            "skills",
+            "host",
+            "cli"
+          ]
+        }
+      ],
+      "options": {
+        "command": "node scripts/src/prepare-geospec-test-consumer.ts out/artifacts/geospec-test-consumer/receipt.json",
+        "forwardAllArgs": false
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/pnpm-workspace.yaml", "{workspaceRoot}/pnpm-lock.yaml"]
+    },
+    "check-geospec-test-consumer": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --test scripts/src/prepare-geospec-test-consumer.check.ts",
+        "forwardAllArgs": false
+      }
+    },
+    "grafana-bundle": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": { "command": "node scripts/src/validate-grafana.ts --write-bundle" }
+    },
+    "validate-grafana": {
+      "executor": "nx:run-commands",
+      "inputs": ["{projectRoot}/src/validate-grafana.ts", "{workspaceRoot}/infra/grafana/**/*"],
+      "options": {
+        "command": "node scripts/src/validate-grafana.ts"
+      }
+    },
+    "validate-workflows": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/validate-workflows.ts"
+      }
+    },
+    "validate": {
+      "executor": "nx:noop",
+      "dependsOn": [
+        {
+          "target": "validate-*"
+        },
+        {
+          "target": "validate-shell-parity",
+          "projects": ["workbench-panes"]
+        }
+      ],
+      "cache": false
+    },
+    "check-registry-dependencies": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/check-registry-dependencies.ts"
+      }
+    },
+    "check-release-projects": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/check-release-projects.ts"
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/.github/workflows/publish.yml"]
+    },
+    "check-pack-install": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/check-pack-install.ts"
+      },
+      "dependsOn": [
+        {
+          "target": "build",
+          "projects": ["tag:type:package"]
+        }
+      ]
+    },
+    "release-gate": {
+      "executor": "nx:noop",
+      "dependsOn": [
+        {
+          "target": "validate"
+        },
+        {
+          "target": "check-*"
+        },
+        {
+          "target": "pkgcheck",
+          "projects": ["tag:type:package"]
+        },
+        {
+          "target": "test",
+          "projects": ["tag:type:package", "tag:type:lib"]
+        },
+        {
+          "target": "typecheck",
+          "projects": ["tag:type:package", "tag:type:lib"]
+        },
+        {
+          "target": "lint",
+          "projects": ["tag:type:package", "tag:type:lib"]
+        },
+        {
+          "target": "audit-public-surface",
+          "projects": ["*"]
+        },
+        {
+          "target": "readme-quickstart",
+          "projects": ["*"]
+        }
+      ],
+      "cache": false
+    },
+    "audit-singular-render-output": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/audit-singular-render-output.ts"
+      }
+    },
+    "pdf-to-md": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/pdf-to-md.ts"
+      }
+    },
+    "text-to-md": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/text-to-md.ts"
+      }
+    },
+    "html-to-md": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/src/html-to-md.ts"
+      }
+    },
+    "validate-agent-lanes": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "{workspaceRoot}/.agents/skills/codex-lanes/scripts/**/*",
+        { "env": "CODEX_LANES_SECTION" },
+        { "runtime": "node --version" },
+        { "runtime": "git --version" }
+      ],
+      "outputs": [],
+      "options": {
+        "command": "node --test .agents/skills/codex-lanes/scripts/lanes.test.mjs"
+      }
+    },
+    "validate-nx-guard": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "{workspaceRoot}/.github/actions/setup-nx/nx-guard.ts",
+        "{workspaceRoot}/.github/actions/setup-nx/nx-guard.test.ts"
+      ],
+      "options": {
+        "command": "node --disable-warning=ExperimentalWarning --test .github/actions/setup-nx/nx-guard.test.ts"
       }
     }
   }

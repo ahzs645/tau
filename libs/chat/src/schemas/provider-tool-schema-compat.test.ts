@@ -1,0 +1,421 @@
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { toolMode, toolName } from '#constants/tool.constants.js';
+import { toolDescriptions } from '#constants/tool-description.constants.js';
+import { arrangeWorkbenchDescription } from '#schemas/tools/arrange-workbench.tool.schema.js';
+import {
+  filterProviderFacingToolNamesByModelSupport,
+  getProviderFacingToolInputSchemas,
+  toProviderToolJsonSchema,
+} from '#schemas/provider-tool-schemas.js';
+import { installPackagesInputSchema } from '#schemas/tools/install-packages.tool.schema.js';
+import {
+  getPrintProfilesInputSchema,
+  machineActionInputSchema,
+  requestJobInputSchema,
+} from '#schemas/tools/machine.tool.schema.js';
+
+/**
+ * Keywords no provider accepts today: Vertex rejects `const`/`propertyNames`/`prefixItems`, and
+ * `$ref`/`definitions`/`$defs` reach Vertex as ref loops it refuses outright.
+ */
+const bannedKeywords = ['const', 'propertyNames', 'prefixItems', '$ref', 'definitions', '$defs'] as const;
+
+type BannedKeyword = (typeof bannedKeywords)[number];
+
+const emptyKeywordPaths = (): Record<BannedKeyword, string[]> => ({
+  const: [],
+  propertyNames: [],
+  prefixItems: [],
+  $ref: [],
+  definitions: [],
+  $defs: [],
+});
+
+const collectKeywordPaths = (
+  value: unknown,
+  path = '$',
+  paths: Record<BannedKeyword, string[]> = emptyKeywordPaths(),
+): Record<BannedKeyword, string[]> => {
+  if (value === null || typeof value !== 'object') {
+    return paths;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      collectKeywordPaths(entry, `${path}[${index}]`, paths);
+    }
+    return paths;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if ((bannedKeywords as readonly string[]).includes(key)) {
+      paths[key as BannedKeyword].push(`${path}.${key}`);
+    }
+    collectKeywordPaths(child, `${path}.${key}`, paths);
+  }
+  return paths;
+};
+
+const arrayItemsPaths = (value: unknown, path = '$'): string[] => {
+  if (value === null || typeof value !== 'object') {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => arrayItemsPaths(entry, `${path}[${index}]`));
+  }
+  return Object.entries(value).flatMap(([key, child]) =>
+    key === 'items' && Array.isArray(child) ? [`${path}.items`] : arrayItemsPaths(child, `${path}.${key}`),
+  );
+};
+
+type ProviderToolSchema = {
+  type?: unknown;
+  anyOf?: unknown;
+  oneOf?: unknown;
+  allOf?: unknown;
+  properties?: Record<string, { type?: string; description?: string }>;
+  required?: unknown;
+};
+
+const serializeProviderFacingSchemas = (testingEnabled = true) =>
+  getProviderFacingToolInputSchemas({
+    toolChoice: toolMode.auto,
+    testingEnabled,
+  }).map((entry) => ({
+    ...entry,
+    jsonSchema: toProviderToolJsonSchema(entry.schema) as ProviderToolSchema,
+  }));
+
+const providerSchemaFor = (name: string): ProviderToolSchema => {
+  const schema = serializeProviderFacingSchemas().find((entry) => entry.toolName === name)?.jsonSchema;
+  if (!schema) {
+    throw new Error(`missing JSON Schema for ${name}`);
+  }
+  return schema;
+};
+
+/**
+ * The Anthropic codec forwards only `{type, properties, required}`, so anything a tool expresses
+ * above that level is silently dropped before Claude ever sees it.
+ */
+const anthropicProjection = (schema: ProviderToolSchema) => ({
+  type: 'object',
+  properties: schema.properties ?? {},
+  required: schema.required ?? [],
+});
+
+describe('provider-facing tool schema compatibility', () => {
+  it('should resolve the complete active CAD toolbelt', () => {
+    const entries = serializeProviderFacingSchemas();
+
+    expect(entries.map((entry) => entry.toolName)).toEqual([
+      toolName.testModel,
+      toolName.evaluateModel,
+      toolName.exportModel,
+      toolName.getParameters,
+      toolName.applyParameterOperation,
+      toolName.screenshot,
+      toolName.editFile,
+      toolName.arrangeWorkbench,
+      toolName.useSkill,
+      toolName.readFile,
+      toolName.listDirectory,
+      toolName.createFile,
+      toolName.deleteFile,
+      toolName.grep,
+      toolName.globSearch,
+      toolName.webSearch,
+      toolName.webBrowser,
+      toolName.history,
+      toolName.updateTodos,
+      toolName.askQuestions,
+      toolName.installPackages,
+      toolName.listMachines,
+      toolName.getMachine,
+      toolName.machineAction,
+      toolName.stopMachine,
+      toolName.getPrintProfiles,
+      toolName.requestJob,
+      toolName.checkJob,
+      toolName.shell,
+    ]);
+    expect(toolDescriptions[toolName.arrangeWorkbench]).toBe(arrangeWorkbenchDescription);
+    expect(toolDescriptions[toolName.arrangeWorkbench].length).toBeGreaterThan(0);
+  });
+
+  it('tells the model a named view leaf is set in that view and view settings go through arrange_workbench', () => {
+    expect(arrangeWorkbenchDescription.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(150);
+    expect(arrangeWorkbenchDescription).toMatchSnapshot();
+  });
+
+  it('keeps arrange_workbench provider-safe and within the approved 14 KiB ceiling', () => {
+    const schema = providerSchemaFor(toolName.arrangeWorkbench);
+    expect(Object.keys(schema.properties ?? {})).toEqual([
+      'open',
+      'close',
+      'views',
+      'entries',
+      'viewer',
+      'workbench',
+      'lanes',
+      'basedOn',
+    ]);
+    expect(collectKeywordPaths(schema)).toEqual(emptyKeywordPaths());
+    expect(arrayItemsPaths(schema)).toEqual([]);
+    expect(Buffer.byteLength(JSON.stringify(schema), 'utf8')).toBeLessThanOrEqual(14_336);
+  });
+
+  it('keeps install_packages provider-safe with a typeless add record', () => {
+    const schema = providerSchemaFor(toolName.installPackages);
+    expect(Object.keys(schema.properties ?? {})).toEqual(['add', 'remove', 'upgrade']);
+    expect(schema.required ?? []).toEqual([]);
+    expect(collectKeywordPaths(schema)).toEqual(emptyKeywordPaths());
+    expect(toolDescriptions[toolName.installPackages]).toContain('package-not-locked');
+    expect(toolDescriptions[toolName.installPackages]).toContain(
+      'A Python or C# project declares its packages in pyproject.toml or its .csproj instead; there it refuses with manifest-conflict',
+    );
+    expect(toolDescriptions[toolName.installPackages]).toContain(
+      'when a JavaScript or TypeScript model imports an npm package that package.json does not list',
+    );
+    expect(installPackagesInputSchema.parse({})).toEqual({});
+    expect(installPackagesInputSchema.parse({ add: { 'simplex-noise': '^4.0.3' } })).toEqual({
+      add: { 'simplex-noise': '^4.0.3' },
+    });
+    expect(installPackagesInputSchema.safeParse({ add: ['simplex-noise@^4.0.3'] }).success).toBe(false);
+    expect(installPackagesInputSchema.safeParse({ add: { 'simplex-noise': '' } }).success).toBe(false);
+  });
+
+  it('keeps shell provider-safe: a strict top-level object with nested strict access and no pattern keyword', () => {
+    const schema = providerSchemaFor(toolName.shell) as ProviderToolSchema & {
+      additionalProperties?: unknown;
+      properties: Record<string, { additionalProperties?: unknown; properties?: Record<string, unknown> }>;
+    };
+    expect(Object.keys(schema.properties)).toEqual(['command', 'cwd', 'timeoutMs', 'access']);
+    expect(schema.required).toEqual(['command']);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties['access']?.additionalProperties).toBe(false);
+    expect(Object.keys(schema.properties['access']?.properties ?? {})).toEqual(['reason', 'read', 'write', 'domains']);
+    expect(collectKeywordPaths(schema)).toEqual(emptyKeywordPaths());
+    expect(JSON.stringify(schema)).not.toContain('"pattern"');
+    expect(anthropicProjection(schema).required).toEqual(['command']);
+  });
+
+  it('should omit test_model when testing is disabled', () => {
+    const entries = serializeProviderFacingSchemas(false);
+
+    expect(entries.map((entry) => entry.toolName)).not.toContain(toolName.testModel);
+    expect(entries.map((entry) => entry.toolName)).toContain(toolName.screenshot);
+  });
+
+  it('should omit image-input tools for text-only models while keeping GeoSpec and file tools', () => {
+    const entries = getProviderFacingToolInputSchemas({
+      toolChoice: toolMode.auto,
+      testingEnabled: true,
+      modelSupport: {
+        tools: true,
+        toolChoice: false,
+        modalities: { input: ['text'], output: ['text'] },
+      },
+    });
+    const names = entries.map((entry) => entry.toolName);
+
+    expect(names).not.toContain(toolName.screenshot);
+    expect(names).toContain(toolName.testModel);
+    expect(names).toContain(toolName.evaluateModel);
+    expect(names).toContain(toolName.exportModel);
+    expect(names).toContain(toolName.editFile);
+  });
+
+  it('should return no provider-facing tools when the model does not support tools', () => {
+    expect(
+      filterProviderFacingToolNamesByModelSupport({
+        toolNames: [toolName.testModel, toolName.screenshot],
+        modelSupport: {
+          tools: false,
+          toolChoice: false,
+          modalities: { input: ['text', 'image'], output: ['text'] },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([true, false])(
+    'should declare every provider-facing input as a plain top-level object (testing enabled: %s)',
+    (testingEnabled) => {
+      const failures = serializeProviderFacingSchemas(testingEnabled).flatMap((entry) => {
+        const { jsonSchema } = entry;
+        return [
+          jsonSchema.type === 'object' ? undefined : `${entry.toolName}: top-level type is ${String(jsonSchema.type)}`,
+          jsonSchema.anyOf === undefined ? undefined : `${entry.toolName}: top-level anyOf`,
+          jsonSchema.oneOf === undefined ? undefined : `${entry.toolName}: top-level oneOf`,
+          jsonSchema.allOf === undefined ? undefined : `${entry.toolName}: top-level allOf`,
+        ].filter((failure) => failure !== undefined);
+      });
+
+      expect(failures).toEqual([]);
+    },
+  );
+
+  it.each([true, false])(
+    'should emit no provider-breaking JSON Schema keywords (testing enabled: %s)',
+    (testingEnabled) => {
+      const failures = serializeProviderFacingSchemas(testingEnabled).flatMap((entry) => {
+        const paths = collectKeywordPaths(entry.jsonSchema);
+        return bannedKeywords.flatMap((keyword) => paths[keyword].map((path) => `${entry.toolName}: ${path}`));
+      });
+
+      expect(failures).toEqual([]);
+    },
+  );
+
+  it('should emit no Draft 7 tuple items rejected by Draft 2020-12 providers', () => {
+    const failures = serializeProviderFacingSchemas().flatMap((entry) =>
+      arrayItemsPaths(entry.jsonSchema).map((path) => `${entry.toolName}: ${path}`),
+    );
+    expect(failures).toEqual([]);
+  });
+
+  it('should preserve fixed coordinate length and numeric validation in provider JSON Schema', () => {
+    const coordinates = z.object({ direction: z.tuple([z.number(), z.number(), z.number()]) });
+    const serialized = toProviderToolJsonSchema(coordinates);
+    const providerInput = z.fromJSONSchema(serialized);
+
+    expect(serialized).toMatchObject({
+      properties: { direction: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 } },
+    });
+    for (const direction of [[0, -1, 0], [], [0, 1], [0, 1, 2, 3], [0, 'north', 0]]) {
+      expect(providerInput.safeParse({ direction }).success).toBe(coordinates.safeParse({ direction }).success);
+    }
+  });
+
+  it('should keep a tuple Zod 4.5 and later close with additionalItems false as a fixed array', () => {
+    // A consumer whose install resolves a newer Zod builds these schemas with it; `.meta` stands in for its emit here.
+    const closed = z.object({
+      direction: z.tuple([z.number(), z.number(), z.number()]).meta({ additionalItems: false }),
+    });
+
+    expect(toProviderToolJsonSchema(closed)).toStrictEqual({
+      type: 'object',
+      properties: { direction: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 } },
+      required: ['direction'],
+    });
+  });
+
+  it('should refuse tuples that cannot preserve their constraints as homogeneous fixed arrays', () => {
+    for (const schema of [z.tuple([z.number(), z.string()]), z.tuple([z.number()]).rest(z.number())]) {
+      expect(() => toProviderToolJsonSchema(schema)).toThrow(
+        'Provider tool schema has a tuple that cannot use one items schema',
+      );
+    }
+  });
+
+  it('should survive the Anthropic codec projection with its parameters intact', () => {
+    // Every CAD tool but list_machines takes at least one input; an empty projection means Claude was offered a tool it cannot call.
+    const failures = serializeProviderFacingSchemas().flatMap((entry) => {
+      if (entry.toolName === toolName.listMachines) {
+        return [];
+      }
+      const projected = anthropicProjection(entry.jsonSchema);
+      return Object.keys(projected.properties).length > 0 ? [] : [entry.toolName];
+    });
+
+    expect(failures).toEqual([]);
+  });
+
+  it('should offer request_job its slicer options as a plain described object slot', () => {
+    const schema = providerSchemaFor(toolName.requestJob);
+
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual([
+      'artifact',
+      'bambuStudio',
+      'machineId',
+      'options',
+      'plate',
+      'preset',
+      'profileId',
+      'targetFile',
+    ]);
+    /* Exactly one of targetFile and artifact, checked at runtime. */
+    expect(schema.required ?? []).toEqual([]);
+    expect(schema.properties?.['options']).toEqual({
+      description: 'Slicer options: a JSON object mapping option names to JSON values.',
+    });
+    expect(schema.properties?.['bambuStudio']).toMatchObject({
+      properties: {
+        settings: {
+          description: 'Bambu Studio settings: a JSON object mapping setting keys from get_print_profiles to values.',
+        },
+      },
+    });
+  });
+
+  it('should bound request_job Bambu Studio settings at runtime', () => {
+    const schema = requestJobInputSchema;
+    /* Bambu Studio's own setting keys. */
+    const settings = (key: string, value: unknown) => ({
+      targetFile: 'main.ts',
+      bambuStudio: { settings: { [key]: value } },
+    });
+
+    expect(schema.safeParse(settings('sparse_infill_density', '20%')).success).toBe(true);
+    expect(schema.safeParse(settings('wall_loops', { nested: 1 })).success).toBe(false);
+    expect(schema.safeParse({ targetFile: 'main.ts', bambuStudio: { profiles: { filaments: [] } } }).success).toBe(
+      false,
+    );
+  });
+
+  it('should offer machine_action its parameters as a plain described object slot, validated at runtime', () => {
+    const schema = providerSchemaFor(toolName.machineAction);
+
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['action', 'componentId', 'machineId', 'parameters']);
+    expect(schema.required).toEqual(['componentId', 'action']);
+    expect(
+      machineActionInputSchema.safeParse({ componentId: 'light', action: 'switch.set', parameters: { on: true } })
+        .success,
+    ).toBe(true);
+    expect(
+      machineActionInputSchema.safeParse({ componentId: 'light', action: 'switch.set', parameters: [true] }).success,
+    ).toBe(false);
+  });
+
+  it('should offer get_print_profiles a machine, profiles and a bounded key filter', () => {
+    const schema = providerSchemaFor(toolName.getPrintProfiles);
+
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['keys', 'machineId', 'profileId', 'profiles']);
+    expect(schema.required ?? []).toEqual([]);
+    expect(getPrintProfilesInputSchema.safeParse({ keys: Array.from({ length: 65 }, (_, i) => `k${i}`) }).success).toBe(
+      false,
+    );
+  });
+
+  it('should keep screenshot and use_skill provider inputs pruned to implemented fields', () => {
+    expect(Object.keys(providerSchemaFor(toolName.screenshot).properties ?? {}).sort()).toEqual([
+      'includeEdges',
+      'instance',
+      'mode',
+      'options',
+      'parameters',
+      'pose',
+      'section',
+      'targetFile',
+      'view',
+      'workbenchView',
+    ]);
+    expect(Object.keys(providerSchemaFor(toolName.useSkill).properties ?? {}).sort()).toEqual(['reason', 'skillName']);
+  });
+
+  it('should keep test_model provider filters as JSON arrays without bracket-key compatibility syntax', () => {
+    const schema = providerSchemaFor(toolName.testModel);
+    const properties = schema.properties ?? {};
+
+    expect(properties['files']?.type).toBe('array');
+    expect(properties['include']?.type).toBe('array');
+    expect(properties['exclude']?.type).toBe('array');
+
+    const serialized = JSON.stringify(schema);
+    expect(serialized).not.toContain('files[0]');
+    expect(serialized).not.toContain('include[0]');
+    expect(serialized).not.toContain('exclude[0]');
+    expect(serialized).not.toContain('files[]');
+    expect(serialized).not.toContain('Do not use bracket-key syntax');
+  });
+});

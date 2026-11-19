@@ -1,0 +1,115 @@
+#!/usr/bin/env node
+/** Purpose: Admit the real package producer's metadata in all native qualification observers. */
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+/* oxlint-disable no-restricted-imports -- Cross-driver package producer contract. */
+import { assertQualificationConsumerScope, assertQualificationSource } from './qualification-candidates.mjs';
+import { desktopManifestFields } from './runtime-stage.mjs';
+import { windowsQualificationPackageSchema } from './qualification-windows.mjs';
+import { linuxQualificationPackageSchema } from './qualification-linux.mjs';
+import { macosQualificationPackageSchema } from './qualification-macos.mjs';
+/* oxlint-enable no-restricted-imports */
+const priorSource = process.env['TAU_DESKTOP_SOURCE_SHA'];
+const priorTag = process.env['TAU_DESKTOP_RELEASE_TAG'];
+try {
+  process.env['TAU_DESKTOP_SOURCE_SHA'] = 'a'.repeat(40);
+  process.env['TAU_DESKTOP_RELEASE_TAG'] = 'desktop@0.1.0';
+  for (const channel of ['production', 'staging'] as const) {
+    const metadata = { version: '0.1.0', ...desktopManifestFields({ channel, environmentOverrides: false }) };
+    for (const schema of [
+      windowsQualificationPackageSchema,
+      linuxQualificationPackageSchema,
+      macosQualificationPackageSchema,
+    ]) {
+      assert.equal(schema.parse(metadata).tauDesktop.channel, channel);
+      assert.throws(() => {
+        schema.parse({ version: '0.1.0', ...desktopManifestFields({ channel, environmentOverrides: true }) });
+      });
+    }
+  }
+  console.log(
+    'PASS actual desktopManifestFields production/staging admission and environment override refusal across all drivers',
+  );
+} finally {
+  if (priorSource === undefined) {
+    delete process.env['TAU_DESKTOP_SOURCE_SHA'];
+  } else {
+    process.env['TAU_DESKTOP_SOURCE_SHA'] = priorSource;
+  }
+  if (priorTag === undefined) {
+    delete process.env['TAU_DESKTOP_RELEASE_TAG'];
+  } else {
+    process.env['TAU_DESKTOP_RELEASE_TAG'] = priorTag;
+  }
+}
+
+const current = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+for (const route of ['windows-nsis', 'macos-zip', 'macos-dmg', 'linux-apt', 'linux-appimage']) {
+  const linux = route.startsWith('linux-');
+  const input = {
+    kind: 'vm',
+    route,
+    scope: route === 'windows-nsis' ? 'windows' : linux ? 'linux' : 'macos',
+    channel: 'staging',
+  } as const;
+  assertQualificationConsumerScope(input);
+  // D-H5: every platform, Windows included, produces its own production clean-host evidence.
+  assertQualificationConsumerScope({ ...input, channel: 'production' });
+  for (const change of [
+    { channel: 'preview' },
+    { scope: 'all' },
+    { scope: undefined },
+    { scope: linux ? 'macos' : 'linux' },
+    { scope: route === 'windows-nsis' ? 'macos' : 'windows' },
+    { route: linux ? 'macos-zip' : 'linux-apt' },
+  ]) {
+    assert.throws(() => {
+      assertQualificationConsumerScope({ ...input, ...change });
+    }, /its own platform scope/u);
+  }
+  assertQualificationConsumerScope({ ...input, kind: 'ci', scope: 'all', channel: 'production' });
+}
+for (const channel of ['staging', 'production']) {
+  assertQualificationSource({ sourceCommit: current, workflowCommit: current, scope: 'windows', channel, kind: 'vm' });
+}
+for (const change of [{ channel: 'preview' }, { sourceCommit: 'a'.repeat(40) }, { scope: 'windows-ci' }]) {
+  assert.throws(() => {
+    assertQualificationSource({
+      sourceCommit: current,
+      workflowCommit: current,
+      scope: 'windows',
+      channel: 'staging',
+      kind: 'vm',
+      ...change,
+    });
+  });
+}
+// A Mac clean-host C is the notarized newest-green ancestor of the vm dispatch: an ancestor source is admitted
+// there (its authenticated binding sidecar carries S≤K≤H), as it is for the Windows and Linux platform scopes, while
+// all-platform runs and reversed ancestry stay refused.
+const parent = execFileSync('git', ['rev-parse', 'HEAD~1'], { encoding: 'utf8' }).trim();
+for (const scope of ['macos', 'windows', 'linux']) {
+  for (const channel of ['staging', 'production']) {
+    for (const kind of ['ci', 'vm'] as const) {
+      assertQualificationSource({ sourceCommit: parent, workflowCommit: current, scope, channel, kind });
+    }
+  }
+}
+for (const options of [
+  { scope: 'all', channel: 'staging', kind: 'vm' },
+  { scope: 'all', channel: 'production', kind: 'vm' },
+  { scope: 'all', channel: 'production', kind: 'ci' },
+] as const) {
+  assert.throws(() => {
+    assertQualificationSource({ sourceCommit: parent, workflowCommit: current, ...options });
+  });
+}
+assert.throws(() => {
+  assertQualificationSource({
+    sourceCommit: current,
+    workflowCommit: parent,
+    scope: 'macos',
+    channel: 'staging',
+    kind: 'vm',
+  });
+});

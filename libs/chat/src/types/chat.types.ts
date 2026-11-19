@@ -1,6 +1,7 @@
 import type { ConstantRecord, ChatError } from '@taucad/types';
-import type { KernelId } from '@taucad/types/constants';
+import type { KernelId, KernelPreference } from '@taucad/types/constants';
 import type { messageRole, messageStatus } from '#constants/message.constants.js';
+import type { CadAgentExecution } from '#schemas/agent-config.schema.js';
 import type { MyUIMessage } from '#types/message.types.js';
 
 /** @public */
@@ -13,28 +14,14 @@ export type MessageStatus = ConstantRecord<typeof messageStatus>;
 export type MessagePart = MyUIMessage['parts'][number];
 
 /** @public */
-export type MessageAnnotation = {
-  type: 'usage';
-  usageTokens: ChatUsageTokens;
-  usageCost: ChatUsageCost;
-  model: string;
-};
-
-/** @public */
-export type ChatUsageTokens = {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-};
-
-/** @public */
-export type ChatUsageCost = {
-  inputTokensCost: number;
-  outputTokensCost: number;
-  cacheReadTokensCost: number;
-  cacheWriteTokensCost: number;
-  totalCost: number;
+export type ChatStartupRequest = {
+  id: string;
+  kind: 'regenerate-tail';
+  messageId: string;
+  /** Exact pending command input until the host durably accepts Start; absent in older records. */
+  message?: MyUIMessage;
+  source: 'homepage-initial-message' | 'fix-with-ai-new-chat' | 'resolve-conflict-new-chat';
+  createdAt: number;
 };
 
 /** @public */
@@ -43,22 +30,37 @@ export type Chat = {
   resourceId: string; // Links chat to a resource (e.g., build)
   name: string;
   messages: MyUIMessage[];
-  draft?: MyUIMessage; // Main draft
-  messageEdits?: Record<string, MyUIMessage>; // Edit drafts by messageId
   error?: ChatError; // Persisted error for display after page reload
+  startupRequest?: ChatStartupRequest;
   /**
-   * Chat-scoped active model id. When present, chat-scoped consumers prefer
-   * this over the cookie-derived default so cookie changes elsewhere never
-   * mutate the model in use within this chat.
+   * Chat-scoped execution target; opaque ids only, never credentials. The chat
+   * owns its intent and each device its placement: a persisted Tau execution
+   * holds no device-relative host (see `TauAgentHostId`).
    */
-  activeModel?: string;
+  activeExecution?: CadAgentExecution;
   /**
-   * Chat-scoped active CAD kernel. Same semantics as {@link Chat.activeModel}
+   * Chat-scoped active CAD kernel. Same semantics as {@link Chat.activeExecution}
    * — present means this chat owns its kernel choice, absent means consumers
    * fall back to the cookie default.
    */
   activeKernel?: KernelId;
+  /**
+   * The chat's kernel preference, `auto` or one kernel (automatic kernel selection blueprint D2). A row without it
+   * reads as Auto, unless its legacy {@link Chat.activeKernel} differs from the project's owner, which marks a real
+   * manual pick.
+   */
+  kernelPreference?: KernelPreference;
+  /**
+   * Durable checkout for this chat's future turns. A linked checkout's id derives from its branch, so the branch is
+   * the portable fact: a device that has no checkout with this id places the turn on the one holding that branch,
+   * opening it when the branch is present there (`@taucad/revisions/turn-placement`).
+   */
+  checkoutId?: string;
+  /** Product recency for chat ordering, in Unix epoch milliseconds. */
+  recencyAt?: number;
   createdAt: number;
   updatedAt: number;
   deletedAt?: number; // Soft delete support
+  /** Irreversible product deletion; the tombstone remains for record synchronization. */
+  purgedAt?: number;
 };

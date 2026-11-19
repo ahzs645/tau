@@ -1,0 +1,21 @@
+{
+  "name": "telemetry",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/telemetry",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:lib"],
+  "targets": {
+    "test": {
+      "inputs": ["default", "^production"]
+    },
+    "generate-runtime-vocabulary": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "libs/telemetry",
+        "commands": ["tsx scripts/generate-runtime-vocabulary.mts", "oxfmt src/runtime-vocabulary.ts"],
+        "parallel": false
+      },
+      "cache": false
+    }
+  }
+}

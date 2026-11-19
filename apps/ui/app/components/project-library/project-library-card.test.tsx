@@ -1,0 +1,360 @@
+import { createProjectFixture } from '@taucad/ui-core/lib/project.fixture';
+import { act, render, screen } from '@testing-library/react';
+import type { RenderResult } from '@testing-library/react';
+import { createContext, useContext, useState } from 'react';
+import userEvent from '@testing-library/user-event';
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ProjectLibraryCard } from '#components/project-library/project-library.js';
+import type { ProjectActions } from '#components/project-library/project-library.js';
+import { TooltipProvider } from '@taucad/ui/components/tooltip';
+import type { ProjectListItem } from '@taucad/files-ui/types/project-library.types';
+
+const routerContent = createContext<React.ReactNode>(null);
+
+function RouterContent(): React.ReactNode {
+  return useContext(routerContent);
+}
+
+function TestRouter({
+  children,
+  initialEntries = ['/projects'],
+}: React.PropsWithChildren<{ readonly initialEntries?: string[] }>): React.JSX.Element {
+  const [router] = useState(() => createMemoryRouter([{ path: '*', Component: RouterContent }], { initialEntries }));
+  return (
+    <routerContent.Provider value={children}>
+      <RouterProvider router={router} />
+    </routerContent.Provider>
+  );
+}
+
+const mockProject: ProjectListItem = {
+  ...createProjectFixture({
+    id: 'proj_aaaaaaaaaaaaaaaaaaaaa',
+    name: 'Library Preview Demo',
+    description: 'Test project',
+    tags: [],
+    assets: { main: { entryPath: 'main.scad' } },
+  }),
+  lastActivityAt: 0,
+  locator: { backend: 'indexeddb', storageRootKey: 'indexeddb:tau-', relativeDirectory: 'library' },
+  slugs: { workspaceSlug: 'home', projectSlug: 'library' },
+};
+
+const mockActions: ProjectActions = {
+  handleDelete: vi.fn(),
+  handlePermanentlyDelete: vi.fn(),
+  handleDuplicate: vi.fn(async () => undefined),
+  handleRename: vi.fn(async () => undefined),
+  handleRestore: vi.fn(),
+};
+let providerMountCount = 0;
+
+vi.mock('#hooks/chat-session-store-provider.js', () => ({
+  useChatSessionStore: () => ({ getProjectClosePlan: vi.fn() }),
+}));
+vi.mock('#hooks/use-sidebar-status.js', () => ({
+  useProjectSidebarRow: () => undefined,
+  useSidebarCommands: () => ({ closeProject: vi.fn() }),
+}));
+
+vi.mock('#hooks/use-file-manager.js', () => {
+  // Stable like the provider's memoized value: thumbnails are observed per record client and watch.
+  const missing = Object.assign(new Error('not found'), { code: 'ENOENT' });
+  const fileManager = {
+    client: { readFile: vi.fn().mockRejectedValue(missing) },
+    recordFiles: { readFile: vi.fn().mockRejectedValue(missing) },
+    watchRecordFile: () => ({
+      ready: Promise.resolve(),
+      closed: new Promise<never>(() => {
+        // Never closes.
+      }),
+      dispose: () => undefined,
+    }),
+    contentService: undefined,
+  };
+  return {
+    useFileManager: () => fileManager,
+    SharedWorkerGate: ({ children }: { readonly children: React.ReactNode }) => (
+      <div data-testid='shared-worker-gate'>{children}</div>
+    ),
+    HomeFileManagerProvider: ({
+      children,
+      projectId,
+      rootDirectory,
+    }: {
+      readonly children: React.ReactNode;
+      readonly projectId: string;
+      readonly rootDirectory: string;
+    }) => (
+      <FileManagerProbe projectId={projectId} rootDirectory={rootDirectory}>
+        {children}
+      </FileManagerProbe>
+    ),
+  };
+});
+
+function FileManagerProbe({
+  children,
+  projectId,
+  rootDirectory,
+}: React.PropsWithChildren<{ projectId: string; rootDirectory: string }>): React.JSX.Element {
+  const [mountToken] = useState(() => ++providerMountCount);
+  return (
+    <div
+      data-testid='file-manager-provider'
+      data-project-id={projectId}
+      data-root-directory={rootDirectory}
+      data-mount-token={mountToken}
+    >
+      {children}
+    </div>
+  );
+}
+
+vi.mock('#hooks/use-cad-preview.js', () => ({
+  CadPreviewProvider: ({
+    children,
+    projectId,
+    mainFile,
+    files,
+    isEnabled,
+  }: {
+    readonly children: React.ReactNode;
+    readonly projectId: string;
+    readonly mainFile: string;
+    readonly files?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
+    readonly isEnabled?: boolean;
+  }) => (
+    <div
+      data-testid='cad-preview-provider'
+      data-project-id={projectId}
+      data-main-file={mainFile}
+      data-has-files={files === undefined ? 'false' : 'true'}
+      data-is-enabled={isEnabled === undefined ? 'true' : String(isEnabled)}
+    >
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock('#components/cad-preview.js', () => ({
+  CadPreviewViewer: () => <div data-testid='cad-preview-viewer' />,
+}));
+
+function LocationProbe(): React.JSX.Element {
+  const location = useLocation();
+  return <output data-testid='location'>{location.pathname}</output>;
+}
+
+function renderCard(
+  properties: {
+    readonly project?: ProjectListItem;
+    readonly isSelected?: boolean;
+    readonly onSelect?: () => void;
+  } = {},
+): RenderResult {
+  const { project = mockProject, ...cardProperties } = properties;
+  return render(
+    <TestRouter initialEntries={['/projects']}>
+      <TooltipProvider>
+        <ProjectLibraryCard project={project} actions={mockActions} {...cardProperties} />
+      </TooltipProvider>
+      <LocationProbe />
+    </TestRouter>,
+  );
+}
+
+describe('ProjectLibraryCard live preview', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    providerMountCount = 0;
+  });
+
+  it('should show opening activity until local navigation settles and ignore repeated opens', async () => {
+    const ready = Promise.withResolvers<void>();
+    const loader = vi.fn(async () => ready.promise);
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/projects',
+          element: (
+            <TooltipProvider>
+              <ProjectLibraryCard project={mockProject} actions={mockActions} />
+            </TooltipProvider>
+          ),
+        },
+        { path: '/w/home/library', loader, element: <h1>Opened project</h1> },
+      ],
+      { initialEntries: ['/projects'] },
+    );
+    render(<RouterProvider router={router} />);
+    try {
+      await userEvent.click(screen.getByRole('link', { name: 'Open Library Preview Demo' }));
+      const opening = screen.getByRole('link', { name: 'Opening… Library Preview Demo', busy: true });
+      expect(screen.getByText('Opening…')).toBeVisible();
+      await userEvent.click(opening);
+      expect(loader).toHaveBeenCalledOnce();
+      await act(async () => {
+        ready.resolve();
+        await ready.promise;
+      });
+      expect(await screen.findByRole('heading', { name: 'Opened project' })).toBeVisible();
+    } finally {
+      ready.resolve();
+      router.dispose();
+    }
+  });
+
+  it('should focus and select the inline name from Rename, save with Enter, and cancel with Escape', async () => {
+    renderCard();
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Library Preview Demo' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const input = await screen.findByRole('textbox', { name: 'Project name' });
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue(mockProject.name);
+    expect(input).toHaveProperty('selectionStart', 0);
+    expect(input).toHaveProperty('selectionEnd', mockProject.name.length);
+    await userEvent.keyboard('Renamed project{Enter}');
+    expect(mockActions.handleRename).toHaveBeenCalledExactlyOnceWith(mockProject.id, 'Renamed project');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/projects');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Library Preview Demo' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    await userEvent.keyboard('Discarded{Escape}');
+    expect(mockActions.handleRename).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: mockProject.name })).toBeVisible();
+  });
+
+  it('should render the static thumbnail and no project-scoped FM until preview is toggled', async () => {
+    renderCard();
+
+    expect(await screen.findByLabelText('No saved preview')).toBeInTheDocument();
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+    const cardLink = screen.getByRole('link', { name: 'Open Library Preview Demo' });
+    expect(cardLink).toHaveAttribute('href', '/w/home/library');
+    expect(cardLink.parentElement).toHaveClass('hover:border-foreground/30');
+    expect(screen.getByText('Open')).toBeInTheDocument();
+    expect(screen.queryByText('Test project')).not.toBeInTheDocument();
+    expect(screen.queryByText('Mechanical')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('shared-worker-gate')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('file-manager-provider')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cad-preview-provider')).not.toBeInTheDocument();
+  });
+
+  /* C15 (P-g): the "no saved preview" icon says the read settled as absent, so it never stands in while it is pending. */
+  it('C15: keeps the media box plain while the thumbnail read is pending, then names the absence', async () => {
+    renderCard();
+
+    expect(screen.queryByLabelText('No saved preview')).not.toBeInTheDocument();
+    expect(await screen.findByLabelText('No saved preview')).toBeInTheDocument();
+  });
+
+  it('shows the Home and project slugs in the location row', () => {
+    renderCard();
+
+    const location = screen.getByLabelText('Location: Home in this browser');
+    expect(location).toHaveTextContent('home/library');
+    expect(location).toHaveClass('w-fit', 'max-w-full');
+    expect(location.querySelector('span')).not.toHaveClass('font-mono');
+    expect(location.querySelector('svg')).toHaveClass('size-3');
+  });
+
+  it('shows the workspace and project slugs for connected folders', () => {
+    renderCard({
+      project: {
+        ...mockProject,
+        locator: {
+          backend: 'webaccess',
+          storageRootKey: 'webaccess:wsp_workshop',
+          relativeDirectory: 'library',
+          workspaceId: 'wsp_workshop',
+        },
+        slugs: { workspaceSlug: 'workshop', projectSlug: 'library' },
+        workspaceName: 'Workshop',
+      },
+    });
+
+    const location = screen.getByLabelText('Location: Workshop on your disk');
+    expect(location).toHaveTextContent('workshop/library');
+    expect(location.querySelector('span')).not.toHaveClass('font-mono');
+    expect(location.querySelector('svg')).toHaveClass('size-3');
+  });
+
+  it('should mount project-scoped FM and Case A CadPreviewProvider when preview is toggled on', async () => {
+    renderCard();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Preview model' }));
+
+    expect(screen.queryByLabelText('No saved preview')).not.toBeInTheDocument();
+    // The live preview is its own chunk (PL5): it mounts once the lazy import settles.
+    expect(await screen.findByTestId('shared-worker-gate')).toBeInTheDocument();
+
+    const fm = screen.getByTestId('file-manager-provider');
+    expect(fm).toHaveAttribute('data-project-id', mockProject.id);
+    expect(fm).toHaveAttribute('data-root-directory', `/projects/${mockProject.id}`);
+
+    const preview = screen.getByTestId('cad-preview-provider');
+    expect(preview).toHaveAttribute('data-project-id', mockProject.id);
+    expect(preview).toHaveAttribute('data-main-file', 'main.scad');
+    expect(preview).toHaveAttribute('data-has-files', 'false');
+    expect(await screen.findByTestId('cad-preview-viewer')).toBeInTheDocument();
+  });
+
+  it('should unmount the preview subtree when preview is toggled off', async () => {
+    renderCard();
+
+    const previewToggle = screen.getByRole('button', { name: 'Preview model' });
+    await userEvent.click(previewToggle);
+    expect(await screen.findByTestId('file-manager-provider')).toBeInTheDocument();
+
+    await userEvent.click(previewToggle);
+    expect(screen.getByLabelText('No saved preview')).toBeInTheDocument();
+    expect(screen.queryByTestId('file-manager-provider')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cad-preview-provider')).not.toBeInTheDocument();
+  });
+
+  it('should remount the scoped file manager when an open card is retargeted to another project', async () => {
+    const view = renderCard();
+    await userEvent.click(screen.getByRole('button', { name: 'Preview model' }));
+    const firstProvider = await screen.findByTestId('file-manager-provider');
+    const firstToken = firstProvider.dataset['mountToken'];
+    const nextProject: ProjectListItem = {
+      ...mockProject,
+      id: 'proj_bbbbbbbbbbbbbbbbbbbbb',
+      name: 'Second project',
+    };
+
+    view.rerender(
+      <TestRouter initialEntries={['/projects']}>
+        <TooltipProvider>
+          <ProjectLibraryCard project={nextProject} actions={mockActions} />
+        </TooltipProvider>
+        <LocationProbe />
+      </TestRouter>,
+    );
+
+    const provider = screen.getByTestId('file-manager-provider');
+    expect(provider).toHaveAttribute('data-project-id', nextProject.id);
+    expect(provider.dataset['mountToken']).not.toBe(firstToken);
+  });
+
+  it('should keep preview, selection, editing, and action controls independent from card navigation', async () => {
+    const onSelect = vi.fn();
+    renderCard({ onSelect });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Preview model' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/projects');
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select Library Preview Demo' }));
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('location')).toHaveTextContent('/projects');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Library Preview Demo' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/projects');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Library Preview Demo' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/projects');
+  });
+});

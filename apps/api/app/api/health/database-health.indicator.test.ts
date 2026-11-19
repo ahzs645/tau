@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
 import { HealthIndicatorService } from '@nestjs/terminus';
 import { DatabaseHealthIndicator } from '#api/health/database-health.indicator.js';
-import { DatabaseService } from '#database/database.service.js';
+import { DatabaseService } from '@taucad/api-database';
 
 describe('DatabaseHealthIndicator', () => {
   let indicator: DatabaseHealthIndicator;
@@ -39,5 +39,7 @@ describe('DatabaseHealthIndicator', () => {
     const result = await indicator.isHealthy();
     expect(result['database']?.status).toBe('down');
     expect(result['database']?.['message']).toBe('Connection refused');
+    // A failed probe still says how long it waited, so a timeout reads differently from a refusal.
+    expect(result['database']?.['responseTimeMs']).toEqual(expect.any(Number));
   });
 });

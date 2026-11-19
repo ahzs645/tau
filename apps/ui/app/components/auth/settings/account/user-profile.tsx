@@ -3,15 +3,13 @@ import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent, CardFooter } from '#components/ui/card.js';
-import { Field, FieldError } from '#components/ui/field.js';
-import { Input } from '#components/ui/input.js';
-import { Label } from '#components/ui/label.js';
-import { Skeleton } from '#components/ui/skeleton.js';
-import { Spinner } from '#components/ui/spinner.js';
-import { cn } from '#utils/ui.utils.js';
+import { FieldError } from '@taucad/ui/components/field';
+import { Input } from '@taucad/ui/components/input';
+import { Skeleton } from '@taucad/ui/components/skeleton';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
 import { ChangeAvatar } from '#components/auth/settings/account/change-avatar.js';
+import { SettingsGroup, SettingsRow } from '@taucad/settings-ui/components/settings/settings-item';
+import { Button } from '@taucad/ui/components/button';
 
 export type UserProfileProps = {
   className?: string;
@@ -41,23 +39,20 @@ export function UserProfile({ className }: UserProfileProps): React.JSX.Element 
   }
 
   return (
-    <div>
-      <h2 className='mb-3 text-sm font-semibold'>{localization.settings.userProfile}</h2>
-
+    <SettingsGroup title='Profile' className={className}>
+      <SettingsRow title={localization.settings.avatar} control={<ChangeAvatar />} />
       <form onSubmit={handleSubmit}>
-        <Card className={cn(className)}>
-          <CardContent className='flex flex-col gap-6'>
-            <ChangeAvatar />
-
-            <Field data-invalid={Boolean(fieldErrors.name)}>
-              <Label htmlFor='name'>{localization.auth.name}</Label>
-
+        <SettingsRow
+          title={<label htmlFor='name'>{localization.auth.name}</label>}
+          control={
+            <>
               {session ? (
                 <Input
                   key={session.user.name}
                   id='name'
                   name='name'
                   autoComplete='name'
+                  className='w-40 sm:w-56'
                   defaultValue={session.user.name}
                   placeholder={localization.auth.name}
                   disabled={isPending}
@@ -80,23 +75,19 @@ export function UserProfile({ className }: UserProfileProps): React.JSX.Element 
                 />
               ) : (
                 <Skeleton>
-                  <Input className='invisible' />
+                  <Input className='invisible w-40 sm:w-56' />
                 </Skeleton>
               )}
-
-              <FieldError>{fieldErrors.name}</FieldError>
-            </Field>
-          </CardContent>
-
-          <CardFooter>
-            <Button type='submit' size='sm' disabled={isPending || !session}>
-              {isPending && <Spinner />}
-
-              {localization.settings.saveChanges}
-            </Button>
-          </CardFooter>
-        </Card>
+              <Button type='submit' variant='outline' disabled={isPending || !session}>
+                {isPending && <Spinner />}
+                Save
+              </Button>
+            </>
+          }
+        >
+          <FieldError>{fieldErrors.name}</FieldError>
+        </SettingsRow>
       </form>
-    </div>
+    </SettingsGroup>
   );
 }

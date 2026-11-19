@@ -1,0 +1,447 @@
+/* oxlint-disable no-await-in-loop, no-eval -- Each required viewport mutates one rendered project session; axe-core crosses the existing trusted browser-command evaluation boundary as source text. */
+import axe from 'axe-core';
+import { expect, test } from 'vitest';
+import { page as selectors } from 'vitest/browser';
+import * as target from '#support/external-target.js';
+import {
+  awaitSaved,
+  backupChooser,
+  backupLine,
+  branchChipOn,
+  createBranchHere,
+  editSource,
+  focusSource,
+  openBackupChooser,
+  openFixture,
+  openSourceFile,
+  pickBranchVerb,
+  replaceSource,
+  restoreFromHistory,
+  revisionChip,
+  revisionStrip,
+  saveShortcut,
+  switchToBranch,
+} from '#support/revision-session.js';
+
+const revisionsPanel = '[data-slot="revisions-panel-body"]';
+const visibleRevisionsPanel = `${revisionsPanel}:visible`;
+/*
+ * Height is part of the matrix, not a constant (C60).
+ *
+ * Every viewport here used to be 900 tall, which is exactly why C36 shipped:
+ * the History list only overflowed its own section — and painted over what
+ * followed it — when the pane was shorter than its content. The two 520-tall
+ * rows are the reproduction; the 320- and 512-wide rows are the reflow widths
+ * a person hits at phone size and at 200% zoom.
+ */
+const viewports = [
+  { width: 320, height: 800 },
+  { width: 320, height: 520 },
+  { width: 360, height: 900 },
+  { width: 600, height: 900 },
+  { width: 1024, height: 900 },
+  { width: 1100, height: 520 },
+] as const;
+
+const expectRevisionLayout = async (): Promise<void> => {
+  const result = await target.evaluate((selector) => {
+    const panel = [...document.querySelectorAll<HTMLElement>(selector)].find(
+      (candidate) => candidate.getClientRects().length > 0,
+    );
+    if (!panel) {
+      return {
+        documentOverflow: 1_000_000,
+        panelOverflow: 1_000_000,
+        panelOffscreen: 1_000_000,
+        escapedControl: 'panel missing',
+        historyOverflow: 1_000_000,
+        sectionOverlap: 1_000_000,
+      };
+    }
+    const panelRect = panel.getBoundingClientRect();
+    const escaped = [
+      ...panel.querySelectorAll<HTMLElement>('button, input, summary, [role="radio"], [role="switch"]'),
+    ].find((control) => {
+      const rect = control.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && (rect.left < panelRect.left - 1 || rect.right > panelRect.right + 1);
+    });
+    /*
+     * The vertical half (C60). C36 was a section that shrank below its own
+     * `<ol>`: the list then painted outside its box and over whatever followed
+     * it. Two numbers say that, and both are `1_000_000` when the element the
+     * assertion is about is missing, so an absent History or Backup line fails
+     * loudly rather than passing vacuously. The Backup line is the pane's last
+     * line, under the column that scrolls History (C2, C4), so the second
+     * number is that column's bottom against the line's top.
+     */
+    const historyList = panel.querySelector<HTMLElement>('ol[aria-label="History entries"]');
+    const historySection = historyList?.closest('section');
+    const historyColumn = panel.querySelector<HTMLElement>('[role="group"][aria-label="History and branches"]');
+    const backupSection = panel.querySelector<HTMLElement>('section[aria-label="Backup"]');
+    const historyRect = historySection?.getBoundingClientRect();
+    const columnRect = historyColumn?.getBoundingClientRect();
+    return {
+      documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
+      panelOverflow: panel.scrollWidth - panel.clientWidth,
+      panelOffscreen: Math.max(0, -panelRect.left, panelRect.right - window.innerWidth),
+      escapedControl: escaped?.getAttribute('aria-label') ?? escaped?.textContent.trim(),
+      historyOverflow:
+        historyList && historyRect ? historyList.getBoundingClientRect().bottom - historyRect.bottom : 1_000_000,
+      sectionOverlap:
+        columnRect && backupSection ? columnRect.bottom - backupSection.getBoundingClientRect().top : 1_000_000,
+    };
+  }, revisionsPanel);
+  expect(result.documentOverflow).toBeLessThanOrEqual(0);
+  expect(result.panelOverflow).toBeLessThanOrEqual(1);
+  expect(result.panelOffscreen).toBeLessThanOrEqual(1);
+  expect(result.escapedControl).toBeUndefined();
+  expect(result.historyOverflow).toBeLessThanOrEqual(1);
+  expect(result.sectionOverlap).toBeLessThanOrEqual(1);
+};
+
+test('keeps every revision surface usable across the closeout UX matrix', async () => {
+  await target.emulateColorScheme('light');
+  await target.setViewport({ width: 1440, height: 900 });
+  await target.navigate('/__e2e/project-file-tree');
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 180_000);
+
+  const openRevisions = selectors.getByRole('button', { name: /^Open History\./u });
+  await target.expectVisible(openRevisions, 120_000);
+  /*
+   * S20 (M2, I6): while History has not answered, the pane says *Loading
+   * history…* and can never say *No history yet* in the same frame. The
+   * window is too short to photograph reliably, so it is watched instead: an
+   * observer records every frame in which both are on screen.
+   */
+  await target.evaluate(() => {
+    const record = globalThis as typeof globalThis & { revisionLoadingContradictions?: number };
+    record.revisionLoadingContradictions = 0;
+    new MutationObserver(() => {
+      const panel = [...document.querySelectorAll<HTMLElement>('[data-slot="revisions-panel-body"]')].find(
+        (candidate) => candidate.getClientRects().length > 0,
+      );
+      const text = panel?.textContent ?? '';
+      if (text.includes('Loading history') && text.includes('No history yet')) {
+        record.revisionLoadingContradictions = (record.revisionLoadingContradictions ?? 0) + 1;
+      }
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  await target.click(openRevisions);
+  await target.expectVisible(selectors.getByCss(visibleRevisionsPanel), 60_000);
+  /* S1 (A6, 1c9fd4ee34): a project starts with its Start version, so a fresh pane lists one row, `V1 · Start`, and
+   * never says *No history yet*; the strip says where the files are in one sentence. */
+  const historyRows = selectors.getByCss(
+    `${visibleRevisionsPanel} ol[aria-label="History entries"] button[data-revision-row]`,
+  );
+  await target.expectVisible(
+    selectors.getByCss(
+      `${visibleRevisionsPanel} ol[aria-label="History entries"] button[data-revision-row][aria-label^="V1 · Start"]`,
+    ),
+    60_000,
+  );
+  const { count: freshRows } = await target.read(historyRows);
+  expect(
+    await target.isVisible(selectors.getByCss(`${visibleRevisionsPanel} [data-slot="panel-empty-state-title"]`)),
+  ).toBe(false);
+  expect(
+    await target.evaluate(
+      () =>
+        (globalThis as typeof globalThis & { revisionLoadingContradictions?: number }).revisionLoadingContradictions,
+    ),
+  ).toBe(0);
+  const stripStatus = selectors.getByCss(`${visibleRevisionsPanel} [role="status"][aria-label="History status"]`);
+  await target.expectVisible(stripStatus, 60_000);
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-S1-fresh-1440-light.png');
+
+  /* Two revisions with different files, as a person makes them: an edit, then Save. */
+  const saveShortcut = await target.evaluate(() => (/mac/i.test(navigator.userAgent) ? 'Meta+s' : 'Control+s'));
+  await openSourceFile();
+  await focusSource();
+  for (let index = 0; index < 2; index += 1) {
+    await editSource();
+    await target.keyboardPress(saveShortcut);
+    await awaitSaved();
+  }
+  if (!(await target.isVisible(selectors.getByCss(visibleRevisionsPanel)))) {
+    await target.click(openRevisions);
+  }
+  await target.expectCount(historyRows, freshRows + 2, 120_000);
+
+  /* Round 16/18: naming lives in the row's More; Cancel hands focus back to it. */
+  const olderRow = historyRows.nth(1);
+  await target.click(olderRow);
+  const moreForOlder = selectors
+    .getByCss(visibleRevisionsPanel)
+    .getByRole('button', { name: 'More', exact: true })
+    .first();
+  await target.click(moreForOlder);
+  await target.click(selectors.getByRole('menuitem', { name: 'Create version…' }));
+  const nameInput = selectors.getByRole('textbox', { name: 'Version name' });
+  await target.expectVisible(nameInput);
+  await target.expectFocused(nameInput);
+  const cancelName = selectors.getByRole('button', { name: 'Cancel' }).first();
+  await target.focus(cancelName);
+  await target.keyboardPress('Enter');
+  await target.expectHidden(nameInput);
+  await target.expectFocused(moreForOlder);
+
+  /* S5 (A9, D1, D2): a restore is a new row named by what it restored, with Undo restore on the strip. */
+  await restoreFromHistory(
+    olderRow,
+    selectors.getByCss(`${visibleRevisionsPanel} button[data-revision-row][aria-label^="Restored "]`),
+  );
+  await target.expectVisible(revisionStrip().getByRole('button', { name: 'Undo restore' }), 30_000);
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-S5-restored-1440-light.png');
+
+  /* S25: New branch has one home, the header chip's menu (C2, D3); the new line's chip, with its ⋮, appears in
+   * History's lanes, and the files stay where they were. */
+  await createBranchHere('fillet-exploration');
+  await target.expectVisible(branchChipOn('main'));
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-S25-first-branch-1440-light.png');
+
+  /* The Backup line's chooser (C4, dbee175fd2): Back up to Tau Cloud opens it on Tau Cloud; *This device only* is
+   * what the project already is, so the chooser's own Back up to Tau Cloud waits for another choice. */
+  await openBackupChooser();
+  const thisDeviceOnly = backupChooser().getByRole('radio', { name: 'This device only' });
+  const tauCloud = backupChooser().getByRole('radio', { name: 'Tau', exact: true });
+  const connectBackup = backupLine().getByRole('button', { name: 'Back up to the cloud', exact: true });
+  await target.expectAttribute(tauCloud, 'aria-checked', 'true');
+  expect(await target.getAttribute(connectBackup, 'disabled')).toBeNull();
+  await target.expectVisible(backupLine().getByRole('switch', { name: 'Include chats' }));
+  await target.click(thisDeviceOnly);
+  await target.expectAttribute(thisDeviceOnly, 'aria-checked', 'true');
+  await target.expectAttribute(connectBackup, 'disabled', '');
+  await target.click(tauCloud);
+  await target.expectAttribute(tauCloud, 'aria-checked', 'true');
+  expect(await target.getAttribute(connectBackup, 'disabled')).toBeNull();
+  const coarsePointer = await target.evaluate(() => matchMedia('(pointer: coarse)').matches);
+
+  for (const { width, height } of viewports) {
+    await target.setViewport({ width, height });
+    if (!(await target.isVisible(selectors.getByCss(visibleRevisionsPanel)))) {
+      if (width < 768) {
+        const historyTab = selectors.getByCss('button[role="tab"]:has-text("History"):visible');
+        await target.waitFor(
+          () => [...document.querySelectorAll('[role="tab"]')].some((tab) => tab.textContent.trim() === 'History'),
+          undefined,
+          { timeout: 15_000 },
+        );
+        await target.evaluate(() => {
+          [...document.querySelectorAll<HTMLElement>('[role="tab"]')]
+            .find((tab) => tab.textContent.trim() === 'History')
+            ?.scrollIntoView({ inline: 'center' });
+        });
+        await target.expectVisible(historyTab, 15_000);
+        await target.click(historyTab, { touch: coarsePointer });
+      } else {
+        await target.expectVisible(openRevisions, 15_000);
+        await target.click(openRevisions);
+      }
+      await target.expectVisible(selectors.getByCss(visibleRevisionsPanel));
+    }
+    if (!(await target.isVisible(backupChooser()))) {
+      await openBackupChooser();
+      await target.expectVisible(backupChooser());
+    }
+    await expectRevisionLayout();
+    await target.screenshot(
+      selectors.getByCss(visibleRevisionsPanel),
+      `revisions-${String(width)}x${String(height)}-light.png`,
+    );
+  }
+
+  /* A 1024-device-pixel viewport at 200% browser zoom has 512 CSS pixels and
+   * must enter the same reflow path a person sees, unlike the CSS zoom property. */
+  await target.setViewport({ width: 512, height: 900 });
+  await target.waitFor(
+    () => [...document.querySelectorAll('[role="tab"]')].some((tab) => tab.textContent.trim() === 'History'),
+    undefined,
+    { timeout: 15_000 },
+  );
+  const zoomHistoryTab = selectors.getByCss('button[role="tab"]:has-text("History"):visible');
+  await target.evaluate(() => {
+    [...document.querySelectorAll<HTMLElement>('[role="tab"]')]
+      .find((tab) => tab.textContent.trim() === 'History')
+      ?.scrollIntoView({ inline: 'center' });
+  });
+  await target.click(zoomHistoryTab, { touch: coarsePointer });
+  await target.expectVisible(selectors.getByCss(visibleRevisionsPanel));
+  if (!(await target.isVisible(backupChooser()))) {
+    await openBackupChooser();
+    await target.expectVisible(backupChooser());
+  }
+  await expectRevisionLayout();
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-200-percent-zoom.png');
+
+  await target.setViewport({ width: 1024, height: 900 });
+  if (!(await target.isVisible(selectors.getByCss(visibleRevisionsPanel)))) {
+    await target.expectVisible(openRevisions, 15_000);
+    await target.click(openRevisions);
+    await target.expectVisible(selectors.getByCss(visibleRevisionsPanel));
+  }
+  if (!(await target.isVisible(backupChooser()))) {
+    await openBackupChooser();
+    await target.expectVisible(backupChooser());
+  }
+
+  await target.emulateColorScheme('dark');
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-1024-dark.png');
+  await target.emulateReducedMotion('reduce');
+  await target.expectVisible(selectors.getByCss(`${visibleRevisionsPanel} #revision-history-heading`));
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-1024-reduced-motion.png');
+  await target.emulateReducedMotion('no-preference');
+  await target.emulateContrast('more');
+  await target.emulateForcedColors('active');
+  await target.expectVisible(selectors.getByCss(`${visibleRevisionsPanel} #revision-history-heading`));
+  await target.expectVisible(backupLine());
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-1024-forced-colors.png');
+  await target.emulateForcedColors('none');
+  await target.emulateContrast('no-preference');
+  await target.emulateColorScheme('light');
+
+  const violations = await target.evaluate(
+    async ({ axeSource, selector }) => {
+      globalThis.eval(axeSource);
+      const runner = (
+        globalThis as typeof globalThis & {
+          axe: {
+            run(
+              root: Element,
+              options: unknown,
+            ): Promise<{
+              violations: Array<{ impact?: string; id: string; nodes: unknown[] }>;
+            }>;
+          };
+        }
+      ).axe;
+      const root = [...document.querySelectorAll<HTMLElement>(selector)].find(
+        (candidate) => candidate.getClientRects().length > 0,
+      );
+      if (!root) {
+        throw new Error('Revision panel was unavailable for accessibility audit.');
+      }
+      const results = await runner.run(root, {
+        runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'] },
+      });
+      return results.violations
+        .filter(({ impact }) => impact === 'serious' || impact === 'critical')
+        .map(({ id, impact, nodes }) => ({ id, impact, nodes: nodes.length }));
+    },
+    { axeSource: axe.source, selector: revisionsPanel },
+  );
+  expect(violations).toEqual([]);
+});
+
+/*
+ * S7, S19 and S24: each state is reached through the real machines — a merge
+ * that collides, a save the store refuses, a chat placed on a branch — never by
+ * painting the DOM. Each row seeds its own project, so no row inherits another's.
+ */
+
+const branchName = 'fillet-exploration';
+
+/** Open the Revisions pane through the header chip unless it is already on screen. */
+const openPane = async (): Promise<void> => {
+  if (!(await target.isVisible(selectors.getByCss(visibleRevisionsPanel)))) {
+    await target.click(revisionChip());
+  }
+  await target.expectVisible(selectors.getByCss(visibleRevisionsPanel), 60_000);
+};
+
+/**
+ * Make the open file one line and save it as a revision, as a person does.
+ *
+ * @param line - The file's new contents.
+ */
+const saveSource = async (line: string): Promise<void> => {
+  const shortcut = await saveShortcut();
+  await openSourceFile();
+  await focusSource();
+  await replaceSource(line);
+  await target.keyboardPress(shortcut);
+  await awaitSaved();
+};
+
+test('S24: places the chat in focus on a branch from its chip, then offers Switch to the branch', async () => {
+  await target.emulateColorScheme('light');
+  await openFixture('?chat=1');
+  await target.expectVisible(revisionChip(), 120_000);
+  await saveSource('// S24 base');
+  await openPane();
+  await createBranchHere(branchName);
+  /* The chat in focus works in main, the live checkout, as the canvas row has it. */
+  await switchToBranch('main');
+  /* D3 (bee2a79e41): the branch's chip ⋮ offers Run this chat here while it would move the chat in focus. */
+  await pickBranchVerb(branchName, 'Run this chat here', {
+    before: async () => {
+      await target.screenshot(undefined, 'revisions-S24-use-in-chat-1440-light.png');
+    },
+  });
+  await target.expectVisible(selectors.getByRole('button', { name: `Switch to ${branchName}`, exact: true }), 60_000);
+  await target.screenshot(undefined, 'revisions-S24-follow-chat-1440-light.png');
+});
+
+test('S7: a merge that changed the same lines on both branches waits for a decision on main', async () => {
+  await target.emulateColorScheme('light');
+  await openFixture('');
+  await target.expectVisible(revisionChip(), 120_000);
+  await saveSource('// S7 base');
+  await openPane();
+  await createBranchHere(branchName);
+  await switchToBranch(branchName);
+  await saveSource('// S7 fillet side');
+  await openPane();
+  await switchToBranch('main');
+  await saveSource('// S7 main side');
+  await openPane();
+  /* D3 (bee2a79e41): Merge is on the branch's chip ⋮, as *Merge into ⟨the branch the files are on⟩*. */
+  await pickBranchVerb(branchName, 'Merge into main');
+  const decision = selectors.getByCss(`${visibleRevisionsPanel} #revision-conflicts-heading`);
+  await target.expectVisible(decision, 120_000);
+  /* HQ1, HQ2: one sentence, naming the line the decision lands on; main is untouched until then. */
+  await target.expectText(
+    revisionStrip().getByRole('status', { name: 'History status' }),
+    'Needs your decision on main',
+    60_000,
+  );
+  const files = selectors.getByRole('list', { name: `Files to resolve in ${branchName}` });
+  await target.expectContainingText(files, 'public/models/honeycomb.js', 30_000);
+  /* Both sides are offered for the one file, as one choice. */
+  await target.expectCount(files.getByRole('button', { name: /^Keep .+ in public\/models\/honeycomb\.js$/u }), 2);
+  await target.expectVisible(selectors.getByRole('button', { name: 'Merge into main' }));
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-S7-needs-decision-1440-light.png');
+});
+
+test('S19: says Couldn’t confirm the save when the store refuses a save, and keeps where you are', async () => {
+  await target.emulateColorScheme('light');
+  await openFixture('');
+  await target.expectVisible(revisionChip(), 120_000);
+  await saveSource('// S19 saved');
+  /* The fixture's fault (`routes/[__e2e].project-file-tree`): another holder takes the branch
+   * ref's exclusive handle, as a second tab or a full disk would, so the next save's ref
+   * update is refused by the store itself. */
+  await target.evaluate(async () => {
+    await (
+      globalThis as typeof globalThis & { __tauE2eHoldProjectFile?: (path: string) => Promise<void> }
+    ).__tauE2eHoldProjectFile?.('.git/refs/heads/main');
+  });
+  await replaceSource('// S19 not confirmed');
+  await target.keyboardPress(await saveShortcut());
+  await openPane();
+  await target.expectText(
+    revisionStrip().getByRole('status', { name: 'History status' }),
+    'Couldn’t confirm the save',
+    120_000,
+  );
+  await target.expectContainingText(
+    selectors.getByRole('alert', { name: 'Unsaved changes' }),
+    'One change could not be saved.',
+    30_000,
+  );
+  /* The last known identity is held: main, never *Setting up*. */
+  await target.expectVisible(
+    selectors.getByRole('button', { name: 'Open History. You are on main. Couldn’t confirm the save.', exact: true }),
+    30_000,
+  );
+  await target.screenshot(selectors.getByCss(visibleRevisionsPanel), 'revisions-S19-save-not-confirmed-1440-light.png');
+});

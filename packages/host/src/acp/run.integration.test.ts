@@ -1,0 +1,3803 @@
+/**
+ * One external agent turn, end to end, through the pieces a daemon assembles:
+ * the Node launcher's external run kind, the ACP client, the materialized
+ * branch, the durable approval inbox, and the host-local MCP endpoint.
+ *
+ * The API is asserted *absent from the data path*, not assumed: a stub API
+ * listens for the whole turn and the process tree's established TCP peers are
+ * sampled while the agent works (SP-4's measurement, ported into Node).
+ */
+
+import { createServer } from 'node:http';
+import { connect } from 'node:net';
+import type { Server } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+
+import { captureChatLogs, chatLogDestination } from '@taucad/formal/capture';
+
+import { ClientSideConnection } from '@agentclientprotocol/sdk';
+import type { Agent, Client, SessionConfigOption, SessionUpdate, StopReason } from '@agentclientprotocol/sdk';
+
+import type { AgentLauncher } from '@taucad/agent-host/launcher';
+import type { AgentChannelAdmissionConfig } from '@taucad/agent-host/wire';
+import type { AgentLogEvent, ExternalAgentTurn, JsonValue, ProviderMessage, ToolRegistry } from '@taucad/agent-host';
+import { parseLogEvent, reduceEventLog } from '@taucad/agent-host';
+import { parseQuestionsFile, serializeAnswersFile } from '@taucad/chat';
+
+import { createIsomorphicGitRevisionPort } from '@taucad/revisions';
+import { NodeFsProvider } from '@taucad/filesystem/backend/node';
+import workbenchBundles from '@taucad/workbench/agent/resources.js';
+
+import { acpCapabilityRenewalMargin, acpLiveSessionLimit, createAcpExternalAgentPort } from '#acp/run.js';
+import { openAcpSession } from '#acp/acp-session.js';
+import { readSessionTextFile, writeSessionTextFile } from '#acp/session.js';
+import type { AcpPromptTurn, OpenAcpSessionOptions } from '#acp/session.js';
+import { createProjectRevisions } from '#revisions.js';
+import type { TurnCheckout, TurnFinalizedEvent } from '#revisions.js';
+import { spawnAcpAdapter } from '#acp/spawn.js';
+import type { AcpWireFrame } from '#acp/spawn.js';
+import { sampleTcpPeers } from '#acp/tcp-peers.js';
+import { startAgentServer } from '#agent-server.js';
+import type { AgentServerHandle } from '#agent-server.js';
+import { createHostMcpEndpoint, hostMcpCapabilityLifetime } from '#mcp-server.js';
+import type { AcpAdapter } from '#acp/registry.js';
+import type { HostSystemSkillBundle } from '#agent-tools.js';
+import { createNodeLauncher } from '#node-launcher.fixture.js';
+import { testModelTool } from '#test-model-tool.fixture.js';
+
+/* The model is not decoration: the `codex` pin carries one (`registry.ts`), an
+ * adapter override spreads the whole pin, and a fixture that offered no
+ * `configOptions` therefore broke every real external run while this literal —
+ * which had no model — stayed green. It carries one now so the host tier fails
+ * first (AV-5). */
+const fakeAgentModel = 'gpt-5.3-codex-spark';
+
+const fakeAgent: AcpAdapter = {
+  id: 'codex',
+  package: 'fixture',
+  version: '0.0.0',
+  configEnv: [],
+  displayName: 'Codex',
+  /* V5 deleted the pin's default model: with no turn selection the fixture runs
+   * its own first model, which is `fakeAgentModel`. */
+  modulePath: new URL('fixtures/fake-agent.ts', import.meta.url).pathname,
+};
+
+/** The same fixture under a second id, so an agent switch inside a chat is testable. */
+const otherFakeAgent: AcpAdapter = { ...fakeAgent, id: 'claude' };
+
+const geospecEvidence = {
+  success: true,
+  failures: [],
+  passes: [{ id: 'is-a-cube', requirement: 'the part is a 10mm cube', targetFile: 'main.scad' }],
+  passed: 1,
+  total: 1,
+};
+
+const registry: ToolRegistry = {
+  list: () => [testModelTool],
+  invoke: async () => ({ content: geospecEvidence, isError: false }),
+};
+
+const roots: string[] = [];
+const closers: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  /* Sequential, and that is the point: a server must not close before the
+   * launcher whose runs still hold sockets on it. */
+  for (const close of closers.splice(0).reverse()) {
+    // oxlint-disable-next-line no-await-in-loop -- teardown order is the invariant under test.
+    await close();
+  }
+  /* Field trace validation: keep each chat log before its root goes (formal:nightly). */
+  const chatLogs = chatLogDestination('host', expect.getState().testPath);
+  await Promise.all(roots.map(async (root) => captureChatLogs(root, chatLogs)));
+  await Promise.all(roots.splice(0).map(async (root) => rm(root, { recursive: true, force: true })));
+});
+
+/** A stub standing in for the Tau API, so "absent" is measured, not assumed. */
+const startStubApi = async (): Promise<{ readonly port: number; readonly requests: string[] }> => {
+  const requests: string[] = [];
+  const server: Server = createServer((request, response) => {
+    requests.push(request.url ?? '');
+    response.writeHead(500).end();
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  closers.push(
+    async () =>
+      new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      }),
+  );
+  const address = server.address();
+  return { port: typeof address === 'object' && address !== null ? address.port : 0, requests };
+};
+
+/** A launcher reference the server may hold before the launcher exists. */
+const launcherStandIn = (reference: { current?: AgentLauncher }): AgentLauncher =>
+  new Proxy({} as AgentLauncher, {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- a forwarding proxy is opaque to the checker by construction.
+    get: (_target, property): unknown => Reflect.get(reference.current ?? {}, property),
+  });
+
+type Harness = {
+  readonly launcher: AgentLauncher;
+  readonly workspaceRoot: string;
+  readonly api: Awaited<ReturnType<typeof startStubApi>>;
+  /** Every ACP frame both ways, so the *protocol* is the assertion (V2). */
+  readonly frames: AcpWireFrame[];
+  /** Every settlement the recorder reported, in order; empty without `revisions`. */
+  readonly settlements: TurnFinalizedEvent[];
+};
+
+/** How many times the client sent one ACP method. */
+const sent = (frames: readonly AcpWireFrame[], method: string): number =>
+  frames.filter((frame) => frame.direction === 'client->agent' && frame.frame.includes(`"method":"${method}"`)).length;
+
+const startHarness = async (
+  options: {
+    readonly idleTimeout?: number;
+    readonly agents?: readonly AcpAdapter[];
+    /** Override the minted capability's expiry (ISO instant), or offer an empty MCP url. */
+    readonly mcp?: { readonly expiresAt?: () => string; readonly url?: string };
+    /** The MCP endpoint's clock, so a test can move time under a prompt in flight. */
+    readonly mcpNow?: () => number;
+    /** Wrap the launcher the way a daemon does, so external turns are recorded (V19). */
+    readonly revisions?: boolean;
+    readonly systemSkillBundles?: readonly HostSystemSkillBundle[];
+    readonly mcpRegistry?: ToolRegistry;
+  } = {},
+): Promise<Harness> => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-run-'));
+  roots.push(workspaceRoot);
+  await writeFile(join(workspaceRoot, 'main.scad'), 'cube(10);\n', 'utf8');
+  const api = await startStubApi();
+  const mcp = createHostMcpEndpoint({
+    secret: randomBytes(32).toString('base64url'),
+    registry: options.mcpRegistry ?? registry,
+    workspaceRoot,
+    ...(options.mcpNow === undefined ? {} : { now: options.mcpNow }),
+  });
+  closers.push(async () => mcp.close());
+
+  const launcherRef: { current?: AgentLauncher } = {};
+  const server: AgentServerHandle = startAgentServer({
+    /* The channel is never dialled here; only the MCP route is. The stand-in
+     * exists so the server can be listening — and so name its own `/mcp` url —
+     * before the launcher that will use that url is built. */
+    launcher: launcherStandIn(launcherRef),
+    token: 'agent-server-token-with-at-least-32-characters',
+    workspaceRoot,
+    mcp,
+  });
+  await server.ready;
+  closers.push(async () => server.close());
+
+  const frames: AcpWireFrame[] = [];
+  /* The daemon's own composition: one map, written when the turn is placed and
+   * read by the port when it opens the session (V19). */
+  const checkouts = new Map<string, TurnCheckout>();
+  const settlements: TurnFinalizedEvent[] = [];
+  const revisions = options.revisions
+    ? createProjectRevisions({
+        via: 'desktop',
+        workspaceRoot,
+        projectId: 'proj_AAAAAAAAAAAAAAAAAAAAA',
+        checkouts,
+        /* The test construction (W3a R7): `isomorphic-git` over the same root,
+         * so this suite needs no `git` on PATH. A daemon takes the native port. */
+        port: createIsomorphicGitRevisionPort({ filesystem: new NodeFsProvider(workspaceRoot) }),
+        events: (event) => {
+          if (event.type === 'turn.finalized') {
+            settlements.push(event);
+          }
+        },
+      })
+    : undefined;
+  const launcher = createNodeLauncher({
+    workspaceRoot,
+    gatewayBaseUrl: `http://127.0.0.1:${String(api.port)}/`,
+    model: { id: 'unused-by-external-runs', contextWindow: 1000 },
+    systemPrompt: 'unused by external runs',
+    toolRegistry: registry,
+    ...(revisions === undefined ? {} : { turnPlacement: revisions.placement(() => registry) }),
+    externalAgents: createAcpExternalAgentPort({
+      agents: options.agents ?? [fakeAgent, otherFakeAgent],
+      workspaceRoot,
+      ...(options.revisions ? { checkouts } : {}),
+      mcp: {
+        url: options.mcp?.url ?? new URL('mcp', server.url()).href,
+        mint: (input) => {
+          const minted = mcp.mint(input);
+          return options.mcp?.expiresAt ? { ...minted, expiresAt: options.mcp.expiresAt() } : minted;
+        },
+        activate: (input) => mcp.activate(input),
+      },
+      onFrame: (frame) => frames.push(frame),
+      ...(options.idleTimeout === undefined ? {} : { idleTimeout: options.idleTimeout }),
+      ...(options.systemSkillBundles === undefined ? {} : { systemSkillBundles: options.systemSkillBundles }),
+    }),
+  });
+  launcherRef.current = launcher;
+  closers.push(async () => {
+    await launcher.close();
+    await revisions?.release();
+  });
+  return { launcher, workspaceRoot, api, frames, settlements };
+};
+
+/** Start one external turn and wait for the run to settle. */
+const runTurn = async (
+  harness: Harness,
+  input: {
+    readonly chatId: string;
+    readonly runId: string;
+    readonly text: string;
+    readonly messageId?: string;
+    readonly agentId?: string;
+    /** Admission context this turn carries beyond the agent selection (V12). */
+    readonly config?: Partial<AgentChannelAdmissionConfig>;
+  },
+): Promise<void> => {
+  const answer = await harness.launcher.execute({
+    type: 'start',
+    commandId: `start-${input.runId}`,
+    payload: {
+      trigger: 'submit',
+      chatId: input.chatId,
+      runId: input.runId,
+      message: { id: input.messageId ?? `user-${input.runId}`, role: 'user', content: input.text },
+      config: {
+        agent: { kind: 'acp', id: input.agentId ?? 'codex' },
+        systemPrompt: '',
+        toolChoice: 'auto',
+        ...input.config,
+      },
+    },
+  });
+  if (answer.status === 'refused') {
+    throw new Error(answer.message);
+  }
+  await until(
+    async () => {
+      const events = await readLog(harness.workspaceRoot, input.chatId);
+      return events.some(
+        (event) =>
+          event.runId === input.runId &&
+          event.type === 'run.lifecycle' &&
+          ['completed', 'failed', 'cancelled'].includes(event.state),
+      );
+    },
+    `run ${input.runId} to settle`,
+    { dump: async () => readLog(harness.workspaceRoot, input.chatId) },
+  );
+  /* The terminal marker is durable a beat before the host lets go of the chat,
+   * and a start inside that beat is refused as an admission conflict. */
+  await until(async () => {
+    const admitted = await harness.launcher.host.waitForAdmission(input.chatId);
+    return admitted === undefined;
+  }, `chat ${input.chatId} to be free`);
+};
+
+const readLog = async (workspaceRoot: string, chatId: string): Promise<readonly AgentLogEvent[]> => {
+  const raw = await readFile(join(workspaceRoot, '.tau', 'chats', chatId, 'events.jsonl'), 'utf8');
+  // A line is complete once its newline lands; a poll can see the run still appending the last one.
+  const complete = raw.slice(0, raw.lastIndexOf('\n') + 1);
+  return (
+    complete
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the log this test just wrote is the vocabulary by construction.
+      .map((line) => JSON.parse(line) as AgentLogEvent)
+  );
+};
+
+/** Whether the chat's log records an abandoned run. */
+const abandonedIn = async (workspaceRoot: string, chatId: string): Promise<boolean> => {
+  const events = await readLog(workspaceRoot, chatId);
+  return events.some((event) => 'detail' in event && event.detail?.code === 'RUN_ABANDONED');
+};
+
+const messagesOf = (events: readonly AgentLogEvent[]): readonly ProviderMessage[] =>
+  events.flatMap((event) => (event.type === 'message.appended' ? [event.message] : []));
+
+const lifecycleOf = (events: readonly AgentLogEvent[]): readonly string[] =>
+  events.flatMap((event) => (event.type === 'run.lifecycle' ? [event.state] : []));
+
+/** Whether the runner refused a turn because it could not reopen the agent's session. */
+const recoveryUnknown = (events: readonly AgentLogEvent[]): boolean =>
+  events.some((event) => event.type === 'run.lifecycle' && event.detail?.code === 'EXTERNAL_AGENT_RECOVERY_UNKNOWN');
+
+/** One run's own last lifecycle record, in a chat that holds several runs. */
+const stopOf = (
+  events: readonly AgentLogEvent[],
+  runId: string,
+): Extract<AgentLogEvent, { type: 'run.lifecycle' }> | undefined =>
+  events.findLast(
+    (event): event is Extract<AgentLogEvent, { type: 'run.lifecycle' }> =>
+      event.runId === runId && event.type === 'run.lifecycle',
+  );
+
+const textOfMessage = (message: ProviderMessage | undefined): string => {
+  const { content } = message ?? {};
+  if (typeof content === 'string') {
+    return content;
+  }
+  return Array.isArray(content)
+    ? content
+        .flatMap((block) =>
+          block !== null && typeof block === 'object' && !Array.isArray(block) && typeof block['text'] === 'string'
+            ? [block['text']]
+            : [],
+        )
+        .join('')
+    : '';
+};
+
+/**
+ * Poll a condition, bounded, so a hung agent fails as a timeout and not a hang.
+ *
+ * The durable log is dumped into the failure: an external run that dies records
+ * its reason there and nowhere else.
+ *
+ * @param predicate - Condition to wait for.
+ * @param label - What is being waited on.
+ * @param options - Diagnostic dump and the upper bound (milliseconds).
+ */
+const until = async (
+  predicate: () => Promise<boolean>,
+  label: string,
+  options: {
+    readonly dump?: (() => Promise<unknown>) | undefined;
+    /** Milliseconds. */ readonly budget?: number | undefined;
+  } = {},
+): Promise<void> => {
+  const { dump = async (): Promise<unknown> => undefined, budget = 25_000 } = options;
+  const deadline = Date.now() + budget;
+  while (Date.now() < deadline) {
+    // oxlint-disable-next-line no-await-in-loop -- polling is ordered by construction.
+    if (await predicate()) {
+      return;
+    }
+    // oxlint-disable-next-line no-await-in-loop -- polling is ordered by construction.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+  throw new Error(`Timed out waiting for ${label}. Log: ${JSON.stringify(await dump())}`);
+};
+
+/**
+ * Answer an approval once the run has rested on it. The request row is durable before the attempt that asked has
+ * settled, and until it has the host answers `CHAT_RUN_LIVE` (`wait`, "settling"): the same command is sent again,
+ * as a client does, rather than dropped (which left the run paused for good).
+ *
+ * @param launcher - The launcher.
+ * @param command - The `resolve-interrupt` command.
+ * @returns The answer that was not a `wait` refusal.
+ */
+const resolveOnceSettled = async (
+  launcher: Pick<AgentLauncher, 'execute'>,
+  command: Parameters<AgentLauncher['execute']>[0],
+): ReturnType<AgentLauncher['execute']> => {
+  const deadline = Date.now() + 25_000;
+  for (;;) {
+    // oxlint-disable-next-line no-await-in-loop -- one command at a time, until it is not refused for a settling run.
+    const answer = await launcher.execute(command);
+    if (answer.status !== 'refused' || answer.code !== 'CHAT_RUN_LIVE' || Date.now() > deadline) {
+      return answer;
+    }
+    // oxlint-disable-next-line no-await-in-loop -- see above.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+};
+
+/**
+ * One chat's log, reduced to what the ACP port reads and writes (W10 EA-S2).
+ *
+ * The host's semantics, not a merging stub: each turn has its own user-message
+ * marker, `remember` merges into *that turn's* marker only, and a turn's
+ * `state` is the newest marker that names an ACP session
+ * (`externalSessionOf`). A partial record on a later turn therefore reads back
+ * as the older, whole one — which is the defect a merging stub hid.
+ *
+ * @param chatId - The chat every turn belongs to.
+ * @returns A turn factory, the markers and the appended events.
+ */
+const durableChat = (
+  chatId: string,
+): {
+  readonly markers: ReadonlyArray<Record<string, JsonValue>>;
+  readonly eventsOf: (runId: string) => readonly AgentLogEvent[];
+  readonly turn: (runId: string, text: string, signal?: AbortSignal) => ExternalAgentTurn;
+} => {
+  const markers: Array<Record<string, JsonValue>> = [];
+  const events: Array<AgentLogEvent & { readonly runId: string }> = [];
+  return {
+    markers,
+    eventsOf: (runId) => events.filter((event) => event.runId === runId),
+    turn: (runId, text, signal = new AbortController().signal) => {
+      const state = markers.findLast((marker) => typeof marker['acpSessionId'] === 'string');
+      const marker: Record<string, JsonValue> = {};
+      markers.push(marker);
+      return {
+        agentId: 'codex',
+        agent: { kind: 'acp', id: 'codex' },
+        chatId,
+        runId,
+        attempt: 1,
+        message: { id: `user-${runId}`, role: 'user', content: text },
+        ...(state === undefined ? {} : { state: { ...state } }),
+        /* The record is the marker; the port's history fallbacks read envelopes this fake does not mint. */
+        history: [],
+        signal,
+        append: async (appended) => {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the log fills base fields; this fake records bodies.
+          events.push(...(appended as readonly AgentLogEvent[]).map((event) => ({ ...event, runId })));
+        },
+        remember: async (remembered) => {
+          Object.assign(marker, remembered);
+        },
+        approve: async () => ({ interruptId: 'stub', outcome: 'approved' }),
+      };
+    },
+  };
+};
+
+/** The per-turn usage every assistant message of these events stamped. */
+const usageOf = (events: readonly AgentLogEvent[]): ReadonlyArray<NonNullable<ProviderMessage['metadata']>['usage']> =>
+  events.flatMap((event) =>
+    event.type === 'message.appended' && event.message.role === 'assistant' && event.message.metadata?.usage
+      ? [event.message.metadata.usage]
+      : [],
+  );
+
+/** Pids the fake agent recorded in its pid file (adapter first, then any grandchild). */
+const recordedPids = async (file: string): Promise<readonly number[]> => {
+  let text = '';
+  try {
+    text = await readFile(file, 'utf8');
+  } catch {
+    /* Not written yet: no pids. */
+  }
+  return text
+    .split('\n')
+    .filter((line) => line !== '')
+    .map(Number);
+};
+
+/** Whether every recorded pid has exited. */
+const allExited = async (file: string): Promise<boolean> => {
+  const pids = await recordedPids(file);
+  return pids.every((pid) => !isAlive(pid));
+};
+
+/** How many pids the fake agent has recorded. */
+const pidCount = async (file: string): Promise<number> => {
+  const pids = await recordedPids(file);
+  return pids.length;
+};
+
+/** A turn that may be cancelled or refused: the test reads its effects, not its answer. */
+const settleQuietly = async (turn: Promise<unknown>): Promise<void> => {
+  try {
+    await turn;
+  } catch {
+    /* Its answer is not what this test checks. */
+  }
+};
+
+const isAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * An adapter whose processes record their pids, and are killed at teardown whatever the test left.
+ *
+ * @param mode - `TAU_FAKE_AGENT_MODE`, comma-separated.
+ * @returns The adapter and its pid file.
+ */
+const trackedAdapter = async (mode: string): Promise<{ readonly adapter: AcpAdapter; readonly pids: string }> => {
+  const directory = await mkdtemp(join(tmpdir(), 'tau-acp-pids-'));
+  roots.push(directory);
+  const pids = join(directory, 'pids');
+  closers.push(async () => {
+    for (const pid of await recordedPids(pids)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        /* Already gone, which is the assertion's happy path. */
+      }
+    }
+  });
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names.
+  return { adapter: { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: mode, TAU_FAKE_AGENT_PIDS: pids } }, pids };
+};
+
+describe('the external agent run kind', () => {
+  it('should publish and consume every generated GeoSpec skill resource through an active ACP fixture session', async () => {
+    const { default: geospecBundles } = await import('geospec/agent/resources.js');
+    const harness = await startHarness({ systemSkillBundles: geospecBundles });
+    await runTurn(harness, {
+      chatId: 'chat-geospec-skills',
+      runId: 'run-geospec-skills',
+      text: 'inspect skills noask',
+    });
+    const assistant = messagesOf(await readLog(harness.workspaceRoot, 'chat-geospec-skills'))
+      .filter((message) => message.role === 'assistant')
+      .map((message) => textOfMessage(message))
+      .join('');
+    const marker = 'native-skills: ';
+    expect(assistant).toContain(marker);
+    const consumed = JSON.parse(assistant.slice(assistant.indexOf(marker) + marker.length)) as Array<{
+      readonly root: string;
+      readonly files: Readonly<Record<string, string>>;
+    }>;
+    expect(consumed).toHaveLength(1);
+    const expectedPaths = geospecBundles.flatMap((bundle) => bundle.files.map((file) => `${bundle.slug}/${file.path}`));
+    expect(Object.keys(consumed[0]!.files).toSorted()).toEqual(expectedPaths.toSorted());
+    const digest = createHash('sha256')
+      .update(
+        JSON.stringify({
+          layout: ['.agents/skills', '.claude/skills'],
+          bundles: geospecBundles.map((bundle) => ({
+            slug: bundle.slug,
+            files: bundle.files.map(({ path, sha256 }) => ({ path, sha256 })),
+          })),
+        }),
+      )
+      .digest('hex');
+    expect(consumed[0]!.root.split('/').at(-1)).toBe(digest);
+    const opened = harness.frames.find(
+      (frame) => frame.direction === 'client->agent' && frame.frame.includes('"method":"session/new"'),
+    );
+    const directories = (JSON.parse(opened!.frame) as { params: { additionalDirectories: string[] } }).params
+      .additionalDirectories;
+    expect(directories).toEqual([consumed[0]!.root]);
+    for (const bundle of geospecBundles) {
+      for (const resource of bundle.files) {
+        const content = consumed[0]!.files[`${bundle.slug}/${resource.path}`]!;
+        expect(Buffer.byteLength(content)).toBe(resource.byteLength);
+        expect(createHash('sha256').update(content).digest('hex')).toBe(resource.sha256);
+        // oxlint-disable-next-line no-await-in-loop -- verify each actively consumed resource against its owner bytes.
+        expect(content).toBe(await readFile(new URL(resource.url), 'utf8'));
+      }
+      expect(consumed[0]!.files[`${bundle.slug}/SKILL.md`]).toBe(bundle.body);
+    }
+  }, 60_000);
+
+  it('drains admitted filesystem work even after the adapter transport closes', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-fs-drain-'));
+    roots.push(cwd);
+    const entered = Promise.withResolvers<void>();
+    const unblock = Promise.withResolvers<void>();
+    const original = NodeFsProvider.prototype.writeFile;
+    const write = vi
+      .spyOn(NodeFsProvider.prototype, 'writeFile')
+      .mockImplementation(async function (this: NodeFsProvider, path, content) {
+        if (this.root === cwd && path === 'admitted.txt') {
+          entered.resolve();
+          await unblock.promise;
+        }
+        return original.call(this, path, content);
+      });
+    const session = await openAcpSession({ adapter: fakeAgent, cwd, createId: randomUUID });
+    const abort = new AbortController();
+    let settled = false;
+    const prompting = (async () => {
+      try {
+        await session.prompt('fs-inflight noask', { ...stubTurn(), signal: abort.signal });
+      } catch {
+        /* Transport closure is expected; settlement is the assertion. */
+      } finally {
+        settled = true;
+      }
+    })();
+    await entered.promise;
+    abort.abort();
+    const closing = session.close();
+    await session.closed;
+    try {
+      expect(settled).toBe(false);
+    } finally {
+      unblock.resolve();
+      await prompting;
+      await closing;
+      write.mockRestore();
+    }
+    await expect(readFile(join(cwd, 'admitted.txt'), 'utf8')).resolves.toBe('admitted write');
+  }, 30_000);
+
+  it('publishes complete system skill bundles through ACP additional directories', async () => {
+    const sourceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-skill-source-'));
+    roots.push(sourceRoot);
+    const files = [
+      ['SKILL.md', '---\nname: fixture-skill\ndescription: Fixture skill\n---\nRead references/guide.md.\n'],
+      ['references/guide.md', '# Guide\nUse the native loader.\n'],
+    ] as const;
+    await Promise.all(
+      files.map(async ([path, body]) => {
+        await mkdir(join(sourceRoot, path, '..'), { recursive: true });
+        await writeFile(join(sourceRoot, path), body, 'utf8');
+      }),
+    );
+    const bundle: HostSystemSkillBundle = {
+      slug: 'fixture-skill',
+      name: 'fixture-skill',
+      description: 'Fixture skill',
+      version: '1.0.0',
+      whenToUse: 'Fixture tests',
+      body: files[0][1],
+      fingerprint: 'fixture',
+      files: files.map(([path, body]) => ({
+        path,
+        url: new URL(path, `file://${sourceRoot}/`).href,
+        byteLength: Buffer.byteLength(body),
+        lineCount: body.split('\n').length - 1,
+        contentKind: 'text',
+        mediaType: 'text/markdown',
+        sha256: createHash('sha256').update(body).digest('hex'),
+      })),
+    };
+    const harness = await startHarness({ systemSkillBundles: [bundle, ...workbenchBundles], idleTimeout: 50 });
+
+    await runTurn(harness, { chatId: 'chat-skills', runId: 'run-skills', text: 'inspect skills noask' });
+
+    const assistant = messagesOf(await readLog(harness.workspaceRoot, 'chat-skills'))
+      .filter((message) => message.role === 'assistant')
+      .map((message) => textOfMessage(message))
+      .join('');
+    const marker = 'native-skills: ';
+    const published = JSON.parse(assistant.slice(assistant.indexOf(marker) + marker.length)) as Array<{
+      readonly files: Readonly<Record<string, string>>;
+    }>;
+    expect(published[0]?.files).toEqual({
+      'fixture-skill/SKILL.md': files[0][1],
+      'fixture-skill/references/guide.md': files[1][1],
+      'workbench/SKILL.md': workbenchBundles[0]?.body,
+    });
+    const opened = harness.frames.find(
+      (frame) => frame.direction === 'client->agent' && frame.frame.includes('"method":"session/new"'),
+    );
+    expect(opened?.frame).toContain('additionalDirectories');
+    expect(opened?.frame).not.toContain(sourceRoot);
+    const publication = (JSON.parse(opened!.frame) as { params: { additionalDirectories: string[] } }).params
+      .additionalDirectories[0]!;
+    await until(async () => sent(harness.frames, 'session/close') === 1, 'skill session eviction');
+    await expect(readFile(join(publication, '.agents/skills/fixture-skill/references/guide.md'), 'utf8')).resolves.toBe(
+      files[1][1],
+    );
+    await expect(readFile(join(publication, '.agents/skills/workbench/SKILL.md'), 'utf8')).resolves.toBe(
+      workbenchBundles[0]?.body,
+    );
+    /* Claude Code finds skills under an added directory's `.claude/skills` only. */
+    await expect(readFile(join(publication, '.claude/skills/fixture-skill/references/guide.md'), 'utf8')).resolves.toBe(
+      files[1][1],
+    );
+    await expect(readFile(join(publication, '.claude/skills/workbench/SKILL.md'), 'utf8')).resolves.toBe(
+      workbenchBundles[0]?.body,
+    );
+    await runTurn(harness, { chatId: 'chat-skills', runId: 'run-skills-restored', text: 'inspect skills noask' });
+    const restored = harness.frames.find(
+      (frame) => frame.direction === 'client->agent' && frame.frame.includes('"method":"session/resume"'),
+    );
+    expect(restored?.frame).toContain(publication);
+
+    const overridden = await startHarness({ systemSkillBundles: [bundle] });
+    const overrideRoot = join(overridden.workspaceRoot, '.agents', 'skills', bundle.slug);
+    await mkdir(overrideRoot, { recursive: true });
+    await writeFile(join(overrideRoot, 'SKILL.md'), '# Workspace override\n', 'utf8');
+    await runTurn(overridden, {
+      chatId: 'chat-skill-override',
+      runId: 'run-skill-override',
+      text: 'inspect skills noask',
+    });
+    const overrideOpen = overridden.frames.find(
+      (frame) => frame.direction === 'client->agent' && frame.frame.includes('"method":"session/new"'),
+    );
+    expect(overrideOpen?.frame).toContain('additionalDirectories');
+    await expect(readFile(join(overrideRoot, 'SKILL.md'), 'utf8')).resolves.toBe('# Workspace override\n');
+
+    // Closing both hosts must not invalidate paths their vendor histories retain.
+    await harness.launcher.close();
+    await overridden.launcher.close();
+    const upgradedBody = '# Guide\nA new package version.\n';
+    await writeFile(join(sourceRoot, 'references/guide.md'), upgradedBody);
+    const upgraded = await startHarness({
+      systemSkillBundles: [
+        {
+          ...bundle,
+          files: bundle.files.map((file) =>
+            file.path === 'references/guide.md'
+              ? {
+                  ...file,
+                  byteLength: Buffer.byteLength(upgradedBody),
+                  sha256: createHash('sha256').update(upgradedBody).digest('hex'),
+                }
+              : file,
+          ),
+        },
+      ],
+    });
+    await runTurn(upgraded, {
+      chatId: 'chat-skills-upgraded',
+      runId: 'run-skills-upgraded',
+      text: 'inspect skills noask',
+    });
+    const upgradeOpen = upgraded.frames.find(
+      (frame) => frame.direction === 'client->agent' && frame.frame.includes('"method":"session/new"'),
+    );
+    const nextPublication = (JSON.parse(upgradeOpen!.frame) as { params: { additionalDirectories: string[] } }).params
+      .additionalDirectories[0]!;
+    expect(nextPublication).not.toBe(publication);
+    await expect(readFile(join(publication, '.agents/skills/fixture-skill/references/guide.md'), 'utf8')).resolves.toBe(
+      files[1][1],
+    );
+    await expect(
+      readFile(join(nextPublication, '.agents/skills/fixture-skill/references/guide.md'), 'utf8'),
+    ).resolves.toBe(upgradedBody);
+  }, 90_000);
+
+  it.each(['codex', 'grok'])(
+    'projects a %s turn with Tau MCP and permissions, and never touches the API',
+    async (agentId) => {
+      const { launcher, workspaceRoot, api } = await startHarness({
+        agents:
+          agentId === 'codex'
+            ? [fakeAgent]
+            : [
+                {
+                  id: 'grok',
+                  displayName: 'Grok Build',
+                  cli: process.execPath,
+                  args: [new URL('fixtures/fake-agent.ts', import.meta.url).pathname],
+                  configEnv: [],
+                  // eslint-disable-next-line @typescript-eslint/naming-convention -- fixture environment variable.
+                  spawnEnv: { TAU_FAKE_AGENT_MODE: 'grok' },
+                },
+              ],
+      });
+      const chatId = 'chat-external-1';
+      const runId = 'run-external-1';
+      const peers: string[] = [];
+      // async-iife: bootstrap; the interval is cleared in this test's own `finally`.
+      const sample = async (): Promise<void> => {
+        const rows = await sampleTcpPeers();
+        peers.push(...rows.map((row) => row.peer));
+      };
+      const sampling = setInterval(() => {
+        void sample();
+      }, 100);
+
+      try {
+        const started = await launcher.execute({
+          type: 'start',
+          commandId: 'cmd-1',
+          payload: {
+            trigger: 'submit',
+            chatId,
+            runId,
+            message: { id: 'user-1', role: 'user', content: 'write the file and run mcp' },
+            config: {
+              agent: { kind: 'acp', id: agentId },
+              systemPrompt: '',
+              toolChoice: 'auto',
+            },
+          },
+        });
+        expect(started).toMatchObject({ status: 'applied', effect: 'durable' });
+
+        // The approval is durable *before* anyone is attached (PH13 / OQ-X4).
+        const hasApproval = async (): Promise<boolean> => {
+          const requests = await launcher.pendingInterrupts(runId);
+          return requests.length > 0;
+        };
+        await until(hasApproval, 'the approval request', { dump: async () => readLog(workspaceRoot, chatId) });
+        const [pending] = await launcher.pendingInterrupts(runId);
+        await resolveOnceSettled(launcher, {
+          type: 'resolve-interrupt',
+          commandId: 'cmd-2',
+          payload: { chatId, runId, interruptId: pending?.interruptId ?? '', outcome: 'approved' },
+        });
+
+        await until(
+          async () => lifecycleOf(await readLog(workspaceRoot, chatId)).includes('completed'),
+          'the run to complete',
+          { dump: async () => readLog(workspaceRoot, chatId) },
+        );
+        const events = await readLog(workspaceRoot, chatId);
+        const messages = messagesOf(events);
+
+        /* Thin projection: current ACP session state, assistant text, then the
+         * agent's own tool call and result. The trailing assistant row carries no text at all — this turn
+         * ended on a tool call, so the vendor's own usage report has no open
+         * block to ride and gets a carrier of its own (V6). It joins the run's
+         * single UI message as a usage part, not as an empty bubble. */
+        expect(messages.map((message) => message.role)).toEqual([
+          'user',
+          'assistant',
+          'assistant',
+          'tool-input',
+          'tool-output',
+          'tool-input',
+          'tool-output',
+          'assistant',
+        ]);
+        expect(messages.at(-1)).toMatchObject({ content: [], metadata: { usage: { totalTokens: 1500 } } });
+        const external = messages.filter((message) => message.role === 'tool-input' || message.role === 'tool-output');
+        for (const message of external) {
+          expect(message.metadata?.tauInternal).toMatchObject({ origin: 'external', agentId });
+        }
+        expect(lifecycleOf(events)).toEqual(['admitted', 'running', 'paused', 'running', 'completed']);
+
+        /* V2: the agent works in the project's own tree, not a copy of it — so
+         * its file is *the* file, and no branch directory exists to hold one. */
+        await expect(readFile(join(workspaceRoot, 'hello.txt'), 'utf8')).resolves.toContain('write the file');
+        await expect(readdir(join(workspaceRoot, '.tau'))).resolves.not.toContain('workspaces');
+        /* The `cwd` fence is still the fence: it is the session's directory that
+         * bounds the client filesystem methods, and that is now the root. */
+        const contextMessage = messages.find((message) => textOfMessage(message).includes('"cwd"'));
+        expect(JSON.parse(contextMessage ? textOfMessage(contextMessage) : '{}')).toMatchObject({ cwd: workspaceRoot });
+
+        // GeoSpec evidence came back through the host-local MCP endpoint.
+        const evidence = messages.findLast(
+          (message) => message.role === 'tool-output' && message.toolName === 'test_model',
+        );
+        expect(JSON.stringify(evidence?.content)).toContain('is-a-cube');
+
+        // The API was absent from the data path: measured, not assumed.
+        expect(api.requests).toEqual([]);
+        await sample();
+        expect(peers.filter((peer) => peer.endsWith(`:${String(api.port)}`))).toEqual([]);
+
+        /* And the instrument works: a deliberate connection to the same stub is
+         * observed by the same sampler, so "no API peer" is a measurement rather
+         * than a sampler that never saw anything. */
+        const probe = connect(api.port, '127.0.0.1');
+        try {
+          await new Promise<void>((resolve, reject) => {
+            probe.once('connect', resolve);
+            probe.once('error', reject);
+          });
+          const observed = await sampleTcpPeers();
+          const observedPeers = observed.map((row) => row.peer);
+          expect(observedPeers.filter((peer) => peer.endsWith(`:${String(api.port)}`))).not.toEqual([]);
+        } finally {
+          probe.destroy();
+        }
+      } finally {
+        clearInterval(sampling);
+      }
+    },
+    90_000,
+  );
+
+  /* The decider's exact one-shot, session or durable choice crosses every Tau
+   * boundary unchanged; the adapter, not Tau, owns persistence semantics. */
+  it.each(['allow', 'allow-session', 'allow-always'])(
+    'answers a permission request with the exact %s option the resolution named',
+    async (optionId) => {
+      const { launcher, workspaceRoot } = await startHarness();
+      const chatId = `chat-external-option-${optionId}`;
+      const runId = `run-external-option-${optionId}`;
+
+      await launcher.execute({
+        type: 'start',
+        commandId: 'cmd-1',
+        payload: {
+          trigger: 'submit',
+          chatId,
+          runId,
+          message: { id: 'user-1', role: 'user', content: 'write the file' },
+          config: { agent: { kind: 'acp', id: 'codex' }, systemPrompt: '', toolChoice: 'auto' },
+        },
+      });
+      const awaitingApproval = async (): Promise<boolean> => {
+        const requests = await launcher.pendingInterrupts(runId);
+        return requests.length > 0;
+      };
+      await until(awaitingApproval, 'the approval request', { dump: async () => readLog(workspaceRoot, chatId) });
+      const [pending] = await launcher.pendingInterrupts(runId);
+      expect(pending?.payload).toMatchObject({
+        providerPermission: {
+          owner: 'provider',
+          persistence: 'unverified',
+          /* The unreviewed adapter claims no saved scope; ACP's own once kinds are still once. */
+          options: [
+            { optionId: 'allow', requestedScope: 'once' },
+            { optionId: 'allow-session', requestedScope: 'unspecified' },
+            { optionId: 'allow-always', requestedScope: 'unspecified' },
+            { optionId: 'reject', requestedScope: 'once' },
+          ],
+        },
+      });
+      expect(JSON.stringify(pending?.payload)).not.toContain('permission-metadata-canary');
+      await resolveOnceSettled(launcher, {
+        type: 'resolve-interrupt',
+        commandId: 'cmd-2',
+        payload: { chatId, runId, interruptId: pending?.interruptId ?? '', outcome: 'approved', optionId },
+      });
+
+      await until(
+        async () => messagesOf(await readLog(workspaceRoot, chatId)).some((message) => message.role === 'tool-output'),
+        'the tool result',
+        { dump: async () => readLog(workspaceRoot, chatId) },
+      );
+      const events = await readLog(workspaceRoot, chatId);
+      const result = messagesOf(events).findLast((message) => message.role === 'tool-output');
+      expect(JSON.stringify(result?.content)).toContain(`"optionId":"${optionId}"`);
+      // The same tool-call facts reach the log in the shared vocabulary (N11).
+      expect(result).toMatchObject({ call: { toolCallId: 'write-1' } });
+      expect(messagesOf(events).find((message) => message.role === 'tool-input')).toMatchObject({
+        call: { toolCallId: 'write-1', title: 'write hello.txt' },
+      });
+      // The chosen option is durable, so a restart replays the decision that was made.
+      const resolved = events.findLast((event) => event.type === 'interrupt.recorded' && event.phase === 'resolved');
+      expect(JSON.stringify(resolved)).toContain(`"optionId":"${optionId}"`);
+    },
+    90_000,
+  );
+
+  it('honours an explicitly empty field in a later ACP tool update', async () => {
+    const harness = await startHarness();
+
+    await runTurn(harness, { chatId: 'chat-empty-title', runId: 'run-empty-title', text: 'clear-title noask' });
+
+    const output = messagesOf(await readLog(harness.workspaceRoot, 'chat-empty-title')).findLast(
+      (message) => message.role === 'tool-output',
+    );
+    expect(output).toMatchObject({ call: { toolCallId: 'write-1', title: '' } });
+  }, 30_000);
+
+  it('refuses filesystem requests carrying another ACP session identity', async () => {
+    const harness = await startHarness();
+
+    await runTurn(harness, {
+      chatId: 'chat-wrong-session',
+      runId: 'run-wrong-session',
+      text: 'wrong-session noask',
+    });
+
+    const messages = messagesOf(await readLog(harness.workspaceRoot, 'chat-wrong-session'));
+    expect(messages.map((message) => textOfMessage(message)).join('')).toContain('wrong-session: Internal error');
+    await expect(readFile(join(harness.workspaceRoot, 'wrong-session.txt'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  }, 30_000);
+
+  it('cancels a turn through the run signal and records it, leaving the session up', async () => {
+    const harness = await startHarness();
+    const { launcher, workspaceRoot, frames } = harness;
+    const chatId = 'chat-external-cancel';
+    const runId = 'run-external-cancel';
+
+    await launcher.execute({
+      type: 'start',
+      commandId: 'cmd-1',
+      payload: {
+        trigger: 'submit',
+        chatId,
+        runId,
+        message: { id: 'user-1', role: 'user', content: 'go slow please' },
+        config: { agent: { kind: 'acp', id: 'codex' }, systemPrompt: '', toolChoice: 'auto' },
+      },
+    });
+    /* W10-F1: the session record is an assistant message written before the prompt, so wait on the prompt itself. */
+    await until(async () => sent(frames, 'session/prompt') === 1, 'the first prompt');
+    await launcher.execute({ type: 'cancel', commandId: 'cmd-2', payload: { chatId, runId } });
+
+    /* The cancelled attempt settles before the chat takes the next start (W8 RA-R12). */
+    await until(
+      async () => {
+        const events = await readLog(workspaceRoot, chatId);
+        return events.some((event) => event.type === 'turn.finalized' && event.runId === runId);
+      },
+      'the cancelled attempt settled',
+      { dump: async () => readLog(workspaceRoot, chatId) },
+    );
+    expect(lifecycleOf(await readLog(workspaceRoot, chatId))).toContain('cancelled');
+
+    /* D12: cancellation stops the prompt. The connection, the child and the
+     * vendor session all stay up, so the next turn continues the same thread —
+     * which is what a user who cancelled and rephrased expects. */
+    expect(sent(frames, 'session/close')).toBe(0);
+    expect(sent(frames, 'session/cancel')).toBe(1);
+    expect(stopOf(await readLog(workspaceRoot, chatId), runId)).toMatchObject({
+      state: 'cancelled',
+      detail: { code: 'USER_STOPPED' },
+    });
+    await launcher.execute({ type: 'resume', commandId: 'cmd-resume-stopped', payload: { chatId, runId } });
+    await until(async () => sent(frames, 'session/prompt') === 2, 'the stopped turn continuation');
+    const prompts = frames.filter(
+      ({ direction, frame }) => direction === 'client->agent' && frame.includes('"method":"session/prompt"'),
+    );
+    expect(prompts[1]?.frame).toContain('Continue from where you stopped.');
+    await until(async () => {
+      const pending = await launcher.pendingInterrupts(runId);
+      return pending.length > 0;
+    }, 'a fresh continuation approval');
+    const [resumedPermission] = await launcher.pendingInterrupts(runId);
+    await resolveOnceSettled(launcher, {
+      type: 'resolve-interrupt',
+      commandId: 'approve-resumed',
+      payload: { chatId, runId, interruptId: resumedPermission?.interruptId ?? '', outcome: 'approved' },
+    });
+    await until(
+      async () => stopOf(await readLog(workspaceRoot, chatId), runId)?.state === 'completed',
+      'the resumed turn completes',
+      { dump: async () => readLog(workspaceRoot, chatId) },
+    );
+    await until(async () => {
+      const admitted = await launcher.host.waitForAdmission(chatId);
+      return admitted === undefined;
+    }, 'the resumed chat to be free');
+    expect(sent(frames, 'session/new')).toBe(1);
+    await runTurn(harness, { chatId, runId: 'run-external-rephrased', text: 'second noask' });
+    expect(sent(frames, 'session/new')).toBe(1);
+    expect(sent(frames, 'session/prompt')).toBe(3);
+    /* The cancel belonged to the first prompt; the rephrased turn completes. */
+    expect(stopOf(await readLog(workspaceRoot, chatId), 'run-external-rephrased')).toMatchObject({
+      state: 'completed',
+    });
+  }, 90_000);
+
+  it('settles a cancel while the adapter never answers its handshake', async () => {
+    /* D12 + review 1-review S3: `cancel` observes settlement, so the handshake
+     * must be cancellable too — an adapter wedged in `initialize` (a keychain
+     * prompt, a hung CLI) would otherwise hold `cancel` open forever. */
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+    const silent: AcpAdapter = { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: 'silent' } };
+    const { launcher, workspaceRoot, frames } = await startHarness({ agents: [silent] });
+    const chatId = 'chat-external-silent-cancel';
+    const runId = 'run-external-silent-cancel';
+
+    await launcher.execute({
+      type: 'start',
+      commandId: 'cmd-1',
+      payload: {
+        trigger: 'submit',
+        chatId,
+        runId,
+        message: { id: 'user-1', role: 'user', content: 'noask' },
+        config: { agent: { kind: 'acp', id: 'codex' }, systemPrompt: '', toolChoice: 'auto' },
+      },
+    });
+    await until(async () => sent(frames, 'initialize') === 1, 'the unanswered initialize request');
+    const started = Date.now();
+    await launcher.execute({ type: 'cancel', commandId: 'cmd-2', payload: { chatId, runId } });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(lifecycleOf(await readLog(workspaceRoot, chatId))).toContain('cancelled');
+    expect(sent(frames, 'session/prompt')).toBe(0);
+  }, 60_000);
+
+  it('continues a turn its host abandoned mid-stream on the session it remembered', async () => {
+    const { launcher, workspaceRoot, frames } = await startHarness();
+    const chatId = 'chat-external-resume';
+    const runId = 'run-external-resume';
+    await mkdir(join(workspaceRoot, '.tau', 'chats', chatId), { recursive: true });
+    /* Exactly what a killed daemon leaves behind: an admitted, running turn
+     * whose marker names the agent and the ACP session it had already created. */
+    const base = { version: 1, leaderEpoch: 'epoch-before-restart', recordedAt: new Date(0).toISOString(), runId };
+    await writeFile(
+      join(workspaceRoot, '.tau', 'chats', chatId, 'events.jsonl'),
+      [
+        { ...base, sequence: 0, type: 'run.lifecycle', state: 'admitted', storageDurability: 'exclusive-append' },
+        {
+          ...base,
+          sequence: 1,
+          type: 'message.appended',
+          message: {
+            id: 'user-1',
+            role: 'user',
+            content: 'write the file',
+            metadata: {
+              tauInternal: { kind: 'external-agent', agentId: 'codex', acpSessionId: 'fake-session-1' },
+            },
+          },
+        },
+        { ...base, sequence: 2, type: 'run.lifecycle', state: 'running' },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n'),
+      'utf8',
+    );
+
+    /* The takeover only records what it knows: the host driving this run is
+     * gone (I4). It re-asks the vendor nothing on its own. */
+    const attached = await launcher.execute({ type: 'attach', commandId: 'cmd-1', payload: { chatId } });
+
+    expect(attached).toMatchObject({ status: 'applied', details: { takeover: true } });
+    /* RH-R1: attach answers as a read; the claim it asked for abandons the run just after. */
+    await until(async () => abandonedIn(workspaceRoot, chatId), 'the abandoned run', {
+      dump: async () => readLog(workspaceRoot, chatId),
+    });
+    expect(sent(frames, 'initialize')).toBe(0);
+
+    await launcher.execute({ type: 'resume', commandId: 'cmd-resume', payload: { chatId, runId } });
+    await until(async () => sent(frames, 'session/prompt') === 1, 'the continuation prompt', {
+      dump: async () => readLog(workspaceRoot, chatId),
+    });
+    /* Resume everywhere: the adapter died with its host, so the vendor turn has
+     * ended; the person's Resume re-enters the same vendor session and asks the
+     * agent to carry on from its own transcript. */
+    expect(sent(frames, 'session/resume')).toBe(1);
+    expect(sent(frames, 'session/new')).toBe(0);
+    const prompt = frames.find(
+      ({ direction, frame }) => direction === 'client->agent' && frame.includes('"method":"session/prompt"'),
+    );
+    expect(prompt?.frame).toContain('Continue from where you stopped.');
+    expect(prompt?.frame).not.toContain('write the file');
+    expect(recoveryUnknown(await readLog(workspaceRoot, chatId))).toBe(false);
+    await launcher.execute({ type: 'cancel', commandId: 'cmd-cancel', payload: { chatId, runId } });
+  }, 90_000);
+
+  /*
+   * V6. Three facts that were all being thrown away: the vendor's own token
+   * report, the model that produced it, and the reason the turn stopped. The
+   * last one is the dangerous one — `max_tokens` recorded as `completed` tells
+   * every later reader that the work is finished.
+   */
+  it("records the vendor's usage and model, and never calls a short stop a completion", async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-usage';
+    const runId = 'run-external-usage';
+
+    await runTurn(harness, { chatId, runId, text: 'stop:max_tokens' });
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    const assistant = messagesOf(events).findLast((message) => message.role === 'assistant');
+    expect(assistant?.metadata).toMatchObject({
+      model: fakeAgentModel,
+      responseModel: fakeAgentModel,
+      usage: { input: 1200, output: 300, totalTokens: 1500, cost: { total: 0 } },
+    });
+    /* The vendor's money is labelled as the vendor's own report and priced at
+     * nothing by Tau: these are not Tau credits and must never be summed as if
+     * they were. */
+    expect(assistant?.metadata?.tauInternal).toMatchObject({
+      agentId: 'codex',
+      vendorCost: { amount: 0.01, currency: 'USD', reportedBy: 'codex' },
+      vendorContext: { used: 1200, size: 200_000 },
+    });
+    const terminal = events.findLast((event) => event.type === 'run.lifecycle');
+    expect(terminal).toMatchObject({ state: 'failed', stopReason: 'max_tokens' });
+    expect(lifecycleOf(events)).not.toContain('completed');
+  }, 90_000);
+
+  it.each(['codex', 'grok'])(
+    'should negotiate the intended file authority for %s',
+    async (agentId) => {
+      const harness = await startHarness({ agents: [{ ...fakeAgent, id: agentId }] });
+      await runTurn(harness, { chatId: 'file-authority', runId: 'file-authority', text: 'noask', agentId });
+      const initialize = harness.frames.find(
+        ({ direction, frame }) => direction === 'client->agent' && frame.includes('"method":"initialize"'),
+      );
+      expect(JSON.parse(initialize?.frame ?? '{}')).toMatchObject({
+        params: {
+          clientCapabilities: {
+            fs: { readTextFile: agentId !== 'grok', writeTextFile: agentId !== 'grok' },
+            elicitation: { url: {}, form: {} },
+            terminal: false,
+          },
+        },
+      });
+    },
+    90_000,
+  );
+
+  /* A usage limit is the person's own account, not a crash: it is recorded once,
+   * typed, in the provider's words, with no duplicate prose and no stack. */
+  it('should record a provider usage limit as one typed stop without a stack trace', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-quota';
+
+    await runTurn(harness, { chatId, runId: 'run-external-quota', text: 'fail:quota' });
+
+    const initialize = harness.frames.find(
+      ({ direction, frame }) => direction === 'client->agent' && frame.includes('"method":"initialize"'),
+    );
+    expect(JSON.parse(initialize?.frame ?? '{}')).toMatchObject({
+      params: {
+        clientCapabilities: { _meta: { jetbrains: { air: { version: 1, capabilities: ['sessionFailure'] } } } },
+      },
+    });
+    const events = await readLog(harness.workspaceRoot, chatId);
+    const title =
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 20th, 2026 4:07 PM.";
+    expect(events.findLast((event) => event.type === 'run.lifecycle')).toMatchObject({
+      state: 'failed',
+      detail: {
+        code: 'EXTERNAL_AGENT_LIMIT_REACHED',
+        message: title,
+        details: { agentId: 'codex', failure: { category: 'limit', title, actions: [] } },
+      },
+    });
+    expect(messagesOf(events).filter((message) => textOfMessage(message).includes('usage limit'))).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain('SYSTEM_ERROR');
+    expect(lifecycleOf(events)).not.toContain('completed');
+  }, 90_000);
+
+  /*
+   * R13. Claude Code reports a limit's reset one update *before* the failure,
+   * on `usage_update`; the AIR failure object never carries one. The stop has
+   * to carry it so the card can name the window and hold Resume until then.
+   */
+  it('should carry the reset a Claude usage_update reported onto a usage-limit stop', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-quota-reset';
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+
+    await runTurn(harness, { chatId, runId: 'run-external-quota-reset', text: 'fail:quota reset:soon' });
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    expect(events.findLast((event) => event.type === 'run.lifecycle')).toMatchObject({
+      state: 'failed',
+      detail: {
+        code: 'EXTERNAL_AGENT_LIMIT_REACHED',
+        /* The second report of that turn is unreadable, and the readable one
+         * before it still decides: a report Tau cannot parse is not a reset. */
+        details: {
+          failure: { category: 'limit' },
+          resetsAt: expect.closeTo(resetsAt, -1) as unknown as number,
+          window: 'five_hour',
+        },
+      },
+    });
+  }, 90_000);
+
+  /* Each of the two negative cases runs its own positive control first, in the
+   * same chat: a turn that *does* stamp, so "no reset" cannot pass by the
+   * reader being dead. */
+  it('should drop a held reset once the agent reports the limit allowed again', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-quota-lifted';
+
+    await runTurn(harness, { chatId, runId: 'run-quota-lifted-1', text: 'fail:quota reset:soon' });
+    expect(JSON.stringify(await readLog(harness.workspaceRoot, chatId))).toContain('"window":"five_hour"');
+    await runTurn(harness, { chatId, runId: 'run-quota-lifted-2', text: 'fail:quota reset:lifted' });
+
+    const stop = stopOf(await readLog(harness.workspaceRoot, chatId), 'run-quota-lifted-2');
+    expect(stop).toMatchObject({ state: 'failed', detail: { code: 'EXTERNAL_AGENT_LIMIT_REACHED' } });
+    expect(JSON.stringify(stop)).not.toContain('resetsAt');
+  }, 90_000);
+
+  /* A reset that has already passed would release a held Resume the moment the
+   * card rendered, which is the same round trip into the same limit. */
+  it('should ignore a reported reset that has already passed', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-quota-past';
+
+    await runTurn(harness, { chatId, runId: 'run-quota-past-1', text: 'fail:quota reset:soon' });
+    expect(JSON.stringify(await readLog(harness.workspaceRoot, chatId))).toContain('"window":"five_hour"');
+    await runTurn(harness, { chatId, runId: 'run-quota-past-2', text: 'fail:quota reset:past' });
+
+    const stop = stopOf(await readLog(harness.workspaceRoot, chatId), 'run-quota-past-2');
+    expect(stop).toMatchObject({ state: 'failed', detail: { code: 'EXTERNAL_AGENT_LIMIT_REACHED' } });
+    expect(JSON.stringify(stop)).not.toContain('resetsAt');
+  }, 90_000);
+
+  /*
+   * F4. A context or budget limit is `limit` too, and no reset clears it: the
+   * account's reset must not be stamped there, or the card would announce a
+   * time in place of the agent's own sentence.
+   */
+  it('should leave a held reset off a limit only a new chat clears', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-context-reset';
+
+    await runTurn(harness, { chatId, runId: 'run-context-reset-1', text: 'fail:quota reset:soon' });
+    expect(JSON.stringify(await readLog(harness.workspaceRoot, chatId))).toContain('"window":"five_hour"');
+    await runTurn(harness, { chatId, runId: 'run-context-reset-2', text: 'fail:context reset:soon' });
+
+    const stop = stopOf(await readLog(harness.workspaceRoot, chatId), 'run-context-reset-2');
+    expect(stop).toMatchObject({
+      state: 'failed',
+      detail: {
+        code: 'EXTERNAL_AGENT_LIMIT_REACHED',
+        message: 'Codex ran out of room in its context window.',
+        details: { failure: { category: 'limit', actions: ['new_session'] } },
+      },
+    });
+    expect(JSON.stringify(stop)).not.toContain('resetsAt');
+  }, 90_000);
+
+  /* R14. Codex has no `usage_update` reset; the patched adapter attaches its own
+   * snapshot beside the AIR failure, in minutes rather than window names. */
+  it("should carry the Codex adapter's snapshot reset, named as a window", async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-quota-codex';
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+
+    await runTurn(harness, { chatId, runId: 'run-external-quota-codex', text: 'fail:quota reset:codex' });
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    expect(events.findLast((event) => event.type === 'run.lifecycle')).toMatchObject({
+      state: 'failed',
+      detail: {
+        code: 'EXTERNAL_AGENT_LIMIT_REACHED',
+        details: { resetsAt: expect.closeTo(resetsAt, -1) as unknown as number, window: 'five_hour' },
+      },
+    });
+  }, 90_000);
+
+  it('should keep the retry action the agent offered for a rate limit', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-rate';
+
+    await runTurn(harness, { chatId, runId: 'run-external-rate', text: 'fail:rate' });
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    expect(events.findLast((event) => event.type === 'run.lifecycle')).toMatchObject({
+      state: 'failed',
+      detail: {
+        code: 'EXTERNAL_AGENT_LIMIT_REACHED',
+        message: 'Codex is temporarily rate limited.',
+        details: { failure: { category: 'limit', actions: ['retry'] } },
+      },
+    });
+  }, 90_000);
+
+  /*
+   * R9/S11. A resume after a stop the agent said a retry can help re-enters the
+   * vendor session that still holds the turn. Replaying the user's message
+   * there would spend the person's own quota on the same work twice.
+   */
+  it('should continue a retryable stop on the remembered session instead of replaying the turn', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-resume-retry';
+
+    await runTurn(harness, { chatId, runId: 'run-external-resume-retry', text: 'fail:rate noask' });
+    await harness.launcher.execute({
+      type: 'resume',
+      commandId: 'cmd-resume',
+      payload: { chatId, runId: 'run-external-resume-retry' },
+    });
+    await until(async () => sent(harness.frames, 'session/prompt') === 2, 'the continuation prompt', {
+      dump: async () => readLog(harness.workspaceRoot, chatId),
+    });
+
+    const prompts = harness.frames
+      .filter(({ direction, frame }) => direction === 'client->agent' && frame.includes('"method":"session/prompt"'))
+      .map(({ frame }) => frame);
+    expect(sent(harness.frames, 'session/new')).toBe(1);
+    expect(prompts).toHaveLength(2);
+    /* The same vendor session, so the agent still has the turn in front of it. */
+    const sessionIdOf = (frame: string): string => /"sessionId":"([^"]+)"/u.exec(frame)?.[1] ?? '';
+    expect(sessionIdOf(prompts[1] ?? '')).toBe(sessionIdOf(prompts[0] ?? ''));
+    expect(prompts[1]).toContain('Continue from where you stopped.');
+    expect(prompts[1]).not.toContain('fail:rate');
+    await harness.launcher.execute({
+      type: 'cancel',
+      commandId: 'cmd-cancel',
+      payload: { chatId, runId: 'run-external-resume-retry' },
+    });
+  }, 90_000);
+
+  /*
+   * F3. A resume reuses the run id, so a run that stopped, resumed and was
+   * *then* cut short by a restart still carries the first stop's `failed` row.
+   * The state this attempt resumes from is the takeover's `RUN_ABANDONED`, not
+   * that stale stop, and it continues the same session (resume everywhere).
+   */
+  it('should continue a resume whose own attempt a restart cut short, from the abandonment', async () => {
+    const { launcher, workspaceRoot, frames } = await startHarness();
+    const chatId = 'chat-external-stale-stop';
+    const runId = 'run-external-stale-stop';
+    await mkdir(join(workspaceRoot, '.tau', 'chats', chatId), { recursive: true });
+    const base = { version: 1, leaderEpoch: 'epoch-before-restart', recordedAt: new Date(0).toISOString(), runId };
+    await writeFile(
+      join(workspaceRoot, '.tau', 'chats', chatId, 'events.jsonl'),
+      [
+        { ...base, sequence: 0, type: 'run.lifecycle', state: 'admitted', storageDurability: 'exclusive-append' },
+        {
+          ...base,
+          sequence: 1,
+          type: 'message.appended',
+          message: {
+            id: 'user-1',
+            role: 'user',
+            content: 'write the file',
+            metadata: { tauInternal: { kind: 'external-agent', agentId: 'codex', acpSessionId: 'fake-session-1' } },
+          },
+        },
+        { ...base, sequence: 2, type: 'run.lifecycle', state: 'running' },
+        /* The agent's own stop, and the resume the person clicked on it. */
+        {
+          ...base,
+          sequence: 3,
+          type: 'run.lifecycle',
+          state: 'failed',
+          detail: {
+            code: 'EXTERNAL_AGENT_LIMIT_REACHED',
+            message: 'Codex is temporarily rate limited.',
+            details: { agentId: 'codex', failure: { category: 'limit', title: 'rate', actions: ['retry'] } },
+          },
+        },
+        /* A resume reopens the run with `running` alone… */
+        { ...base, sequence: 4, type: 'run.lifecycle', state: 'running' },
+        /* …and the daemon died here, with that resume still in flight. */
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n'),
+      'utf8',
+    );
+
+    await launcher.execute({ type: 'attach', commandId: 'cmd-1', payload: { chatId } });
+    /* RH-R1: attach answers as a read; the claim it asked for abandons the run just after. */
+    await until(async () => abandonedIn(workspaceRoot, chatId), 'the abandoned run', {
+      dump: async () => readLog(workspaceRoot, chatId),
+    });
+    await launcher.execute({ type: 'resume', commandId: 'cmd-resume', payload: { chatId, runId } });
+    await until(async () => sent(frames, 'session/prompt') === 1, 'the continuation prompt', {
+      dump: async () => readLog(workspaceRoot, chatId),
+    });
+
+    expect(sent(frames, 'session/resume')).toBe(1);
+    expect(sent(frames, 'session/new')).toBe(0);
+    const prompt = frames.find(
+      ({ direction, frame }) => direction === 'client->agent' && frame.includes('"method":"session/prompt"'),
+    );
+    expect(prompt?.frame).toContain('Continue from where you stopped.');
+    expect(recoveryUnknown(await readLog(workspaceRoot, chatId))).toBe(false);
+    await launcher.execute({ type: 'cancel', commandId: 'cmd-cancel', payload: { chatId, runId } });
+  }, 90_000);
+
+  /* A model the account's login cannot run is a model choice, not a crash:
+   * Try again meets the same refusal, so it is typed for Switch model. */
+  it('should record a provider model refusal as a typed model-unavailable stop in its own words', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-model';
+
+    await runTurn(harness, { chatId, runId: 'run-external-model', text: 'fail:model' });
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    const message = 'The requested model is not supported for this account.';
+    expect(events.findLast((event) => event.type === 'run.lifecycle')).toMatchObject({
+      state: 'failed',
+      detail: {
+        code: 'EXTERNAL_AGENT_MODEL_UNAVAILABLE',
+        message,
+        details: { agentId: 'codex', failure: { category: 'service', title: message, actions: ['retry'] } },
+      },
+    });
+  }, 90_000);
+
+  it("should carry an unclassified failure's stderr as diagnostics, not as its message", async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-crash';
+
+    await runTurn(harness, { chatId, runId: 'run-external-crash', text: 'crash' });
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    const terminal = events.findLast((event) => event.type === 'run.lifecycle');
+    expect(terminal).toMatchObject({
+      state: 'failed',
+      detail: {
+        code: 'EXTERNAL_AGENT_FAILED',
+        message: 'Codex stopped unexpectedly: Internal error',
+        details: {
+          agentId: 'codex',
+          failure: { category: 'internal', title: 'Internal error', actions: ['retry'] },
+          diagnostics: expect.stringContaining('[SYSTEM_ERROR] Prompt for session') as unknown as string,
+        },
+      },
+    });
+  }, 90_000);
+
+  /* Every ACP counter is a session total ("Total input tokens across all
+   * turns"), and `metadata.usage` is a per-turn figure Tau's readers sum. Turn 2
+   * must therefore report turn 2, not the session. */
+  it('stamps each turn its own share of the running totals the agent reports', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-usage-delta';
+
+    await runTurn(harness, { chatId, runId: 'run-usage-1', text: 'noask' });
+    await runTurn(harness, { chatId, runId: 'run-usage-2', text: 'noask' });
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    const stamped = messagesOf(events).filter((message) => message.metadata?.usage !== undefined);
+    expect(stamped).toHaveLength(2);
+    expect(stamped.at(0)?.metadata?.usage).toMatchObject({ input: 1200, output: 300, totalTokens: 1500 });
+    expect(stamped.at(1)?.metadata?.usage).toMatchObject({ input: 1200, output: 300, totalTokens: 1500 });
+    /* The agent's own running totals are kept verbatim, so the vendor's report
+     * is still readable beside the share Tau derived from it. */
+    expect(stamped.at(1)?.metadata?.tauInternal).toMatchObject({
+      vendorUsage: { inputTokens: 2400, outputTokens: 600, totalTokens: 3000 },
+    });
+  }, 90_000);
+
+  /* VSC3 + V6: the agent moved its own session, so the chat's record follows it
+   * rather than replaying the model Tau last asked for. */
+  it('follows the agent onto the model it moved its own session to, and keeps the title it chose', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-external-switch';
+
+    await runTurn(harness, { chatId, runId: 'run-switch-1', text: 'updates switch noask' });
+
+    const first = await readLog(harness.workspaceRoot, chatId);
+    const remembered = first.findLast((event) => event.type === 'message.envelope-replaced');
+    expect(JSON.stringify(remembered)).toContain('"model":"gpt-5.3-codex"');
+    // `session_info_update.title` is a durable candidate, not a dropped update.
+    expect(JSON.stringify(remembered)).toContain('"title":"Fixture session"');
+
+    await runTurn(harness, { chatId, runId: 'run-switch-2', text: 'noask' });
+
+    /* The record drove the second turn: the fixture echoes the model it is
+     * actually running, and it is the one the agent switched to. */
+    const second = messagesOf(await readLog(harness.workspaceRoot, chatId)).filter(
+      (message) => message.role === 'assistant',
+    );
+    expect(textOfMessage(second.at(-2) ?? second.at(-1))).toContain('"model":"gpt-5.3-codex"');
+    /* And the record the second turn read is the *same session*: a `remember`
+     * that clobbered the marker would silently open a fresh one, and every
+     * assertion above would still pass (4-review S3). */
+    expect(sent(harness.frames, 'session/new')).toBe(1);
+  }, 90_000);
+
+  /* The banner has to name the requester from the record, not from whatever the
+   * composer happens to be showing when it renders (V6). */
+  it('names the agent that asked on the durable interrupt record', async () => {
+    const { launcher, workspaceRoot } = await startHarness();
+    const chatId = 'chat-external-attribution';
+    const runId = 'run-external-attribution';
+
+    await launcher.execute({
+      type: 'start',
+      commandId: 'cmd-1',
+      payload: {
+        trigger: 'submit',
+        chatId,
+        runId,
+        message: { id: 'user-1', role: 'user', content: 'write the file' },
+        config: { agent: { kind: 'acp', id: 'claude' }, systemPrompt: '', toolChoice: 'auto' },
+      },
+    });
+    await until(
+      async () => {
+        const requests = await launcher.pendingInterrupts(runId);
+        return requests.length > 0;
+      },
+      'the approval request',
+      { dump: async () => readLog(workspaceRoot, chatId) },
+    );
+
+    const recorded = await readLog(workspaceRoot, chatId);
+    const requested = recorded.find((event) => event.type === 'interrupt.recorded' && event.phase === 'requested');
+    expect(requested).toMatchObject({ payload: { agentId: 'claude', kind: 'approval' } });
+    // The options the agent offered ride the same record, so the banner renders them.
+    expect(JSON.stringify(requested)).toContain('"optionId":"allow-always"');
+
+    const [pending] = await launcher.pendingInterrupts(runId);
+    await launcher.execute({
+      type: 'resolve-interrupt',
+      commandId: 'cmd-2',
+      payload: { chatId, runId, interruptId: pending?.interruptId ?? '', outcome: 'denied' },
+    });
+  }, 90_000);
+
+  it('refuses an agent this host cannot start, without failing the channel', async () => {
+    const { launcher } = await startHarness();
+
+    await expect(
+      launcher.execute({
+        type: 'start',
+        commandId: 'cmd-1',
+        payload: {
+          trigger: 'submit',
+          chatId: 'chat-external-missing',
+          runId: 'run-external-missing',
+          message: { id: 'user-1', role: 'user', content: 'hello' },
+          config: { agent: { kind: 'acp', id: 'gemini' }, systemPrompt: '', toolChoice: 'auto' },
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: 'refused',
+      message: expect.stringMatching(/cannot start the gemini agent/u) as unknown as string,
+    });
+  }, 30_000);
+});
+
+type FixtureConnection = Required<Agent>;
+
+/**
+ * A fixture agent driven directly over ACP, with no launcher in between.
+ *
+ * The launcher cases above prove the projection; these prove the *fixture*
+ * offers what a G-ACP gate has to read (V15). Talking to it at the protocol
+ * level is the cheaper seam — a spawn and a connection, no durable log.
+ *
+ * @param options - Working directory, and the pre-prompt mode to spawn under.
+ * @returns The connection, plus every `session/update` it received.
+ */
+const openFixture = async (
+  options: { readonly mode?: string } = {},
+): Promise<{
+  readonly connection: FixtureConnection;
+  readonly updates: SessionUpdate[];
+  readonly cwd: string;
+}> => {
+  const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-fixture-'));
+  roots.push(cwd);
+  const updates: SessionUpdate[] = [];
+  const adapter = spawnAcpAdapter({
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+    adapter: options.mode === undefined ? fakeAgent : { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: options.mode } },
+    cwd,
+  });
+  closers.push(async () => {
+    adapter.close();
+  });
+  const handler: Client = {
+    sessionUpdate: (params) => {
+      updates.push(params.update);
+    },
+    requestPermission: () => ({ outcome: { outcome: 'selected', optionId: 'allow' } }),
+  };
+  /* oxlint-disable-next-line typescript/no-deprecated -- the same long-lived
+   * connection shape `runAcpSession` uses; the replacement scopes a connection
+   * to one callback. */
+  return { connection: new ClientSideConnection(() => handler, adapter.stream), updates, cwd };
+};
+
+/** The ACP handshake every fixture case starts with. */
+const initializeFixture = async (connection: FixtureConnection): Promise<void> => {
+  await connection.initialize({
+    protocolVersion: 1,
+    clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
+    clientInfo: { name: 'tau-host-test', version: '1' },
+  });
+};
+
+const modelOption = (configOptions: readonly SessionConfigOption[] | undefined): SessionConfigOption =>
+  configOptions?.find((option) => option.category === 'model') ?? {
+    id: 'missing',
+    name: 'missing',
+    type: 'boolean',
+    currentValue: false,
+  };
+
+const textChunks = (updates: readonly SessionUpdate[]): readonly string[] =>
+  updates.flatMap((update) =>
+    update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text' ? [update.content.text] : [],
+  );
+
+/** The durable seams of one turn, stubbed, keeping whatever was appended. */
+const stubTurn = (appended: unknown[] = []): AcpPromptTurn => ({
+  append: async (events) => {
+    appended.push(...events);
+  },
+  approve: async () => ({ interruptId: 'stub', outcome: 'approved' }),
+  publishLive: async () => undefined,
+  signal: new AbortController().signal,
+});
+
+/** One `openAcpSession` turn against the fixture, with the log stubbed out. */
+const runFixtureSession = async (options: {
+  readonly adapter: AcpAdapter;
+  readonly cwd: string;
+  readonly model?: string | undefined;
+  readonly prompt: string;
+}): Promise<StopReason> => {
+  const session = await openAcpSession({ adapter: options.adapter, cwd: options.cwd, createId: () => randomUUID() });
+  try {
+    const { stopReason } = await session.prompt(options.prompt, stubTurn(), options.model);
+    return stopReason;
+  } finally {
+    await session.close();
+  }
+};
+
+describe('the fixture agent', () => {
+  it('offers a model select, honours a selection, and reports it back on the turn', async () => {
+    const { connection, updates, cwd } = await openFixture();
+    await initializeFixture(connection);
+    const session = await connection.newSession({ cwd, mcpServers: [] });
+
+    const offered = modelOption(session.configOptions ?? undefined);
+    expect(offered).toMatchObject({ id: 'model', type: 'select', currentValue: fakeAgentModel });
+    expect(offered.type === 'select' ? offered.options : []).toEqual([
+      { value: 'gpt-5.3-codex-spark', name: 'gpt-5.3-codex-spark' },
+      { value: 'gpt-5.3-codex', name: 'gpt-5.3-codex' },
+    ]);
+    // The other categories a client must stay indifferent to are offered too.
+    expect(session.configOptions?.map((option) => option.category)).toEqual([
+      'model',
+      'mode',
+      'thought_level',
+      'model_config',
+    ]);
+
+    const set = await connection.setSessionConfigOption({
+      sessionId: session.sessionId,
+      configId: 'model',
+      value: 'gpt-5.3-codex',
+    });
+    expect(modelOption(set.configOptions)).toMatchObject({ currentValue: 'gpt-5.3-codex' });
+
+    await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'noask' }] });
+    expect(JSON.parse(textChunks(updates)[0] ?? '{}')).toMatchObject({ model: 'gpt-5.3-codex', turn: 1 });
+  }, 30_000);
+
+  it('flattens a grouped model list, and refuses a model no group offers', async () => {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+    const grouped: AcpAdapter = { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: 'grouped' } };
+    const branch = await mkdtemp(join(tmpdir(), 'tau-acp-grouped-'));
+    roots.push(branch);
+
+    await expect(
+      runFixtureSession({ adapter: grouped, cwd: branch, model: 'gpt-5.3-codex', prompt: 'noask' }),
+    ).resolves.toBe('end_turn');
+    await expect(runFixtureSession({ adapter: grouped, cwd: branch, model: 'gpt-4', prompt: 'noask' })).rejects.toThrow(
+      /does not offer the model "gpt-4"\. It offers: gpt-5\.3-codex-spark, gpt-5\.3-codex/u,
+    );
+  }, 60_000);
+
+  it.each(['end_turn', 'max_tokens', 'refusal', 'cancelled'])(
+    'ends a turn with stop reason %s',
+    async (reason) => {
+      const { connection, cwd } = await openFixture();
+      await initializeFixture(connection);
+      const session = await connection.newSession({ cwd, mcpServers: [] });
+
+      const answered = await connection.prompt({
+        sessionId: session.sessionId,
+        prompt: [{ type: 'text', text: `stop:${reason}` }],
+      });
+
+      expect(answered.stopReason).toBe(reason);
+    },
+    30_000,
+  );
+
+  it('reports usage both as an update and on the prompt response', async () => {
+    const { connection, updates, cwd } = await openFixture();
+    await initializeFixture(connection);
+    const session = await connection.newSession({ cwd, mcpServers: [] });
+
+    const answered = await connection.prompt({
+      sessionId: session.sessionId,
+      prompt: [{ type: 'text', text: 'noask' }],
+    });
+
+    expect(updates.find((update) => update.sessionUpdate === 'usage_update')).toMatchObject({
+      used: 1200,
+      size: 200_000,
+      cost: { currency: 'USD' },
+    });
+    expect(answered.usage).toMatchObject({ totalTokens: 1500, inputTokens: 1200, outputTokens: 300 });
+  }, 30_000);
+
+  it('changes its own model mid-turn and pushes the new options', async () => {
+    const { connection, updates, cwd } = await openFixture();
+    await initializeFixture(connection);
+    const session = await connection.newSession({ cwd, mcpServers: [] });
+
+    await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'switch noask' }] });
+
+    const pushed = updates.find((update) => update.sessionUpdate === 'config_option_update');
+    expect(
+      modelOption(pushed?.sessionUpdate === 'config_option_update' ? pushed.configOptions : undefined),
+    ).toMatchObject({ currentValue: 'gpt-5.3-codex' });
+    expect(textChunks(updates)).toContain('model: gpt-5.3-codex');
+  }, 30_000);
+
+  it('emits the presentation-only updates Tau drops', async () => {
+    const { connection, updates, cwd } = await openFixture();
+    await initializeFixture(connection);
+    const session = await connection.newSession({ cwd, mcpServers: [] });
+
+    await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'updates noask' }] });
+
+    expect(new Set(updates.map((update) => update.sessionUpdate))).toEqual(
+      new Set([
+        'agent_message_chunk',
+        'usage_update',
+        'agent_thought_chunk',
+        'plan',
+        'plan_update',
+        'plan_removed',
+        'available_commands_update',
+        'current_mode_update',
+        'session_info_update',
+        'tool_call',
+        'tool_call_update',
+      ]),
+    );
+  }, 30_000);
+
+  it('emits a Codex-style tool sequence with locations, diff and terminal content', async () => {
+    const { connection, updates, cwd } = await openFixture();
+    await initializeFixture(connection);
+    const session = await connection.newSession({ cwd, mcpServers: [] });
+
+    await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'tools noask' }] });
+
+    const calls = updates.filter((update) => update.sessionUpdate === 'tool_call');
+    expect(new Set(calls.map((call) => call.kind))).toEqual(new Set(['read', 'execute', 'think', 'fetch', 'edit']));
+    expect(calls.find((call) => call.toolCallId === 'list-1')).toMatchObject({
+      title: 'List files',
+      kind: 'read',
+      status: 'pending',
+      locations: [{ path: join(cwd, 'main.scad'), line: 1 }],
+    });
+    const results = updates.filter((update) => update.sessionUpdate === 'tool_call_update');
+    // Every call moved through `in_progress` before it settled.
+    expect(results.filter((result) => result.status === 'in_progress')).toHaveLength(5);
+    const content = results.flatMap((result) => result.content ?? []);
+    expect(content.map((entry) => entry.type)).toContain('diff');
+    expect(content.map((entry) => entry.type)).toContain('terminal');
+  }, 30_000);
+
+  it('carries a transcript across two prompts in one session', async () => {
+    const { connection, updates, cwd } = await openFixture();
+    await initializeFixture(connection);
+    const session = await connection.newSession({ cwd, mcpServers: [] });
+
+    await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'first noask' }] });
+    await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'second noask' }] });
+
+    expect(textChunks(updates)).toContain('transcript: first noask | second noask');
+    expect(JSON.parse(textChunks(updates).at(-2) ?? '{}')).toMatchObject({ turn: 2 });
+  }, 30_000);
+
+  it('restores silently on resume and replays the transcript on load', async () => {
+    const { connection, updates, cwd } = await openFixture();
+    await initializeFixture(connection);
+    const session = await connection.newSession({ cwd, mcpServers: [] });
+    await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'first noask' }] });
+
+    const beforeResume = updates.length;
+    await connection.resumeSession({ sessionId: session.sessionId, cwd, mcpServers: [] });
+    expect(updates.slice(beforeResume)).toEqual([]);
+
+    await connection.loadSession({ sessionId: session.sessionId, cwd, mcpServers: [] });
+    expect(textChunks(updates.slice(beforeResume))).toEqual(['replay: first noask']);
+  }, 30_000);
+
+  it('closes a session, and refuses to prompt the session it closed', async () => {
+    const { connection, cwd } = await openFixture();
+    await initializeFixture(connection);
+    const session = await connection.newSession({ cwd, mcpServers: [] });
+
+    await connection.closeSession({ sessionId: session.sessionId });
+
+    await expect(
+      connection.prompt({
+        sessionId: session.sessionId,
+        prompt: [{ type: 'text', text: 'noask' }],
+      }),
+    ).rejects.toThrow(/Unknown session/u);
+  }, 30_000);
+
+  it('advertises an auth method and refuses a session when it is logged out', async () => {
+    const { connection, cwd } = await openFixture({ mode: 'auth-required' });
+
+    const initialized = await connection.initialize({
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+    });
+
+    /* The list codex-acp 1.7.0 sends: no method carries a terminal command, and the
+     * device-code method is offered only to a client that advertised
+     * `elicitation.url`, which this one did not. */
+    expect(initialized.authMethods).toEqual([
+      {
+        id: 'api-key',
+        name: 'API Key',
+        description: 'Use an API key to authenticate',
+        _meta: { 'api-key': { provider: 'openai' } },
+      },
+      { id: 'chat-gpt', name: 'ChatGPT', description: 'Use ChatGPT to authenticate' },
+    ]);
+    await expect(connection.newSession({ cwd, mcpServers: [] })).rejects.toThrow(/Authentication required/u);
+  }, 30_000);
+
+  it('never answers initialize at all in silent mode', async () => {
+    const { connection } = await openFixture({ mode: 'silent' });
+
+    const answered = await Promise.race([
+      Promise.resolve(
+        connection.initialize({
+          protocolVersion: 1,
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        }),
+      ).then(() => 'answered'),
+      new Promise<string>((resolve) => {
+        setTimeout(() => {
+          resolve('silent');
+        }, 750);
+      }),
+    ]);
+
+    expect(answered).toBe('silent');
+  }, 30_000);
+});
+
+describe('one ACP session per chat', () => {
+  it.each(['new', 'resume', 'load'] as const)(
+    'passes Grok skill plugins and keeps Tau revision authority on %s',
+    async (operation) => {
+      const cwd = await mkdtemp(join(tmpdir(), 'tau-grok-session-'));
+      roots.push(cwd);
+      const frames: AcpWireFrame[] = [];
+      const adapter: AcpAdapter = {
+        id: 'grok',
+        displayName: 'Grok Build',
+        cli: process.execPath,
+        args: [new URL('fixtures/fake-agent.ts', import.meta.url).pathname],
+        configEnv: [],
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- fixture environment variable.
+        spawnEnv: { TAU_FAKE_AGENT_MODE: operation === 'load' ? 'grok-load' : 'grok' },
+      };
+      const mcpServers: OpenAcpSessionOptions['mcpServers'] = [
+        { type: 'http', name: 'tau', url: 'http://127.0.0.1:1/mcp', headers: [] },
+      ];
+      const session = await openAcpSession({
+        adapter,
+        cwd,
+        createId: randomUUID,
+        additionalDirectories: [cwd],
+        mcpServers,
+        ...(operation === 'new' ? {} : { acpSessionId: 'previous-session' }),
+        onFrame: (frame) => frames.push(frame),
+      });
+      await session.close();
+      const request = frames.find(
+        (frame) => frame.direction === 'client->agent' && frame.frame.includes(`"session/${operation}"`),
+      );
+      expect(JSON.parse(request?.frame ?? '{}')).toMatchObject({
+        params: { cwd, mcpServers, _meta: { pluginDirs: [join(cwd, '.agents')], 'x.ai/restore_code': false } },
+      });
+      expect(request?.frame).not.toContain('additionalDirectories');
+      expect(sent(frames, 'authenticate')).toBe(0);
+    },
+    30_000,
+  );
+
+  it('surfaces Grok login without starting an interactive authentication flow', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-grok-login-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    await expect(
+      openAcpSession({
+        adapter: {
+          ...fakeAgent,
+          id: 'grok',
+          displayName: 'Grok Build',
+          loginCommand: 'grok login',
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- fixture environment variable.
+          spawnEnv: { TAU_FAKE_AGENT_MODE: 'grok-auth' },
+        },
+        cwd,
+        createId: randomUUID,
+        onFrame: (frame) => frames.push(frame),
+      }),
+    ).rejects.toMatchObject({
+      code: 'EXTERNAL_AGENT_AUTH_REQUIRED',
+      login: {
+        agentId: 'grok',
+        authMethods: [
+          { id: 'cli-login', name: 'Sign in to Grok Build', terminalCommand: 'grok login' },
+          { id: 'grok.com', name: 'Grok' },
+        ],
+      },
+    });
+    expect(sent(frames, 'authenticate')).toBe(0);
+  }, 30_000);
+
+  it('reports a missing native executable without crashing the host', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-grok-missing-'));
+    roots.push(cwd);
+    await expect(
+      openAcpSession({
+        adapter: {
+          id: 'grok',
+          displayName: 'Grok Build',
+          cli: join(cwd, 'missing-grok'),
+          args: ['agent', 'stdio'],
+          configEnv: [],
+        },
+        cwd,
+        createId: randomUUID,
+      }),
+    ).rejects.toThrow();
+  }, 30_000);
+
+  it('refuses required HTTP MCP and skill-directory capabilities before opening a session', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-capabilities-'));
+    roots.push(cwd);
+    const noHttp: AcpAdapter = {
+      ...fakeAgent,
+      spawnEnv: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test fixture environment variables retain their process names.
+        TAU_FAKE_AGENT_MODE: 'no-http',
+      },
+    };
+    await expect(
+      openAcpSession({
+        adapter: noHttp,
+        cwd,
+        createId: () => randomUUID(),
+        mcpServers: [{ type: 'http', name: 'tau', url: 'http://127.0.0.1:1/mcp', headers: [] }],
+      }),
+    ).rejects.toMatchObject({ code: 'EXTERNAL_AGENT_UNAVAILABLE' });
+
+    const noDirectories: AcpAdapter = {
+      ...fakeAgent,
+      spawnEnv: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test fixture environment variables retain their process names.
+        TAU_FAKE_AGENT_MODE: 'no-additional-directories',
+      },
+    };
+    await expect(
+      openAcpSession({
+        adapter: noDirectories,
+        cwd,
+        createId: () => randomUUID(),
+        additionalDirectories: [cwd],
+      }),
+    ).rejects.toMatchObject({ code: 'EXTERNAL_AGENT_UNAVAILABLE' });
+  }, 30_000);
+
+  it('opens one vendor session and prompts it twice, then closes it', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-continuity-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    const appended: unknown[] = [];
+    const session = await openAcpSession({
+      adapter: fakeAgent,
+      cwd,
+      createId: () => randomUUID(),
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    await session.prompt('first noask', stubTurn(appended));
+    await session.prompt('second noask', stubTurn(appended));
+    await session.close();
+
+    /* The whole point of V2, read off the wire: one conversation, two turns. */
+    expect(sent(frames, 'session/new')).toBe(1);
+    expect(sent(frames, 'session/prompt')).toBe(2);
+    expect(sent(frames, 'session/close')).toBe(1);
+    expect(JSON.stringify(appended)).toContain('transcript: first noask | second noask');
+  }, 30_000);
+
+  it('sets the model only when the session is not already on it', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-model-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    const session = await openAcpSession({
+      adapter: fakeAgent,
+      cwd,
+      createId: () => randomUUID(),
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    /* The one call on the first turn is the default mode (PR5), not the model. */
+    await session.prompt('first noask', stubTurn(), fakeAgentModel);
+    expect(sent(frames, 'session/set_config_option')).toBe(1);
+
+    await session.prompt('second noask', stubTurn(), 'gpt-5.3-codex');
+    expect(sent(frames, 'session/set_config_option')).toBe(2);
+    expect(modelOption(session.configOptions)).toMatchObject({ currentValue: 'gpt-5.3-codex' });
+
+    /* Still two, because the session now holds what the third turn asks for. */
+    await session.prompt('third noask', stubTurn(), 'gpt-5.3-codex');
+    expect(sent(frames, 'session/set_config_option')).toBe(2);
+    await session.close();
+  }, 30_000);
+
+  it('applies offered ACP configuration once and retains the resulting session state', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-config-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    const session = await openAcpSession({
+      adapter: fakeAgent,
+      cwd,
+      createId: () => randomUUID(),
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    const outcome = await session.prompt('first noask', stubTurn(), undefined, {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- ACP configuration retains its wire id.
+      thought_level: 'high',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- ACP configuration retains its wire id.
+      web_search: true,
+    });
+    /* Thinking, web search and the default mode (PR5). */
+    expect(sent(frames, 'session/set_config_option')).toBe(3);
+    expect(
+      frames.some(
+        ({ direction, frame }) =>
+          direction === 'client->agent' &&
+          frame.includes('"method":"session/set_config_option"') &&
+          frame.includes('"configId":"web_search"') &&
+          frame.includes('"type":"boolean"'),
+      ),
+    ).toBe(true);
+    expect(session.configOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'thought_level', currentValue: 'high' }),
+        expect.objectContaining({ id: 'web_search', currentValue: true }),
+      ]),
+    );
+    expect(outcome.configuration['thought_level']).toBe('high');
+    expect(outcome.configuration['web_search']).toBe(true);
+
+    await session.prompt('second noask', stubTurn(), undefined, {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- ACP configuration retains its wire id.
+      thought_level: 'high',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- ACP configuration retains its wire id.
+      web_search: true,
+    });
+    expect(sent(frames, 'session/set_config_option')).toBe(3);
+    await session.close();
+  }, 30_000);
+
+  it('starts a new session in auto, falls back on a model without it, and keeps a pick (PR5)', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-mode-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    const session = await openAcpSession({
+      adapter: { ...fakeAgent, defaultModePreference: ['auto', 'acceptEdits'] },
+      cwd,
+      createId: () => randomUUID(),
+      onFrame: (frame) => frames.push(frame),
+    });
+    const mode = (): unknown => session.configOptions?.find((option) => option.id === 'mode')?.currentValue;
+    const modeSets = (): string[] =>
+      frames
+        .filter(
+          ({ direction, frame }) =>
+            direction === 'client->agent' &&
+            frame.includes('"method":"session/set_config_option"') &&
+            frame.includes('"configId":"mode"'),
+        )
+        .map(({ frame }) => /"value":"([^"]+)"/u.exec(frame)?.[1] ?? '');
+
+    await session.prompt('first noask', stubTurn(), fakeAgentModel);
+    expect(mode()).toBe('auto');
+    /* The composer echoes `auto`; the fixture clamps it to `default` on a model without auto. */
+    await session.prompt('second noask', stubTurn(), 'gpt-5.3-codex', { mode: 'auto' });
+    expect(mode()).toBe('acceptEdits');
+    await session.prompt('third noask', stubTurn(), fakeAgentModel, { mode: 'acceptEdits' });
+    expect(mode()).toBe('auto');
+    /* The person picks Manual: kept through a model switch. */
+    await session.prompt('fourth noask', stubTurn(), fakeAgentModel, { mode: 'default' });
+    await session.prompt('fifth noask', stubTurn(), 'gpt-5.3-codex', { mode: 'default' });
+    expect(mode()).toBe('default');
+    expect(modeSets()).toEqual(['auto', 'acceptEdits', 'auto', 'default']);
+    await session.close();
+  }, 30_000);
+
+  it('declines an elicitation that arrives between turns, and records it against nothing', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-between-turns-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    const appended: unknown[] = [];
+    const session = await openAcpSession({
+      adapter: fakeAgent,
+      cwd,
+      createId: () => randomUUID(),
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    await session.prompt('late-auth noask', stubTurn(appended));
+    const afterTurn = appended.length;
+    await until(
+      async () => frames.some((frame) => frame.frame.includes('"method":"elicitation/create"')),
+      'the agent to ask after its turn ended',
+    );
+
+    /* The turn is over: there is no run to record the login against, so the
+     * honest answer is to decline rather than to accept one nobody will see
+     * and reopen a finished message with it (4-review S6). */
+    expect(appended.length).toBeGreaterThanOrEqual(afterTurn);
+    expect(JSON.stringify(appended)).not.toContain('login-1');
+    expect(frames.some((frame) => frame.frame.includes('"action":"decline"'))).toBe(true);
+    await session.close();
+  }, 30_000);
+
+  it('keeps replayed updates out of the durable log when no turn is open', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-quiet-'));
+    roots.push(cwd);
+    const appended: unknown[] = [];
+    const session = await openAcpSession({ adapter: fakeAgent, cwd, createId: () => randomUUID() });
+    await session.prompt('first noask', stubTurn(appended));
+    const afterTurn = appended.length;
+
+    /* A second client loads the same session, which replays it. Tau's own
+     * connection sees those notifications with no turn open — the replay guard
+     * the `session/load` fallback depends on. */
+    const { connection, cwd: otherCwd } = await openFixture();
+    void otherCwd;
+    await initializeFixture(connection);
+    await connection.loadSession({ sessionId: session.acpSessionId, cwd, mcpServers: [] });
+
+    expect(appended).toHaveLength(afterTurn);
+    expect(JSON.stringify(appended)).not.toContain('replay:');
+    await session.close();
+  }, 30_000);
+
+  it('persists session presentation reported between turns without reopening the run', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-late-session-state';
+
+    await runTurn(harness, { chatId, runId: 'run-late-session-state', text: 'late-state noask' });
+    await until(
+      async () => JSON.stringify(reduceEventLog(await readLog(harness.workspaceRoot, chatId))).includes('late-command'),
+      'the idle session update',
+      {
+        budget: 5000,
+        dump: async () => ({ frames: harness.frames, log: await readLog(harness.workspaceRoot, chatId) }),
+      },
+    );
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    expect(events.findLast((event) => event.type === 'run.lifecycle')).toMatchObject({ state: 'completed' });
+    const sessionMessages = reduceEventLog(events).filter(
+      (message) => message.role === 'assistant' && JSON.stringify(message.content).includes('"type":"acp-session"'),
+    );
+    expect(sessionMessages).toHaveLength(1);
+    expect(JSON.stringify(sessionMessages[0]?.content)).toContain('late-command');
+  }, 30_000);
+
+  it.each([false, true])(
+    'retries idle state without admitting a prompt while storage fails (recover: %s)',
+    async (recover) => {
+      const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-idle-state-failure-'));
+      roots.push(cwd);
+      const frames: AcpWireFrame[] = [];
+      const session = await openAcpSession({
+        adapter: fakeAgent,
+        cwd,
+        createId: () => randomUUID(),
+        onFrame: (frame) => frames.push(frame),
+      });
+      const first = stubTurn();
+      let failures = 0;
+      const turn: AcpPromptTurn = {
+        ...first,
+        appendSession: async (events) => {
+          if (JSON.stringify(events).includes('late-command') && (!recover || failures === 0)) {
+            failures++;
+            throw new Error('idle state storage failed');
+          }
+          await first.append(events);
+        },
+      };
+
+      await session.prompt('late-state noask', turn);
+      await until(
+        async () => frames.some((frame) => frame.frame.includes('late-command')),
+        'the idle state notification',
+      );
+      if (recover) {
+        await expect(session.prompt('second noask', stubTurn())).resolves.toBeDefined();
+        await expect(session.prompt('third noask', stubTurn())).resolves.toBeDefined();
+      } else {
+        await expect(session.prompt('second noask', stubTurn())).rejects.toThrow('idle state storage failed');
+      }
+      await session.close();
+    },
+    30_000,
+  );
+
+  it('runs two turns of a chat through one session, with no workspace copy', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-continuity';
+
+    await runTurn(harness, { chatId, runId: 'run-c1', text: 'first noask' });
+    await runTurn(harness, { chatId, runId: 'run-c2', text: 'second noask' });
+
+    expect(sent(harness.frames, 'session/new')).toBe(1);
+    expect(sent(harness.frames, 'session/prompt')).toBe(2);
+    /* V2: no branch was ever materialized, so the directory does not exist. */
+    await expect(readdir(join(harness.workspaceRoot, '.tau'))).resolves.not.toContain('workspaces');
+    const events = await readLog(harness.workspaceRoot, chatId);
+    const messages = messagesOf(events);
+    expect(JSON.stringify(messages)).toContain('transcript: first noask | second noask');
+    const sessionMessages = messages.filter(
+      (message) => message.role === 'assistant' && JSON.stringify(message.content).includes('"type":"acp-session"'),
+    );
+    expect(sessionMessages).toHaveLength(1);
+    expect(sessionMessages[0]?.content).toMatchObject([{ type: 'acp-session', agentId: 'codex' }]);
+    expect(JSON.stringify(sessionMessages[0]?.content)).toMatch(/"sessionId":"fake-session-/u);
+    /* The session id is durable on the chat's own record, which is what a cold
+     * start reads back (VSC3); `remember` records it by replacing the envelope. */
+    const remembered = events.findLast(
+      (event) =>
+        event.type === 'message.envelope-replaced' &&
+        event.replacement.metadata?.tauInternal?.['acpSessionId'] !== undefined,
+    );
+    expect(remembered).toMatchObject({
+      /* oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- `expect.stringMatching` is typed `any` by vitest. */
+      replacement: { metadata: { tauInternal: { acpSessionId: expect.stringMatching(/^fake-session-\d+-/u) } } },
+    });
+  }, 90_000);
+
+  it('resumes after an idle eviction without replaying history into the log', async () => {
+    const harness = await startHarness({ idleTimeout: 50 });
+    const chatId = 'chat-cold-start';
+
+    await runTurn(harness, { chatId, runId: 'run-cold-1', text: 'first noask' });
+    await until(async () => sent(harness.frames, 'session/close') === 1, 'the idle eviction');
+    const before = messagesOf(await readLog(harness.workspaceRoot, chatId)).length;
+
+    await runTurn(harness, { chatId, runId: 'run-cold-2', text: 'second noask' });
+
+    expect(sent(harness.frames, 'session/resume')).toBe(1);
+    expect(sent(harness.frames, 'session/new')).toBe(1);
+    const messages = messagesOf(await readLog(harness.workspaceRoot, chatId));
+    /* Exactly turn two's own five new messages. Its current ACP state replaces
+     * the prior session envelope instead of appending a second one; text, the
+     * tool pair and usage carrier are new, and no replay is appended. */
+    expect(messages.length - before).toBe(5);
+    expect(JSON.stringify(messages)).not.toContain('replay:');
+    /* The transcript itself is asserted on the *live* path above: this fixture
+     * forgets a session on `session/close`, so a resume after eviction gets an
+     * empty one back. See the report's fixture gaps. */
+  }, 90_000);
+
+  it('reopens a session whose capability is about to lapse instead of prompting under it', async () => {
+    /* The idle timer bounds idleness, not life: a chat prompted every few
+     * minutes would otherwise ride one capability past its expiry (2-review S1). */
+    const harness = await startHarness({
+      mcp: { expiresAt: () => new Date(Date.now() + acpCapabilityRenewalMargin / 2).toISOString() },
+    });
+    const chatId = 'chat-capability-lapse';
+
+    await runTurn(harness, { chatId, runId: 'run-cap-1', text: 'first noask' });
+    await runTurn(harness, { chatId, runId: 'run-cap-2', text: 'second noask' });
+
+    expect(sent(harness.frames, 'session/close')).toBe(1);
+    expect(sent(harness.frames, 'session/resume')).toBe(1);
+    expect(harness.frames.filter((frame) => frame.frame.includes('tau-mcp-host-v1.'))).toHaveLength(2);
+  }, 90_000);
+
+  it('refuses to open a session while the MCP endpoint has no url yet', async () => {
+    const harness = await startHarness({ mcp: { url: '' } });
+    const chatId = 'chat-mcp-unbound';
+
+    await runTurn(harness, { chatId, runId: 'run-unbound', text: 'first noask' });
+
+    const events = await readLog(harness.workspaceRoot, chatId);
+    const terminal = events.find((event) => event.type === 'run.lifecycle' && event.state === 'failed');
+    // V-W9 records the typed code on the run; today only the message is durable.
+    expect(JSON.stringify(terminal)).toContain('still starting its tool endpoint');
+    expect(sent(harness.frames, 'session/new')).toBe(0);
+  }, 90_000);
+
+  it('closes the vendor session on relinquish and on host close', async () => {
+    const harness = await startHarness();
+
+    await runTurn(harness, { chatId: 'chat-relinquish', runId: 'run-r1', text: 'first noask' });
+    await harness.launcher.host.relinquish('chat-relinquish');
+    expect(sent(harness.frames, 'session/close')).toBe(1);
+
+    await runTurn(harness, { chatId: 'chat-host-close', runId: 'run-r2', text: 'first noask' });
+    await harness.launcher.close();
+    expect(sent(harness.frames, 'session/close')).toBe(2);
+  }, 90_000);
+
+  it('serves Tau MCP to the second turn under the capability the session was opened with', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-mcp-twice';
+
+    await runTurn(harness, { chatId, runId: 'run-m1', text: 'noask mcp' });
+    await runTurn(harness, { chatId, runId: 'run-m2', text: 'noask mcp' });
+
+    const evidence = messagesOf(await readLog(harness.workspaceRoot, chatId)).filter(
+      (message) => message.role === 'tool-output' && message.toolName === 'test_model',
+    );
+    expect(evidence).toHaveLength(2);
+    for (const message of evidence) {
+      expect(JSON.stringify(message.content)).toContain('is-a-cube');
+    }
+    /* One session, so one server list, so one capability: it was minted at the
+     * open and never re-issued under the live session (V7). */
+    expect(harness.frames.filter((frame) => frame.frame.includes('tau-mcp-host-v1.'))).toHaveLength(1);
+  }, 90_000);
+
+  it('makes two distinct MCP arrangement calls for the stale-digest fixture prompt', async () => {
+    const inputs: unknown[] = [];
+    const mcpRegistry: ToolRegistry = {
+      list: () => [
+        { name: 'arrange_workbench', description: 'Arrange the workbench.', inputSchema: { type: 'object' } },
+      ],
+      invoke: async (invocation): ReturnType<ToolRegistry['invoke']> => {
+        inputs.push(invocation.input);
+        return inputs.length === 1
+          ? {
+              content: {
+                status: 'written',
+                revisions: [
+                  { path: '.tau/workbench/layout.json', digest: `sha256:${'a'.repeat(64)}`, previousDigest: 'missing' },
+                ],
+                visible: [{ kind: 'view', view: 'front' }],
+              },
+              isError: false,
+            }
+          : { content: { errorCode: 'RECORD_CONFLICT', message: 'The workbench arrangement changed.' }, isError: true };
+      },
+    };
+    const harness = await startHarness({ mcpRegistry });
+    const chatId = 'chat-mcp-arrange-conflict';
+
+    await runTurn(harness, { chatId, runId: 'run-arrange-conflict', text: 'noask mcp-arrange-conflict' });
+
+    expect(inputs).toEqual([
+      { views: [{ id: 'front', name: 'Front', entryPath: 'main.scad', camera: { kind: 'preset', preset: 'front' } }] },
+      { basedOn: 'missing', open: [{ kind: 'pane', pane: 'parameters' }] },
+    ]);
+    const messages = messagesOf(await readLog(harness.workspaceRoot, chatId));
+    const arrangementInputs = messages.filter(
+      (message) => message.role === 'tool-input' && message.toolName === 'arrange_workbench',
+    );
+    const arrangementOutputs = messages.filter(
+      (message) => message.role === 'tool-output' && message.toolName === 'arrange_workbench',
+    );
+    expect(
+      arrangementInputs.map((message) => (message.role === 'tool-input' ? message.call?.toolCallId : undefined)),
+    ).toEqual(['mcp-arrange-1', 'mcp-arrange-conflict-2']);
+    expect(arrangementOutputs).toMatchObject([
+      {
+        call: { toolCallId: 'mcp-arrange-1' },
+        isError: false,
+        content: {
+          status: 'written',
+          revisions: [
+            { path: '.tau/workbench/layout.json', digest: `sha256:${'a'.repeat(64)}`, previousDigest: 'missing' },
+          ],
+          visible: [{ kind: 'view', view: 'front' }],
+        },
+      },
+      {
+        call: { toolCallId: 'mcp-arrange-conflict-2' },
+        isError: true,
+        content: { errorCode: 'RECORD_CONFLICT', message: 'The workbench arrangement changed.' },
+      },
+    ]);
+  }, 90_000);
+
+  it('gives a second agent in the same chat its own session', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-agent-switch';
+
+    await runTurn(harness, { chatId, runId: 'run-s1', text: 'first noask' });
+    await runTurn(harness, { chatId, runId: 'run-s2', text: 'second noask', agentId: 'claude' });
+
+    /* Two agents, two sessions: the second was never handed the first's id. */
+    expect(sent(harness.frames, 'session/new')).toBe(2);
+    expect(sent(harness.frames, 'session/resume')).toBe(0);
+  }, 90_000);
+});
+
+/**
+ * The fixture behind a wire proxy that hides capabilities it advertises.
+ *
+ * The fixture offers `session/resume`, so the `session/load` rung below it is
+ * unreachable through it — and that rung is the one whose replay must never
+ * reach the durable log. Rewriting the `initialize` reply on the wire is the
+ * smallest honest way to exercise it without a second fixture: the proxy edits
+ * one field of one frame and forwards everything else byte for byte.
+ *
+ * @param hidden - Capabilities to strip from the agent's `initialize` reply.
+ * @returns An adapter that speaks the fixture's protocol without them.
+ */
+const withoutCapabilities = async (hidden: {
+  readonly resume?: boolean;
+  readonly load?: boolean;
+}): Promise<AcpAdapter> => {
+  const directory = await mkdtemp(join(tmpdir(), 'tau-acp-proxy-'));
+  roots.push(directory);
+  const modulePath = join(directory, 'capability-proxy.cjs');
+  await writeFile(
+    modulePath,
+    `const { spawn } = require('node:child_process');
+const child = spawn(process.execPath, [process.env.TAU_PROXIED_MODULE], { stdio: ['pipe', 'pipe', 'inherit'] });
+process.stdin.pipe(child.stdin);
+let buffer = '';
+child.stdout.setEncoding('utf8');
+child.stdout.on('data', (chunk) => {
+  buffer += chunk;
+  const lines = buffer.split('\\n');
+  buffer = lines.pop() ?? '';
+  for (const line of lines) {
+    if (line.trim() === '') continue;
+    let message;
+    try { message = JSON.parse(line); } catch { process.stdout.write(line + '\\n'); continue; }
+    const capabilities = message && message.result && message.result.agentCapabilities;
+    if (capabilities) {
+      if (process.env.TAU_PROXY_HIDE_RESUME && capabilities.sessionCapabilities) delete capabilities.sessionCapabilities.resume;
+      if (process.env.TAU_PROXY_HIDE_LOAD) delete capabilities.loadSession;
+    }
+    process.stdout.write(JSON.stringify(message) + '\\n');
+  }
+});
+`,
+    'utf8',
+  );
+  return {
+    ...fakeAgent,
+    modulePath,
+    spawnEnv: {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+      TAU_PROXIED_MODULE: fakeAgent.modulePath,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+      ...(hidden.resume === false ? {} : { TAU_PROXY_HIDE_RESUME: '1' }),
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+      ...(hidden.load === true ? { TAU_PROXY_HIDE_LOAD: '1' } : {}),
+    },
+  };
+};
+
+describe('restoring a session a cold start lost', () => {
+  it('does not turn an authentication failure during restore into a fresh session', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-restore-auth-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names.
+    const adapter: AcpAdapter = { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: 'restore-auth' } };
+
+    await expect(
+      openAcpSession({
+        adapter,
+        cwd,
+        acpSessionId: 'expired-session',
+        createId: () => randomUUID(),
+        onFrame: (frame) => frames.push(frame),
+      }),
+    ).rejects.toMatchObject({ code: 'EXTERNAL_AGENT_AUTH_REQUIRED' });
+    expect(sent(frames, 'session/new')).toBe(0);
+  }, 30_000);
+
+  it('retains the cumulative usage baseline when a new port restores the session', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-restored-usage-'));
+    roots.push(workspaceRoot);
+    const chat = durableChat('chat-restored-usage');
+
+    const first = createAcpExternalAgentPort({ agents: [fakeAgent], workspaceRoot });
+    await first.run(chat.turn('run-1', 'noask'));
+    await first.closeChat?.('chat-restored-usage');
+    const restored = createAcpExternalAgentPort({ agents: [fakeAgent], workspaceRoot });
+    await restored.run(chat.turn('run-2', 'noask'));
+    await restored.closeChat?.('chat-restored-usage');
+
+    expect(usageOf(chat.eventsOf('run-2')).at(-1)).toMatchObject({ input: 1200, output: 300, totalTokens: 1500 });
+  }, 30_000);
+
+  it('falls back to session/load, and appends nothing it replays', async () => {
+    const adapter = await withoutCapabilities({ resume: true });
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-load-'));
+    roots.push(cwd);
+    const first = await openAcpSession({ adapter, cwd, createId: () => randomUUID() });
+    await first.prompt('first noask', stubTurn());
+
+    const frames: AcpWireFrame[] = [];
+    const restored = await openAcpSession({
+      adapter,
+      cwd,
+      createId: () => randomUUID(),
+      acpSessionId: first.acpSessionId,
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    expect(sent(frames, 'session/load')).toBe(1);
+    expect(sent(frames, 'session/resume')).toBe(0);
+    expect(sent(frames, 'session/new')).toBe(0);
+    expect(restored.contextLost).toBe(false);
+    /* The agent really did stream the transcript back — and it went nowhere,
+     * because no turn was open to receive it. */
+    expect(
+      frames.some((frame) => frame.direction === 'agent->client' && frame.frame.includes('replay: first noask')),
+    ).toBe(true);
+    await restored.close();
+    await first.close();
+  }, 30_000);
+
+  it('opens a fresh session and says so when neither rung can restore one', async () => {
+    const adapter = await withoutCapabilities({ load: true });
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-lost-'));
+    roots.push(workspaceRoot);
+    const port = createAcpExternalAgentPort({ agents: [adapter], workspaceRoot, createId: () => randomUUID() });
+    const appended: AgentLogEvent[] = [];
+
+    await port.run({
+      agentId: 'codex',
+      agent: { kind: 'acp', id: 'codex' },
+      chatId: 'chat-lost',
+      runId: 'run-lost',
+      attempt: 1,
+      message: { id: 'user-1', role: 'user', content: 'noask' },
+      state: { agentId: 'codex', acpSessionId: 'a-session-this-vendor-forgot' },
+      history: [],
+      signal: new AbortController().signal,
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the log fills every base field; this stub only records bodies.
+      append: async (events) => {
+        appended.push(...(events as readonly AgentLogEvent[]));
+      },
+      remember: async () => undefined,
+      approve: async () => ({ interruptId: 'stub', outcome: 'approved' }),
+    });
+    await port.closeChat?.('chat-lost');
+
+    /* Never a silent fresh start: exactly one durable note says the context is gone. */
+    const notes = appended.filter(
+      (event) =>
+        event.type === 'message.appended' &&
+        event.message.role === 'assistant' &&
+        textOfMessage(event.message).includes('could not restore'),
+    );
+    expect(notes).toHaveLength(1);
+    /* The note is a durable row like any other: the log refuses one its schema does not admit. */
+    const envelope = { version: 1, leaderEpoch: 'epoch', recordedAt: 'now', runId: 'run-lost' };
+    for (const [sequence, event] of appended.entries()) {
+      expect(() => parseLogEvent({ ...event, ...envelope, sequence })).not.toThrow();
+    }
+  }, 30_000);
+});
+
+/** Every event of one kind, narrowed, in log order. */
+const eventsOfType = <Type extends AgentLogEvent['type']>(
+  events: readonly AgentLogEvent[],
+  type: Type,
+): ReadonlyArray<Extract<AgentLogEvent, { readonly type: Type }>> =>
+  events.flatMap((event) =>
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the discriminant is checked on the line above.
+    event.type === type ? [event as Extract<AgentLogEvent, { readonly type: Type }>] : [],
+  );
+
+/** Every `session/prompt` this client sent, as raw frames. */
+const promptFrames = (frames: readonly AcpWireFrame[]): readonly string[] =>
+  frames
+    .filter((frame) => frame.direction === 'client->agent' && frame.frame.includes('"method":"session/prompt"'))
+    .map((frame) => frame.frame);
+
+describe('authentication, initialize and prompt content', () => {
+  it('refuses a logged-out agent with a typed code and the login it offered', async () => {
+    const loggedOut: AcpAdapter = {
+      ...fakeAgent,
+      loginCommand: 'codex login',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+      spawnEnv: { TAU_FAKE_AGENT_MODE: 'auth-required' },
+    };
+    const harness = await startHarness({ agents: [loggedOut] });
+
+    await runTurn(harness, { chatId: 'chat-auth', runId: 'run-auth', text: 'noask' });
+
+    const events = await readLog(harness.workspaceRoot, 'chat-auth');
+    expect(eventsOfType(events, 'run.lifecycle').at(-1)).toMatchObject({
+      state: 'failed',
+      detail: { code: 'EXTERNAL_AGENT_AUTH_REQUIRED' },
+    });
+    /* The affordance, durable beside the refusal: Tau's own CLI login first,
+     * the one command line the user runs themselves (X6), then the methods
+     * codex-acp listed, none of which carries a command. */
+    const authInterrupts = eventsOfType(events, 'interrupt.recorded');
+    expect(authInterrupts.at(0)?.payload).toEqual({
+      kind: 'external-agent-login',
+      agentId: 'codex',
+      authMethods: [
+        { id: 'cli-login', name: 'Sign in to Codex', terminalCommand: 'codex login' },
+        { id: 'api-key', name: 'API Key', description: 'Use an API key to authenticate' },
+        { id: 'chat-gpt', name: 'ChatGPT', description: 'Use ChatGPT to authenticate' },
+        {
+          id: 'chat-gpt-device-code',
+          name: 'ChatGPT (device code)',
+          description: 'Sign in to ChatGPT by opening a verification page and entering a one-time code',
+        },
+      ],
+    });
+    /* Nothing ever answers a login interrupt — there is no completion event and
+     * the affordance is deliberately buttonless — so the refusal settles its own
+     * record. An unresolved one would flag the chat "approval required" forever. */
+    expect(authInterrupts.at(1)).toMatchObject({
+      interruptId: authInterrupts.at(0)?.interruptId,
+      phase: 'resolved',
+      reason: 'cancelled',
+      payload: { outcome: 'cancelled' },
+    });
+    /* Refused before the turn, not during it: nothing was ever prompted. */
+    expect(sent(harness.frames, 'session/prompt')).toBe(0);
+  }, 30_000);
+
+  it('offers the CLI login for an agent that lists no auth method and refuses at prompt', async () => {
+    /* An agent that advertises no auth method and turns the CLI's "Please run
+     * /login" into `-32000` on `session/prompt`: the profile's own login command
+     * is then the only affordance to show. Claude's adapter (0.70.0) refuses at
+     * prompt the same way, but it does advertise methods to a client that sent
+     * `_meta['terminal-auth']`, which Tau always does; the next case has that. */
+    const claude: AcpAdapter = {
+      ...fakeAgent,
+      id: 'claude',
+      displayName: 'Claude Code',
+      loginCommand: 'claude auth login',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+      spawnEnv: { TAU_FAKE_AGENT_MODE: 'prompt-auth' },
+    };
+    const harness = await startHarness({ agents: [claude] });
+
+    await runTurn(harness, { chatId: 'chat-claude-auth', runId: 'run-claude-auth', text: 'noask', agentId: 'claude' });
+
+    const events = await readLog(harness.workspaceRoot, 'chat-claude-auth');
+    expect(eventsOfType(events, 'run.lifecycle').at(-1)).toMatchObject({
+      state: 'failed',
+      detail: { code: 'EXTERNAL_AGENT_AUTH_REQUIRED' },
+    });
+    expect(eventsOfType(events, 'interrupt.recorded').at(0)?.payload).toMatchObject({
+      kind: 'external-agent-login',
+      agentId: 'claude',
+      authMethods: [{ id: 'cli-login', name: 'Sign in to Claude Code', terminalCommand: 'claude auth login' }],
+    });
+  }, 30_000);
+
+  it('should offer the CLI login first and drop the adapter’s own process from Claude’s terminal-auth methods', async () => {
+    /* Claude's adapter (0.70.0) shape: two methods whose `terminal-auth` command
+     * is the adapter's own process — the host's `process.execPath` running the
+     * adapter module. On the desktop that is Tau's Electron helper, which no
+     * user's terminal can run (F1). */
+    const claude: AcpAdapter = {
+      ...fakeAgent,
+      id: 'claude',
+      displayName: 'Claude Code',
+      loginCommand: 'claude auth login',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+      spawnEnv: { TAU_FAKE_AGENT_MODE: 'prompt-auth,claude-terminal-auth' },
+    };
+    const harness = await startHarness({ agents: [claude] });
+
+    await runTurn(harness, {
+      chatId: 'chat-claude-terminal-auth',
+      runId: 'run-claude-terminal-auth',
+      text: 'noask',
+      agentId: 'claude',
+    });
+
+    const events = await readLog(harness.workspaceRoot, 'chat-claude-terminal-auth');
+    expect(eventsOfType(events, 'run.lifecycle').at(-1)).toMatchObject({
+      state: 'failed',
+      detail: { code: 'EXTERNAL_AGENT_AUTH_REQUIRED' },
+    });
+    const login = eventsOfType(events, 'interrupt.recorded').at(0)?.payload;
+    expect(login).toEqual({
+      kind: 'external-agent-login',
+      agentId: 'claude',
+      authMethods: [
+        { id: 'cli-login', name: 'Sign in to Claude Code', terminalCommand: 'claude auth login' },
+        { id: 'claude-ai-login', name: 'Claude Subscription', description: 'Use Claude subscription ' },
+        { id: 'console-login', name: 'Anthropic Console', description: 'Use Anthropic Console (API usage billing)' },
+      ],
+    });
+    /* The fixture really did advertise its own process, so the drop is proven. */
+    const initialized = harness.frames.find(
+      (frame) => frame.direction === 'agent->client' && frame.frame.includes('"claude-ai-login"'),
+    );
+    expect(initialized?.frame).toContain(JSON.stringify(process.execPath));
+    expect(JSON.stringify(login)).not.toContain(process.execPath);
+    expect(JSON.stringify(login)).not.toContain(new URL('fixtures/fake-agent.ts', import.meta.url).pathname);
+  }, 30_000);
+
+  it('should refuse a raw secret form before SDK normalization can create a plaintext question record', async () => {
+    const harness = await startHarness();
+    await runTurn(harness, { chatId: 'chat-secret-ask', runId: 'run-secret-ask', text: 'ask-secret-form noask' });
+    const events = await readLog(harness.workspaceRoot, 'chat-secret-ask');
+    expect(JSON.stringify(events)).toContain(String.raw`ask-secret-form: {\"action\":\"decline\"}`);
+    await expect(
+      readFile(join(harness.workspaceRoot, '.tau', 'chats', 'chat-secret-ask', 'questions.v2.yaml'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(lifecycleOf(events).at(-1)).toBe('completed');
+  });
+
+  it('asks a form elicitation through the chat question record and answers with the person’s choice', async () => {
+    const harness = await startHarness();
+    const chatDirectory = join(harness.workspaceRoot, '.tau', 'chats', 'chat-ask');
+    /* The person's client: answer the ask as soon as it is recorded. */
+    const answerWhenAsked = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- polling is sequential by design
+        const text = await readFile(join(chatDirectory, 'questions.v2.yaml'), 'utf8').catch(() => undefined);
+        const [recorded] = parseQuestionsFile(text).asks;
+        if (recorded !== undefined) {
+          // oxlint-disable-next-line eslint/no-await-in-loop -- polling is sequential by design
+          await writeFile(
+            join(chatDirectory, 'answers.v2.yaml'),
+            serializeAnswersFile({
+              version: 1,
+              answers: {
+                // eslint-disable-next-line @typescript-eslint/naming-convention -- claude-agent-acp's wire field name
+                [recorded.id]: { questions: { question_0: { choice: 'PLA', at: new Date().toISOString() } } },
+              },
+            }),
+          );
+          return;
+        }
+        // oxlint-disable-next-line eslint/no-await-in-loop -- polling is sequential by design
+        await new Promise((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      }
+    };
+    await Promise.all([
+      runTurn(harness, { chatId: 'chat-ask', runId: 'run-ask', text: 'ask-form noask' }),
+      answerWhenAsked(),
+    ]);
+
+    const [ask] = parseQuestionsFile(await readFile(join(chatDirectory, 'questions.v2.yaml'), 'utf8')).asks;
+    expect(ask).toMatchObject({
+      callId: 'ask-1',
+      source: 'acp',
+      agentId: 'codex',
+      questions: [{ id: 'question_0', header: 'Material', recommended: 0, allowsText: true }],
+      resolution: { outcome: 'answered' },
+    });
+    const events = await readLog(harness.workspaceRoot, 'chat-ask');
+    expect(JSON.stringify(events)).toContain(String.raw`ask-form: accept {\"question_0\":\"PLA\"}`);
+    expect(lifecycleOf(events).at(-1)).toBe('completed');
+  }, 30_000);
+
+  it('records a url elicitation as a durable login, resolves it, and finishes the turn', async () => {
+    const harness = await startHarness();
+
+    await runTurn(harness, { chatId: 'chat-login', runId: 'run-login', text: 'login noask' });
+
+    const events = await readLog(harness.workspaceRoot, 'chat-login');
+    const interrupts = eventsOfType(events, 'interrupt.recorded');
+    expect(interrupts[0]).toMatchObject({
+      phase: 'requested',
+      interruptId: 'login-1',
+      payload: { kind: 'external-agent-login', url: 'https://example.invalid/device', code: 'FAKE-CODE' },
+    });
+    expect(interrupts[0]?.reason).toContain('FAKE-CODE');
+    expect(interrupts[1]).toMatchObject({ phase: 'resolved', interruptId: 'login-1' });
+    expect(lifecycleOf(events).at(-1)).toBe('completed');
+    /* The agent was told Tau can present one; that is why it offered the flow. */
+    expect(
+      harness.frames.some(
+        (frame) => frame.direction === 'client->agent' && frame.frame.includes('"elicitation":{"url":{},"form":{}}'),
+      ),
+    ).toBe(true);
+  }, 30_000);
+
+  it('drops a login url no browser should follow, and keeps the rest of the affordance', async () => {
+    const harness = await startHarness();
+
+    await runTurn(harness, { chatId: 'chat-login-unsafe', runId: 'run-login-unsafe', text: 'login unsafe noask' });
+
+    const events = await readLog(harness.workspaceRoot, 'chat-login-unsafe');
+    const requested = eventsOfType(events, 'interrupt.recorded').at(0);
+    /* One guard at the writer, because three surfaces render this record as a
+     * link (banner, CLI, TUI). The code and the agent's own message survive:
+     * the user can still finish the flow the way the agent described it. */
+    expect(requested?.payload).toMatchObject({ kind: 'external-agent-login', code: 'FAKE-CODE' });
+    // oxlint-disable-next-line eslint/no-script-url -- asserting the scheme is absent requires naming it.
+    expect(JSON.stringify(requested?.payload)).not.toContain('javascript:');
+    expect(requested?.payload).not.toHaveProperty('url');
+  }, 30_000);
+
+  it('disconnects from an agent whose protocol version it does not speak', async () => {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+    const future: AcpAdapter = { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: 'protocol-2' } };
+    const harness = await startHarness({ agents: [future] });
+
+    await runTurn(harness, { chatId: 'chat-version', runId: 'run-version', text: 'noask' });
+
+    const events = await readLog(harness.workspaceRoot, 'chat-version');
+    expect(eventsOfType(events, 'run.lifecycle').at(-1)).toMatchObject({
+      state: 'failed',
+      detail: { code: 'EXTERNAL_AGENT_UNAVAILABLE' },
+    });
+    expect(sent(harness.frames, 'session/new')).toBe(0);
+    expect(sent(harness.frames, 'session/prompt')).toBe(0);
+  }, 30_000);
+
+  it("never sends the person block to an external agent, even when the client's system prompt carries one", async () => {
+    /* Only Tau's own agent is told what the person makes and reads. An external agent gets the guidance, skills,
+     * memory and snapshot blocks, never the system prompt, so a client that did put the block there leaks nothing. */
+    const harness = await startHarness();
+    const person = [
+      '<person>',
+      'Makes: electronics.',
+      'Reads: Python.',
+      "Background about the person, not a request. The request, this project's kernel and what is available here come first. Where several kernels fit, this may tip the choice.",
+      '</person>',
+    ].join('\n');
+    const config = {
+      systemPrompt: `You are Tau.\n\n${person}`,
+      snapshot: { files: ['main.ts'] },
+    };
+
+    await runTurn(harness, { chatId: 'chat-person', runId: 'run-person-1', text: 'noask', config });
+
+    const [first] = promptFrames(harness.frames);
+    expect(first).toContain('tau://snapshot');
+    expect(first).not.toContain('<person>');
+    expect(first).not.toContain('Makes:');
+    expect(first).not.toContain('Background about the person');
+  }, 60_000);
+
+  it('sends shared ACP guidance once and current CAD context on every prompt, and writes no file', async () => {
+    const harness = await startHarness();
+    const config = {
+      systemPrompt: 'You are Tau. The kernel is OpenSCAD.',
+      contextPayload: {
+        skills: [{ name: 'brep-design', description: 'Design manufacture-ready parts.' }],
+        memory: { '.tau/AGENTS.md': 'Keep all dimensions in millimetres.' },
+      },
+      snapshot: {
+        files: ['main.scad'],
+        kernel: {
+          preference: 'auto',
+          owner: { kernel: 'openscad', entryPath: 'main.scad' },
+          available: ['openscad', 'replicad'],
+          unavailable: [{ kernel: 'zoo', reason: 'not available here' }],
+          guidance: 'This project uses OpenSCAD; activate the cad-openscad skill.',
+        },
+      },
+    };
+
+    await runTurn(harness, { chatId: 'chat-context', runId: 'run-context-1', text: 'noask', config });
+    await runTurn(harness, { chatId: 'chat-context', runId: 'run-context-2', text: 'second noask', config });
+
+    const [first, second] = promptFrames(harness.frames);
+    /* The user's words lead, so a vendor titles its mirrored thread from them. */
+    expect(first?.indexOf('noask')).toBeLessThan(first?.indexOf('tau://agent-guidance') ?? -1);
+    expect(first).toContain('tau://agent-guidance');
+    expect(first).toContain('native skill loader');
+    expect(first).toContain('If the project has no model file, choose a kernel before writing one.');
+    expect(first).not.toContain('tau://system-prompt');
+    expect(first).not.toContain('The kernel is OpenSCAD.');
+    expect(first).toContain('tau://skills');
+    expect(first).toContain('tau://memory');
+    expect(first).toContain('Keep all dimensions in millimetres.');
+    expect(first).toContain('tau://snapshot');
+    /* The snapshot's kernel object (AKS-7) crosses as loose JSON: forwarded as sent, with no reader of its own. */
+    expect(first).toContain(JSON.stringify(config.snapshot.kernel).replaceAll('"', String.raw`\"`));
+    /* Stable guidance is session-scoped; current project facts accompany each
+     * turn so a native→ACP switch cannot leave the vendor on an old snapshot. */
+    expect(second).not.toContain('tau://agent-guidance');
+    expect(second).toContain('tau://skills');
+    expect(second).toContain('tau://memory');
+    expect(second).toContain('tau://snapshot');
+    expect(second).toContain('second noask');
+    /* V12 supersedes the `AGENTS.md` rung: in direct mode the cwd is the user's
+     * own project, and Tau writes no control file into it. */
+    await expect(readdir(harness.workspaceRoot)).resolves.not.toContain('AGENTS.md');
+  }, 60_000);
+
+  /*
+   * Seamless handoff: an agent keeps its own session, so turns it never saw — Tau's, or another device's synced into
+   * the chat's segments — reach it as context on its next prompt: the whole chat for a fresh session, and only what
+   * came after its own last turn for a session it continues.
+   */
+  it('gives the agent the chat turns its session has not seen, from Tau or another device', async () => {
+    const harness = await startHarness();
+    const chatId = 'chat-handoff';
+    const segments = join(harness.workspaceRoot, '.tau', 'chats', chatId, 'events');
+    await mkdir(segments, { recursive: true });
+    const phoneRows = (turns: ReadonlyArray<readonly [string, string, string]>): string =>
+      turns
+        .flatMap(([at, question, answer], turn) => [
+          {
+            sequence: turn * 2,
+            type: 'message.appended',
+            message: { id: `phone-user-${String(turn)}`, role: 'user', content: question },
+            at,
+          },
+          {
+            sequence: turn * 2 + 1,
+            type: 'message.appended',
+            message: {
+              id: `phone-answer-${String(turn)}`,
+              role: 'assistant',
+              content: [{ type: 'text', text: answer }],
+            },
+            at,
+          },
+        ])
+        .map(
+          ({ sequence, at, ...body }) =>
+            /* Each phone turn opened its own incarnation there, so each is its own term. */
+            `${JSON.stringify({ version: 1, leaderEpoch: `phone-${String(Math.floor(sequence / 2))}`, sequence: sequence % 2, recordedAt: at, runId: `phone-run-${String(Math.floor(sequence / 2))}`, ...body })}\n`,
+        )
+        .join('');
+    const earlier = new Date(Date.now() - 60_000).toISOString();
+    await writeFile(join(segments, 'device-phone.jsonl'), phoneRows([[earlier, 'from the phone', 'phone answer']]));
+
+    await runTurn(harness, { chatId, runId: 'run-handoff-1', text: 'first noask' });
+    /* The session's own later turns carry markers without its id: they are still its turns. */
+    await runTurn(harness, { chatId, runId: 'run-handoff-2', text: 'second noask' });
+    await runTurn(harness, { chatId, runId: 'run-handoff-3', text: 'third noask' });
+    const later = new Date(Date.now() + 1000).toISOString();
+    await writeFile(
+      join(segments, 'device-phone.jsonl'),
+      phoneRows([
+        [earlier, 'from the phone', 'phone answer'],
+        [later, 'phone again', 'second phone answer'],
+      ]),
+    );
+    await runTurn(harness, { chatId, runId: 'run-handoff-4', text: 'fourth noask' });
+
+    const [first, second, third, fourth] = promptFrames(harness.frames);
+    expect(first).toContain('tau://chat-handoff');
+    expect(first).toContain('from the phone');
+    expect(first).toContain('phone answer');
+    expect(first?.indexOf('first noask')).toBeLessThan(first?.indexOf('tau://chat-handoff') ?? -1);
+    expect(second).not.toContain('tau://chat-handoff');
+    expect(third).not.toContain('tau://chat-handoff');
+    expect(fourth).toContain('tau://chat-handoff');
+    expect(fourth).toContain('phone again');
+    expect(fourth).not.toContain('from the phone');
+    expect(fourth).not.toContain('second noask');
+  }, 60_000);
+
+  it('falls textual Tau context back to ordinary ACP text when embedded context is unsupported', async () => {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+    const textOnly: AcpAdapter = { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: 'text-only' } };
+    const harness = await startHarness({ agents: [textOnly] });
+
+    await runTurn(harness, {
+      chatId: 'chat-text-context',
+      runId: 'run-text-context',
+      text: 'noask',
+      config: { contextPayload: { memory: { '.tau/AGENTS.md': 'Prefer symmetric parts.' } } },
+    });
+
+    const [prompt] = promptFrames(harness.frames);
+    expect(prompt).not.toContain('"type":"resource"');
+    expect(prompt).toContain('tau://agent-guidance');
+    expect(prompt).toContain('tau://memory');
+    expect(prompt).toContain('Prefer symmetric parts.');
+  }, 30_000);
+
+  /* W8 TS-S4 (RH-S11): a placed attempt runs where its grant rooted it, not where the host's own checkout map says. */
+  it('should open the agent session in the root the placement granted', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-workspace-'));
+    const placedRoot = await mkdtemp(join(tmpdir(), 'tau-acp-placed-'));
+    roots.push(workspaceRoot, placedRoot);
+    const frames: AcpWireFrame[] = [];
+    const port = createAcpExternalAgentPort({
+      agents: [fakeAgent],
+      workspaceRoot,
+      onFrame: (frame) => frames.push(frame),
+    });
+    const turn: ExternalAgentTurn & { readonly root: string } = {
+      agentId: fakeAgent.id,
+      agent: { kind: 'acp', id: fakeAgent.id },
+      chatId: 'chat-placed',
+      runId: 'run-placed',
+      attempt: 1,
+      root: placedRoot,
+      message: { id: 'user-placed', role: 'user', content: 'noask' },
+      history: [],
+      signal: new AbortController().signal,
+      append: async () => undefined,
+      remember: async () => undefined,
+      approve: async () => ({ interruptId: 'stub', outcome: 'approved' }),
+    };
+
+    await port.run(turn);
+    await port.closeChat?.('chat-placed');
+
+    const opened = frames.find(
+      (frame) => frame.direction === 'client->agent' && frame.frame.includes('"method":"session/new"'),
+    );
+    expect(opened?.frame).toContain(JSON.stringify(placedRoot));
+    expect(opened?.frame).not.toContain(JSON.stringify(workspaceRoot));
+  }, 30_000);
+
+  it('delivers a resource-only user prompt instead of treating it as an empty reattach', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-resource-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    const port = createAcpExternalAgentPort({
+      agents: [fakeAgent],
+      workspaceRoot: cwd,
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    await port.run({
+      agentId: fakeAgent.id,
+      agent: { kind: 'acp', id: fakeAgent.id },
+      chatId: 'chat-resource',
+      runId: 'run-resource',
+      attempt: 1,
+      message: {
+        id: 'user-resource',
+        role: 'user',
+        content: [
+          {
+            type: 'resource',
+            resource: { uri: 'tau://attachment/brief', mimeType: 'text/markdown', text: '# Brief\nNoask' },
+          },
+        ],
+      },
+      history: [],
+      signal: new AbortController().signal,
+      append: async () => undefined,
+      remember: async () => undefined,
+      approve: async () => ({ interruptId: 'stub', outcome: 'approved' }),
+    });
+    await port.closeChat?.('chat-resource');
+
+    expect(promptFrames(frames).at(-1)).toContain('tau://attachment/brief');
+    expect(promptFrames(frames).at(-1)).toContain('# Brief');
+  }, 30_000);
+
+  it('refuses an image an agent cannot read, and sends one it can', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-image-'));
+    roots.push(cwd);
+    const frames: AcpWireFrame[] = [];
+    const imageTurn = (agent: AcpAdapter): Parameters<ReturnType<typeof createAcpExternalAgentPort>['run']>[0] => ({
+      agentId: agent.id,
+      agent: { kind: 'acp', id: agent.id },
+      chatId: 'chat-image',
+      runId: 'run-image',
+      attempt: 1,
+      message: {
+        id: 'user-image',
+        role: 'user',
+        content: [
+          { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' },
+          { type: 'text', text: 'noask' },
+        ],
+      },
+      history: [],
+      signal: new AbortController().signal,
+      append: async () => undefined,
+      remember: async () => undefined,
+      approve: async () => ({ interruptId: 'stub', outcome: 'approved' }),
+    });
+
+    const blind = createAcpExternalAgentPort({
+      agents: [fakeAgent],
+      workspaceRoot: cwd,
+      onFrame: (frame) => frames.push(frame),
+    });
+    /* Loud, never dropped: an answer about a picture the model never saw is
+     * worse than a refusal that says why (V12). */
+    await expect(blind.run(imageTurn(fakeAgent))).rejects.toMatchObject({
+      code: 'EXTERNAL_AGENT_CONTENT_UNSUPPORTED',
+    });
+    expect(promptFrames(frames)).toEqual([]);
+    await blind.closeChat?.('chat-image');
+
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+    const seeing: AcpAdapter = { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: 'images' } };
+    const sighted = createAcpExternalAgentPort({
+      agents: [seeing],
+      workspaceRoot: cwd,
+      onFrame: (frame) => frames.push(frame),
+    });
+    await sighted.run(imageTurn(seeing));
+    await sighted.closeChat?.('chat-image');
+
+    expect(promptFrames(frames).at(-1)).toContain('iVBORw0KGgo=');
+  }, 60_000);
+
+  it('validates every media block instead of accepting a supported first block', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-mixed-media-'));
+    roots.push(cwd);
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variables keep their wire names
+    const seeing: AcpAdapter = { ...fakeAgent, spawnEnv: { TAU_FAKE_AGENT_MODE: 'images' } };
+    const port = createAcpExternalAgentPort({ agents: [seeing], workspaceRoot: cwd });
+
+    await expect(
+      port.run({
+        agentId: seeing.id,
+        agent: { kind: 'acp', id: seeing.id },
+        chatId: 'chat-mixed-media',
+        runId: 'run-mixed-media',
+        attempt: 1,
+        message: {
+          id: 'user-mixed-media',
+          role: 'user',
+          content: [
+            { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' },
+            { type: 'audio', mimeType: 'audio/wav', data: 'UklGRg==' },
+            { type: 'text', text: 'noask' },
+          ],
+        },
+        history: [],
+        signal: new AbortController().signal,
+        append: async () => undefined,
+        remember: async () => undefined,
+        approve: async () => ({ interruptId: 'stub', outcome: 'approved' }),
+      }),
+    ).rejects.toMatchObject({ code: 'EXTERNAL_AGENT_CONTENT_UNSUPPORTED' });
+    await port.closeChat?.('chat-mixed-media');
+  }, 60_000);
+});
+
+/**
+ * The revision seam, over the same daemon composition (V19, VI11, G-REV-EXT).
+ *
+ * `revisions: true` wraps the harness launcher exactly the way `host-daemon.ts`
+ * does, so the ordering under test — prepare and anchor before admission, the
+ * port rooting its session in what was prepared, finalize on the terminal
+ * marker — is the ordering a real daemon produces.
+ */
+describe('external turns through the revision port', () => {
+  /**
+   * The `cwd` the client actually sent at `session/new`.
+   *
+   * Asserted off the wire rather than off the port's internals: the whole claim
+   * of candidate mode is that the *agent* was rooted somewhere else, and only
+   * the frame proves that.
+   *
+   * @param frames - Every frame the harness captured.
+   * @returns The working directory of the last session opened.
+   */
+  const openedCwd = (frames: readonly AcpWireFrame[]): string | undefined => {
+    const frame = frames.findLast((entry) => entry.frame.includes('"method":"session/new"'))?.frame;
+    return frame === undefined ? undefined : /"cwd":"([^"]*)"/u.exec(frame)?.[1];
+  };
+
+  /**
+   * The revision this turn recorded, read back through a second port.
+   *
+   * A fresh port over the same root is what the next process sees, which is the
+   * only reading that proves the turn is durable rather than in memory.
+   *
+   * @param workspaceRoot - The host's own root.
+   * @param branch - The branch the turn recorded onto; the trunk by default,
+   *   because placement is non-branching (D7/I18).
+   * @returns The finalized revision, or `undefined` when none was recorded.
+   */
+  const recordedRevision = async (
+    workspaceRoot: string,
+    branch = 'main',
+  ): Promise<
+    | {
+        readonly id: string;
+        readonly parents: readonly string[];
+        readonly tree: Map<string, string>;
+        readonly provenance: unknown;
+      }
+    | undefined
+  > => {
+    const port = createIsomorphicGitRevisionPort({ filesystem: new NodeFsProvider(workspaceRoot) });
+    const head = await port.readRef(branch);
+    const revision = head === undefined ? undefined : await port.readRevision(head);
+    const tree = head === undefined ? undefined : await port.readTree(head);
+    if (revision === undefined || tree === undefined) {
+      return undefined;
+    }
+    const decoder = new TextDecoder();
+    return {
+      id: revision.id,
+      parents: revision.parents,
+      tree: new Map(tree.entries().map(({ path, content }) => [path, decoder.decode(content)])),
+      provenance: revision.provenance,
+    };
+  };
+
+  it('records one finalized revision for an external turn on the live checkout', async () => {
+    const harness = await startHarness({ revisions: true });
+
+    await runTurn(harness, { chatId: 'chat-rev-direct', runId: 'run-rev-direct', text: 'noask direct turn' });
+    await until(async () => harness.settlements.length > 0, 'the turn to settle its revision');
+
+    /* Non-branching placement (D7/I18): the agent worked in the project itself,
+     * so the write is in the live tree and the revision is a record of it, not
+     * a copy of it. */
+    expect(openedCwd(harness.frames)).toBe(harness.workspaceRoot);
+    expect(await readFile(join(harness.workspaceRoot, 'hello.txt'), 'utf8')).toBe('noask direct turn');
+    expect(harness.settlements[0]).toMatchObject({
+      type: 'turn.finalized',
+      chatId: 'chat-rev-direct',
+      runId: 'run-rev-direct',
+      branch: 'main',
+      changedPaths: ['hello.txt'],
+      trigger: 'turn',
+      runIds: ['run-rev-direct'],
+    });
+
+    const revision = await recordedRevision(harness.workspaceRoot);
+    expect(revision?.tree.get('hello.txt')).toBe('noask direct turn');
+    expect(revision?.provenance).toMatchObject({ source: 'agent', runId: 'run-rev-direct' });
+
+    /* The turn's lease is retired with it, and no directory is left behind:
+     * `.tau/runs` is the only place a turn ever wrote outside the tree (S7). */
+    await expect(readdir(join(harness.workspaceRoot, '.tau', 'runs'))).resolves.toEqual([]);
+    await expect(readdir(join(harness.workspaceRoot, '.tau', 'workspaces'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  }, 60_000);
+
+  /* XD4: an id no checkout and no branch here derives, in a project with no remote to bring it, is refused for good. */
+  it.each([false, true])(
+    'refuses a missing persisted checkout instead of main (previous turn: %s)',
+    async (previousTurn) => {
+      const harness = await startHarness({ revisions: true });
+      const chatId = 'chat-selected';
+      if (previousTurn) {
+        await runTurn(harness, { chatId, runId: 'run-prior', text: 'noask original branch' });
+        await until(async () => harness.settlements.length > 0, 'prior turn settlement');
+      }
+      await mkdir(join(harness.workspaceRoot, '.tau/chats', chatId), { recursive: true });
+      await writeFile(
+        join(harness.workspaceRoot, '.tau/chats', chatId, 'chat.json'),
+        JSON.stringify({
+          id: chatId,
+          resourceId: 'project',
+          name: 'Selected branch',
+          createdAt: 0,
+          updatedAt: 0,
+          checkoutId: 'missing-checkout',
+        }),
+      );
+      /* The start is answered at its intent row; the placement's refusal ends the run with its code (HD-3, TS-R12). */
+      await runTurn(harness, { chatId, runId: 'run-selected', text: 'noask selected branch' });
+      const events = await readLog(harness.workspaceRoot, chatId);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'run.lifecycle',
+          runId: 'run-selected',
+          state: 'failed',
+          detail: expect.objectContaining({ code: 'CHECKOUT_UNKNOWN' }) as unknown,
+        }),
+      );
+      expect(sent(harness.frames, 'session/new')).toBe(previousTurn ? 1 : 0);
+    },
+    30_000,
+  );
+
+  it('runs two turns of one chat on one session, each revision parented on the last', async () => {
+    const harness = await startHarness({ revisions: true });
+
+    await runTurn(harness, {
+      chatId: 'chat-rev-second',
+      runId: 'run-rev-second-1',
+      text: 'noask first turn',
+    });
+    await until(async () => harness.settlements.length > 0, 'the first turn to settle its revision');
+    const first = await recordedRevision(harness.workspaceRoot);
+    expect(first?.tree.get('hello.txt')).toBe('noask first turn');
+
+    await runTurn(harness, {
+      chatId: 'chat-rev-second',
+      runId: 'run-rev-second-2',
+      text: 'noask second turn',
+    });
+    await until(async () => harness.settlements.length > 1, 'the second turn to settle its revision');
+
+    /* One checkout, so one `cwd` and one vendor session for both turns, and the
+     * second revision is the next step on the trunk rather than a lineage of
+     * its own. */
+    expect(sent(harness.frames, 'session/new')).toBe(1);
+    expect(openedCwd(harness.frames)).toBe(harness.workspaceRoot);
+    const second = await recordedRevision(harness.workspaceRoot);
+    expect(second?.tree.get('hello.txt')).toBe('noask second turn');
+    expect(second?.id).not.toBe(first?.id);
+    expect(second?.parents).toEqual([first?.id]);
+    expect(harness.settlements[1]).toMatchObject({
+      revisionId: second?.id,
+      changedPaths: ['hello.txt'],
+    });
+  }, 60_000);
+
+  /* Manifest recovery blueprint R8: a second model is just another source file.
+   * An agent that registers it in `tau.json` hears why, instead of the project
+   * becoming unreachable at its next discovery. */
+  it('refuses an fs/write_text_file that would break tau.json and accepts a valid edit', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-manifest-'));
+    roots.push(cwd);
+    const manifest = {
+      $schema: 'https://tau.new/schemas/tau-v1.json',
+      name: 'Relief',
+      description: '',
+      tags: [],
+      assets: { main: { entryPath: 'main.cs' } },
+    };
+    const original = `${JSON.stringify(manifest, undefined, 2)}\n`;
+    await writeFile(join(cwd, 'tau.json'), original, 'utf8');
+
+    const secondAsset = { ...manifest, assets: { ...manifest.assets, second: { entryPath: 'second.cs' } } };
+    await expect(
+      writeSessionTextFile(cwd, { path: 'tau.json', content: JSON.stringify(secondAsset) }),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      /* oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- `expect.stringContaining` is typed `any` by vitest. */
+      message: expect.stringContaining('assets: Unrecognized key: "second"'),
+    });
+    expect(await readSessionTextFile(cwd, { path: 'tau.json' })).toBe(original);
+
+    await writeSessionTextFile(cwd, { path: 'tau.json', content: JSON.stringify({ ...manifest, name: 'Renamed' }) });
+    expect(JSON.parse(await readSessionTextFile(cwd, { path: 'tau.json' }))).toMatchObject({ name: 'Renamed' });
+  });
+
+  it('refuses an agent write under Tau’s own control metadata and still serves the read', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-mask-'));
+    /* Not in `roots`: its `events.jsonl` is a placeholder the fence guards, not a chat log to validate. */
+    onTestFinished(async () => rm(cwd, { recursive: true, force: true }));
+    await mkdir(join(cwd, '.tau', 'chats', 'chat-1'), { recursive: true });
+    await mkdir(join(cwd, '.git'), { recursive: true });
+    await writeFile(join(cwd, '.tau', 'chats', 'chat-1', 'events.jsonl'), '{"type":"run.lifecycle"}\n', 'utf8');
+    await writeFile(join(cwd, '.git', 'note.txt'), 'store\n', 'utf8');
+
+    for (const path of ['.tau/chats/chat-1/events.jsonl', '.git/note.txt', '.tau/chats']) {
+      // oxlint-disable-next-line no-await-in-loop -- one refusal at a time is the assertion.
+      await expect(writeSessionTextFile(cwd, { path, content: 'forged' })).rejects.toMatchObject({
+        code: 'WORKSPACE_MASKED_PATH',
+      });
+    }
+    /* Escaping the session directory is the same refusal to a client: one code,
+     * one affordance. */
+    await expect(writeSessionTextFile(cwd, { path: '../escaped.txt', content: 'x' })).rejects.toMatchObject({
+      code: 'WORKSPACE_MASKED_PATH',
+    });
+
+    // Read-only, not invisible: the agent may read back its own transcript.
+    await expect(readSessionTextFile(cwd, { path: '.tau/chats/chat-1/events.jsonl' })).resolves.toBe(
+      '{"type":"run.lifecycle"}\n',
+    );
+    /* The revision control plane is invisible, not merely read-only: a read is
+     * refused exactly as a write is (path registry `hidden`, north star S18). */
+    await expect(readSessionTextFile(cwd, { path: '.git/note.txt' })).rejects.toMatchObject({
+      code: 'WORKSPACE_MASKED_PATH',
+    });
+    /* Inside `.tau` a path that only *starts* like a records row is an unlisted
+     * name, which is the agent's like any other project file (P13, mask retired
+     * 2026-10-31); only the declared rows are Tau's. */
+    await expect(writeSessionTextFile(cwd, { path: '.tau/chats-notes.md', content: 'mine' })).resolves.toBeUndefined();
+    await expect(writeSessionTextFile(cwd, { path: '.tau/AGENTS.md', content: 'mine' })).resolves.toBeUndefined();
+  });
+
+  it('should serve canonical paths under a symlinked session root without widening access', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-acp-root-alias-'));
+    roots.push(root);
+    const project = join(await realpath(root), 'project');
+    const cwd = join(root, 'alias');
+    await mkdir(project);
+    await symlink(project, cwd, 'dir');
+    await writeFile(join(project, 'main.scad'), 'cube(10);\n');
+
+    await expect(readSessionTextFile(cwd, { path: join(project, 'main.scad') })).resolves.toBe('cube(10);\n');
+    await writeSessionTextFile(cwd, { path: join(project, 'parts/new.scad'), content: 'cube(20);\n' });
+    await expect(readFile(join(project, 'parts/new.scad'), 'utf8')).resolves.toBe('cube(20);\n');
+    await expect(readSessionTextFile(cwd, { path: join(project, '../outside.txt') })).rejects.toMatchObject({
+      code: 'WORKSPACE_MASKED_PATH',
+    });
+    await expect(
+      writeSessionTextFile(cwd, { path: join(project, '.git/config'), content: 'forged' }),
+    ).rejects.toMatchObject({
+      code: 'WORKSPACE_MASKED_PATH',
+    });
+  });
+
+  it('should read published skill resources without granting writes or sibling reads', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-acp-skill-access-'));
+    roots.push(root);
+    const cwd = join(root, 'project');
+    const skills = join(root, 'publication/.agents/skills');
+    await mkdir(cwd);
+    await mkdir(join(skills, 'probe/references'), { recursive: true });
+    const resource = join(skills, 'probe/references/marker.txt');
+    await writeFile(resource, 'skill marker');
+    await writeFile(join(root, 'publication/private.txt'), 'private');
+    await symlink(join(root, 'publication'), join(skills, 'escape'), 'dir');
+
+    await expect(readSessionTextFile(cwd, { path: resource }, [skills])).resolves.toBe('skill marker');
+    /* An unlisted `.tau` name is an ordinary project path: absent, it is simply not there. */
+    await expect(readSessionTextFile(cwd, { path: '.tau/private.png' }, [skills])).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await writeFile(join(cwd, 'image.png'), new Uint8Array([137, 80, 78, 71, 0, 255]));
+    await expect(readSessionTextFile(cwd, { path: 'image.png' }, [skills])).rejects.toThrow('UTF-8 text');
+    await expect(writeSessionTextFile(cwd, { path: resource, content: 'changed' })).rejects.toMatchObject({
+      code: 'WORKSPACE_MASKED_PATH',
+    });
+    await expect(
+      readSessionTextFile(cwd, { path: join(root, 'publication/private.txt') }, [skills]),
+    ).rejects.toMatchObject({ code: 'WORKSPACE_MASKED_PATH' });
+    await expect(
+      readSessionTextFile(cwd, { path: join(skills, 'escape/private.txt') }, [skills]),
+    ).rejects.toMatchObject({ code: 'WORKSPACE_MASKED_PATH' });
+    await expect(readFile(resource, 'utf8')).resolves.toBe('skill marker');
+  });
+
+  it('refuses filesystem reads and writes through a symlink outside the session root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-acp-symlink-'));
+    roots.push(root);
+    const cwd = join(root, 'project');
+    const outside = join(root, 'outside');
+    await mkdir(cwd);
+    await mkdir(outside);
+    await writeFile(join(outside, 'sentinel.txt'), 'untouched', 'utf8');
+    await symlink(outside, join(cwd, 'escape'));
+
+    await expect(readSessionTextFile(cwd, { path: 'escape/sentinel.txt' })).rejects.toMatchObject({
+      code: 'WORKSPACE_MASKED_PATH',
+    });
+    await expect(writeSessionTextFile(cwd, { path: 'escape/sentinel.txt', content: 'changed' })).rejects.toMatchObject({
+      code: 'WORKSPACE_MASKED_PATH',
+    });
+    await expect(readFile(join(outside, 'sentinel.txt'), 'utf8')).resolves.toBe('untouched');
+  });
+
+  it('serves the line window an agent asked for and creates the parent a write implies', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'tau-acp-fs-'));
+    roots.push(cwd);
+    await writeFile(join(cwd, 'main.scad'), 'one\ntwo\nthree\nfour\n', 'utf8');
+
+    await expect(readSessionTextFile(cwd, { path: 'main.scad' })).resolves.toBe('one\ntwo\nthree\nfour\n');
+    await expect(readSessionTextFile(cwd, { path: 'main.scad', line: 2, limit: 2 })).resolves.toBe('two\nthree');
+    await expect(readSessionTextFile(cwd, { path: 'main.scad', line: 3 })).resolves.toBe('three\nfour\n');
+    await expect(readSessionTextFile(cwd, { path: 'main.scad', limit: 1 })).resolves.toBe('one');
+    /* `null` is what an agent sends for a field it declined to fill; treating it
+     * as line zero would silently drop the first line of every read. */
+    await expect(readSessionTextFile(cwd, { path: 'main.scad', line: null, limit: null })).resolves.toBe(
+      'one\ntwo\nthree\nfour\n',
+    );
+
+    await writeSessionTextFile(cwd, { path: 'src/parts/bracket.scad', content: 'cube(2);\n' });
+    await expect(readFile(join(cwd, 'src', 'parts', 'bracket.scad'), 'utf8')).resolves.toBe('cube(2);\n');
+  });
+});
+
+/*
+ * W10 EA-S2: the port's session ownership (I33) and the durable session
+ * record, each red on the port before M3 (external-agents blueprint F2–F5, F7,
+ * F8, F10).
+ */
+describe('ACP session ownership', () => {
+  /* F2, EA-A2: eviction ran only when a session opened, so turns that overlap
+   * past the limit and then end leave every session open for its idle time. */
+  it('keeps at most the limit open after concurrent turns end', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-limit-'));
+    roots.push(workspaceRoot);
+    const frames: AcpWireFrame[] = [];
+    const port = createAcpExternalAgentPort({
+      agents: [fakeAgent],
+      workspaceRoot,
+      onFrame: (frame) => frames.push(frame),
+    });
+    const chats = Array.from({ length: acpLiveSessionLimit + 1 }, (_, index) =>
+      durableChat(`chat-limit-${String(index)}`),
+    );
+    closers.push(async () => {
+      await Promise.all(chats.map(async (_, index) => port.closeChat?.(`chat-limit-${String(index)}`)));
+    });
+    const controllers = chats.map(() => new AbortController());
+    const runs = chats.map(async (chat, index) =>
+      settleQuietly(port.run(chat.turn(`run-${String(index)}`, 'slow', controllers[index]?.signal))),
+    );
+    await until(async () => sent(frames, 'session/prompt') === chats.length, 'every turn prompting at once');
+    for (const controller of controllers) {
+      controller.abort();
+    }
+    await Promise.all(runs);
+
+    await until(async () => sent(frames, 'session/close') >= 1, 'the least recently used session to close', {
+      budget: 8000,
+    });
+    expect(sent(frames, 'session/close')).toBe(1);
+  }, 60_000);
+
+  /* F5, EA-A10: a second turn reused a lent session and prompted it concurrently. */
+  it('refuses a second turn for a chat whose session is lent', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-lent-'));
+    roots.push(workspaceRoot);
+    const frames: AcpWireFrame[] = [];
+    const port = createAcpExternalAgentPort({
+      agents: [fakeAgent],
+      workspaceRoot,
+      onFrame: (frame) => frames.push(frame),
+    });
+    closers.push(async () => port.closeChat?.('chat-lent'));
+    const chat = durableChat('chat-lent');
+    const controller = new AbortController();
+    const first = settleQuietly(port.run(chat.turn('run-1', 'slow', controller.signal)));
+    await until(async () => sent(frames, 'session/prompt') === 1, 'the first turn prompting');
+
+    await expect(port.run(chat.turn('run-2', 'noask'))).rejects.toMatchObject({ code: 'CHAT_RUN_LIVE' });
+    expect(sent(frames, 'session/prompt')).toBe(1);
+    controller.abort();
+    await first;
+  }, 60_000);
+
+  /* F3, EA-A3: a cancelled open sent SIGTERM and forgot the key, so the next
+   * turn spawned a second adapter beside one that ignored the signal. */
+  it('does not open a second adapter for a key that is still closing', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-closing-key-'));
+    roots.push(workspaceRoot);
+    const { adapter, pids } = await trackedAdapter('silent,stubborn');
+    let firstAliveAtSecondSpawn: boolean | undefined;
+    const frames: AcpWireFrame[] = [];
+    const port = createAcpExternalAgentPort({
+      agents: [adapter],
+      workspaceRoot,
+      onFrame: (frame) => {
+        frames.push(frame);
+        if (sent(frames, 'initialize') === 2 && firstAliveAtSecondSpawn === undefined) {
+          const [first] = readFileSync(pids, 'utf8').split('\n').map(Number);
+          firstAliveAtSecondSpawn = first !== undefined && isAlive(first);
+        }
+      },
+    });
+    const chat = durableChat('chat-closing-key');
+    const cancelFirst = new AbortController();
+    const first = port.run(chat.turn('run-1', 'noask', cancelFirst.signal));
+    /* Booted, SIGTERM handler installed, and its initialize unanswered. */
+    await until(
+      async () => (await pidCount(pids)) === 1 && sent(frames, 'initialize') === 1,
+      'the first unanswered initialize',
+    );
+    cancelFirst.abort();
+    await expect(first).rejects.toBeDefined();
+
+    const cancelSecond = new AbortController();
+    const second = port.run(chat.turn('run-2', 'noask', cancelSecond.signal));
+    await until(async () => sent(frames, 'initialize') === 2, 'the second adapter to start', { budget: 15_000 });
+    cancelSecond.abort();
+    await expect(second).rejects.toBeDefined();
+
+    expect(firstAliveAtSecondSpawn).toBe(false);
+  }, 60_000);
+
+  /* F3 and F10, EA-A3: the bootstrap abort sent SIGTERM to the adapter alone,
+   * with no escalation, and nothing reached the processes it started. */
+  it('escalates a cancelled open to SIGKILL of the process group', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-cancel-open-'));
+    roots.push(workspaceRoot);
+    const { adapter, pids } = await trackedAdapter('silent,stubborn,grandchild');
+    const frames: AcpWireFrame[] = [];
+    const port = createAcpExternalAgentPort({
+      agents: [adapter],
+      workspaceRoot,
+      onFrame: (frame) => frames.push(frame),
+    });
+    const controller = new AbortController();
+    const run = port.run(durableChat('chat-cancel-open').turn('run-1', 'noask', controller.signal));
+    await until(async () => (await pidCount(pids)) === 2 && sent(frames, 'initialize') === 1, 'the open');
+    controller.abort();
+    await expect(run).rejects.toBeDefined();
+
+    await until(async () => allExited(pids), 'the whole group to die', {
+      budget: 10_000,
+    });
+  }, 60_000);
+
+  /* F10: an idle close killed the adapter alone; a process it started outlived it. */
+  it("closes an idle session's whole process group", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-close-group-'));
+    roots.push(workspaceRoot);
+    const { adapter, pids } = await trackedAdapter('grandchild');
+    const port = createAcpExternalAgentPort({ agents: [adapter], workspaceRoot });
+    await port.run(durableChat('chat-close-group').turn('run-1', 'noask'));
+    const alive = await recordedPids(pids);
+    expect(alive.every((pid) => isAlive(pid))).toBe(true);
+
+    await port.closeChat?.('chat-close-group');
+
+    await until(async () => allExited(pids), 'the whole group to die', {
+      budget: 10_000,
+    });
+  }, 60_000);
+
+  /* F4, EA-A4: the capability was checked only when a turn began, so a prompt
+   * that outlived it lost Tau's tools partway through. */
+  it("should keep a long prompt's Tau tools past expiry", async () => {
+    let skew = 0;
+    const harness = await startHarness({ mcpNow: () => Date.now() + skew });
+    const gates = await mkdtemp(join(tmpdir(), 'tau-acp-gate-'));
+    roots.push(gates);
+    const gate = join(gates, 'go');
+    const chatId = 'chat-capability-expiry';
+    await harness.launcher.execute({
+      type: 'start',
+      commandId: 'cmd-start',
+      payload: {
+        trigger: 'submit',
+        chatId,
+        runId: 'run-expiry',
+        message: { id: 'user-1', role: 'user', content: `noask mcp mcp-when:${gate}` },
+        config: { agent: { kind: 'acp', id: 'codex' }, systemPrompt: '', toolChoice: 'auto' },
+      },
+    });
+    await until(async () => sent(harness.frames, 'session/prompt') === 1, 'the prompt in flight');
+    skew = hostMcpCapabilityLifetime + 60_000;
+    await writeFile(gate, 'go', 'utf8');
+    await until(
+      async () => lifecycleOf(await readLog(harness.workspaceRoot, chatId)).includes('completed'),
+      'the turn to finish',
+      { dump: async () => readLog(harness.workspaceRoot, chatId) },
+    );
+
+    const results = messagesOf(await readLog(harness.workspaceRoot, chatId)).filter(
+      (message) => message.role === 'tool-output' && message.toolName === 'test_model',
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ isError: false, content: { passed: 1, total: 1 } });
+  }, 60_000);
+
+  /* F7, EA-A8: a turn on a live session remembered usage, config and title
+   * without the session id, so the record read back was the opening turn's. */
+  it('remembers the whole session record on every turn outcome', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-record-'));
+    roots.push(workspaceRoot);
+    const port = createAcpExternalAgentPort({ agents: [fakeAgent], workspaceRoot });
+    closers.push(async () => port.closeChat?.('chat-record'));
+    const chat = durableChat('chat-record');
+
+    await port.run(chat.turn('run-1', 'noask'));
+    await port.run(chat.turn('run-2', 'noask'));
+    await expect(port.run(chat.turn('run-3', 'fail:rate noask'))).rejects.toMatchObject({
+      code: 'EXTERNAL_AGENT_LIMIT_REACHED',
+    });
+
+    const [opening, reused, stopped] = chat.markers;
+    expect(typeof opening?.['acpSessionId']).toBe('string');
+    expect(reused).toMatchObject({ acpSessionId: opening?.['acpSessionId'], cwd: workspaceRoot });
+    expect(reused?.['acpPriorUsage']).toMatchObject({ totalTokens: 3000 });
+    expect(stopped).toMatchObject({ acpSessionId: opening?.['acpSessionId'], cwd: workspaceRoot });
+  }, 60_000);
+
+  /* F7, EA-A8: the turn after an eviction resumed with the opening turn's
+   * usage baseline and attributed two turns' tokens to one. */
+  it('attributes usage correctly after an eviction', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-usage-evicted-'));
+    roots.push(workspaceRoot);
+    const port = createAcpExternalAgentPort({ agents: [fakeAgent], workspaceRoot });
+    closers.push(async () => port.closeChat?.('chat-usage-evicted'));
+    const chat = durableChat('chat-usage-evicted');
+
+    await port.run(chat.turn('run-1', 'noask'));
+    await port.run(chat.turn('run-2', 'noask'));
+    await port.closeChat?.('chat-usage-evicted');
+    await port.run(chat.turn('run-3', 'noask'));
+
+    expect(usageOf(chat.eventsOf('run-3')).at(-1)).toMatchObject({ totalTokens: 1500 });
+  }, 60_000);
+
+  /* F8, EA-A7: a reset reported on `usage_update` lived only in the session's
+   * memory, so the stop after an eviction had no reset time to hold Resume on. */
+  it('restores a held limit reset after eviction', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-reset-evicted-'));
+    roots.push(workspaceRoot);
+    const port = createAcpExternalAgentPort({ agents: [fakeAgent], workspaceRoot });
+    closers.push(async () => port.closeChat?.('chat-reset-evicted'));
+    const chat = durableChat('chat-reset-evicted');
+
+    await port.run(chat.turn('run-1', 'reset:soon noask'));
+    await port.closeChat?.('chat-reset-evicted');
+    const stopped = await port.run(chat.turn('run-2', 'fail:quota')).catch((error: unknown) => error);
+
+    expect(stopped).toMatchObject({ code: 'EXTERNAL_AGENT_LIMIT_REACHED', details: { window: 'five_hour' } });
+    expect((stopped as { details?: { resetsAt?: unknown } }).details?.resetsAt).toBeGreaterThan(Date.now() / 1000);
+  }, 60_000);
+
+  it('restores a held limit reset after a host restart', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-acp-reset-restart-'));
+    roots.push(workspaceRoot);
+    const chat = durableChat('chat-reset-restart');
+    const before = createAcpExternalAgentPort({ agents: [fakeAgent], workspaceRoot });
+    await before.run(chat.turn('run-1', 'reset:soon noask'));
+    await before.closeChat?.('chat-reset-restart');
+
+    const after = createAcpExternalAgentPort({ agents: [fakeAgent], workspaceRoot });
+    closers.push(async () => after.closeChat?.('chat-reset-restart'));
+    const stopped = await after.run(chat.turn('run-2', 'fail:quota')).catch((error: unknown) => error);
+
+    expect(stopped).toMatchObject({ code: 'EXTERNAL_AGENT_LIMIT_REACHED', details: { window: 'five_hour' } });
+    expect((stopped as { details?: { resetsAt?: unknown } }).details?.resetsAt).toBeGreaterThan(Date.now() / 1000);
+  }, 60_000);
+});

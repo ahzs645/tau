@@ -1,0 +1,97 @@
+{
+  "name": "@taucad/bambu",
+  "version": "0.1.0-beta.9",
+  "description": "Bambu Lab Developer LAN machine plugin",
+  "type": "module",
+  "sideEffects": false,
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/plugins/bambu"
+  },
+  "homepage": "https://github.com/taucad/tau/tree/main/packages/plugins/bambu#readme",
+  "bugs": {
+    "url": "https://github.com/taucad/tau/issues"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "cad",
+    "plugin",
+    "bambu"
+  ],
+  "author": "Richard Fontein",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./lan": "./src/bambu.lan.ts",
+    "./plate": "./src/bambu.plate.ts",
+    "./package.json": "./package.json",
+    "./settings": "./src/bambu.settings.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
+      },
+      "./lan": {
+        "types": "./dist/bambu.lan.d.mts",
+        "import": "./dist/bambu.lan.mjs",
+        "default": "./dist/bambu.lan.mjs"
+      },
+      "./plate": {
+        "types": "./dist/bambu.plate.d.mts",
+        "import": "./dist/bambu.plate.mjs",
+        "default": "./dist/bambu.plate.mjs"
+      },
+      "./package.json": "./package.json",
+      "./settings": {
+        "types": "./dist/bambu.settings.d.mts",
+        "import": "./dist/bambu.settings.mjs",
+        "default": "./dist/bambu.settings.mjs"
+      }
+    },
+    "imports": {}
+  },
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
+  "peerDependencies": {
+    "@taucad/runtime": "^0.1.0-beta.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@taucad/runtime": "workspace:*",
+    "@taucad/runtime-testing": "workspace:*",
+    "@taucad/slicer": "workspace:*",
+    "zod": "catalog:"
+  },
+  "taucad": {
+    "hostTarget": "daemon"
+  },
+  "tau": {
+    "skills": null,
+    "reason": "Machine plugin; no CAD authoring surface"
+  },
+  "dependencies": {
+    "@standard-schema/spec": "catalog:",
+    "@taucad/units": "workspace:*",
+    "basic-ftp": "catalog:",
+    "fflate": "catalog:",
+    "mqtt": "catalog:"
+  }
+}

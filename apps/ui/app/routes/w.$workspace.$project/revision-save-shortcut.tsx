@@ -1,0 +1,90 @@
+/**
+ * `Mod+S` anywhere in the workbench: record what is on disk (S30, AC12).
+ *
+ * Buffers first, then the ask: `editorRef.flushNow`, `projectRef.flushNow`, wait
+ * for both stores to become idle and for the editor's file writes to land
+ * (D80), then cut the tree. The wait is bounded so a
+ * stuck producer cannot disable the explicit save gesture forever.
+ */
+
+import { useCallback } from 'react';
+import type { ReactNode } from 'react';
+import { waitFor } from 'xstate';
+import { useKeybinding } from '@taucad/ui/components/keyboard';
+import { useOptionalFileManager } from '#hooks/use-file-manager.js';
+import { useProject } from '#hooks/use-project.js';
+import { useRevisionCommands } from '#hooks/use-revision-status.js';
+import type { KeyCombination } from '@taucad/ui/utils/keys';
+import { toast } from '@taucad/ui/components/sonner';
+
+/** The workbench-wide *Save revision* gesture. @public */
+export const saveRevisionKeyCombination = {
+  key: 's',
+  modKey: true,
+} as const satisfies KeyCombination;
+
+const saveFlushTimeoutMilliseconds = 10_000;
+
+/**
+ * The *Save revision* request for the project this subtree is rooted at.
+ *
+ * @returns A callback that flushes the editor and project stores, then asks for the cut.
+ */
+export function useSaveRevisionRequest(): () => Promise<void> {
+  const { projectRef, editorRef } = useProject();
+  /* No file manager means no editor writes to wait for. */
+  const fileManagerRef = useOptionalFileManager()?.fileManagerRef;
+  const { saveRevision } = useRevisionCommands();
+  return useCallback(async () => {
+    editorRef.send({ type: 'flushNow' });
+    projectRef.send({ type: 'flushNow' });
+    try {
+      await Promise.all([
+        waitFor(editorRef, (state) => state.matches({ ready: { storing: 'idle' } }), {
+          timeout: saveFlushTimeoutMilliseconds,
+        }),
+        waitFor(projectRef, (state) => state.matches({ ready: { storing: 'idle' } }), {
+          timeout: saveFlushTimeoutMilliseconds,
+        }),
+        Promise.race([
+          fileManagerRef?.getSnapshot().context.contentService?.settleEditorSaves(),
+          new Promise((_resolve, reject) => {
+            setTimeout(() => {
+              reject(new Error('The editor files did not finish saving.'));
+            }, saveFlushTimeoutMilliseconds);
+          }),
+        ]),
+      ]);
+      /* Not awaited: the gesture is finished once the cut is asked for, and the
+       * correlated answer exists for the unload registrant, not for a person
+       * waiting at the keyboard (C16). */
+      void saveRevision('save');
+    } catch (error) {
+      /* What failed here is a file flush, not a revision verb, so it carries no
+         code to phrase (P4) — and its own words are a diagnostic a person
+         cannot act on (E5). They get what did not happen; the console gets why. */
+      console.error('[revisions]', 'save', error);
+      toast.error('Couldn’t save', { description: 'Some files didn’t finish saving. Try again.' });
+    }
+  }, [editorRef, projectRef, fileManagerRef, saveRevision]);
+}
+
+/**
+ * Register the save shortcut for the project this subtree is rooted at.
+ *
+ * Every live project keeps its subtree mounted (V21), so every one of them
+ * registers this global gesture; the registry fires the first registration and
+ * consumes the event. Only the project the person is looking at may answer
+ * `Mod+S`, so a retained, unfocused project disables its binding (P73).
+ *
+ * @returns Nothing rendered.
+ */
+export function RevisionSaveShortcut({ isFocused = true }: { readonly isFocused?: boolean }): ReactNode {
+  const save = useSaveRevisionRequest();
+
+  /* A save is exactly what someone means while typing in the editor, and
+   * `scope: 'global'` means the same thing with a dialog open. */
+  useKeybinding(saveRevisionKeyCombination, save, { enabled: isFocused, scope: 'global' });
+
+  return null;
+}

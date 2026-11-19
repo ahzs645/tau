@@ -1,126 +1,67 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
-import PlaygroundGallery from '#routes/_index/route.js';
+import { describe, expect, it, vi } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
+import * as Cookies from 'es-cookie';
+import Home, { handle, meta } from '#routes/_index/route.js';
 
-describe('PlaygroundGallery', () => {
-  afterEach(() => {
-    cleanup();
+vi.mock('#components/project-library/project-library.js', () => ({
+  ProjectLibrary: ({ emptyContent }: { readonly emptyContent?: React.ReactNode }) => (
+    <div data-testid='project-library'>{emptyContent}</div>
+  ),
+}));
+
+// Setup's auto-open reads the session; its own tests cover it (`use-setup-offer.test.tsx`).
+vi.mock('#components/onboarding/use-setup-offer.js', () => ({ useSetupOffer: () => undefined }));
+
+vi.mock('#components/project-grid.js', () => ({ CommunityProjectGrid: () => <ul aria-label='examples' /> }));
+
+vi.mock('#routes/_index/homepage-chat-hero.js', () => ({
+  HomepageChatHero: () => <div data-testid='homepage-chat-hero' />,
+}));
+
+function renderHome(path = '/'): ReturnType<typeof createMemoryRouter> {
+  const router = createMemoryRouter([{ path: '/', element: <Home /> }], { initialEntries: [path] });
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
+describe('Home route', () => {
+  it('should render the chat hero above the project library', () => {
+    renderHome();
+
+    const hero = screen.getByTestId('homepage-chat-hero');
+    expect(hero.nextElementSibling).toBe(screen.getByTestId('project-library'));
   });
 
-  it('renders gallery cards that open examples in the playground', () => {
-    renderGallery();
+  it('should offer the community builds as the empty library content', () => {
+    renderHome();
 
-    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Network Equipment Rack' })).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Atmospheric Sampler' })).toBeDefined();
-    // OpenCascade-derived (Replicad) projects must be visible alongside OpenSCAD ones.
-    expect(screen.getByRole('heading', { name: 'Modular PET Bottle Opener (OpenCascade)' })).toBeDefined();
-    // The whole card is the link, labelled per model.
-    expect(screen.getByRole('link', { name: 'Open 3D Rack System' }).getAttribute('href')).toBe(
-      '/playground?model=3d-rack-scad',
-    );
+    const library = within(screen.getByTestId('project-library'));
+    expect(library.getByRole('heading', { level: 2, name: 'Built with Tau' })).toBeInTheDocument();
+    expect(library.getByRole('list', { name: 'examples' })).toBeInTheDocument();
+    expect(library.getByRole('link', { name: 'View all' })).toHaveAttribute('href', '/community');
   });
 
-  it('exposes a per-kernel engine filter including variant-only kernels', () => {
-    renderGallery();
+  it('should record the app preference and drop the marker when a marketing link opens Home', async () => {
+    Cookies.remove('tau-entry', { path: '/' });
+    const router = renderHome('/?app&utm_source=www');
 
-    // Both kernels present in the gallery get their own filter chip.
-    expect(screen.getByRole('button', { name: 'OpenSCAD' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'OpenCascade' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Replicad' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Static' })).toBeDefined();
+    await vi.waitFor(() => {
+      expect(router.state.location.search).toBe('?utm_source=www');
+    });
+    expect(Cookies.get('tau-entry')).toBe('app');
   });
 
-  it('shows every supported kernel on dual-kernel cards', () => {
-    renderGallery();
-
-    const rackCard = screen.getByRole('heading', { name: '3D Rack System' }).closest('article');
-    expect(rackCard).not.toBeNull();
-    expect(within(rackCard!).getByLabelText('Engines: OpenSCAD, OpenCascade')).toBeDefined();
+  it('should keep the app shell', () => {
+    expect(handle.enablePageWrapper).toBe(true);
   });
 
-  it('matches and filters against kernels supplied only by variants', () => {
-    renderGallery();
+  it('should provide an application title and description', () => {
+    // MetaFunction args are unused by the homepage meta.
+    const descriptors = meta({} as Parameters<typeof meta>[0]) as Array<Record<string, unknown>>;
 
-    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'OpenCascade' } });
-    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
-    expect(screen.queryByRole('heading', { name: 'Network Equipment Rack' })).toBeNull();
-
-    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'OpenCascade' }));
-    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
-    expect(screen.queryByRole('heading', { name: 'Network Equipment Rack' })).toBeNull();
-  });
-
-  it('filters gallery models by search and engine', () => {
-    renderGallery();
-
-    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'rack' } });
-
-    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
-    expect(screen.queryByRole('heading', { name: 'OpenSCAD bracket' })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));
-
-    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
-
-    // Switching to the Replicad engine filter hides the OpenSCAD rack and shows the opener.
-    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Replicad' }));
-
-    expect(screen.queryByRole('heading', { name: '3D Rack System' })).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Modular PET Bottle Opener (OpenCascade)' })).toBeDefined();
-
-    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'not-a-real-model' } });
-
-    expect(screen.getByText('No gallery models match the current filters.')).toBeDefined();
-  });
-
-  it('filters gallery models by project.json category metadata', () => {
-    renderGallery();
-
-    fireEvent.change(screen.getByLabelText('Filter by category'), { target: { value: 'Organization' } });
-
-    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
-    expect(screen.queryByRole('heading', { name: 'Atmospheric Sampler' })).toBeNull();
-
-    fireEvent.change(screen.getByLabelText('Filter by category'), { target: { value: 'All' } });
-
-    expect(screen.getByRole('heading', { name: 'Atmospheric Sampler' })).toBeDefined();
-  });
-
-  it('zooms a card image into a lightbox and closes it without navigating', () => {
-    renderGallery();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Preview 3D Rack System' }));
-
-    expect(screen.getByRole('dialog', { name: '3D Rack System preview' })).toBeDefined();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
-
-    expect(screen.queryByRole('dialog')).toBeNull();
-    // The card link is untouched by the zoom interaction.
-    expect(screen.getByRole('link', { name: 'Open 3D Rack System' })).toBeDefined();
-  });
-
-  it('matches search terms against project.json tags', () => {
-    renderGallery();
-
-    // "storage" only appears in tags, not in any name or description.
-    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'storage' } });
-
-    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Interlocking Boxes System' })).toBeDefined();
-    expect(screen.queryByRole('heading', { name: 'Atmospheric Sampler' })).toBeNull();
+    expect(descriptors.find((descriptor) => 'title' in descriptor)?.['title']).toContain('Tau');
+    expect(typeof descriptors.find((descriptor) => descriptor['name'] === 'description')?.['content']).toBe('string');
   });
 });
-
-function renderGallery(): ReturnType<typeof render> {
-  return render(
-    <MemoryRouter>
-      <PlaygroundGallery />
-    </MemoryRouter>,
-  );
-}

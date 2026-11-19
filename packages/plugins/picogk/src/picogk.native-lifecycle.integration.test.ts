@@ -1,0 +1,74 @@
+// @vitest-environment node
+import { assertRenderingSuccess, createTestRuntimeClient } from '@taucad/runtime-testing';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { installFetchTripwire } from '@taucad/runtime-testing/preparation';
+import { beforeAll, expect, it } from 'vitest';
+
+import { picogk } from '#index.js';
+import { nativeEngineAvailable, nativeKernelOptions } from '#picogk-native.fixture.js';
+
+// The kernels run from a closure already on disk: no request may leave this file (charter D27 tripwire).
+beforeAll(() => installFetchTripwire());
+
+it.runIf(nativeEngineAvailable)(
+  'should release native listeners on default client shutdown and preserve sibling sessions',
+  async () => {
+    const signals = ['exit', 'SIGINT', 'SIGTERM'] as const;
+    const runtime = defineRuntime({
+      plugins: [
+        picogk({
+          kernels: {
+            default: {
+              closure: nativeKernelOptions,
+              requestTimeout: 120_000,
+            },
+          },
+        }),
+      ],
+    });
+    const files = {
+      'main.cs':
+        'using System.Numerics; using PicoGK; Library.Go(1f, () => { Library.oViewer().Add(Utils.mshCreateCube(new Vector3(2, 4, 6))); });',
+    };
+    const makeClient = () => createTestRuntimeClient({ runtime, files });
+    const renderModel = async (client: ReturnType<typeof makeClient>) => {
+      const document = client.open({ source: { path: 'main.cs' }, watch: false });
+      const view = document.view('model');
+      try {
+        const outcome = await view.rendering();
+        expect(outcome.superseded).toBe(false);
+        if (outcome.superseded) {
+          throw new Error('PicoGK render was unexpectedly superseded.');
+        }
+        assertRenderingSuccess(outcome.rendering);
+        return outcome.rendering;
+      } finally {
+        view.close();
+        document.close();
+      }
+    };
+    // The sandbox runtime registers its own process-wide cleanup listeners once, on first launch;
+    // they outlive every session, so the baseline is taken after a warm-up session has released.
+    const warmUp = makeClient();
+    await renderModel(warmUp);
+    await warmUp.shutdown();
+    const baseline = signals.map((signal) => process.listenerCount(signal));
+    const first = makeClient();
+    const second = makeClient();
+    try {
+      for (const client of [first, second]) {
+        // oxlint-disable-next-line no-await-in-loop -- separate native clients initialize in a deterministic order.
+        await renderModel(client);
+      }
+      expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baseline.map((count) => count + 2));
+      await first.shutdown();
+      expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baseline.map((count) => count + 1));
+      await renderModel(second);
+      await second.shutdown();
+      expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baseline);
+    } finally {
+      await Promise.all([first.shutdown(), second.shutdown()]);
+    }
+  },
+  120_000,
+);

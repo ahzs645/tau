@@ -1,0 +1,69 @@
+version: 1
+repos_dir: repos
+owner: taucad
+groups:
+  public-maintenance:
+    description: OSS inputs used by public source-maintenance workflows
+    repos:
+      - opencascade.js
+      - OCCT
+      - replicad
+      - zoo-modeling-app
+      - shiki
+      - lobe-icons
+      - three-viewport-gizmo
+      - three.js
+      - nanoraster
+      - openrscad
+      - paseo
+repos:
+  opencascade.js:
+    upstream: donalffons/opencascade.js
+    fork: taucad/opencascade.js
+    branch: master
+    description: OpenCASCADE compiled to WASM via Emscripten
+  OCCT:
+    upstream: Open-Cascade-SAS/OCCT
+    branch: master
+    description: Open CASCADE Technology - 3D modeling kernel
+    shallow: true
+  replicad:
+    upstream: sgenoud/replicad
+    branch: main
+    description: Replicad - CAD library built on OpenCASCADE
+    fork: taucad/replicad
+  zoo-modeling-app:
+    upstream: KittyCAD/modeling-app
+    fork: taucad/modeling-app
+    path: zoo-modeling-app
+    branch: main
+    description: Zoo CAD modeling application
+  shiki:
+    upstream: shikijs/shiki
+    fork: taucad/shiki
+    branch: main
+    description: A beautiful yet powerful syntax highlighter
+  lobe-icons:
+    upstream: lobehub/lobe-icons
+    description: AI and software brand icon library
+  three-viewport-gizmo:
+    upstream: Fennec-hub/three-viewport-gizmo
+    description: Three Viewport Gizmo - interactive three.js view helper
+    fork: taucad/three-viewport-gizmo
+    commit: bed9a3c809abe7fac8203707261297143b8a0acc
+  three.js:
+    upstream: mrdoob/three.js
+    branch: dev
+    description: Three.js - JavaScript 3D library
+    shallow: true
+  nanoraster:
+    upstream: taucad/nanoraster
+    description: A tiny, headless WebGPU-powered GLTF renderer - eyes for your LLM.
+  openrscad:
+    upstream: matthova/openrscad
+    fork: taucad/openrscad
+    commit: a08461511ebd4c315be8b5cd83702187fbd0878e
+    description: Clean-room Rust implementation of the OpenSCAD language and geometry runtime
+  paseo:
+    upstream: getpaseo/paseo
+    description: Orchestrate multiple coding agents from desktop and mobile

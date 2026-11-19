@@ -1,21 +1,55 @@
-/* oxlint-disable new-cap -- NestJS decorators use PascalCase */
+/* oxlint-disable new-cap, typescript-eslint/consistent-type-imports -- NestJS decorators use PascalCase; DI requires runtime imports */
 import process from 'node:process';
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { HealthCheck, HealthCheckService, MemoryHealthIndicator } from '@nestjs/terminus';
 import type { HealthCheckResult } from '@nestjs/terminus';
 import { RedisHealthIndicator } from '#api/health/redis-health.indicator.js';
 import { DatabaseHealthIndicator } from '#api/health/database-health.indicator.js';
+import { S3HealthIndicator } from '#api/health/s3-health.indicator.js';
+import { GitToolchainHealthIndicator } from '#api/health/git-toolchain-health.indicator.js';
+import { ReadinessRefusalException, readinessFailures } from '#api/health/readiness-refusal.exception.js';
+import { MetricsService } from '@taucad/api-observability/metrics';
+import { reportReadinessFailure } from '@taucad/api-observability/sentry';
+import { AttributeKey } from '@taucad/telemetry';
 
-/** Heap threshold: 80% of the 2GB VM allocation */
-const heapThresholdBytes = 2 * 1024 * 1024 * 1024 * 0.8;
+/**
+ * Heap threshold: 80% of the 1 GiB API allocation in both Fly environments.
+ * This is a heap guard, not an RSS limit; review it whenever API VM sizing changes.
+ */
+const heapThresholdBytes = 1024 * 1024 * 1024 * 0.8;
+
+/**
+ * Indicators for dependencies every API Machine shares. When one is slow or down it is down for all of them, so
+ * refusing readiness on it drains the whole fleet at once and a dependency slowdown becomes a full API outage,
+ * including for routes that never touch it. They are still probed, reported and counted; they do not refuse.
+ * Any other indicator (the git toolchain, heap, one added later) describes this Machine and refuses.
+ */
+const sharedDependencyIndicators: ReadonlySet<string> = new Set(['redis', 'database', 's3']);
+
+/**
+ * Probes in a row a shared dependency must be down on this Machine before it is reported to Sentry. One slow answer
+ * is the dependency's tail latency (TAU-API-6: R2 occasionally misses the 1.5 s deadline once and answers the next
+ * probe); two in a row is a degradation worth an event. The streak counts probes from any caller of this
+ * Machine's `/health/ready`; with Fly's 10 s check as the only caller that is about 10 s of failure. Every down probe is still logged and
+ * counted, so the metric keeps the full rate.
+ */
+const sharedDependencyReportStreak = 2;
 
 @Controller('health')
 export class HealthController {
+  private readonly logger = new Logger(HealthController.name);
+
+  /** Down probes in a row per indicator on this Machine; an indicator leaves the map when it answers up. */
+  private readonly consecutiveFailures = new Map<string, number>();
+
   public constructor(
     private readonly health: HealthCheckService,
     private readonly memory: MemoryHealthIndicator,
     private readonly redisHealth: RedisHealthIndicator,
     private readonly databaseHealth: DatabaseHealthIndicator,
+    private readonly s3Health: S3HealthIndicator,
+    private readonly gitToolchainHealth: GitToolchainHealthIndicator,
+    private readonly metrics: MetricsService,
   ) {}
 
   /**
@@ -30,18 +64,64 @@ export class HealthController {
   }
 
   /**
-   * Readiness probe: Can the service handle traffic?
-   * Checks all external dependencies. Failure removes the machine
-   * from the Fly.io load balancer.
+   * Readiness probe: Can this Machine handle traffic?
+   * Refuses (503, and Fly removes the Machine from the load balancer) only for a fault of this
+   * Machine: the git toolchain or heap. Redis, the database and object storage are probed too,
+   * but a down shared dependency leaves the probe at 200 with the indicator under `error`,
+   * because every Machine would refuse together.
+   *
+   * Every down indicator, refusing or not, is logged as a warning and counted per indicator. It is
+   * reported to Sentry grouped by indicator rather than as one anonymous `ServiceUnavailableException`:
+   * a Machine check at once, a shared dependency once it is down on two probes in a row (TAU-API-6).
    */
   @Get('ready')
   @HealthCheck()
   public async checkReady(): Promise<HealthCheckResult> {
-    return this.health.check([
-      async () => this.redisHealth.isHealthy(),
-      async () => this.databaseHealth.isHealthy(),
-      async () => this.memory.checkHeap('memory_heap', heapThresholdBytes),
-    ]);
+    try {
+      const ready = await this.health.check([
+        async () => this.redisHealth.isHealthy(),
+        async () => this.databaseHealth.isHealthy(),
+        async () => this.s3Health.isHealthy(),
+        async () => this.gitToolchainHealth.isHealthy(),
+        async () => this.memory.checkHeap('memory_heap', heapThresholdBytes),
+      ]);
+      this.consecutiveFailures.clear();
+      return ready;
+    } catch (error) {
+      if (!(error instanceof ServiceUnavailableException)) {
+        throw error;
+      }
+      const result = error.getResponse() as HealthCheckResult;
+      const failures = readinessFailures(result);
+      // No down indicator (terminus `shutting_down`) is not a dependency refusal: leave it to the filter.
+      if (failures.length === 0) {
+        throw error;
+      }
+      const refuses = failures.some((failure) => !sharedDependencyIndicators.has(failure.indicator));
+      this.logger.warn(
+        { failures },
+        refuses ? 'Readiness refused: Machine check down' : 'Readiness degraded: shared dependency check down',
+      );
+      const streaks = new Map(
+        failures.map((failure) => [failure.indicator, (this.consecutiveFailures.get(failure.indicator) ?? 0) + 1]),
+      );
+      this.consecutiveFailures.clear();
+      for (const [indicator, streak] of streaks) {
+        this.consecutiveFailures.set(indicator, streak);
+      }
+      for (const failure of failures) {
+        this.metrics.healthReadinessFailures.add(1, { [AttributeKey.HEALTH_INDICATOR]: failure.indicator });
+        const consecutiveFailures = streaks.get(failure.indicator) ?? 1;
+        const shared = sharedDependencyIndicators.has(failure.indicator);
+        if (!shared || consecutiveFailures >= sharedDependencyReportStreak) {
+          reportReadinessFailure({ ...failure, consecutiveFailures });
+        }
+      }
+      if (!refuses) {
+        return { ...result, status: 'ok' };
+      }
+      throw new ReadinessRefusalException(failures, result);
+    }
   }
 
   /**

@@ -1,0 +1,68 @@
+{
+  "name": "agent-host",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/agent-host",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:package"],
+  "targets": {
+    "formal:logs": {},
+    "formal:nightly": {
+      "dependsOn": [{ "target": "formal:nightly:fresh" }],
+      "options": {
+        "command": "node tools/formal/src/cli.ts nightly --without-check --without-mutants packages/agent-host && vitest run --root packages/agent-host src/host/chat-run.conformance.test.ts src/launchers/leadership/leadership.machine.conformance.test.ts",
+        "env": {
+          "FORMAL_FRESH_TRACES": "20000",
+          "FORMAL_SIMULATED": "out/test-results/formal/packages/agent-host/simulated"
+        }
+      }
+    },
+    "formal:nightly:fresh": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "parallel": true,
+        "commands": [
+          "FORMAL_FRESH_PART=1/4 vitest run --root packages/agent-host --no-cache src/log/chat-ledger.differential.test.ts",
+          "FORMAL_FRESH_PART=2/4 vitest run --root packages/agent-host --no-cache src/log/chat-ledger.differential.test.ts -t 'should write fresh-seed corpora'",
+          "FORMAL_FRESH_PART=3/4 vitest run --root packages/agent-host --no-cache src/log/chat-ledger.differential.test.ts -t 'should write fresh-seed corpora'",
+          "FORMAL_FRESH_PART=4/4 vitest run --root packages/agent-host --no-cache src/log/chat-ledger.differential.test.ts -t 'should write fresh-seed corpora'"
+        ],
+        "env": {
+          "FORMAL_FRESH_TRACES": "20000",
+          "FORMAL_SIMULATED": "out/test-results/formal/packages/agent-host/simulated"
+        }
+      }
+    },
+    "formal:nightly:check": {},
+    "formal:nightly:mutants": {},
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build"],
+      "options": {
+        "command": "tsdown",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "test:live": {
+      "command": "vitest run --config vitest.live.config.ts",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "cache": false
+    },
+    "test:e2e:queue": {
+      "executor": "nx:noop",
+      "dependsOn": ["test:e2e"],
+      "metadata": {
+        "description": "The merge-queue e2e ratchet: the suites of this project that passed two consecutive e2e-nightly runs. ci.yml's e2e-queue lane runs each one as its own job in the merge queue whenever this project is affected, and e2e-nightly.yml leaves every suite listed here out of its matrix. A suite joins by being added to dependsOn (a target of this project) once green on two consecutive nightlies, and never moves back. Running this target runs them all."
+      }
+    },
+    "test:e2e": {
+      "command": "vitest run --config vitest.browser.config.ts",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "cache": false
+    }
+  }
+}

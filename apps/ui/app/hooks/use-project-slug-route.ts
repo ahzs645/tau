@@ -1,0 +1,138 @@
+/**
+ * Slug ↔ `proj_` id resolution for the `/w/{workspaceSlug}/{projectSlug}` route
+ * grammar (blueprint D4/D5/D11).
+ *
+ * Both directions read the discovery listing, which already carries each
+ * project's slugs (L1), so an external directory rename corrects itself on the
+ * next listing refresh (D8) without any extra bookkeeping. Matching is
+ * case-insensitive because the filesystems Tau targets are (F3), and the
+ * project slug is the literal directory basename — Tau slugifies only the names
+ * it generates.
+ */
+
+import { useEffect, useRef } from 'react';
+import { idPrefix } from '@taucad/types/constants';
+import { useProjects } from '#hooks/use-projects.js';
+import type { ProjectListItem } from '@taucad/files-ui/types/project-library.types';
+import type { ProjectSlugs } from '@taucad/files-ui/utils/project-url.utils';
+import { projectUrl, projectUrlOr } from '@taucad/files-ui/utils/project-url.utils';
+import { legacyWorkspaceSlugTombstones } from '@taucad/files-ui/filesystem/handle-store';
+
+const equalsFolded = (a: string, b: string): boolean => a.toLocaleLowerCase() === b.toLocaleLowerCase();
+const isWorkspaceId = (value: string): boolean => value.startsWith(`${idPrefix.workspace}_`);
+const isProjectId = (value: string): boolean => value.startsWith(`${idPrefix.project}_`);
+
+type RouteProject = Pick<ProjectListItem, 'id' | 'locator' | 'slugs'>;
+
+/** Resolve a unique project by slug or durable id, rejecting ambiguous and old engine slugs. */
+export function resolveProjectRoute(
+  projects: readonly RouteProject[],
+  workspaceSegment: string,
+  projectSegment: string,
+): string | undefined {
+  if (legacyWorkspaceSlugTombstones.some((slug) => equalsFolded(slug, workspaceSegment))) {
+    return undefined;
+  }
+
+  let resolvedId: string | undefined;
+  for (const candidate of projects) {
+    if (!candidate.slugs) {
+      continue;
+    }
+    const workspaceMatches = isWorkspaceId(workspaceSegment)
+      ? candidate.locator.backend === 'webaccess' && candidate.locator.workspaceId === workspaceSegment
+      : equalsFolded(candidate.slugs.workspaceSlug, workspaceSegment);
+    const projectMatches = isProjectId(projectSegment)
+      ? candidate.id === projectSegment
+      : equalsFolded(candidate.slugs.projectSlug, projectSegment);
+    if (!workspaceMatches || !projectMatches) {
+      continue;
+    }
+    // A folded slug can name different projects or workspaces. Listing order
+    // must never decide which project's session receives the navigation.
+    if (resolvedId !== undefined && resolvedId !== candidate.id) {
+      return undefined;
+    }
+    resolvedId = candidate.id;
+  }
+  return resolvedId;
+}
+
+/** Resolution outcome. `resolving` must not render a not-found. */
+export type SlugResolution<T> =
+  | { readonly status: 'resolving' }
+  | { readonly status: 'resolved'; readonly value: T }
+  | { readonly status: 'not-found' };
+
+/** Canonical slugs for a project id, for redirects and URL correction. */
+export function useProjectSlugs(projectId: string | undefined): SlugResolution<ProjectSlugs> {
+  // Trashed projects still resolve: the route gate owns the "restore" UI.
+  const { projects, isLoading } = useProjects({ scope: 'all' });
+  if (isLoading) {
+    return { status: 'resolving' };
+  }
+  const slugs = projects.find((candidate) => candidate.id === projectId)?.slugs;
+  return slugs ? { status: 'resolved', value: slugs } : { status: 'not-found' };
+}
+
+/**
+ * Canonical project URL for surfaces that hold only an id (usage rows, the
+ * files browser). Falls back to the library while discovery has not placed the
+ * project — never a legacy `/projects/:id` URL (L1).
+ */
+export function useProjectUrl(projectId: string | undefined): string {
+  const slugs = useProjectSlugs(projectId);
+  return projectUrlOr(slugs.status === 'resolved' ? slugs.value : undefined);
+}
+
+/**
+ * Keep the address bar on the open project's canonical URL (D8). A directory
+ * renamed outside Tau changes the slug but not the established project ID, so discovery
+ * re-points the config and the next listing refresh lands here.
+ *
+ * @param projectId - The open project, once resolved.
+ * @param suffix - Path appended to the canonical project URL (e.g. `/preview`).
+ * @param from - The path the project was resolved from. When given, the correction writes only while the address
+ * bar still shows it, or the URL this hook last wrote (a later rename follows, D8): a person who navigated on before
+ * the slugs resolved keeps the URL they went to (I2).
+ */
+export function useCanonicalProjectUrlCorrection(
+  projectId: string | undefined,
+  suffix = '',
+  from?: string,
+): ProjectSlugs | undefined {
+  const canonical = useProjectSlugs(projectId);
+  const canonicalSlugs = canonical.status === 'resolved' ? canonical.value : undefined;
+  const target = canonicalSlugs ? `${projectUrl(canonicalSlugs)}${suffix}` : undefined;
+  /* `replaceState` is invisible to the router, so after a write the bar shows this path, not `from`. */
+  const written = useRef<Readonly<{ projectId: string | undefined; url: string }> | undefined>(undefined);
+  useEffect(() => {
+    const shown = globalThis.location.pathname;
+    /* Only this project's last write: a bar showing another project's corrected URL is the person's (Back). */
+    const wrote = written.current;
+    const wroteThis = wrote !== undefined && wrote.projectId === projectId && shown === wrote.url;
+    if (from !== undefined && shown !== from && !wroteThis) {
+      return;
+    }
+    if (target !== undefined && shown !== target) {
+      written.current = { projectId, url: target };
+      globalThis.history.replaceState(
+        globalThis.history.state,
+        '',
+        `${target}${globalThis.location.search}${globalThis.location.hash}`,
+      );
+    }
+  }, [target, from, projectId]);
+
+  return canonicalSlugs;
+}
+
+/** `proj_` id addressed by slug or id segments in the `/w/` grammar. */
+export function useProjectIdBySlugs(workspaceSlug: string, projectSlug: string): SlugResolution<string> {
+  const { projects, isLoading } = useProjects({ scope: 'all' });
+  if (isLoading) {
+    return { status: 'resolving' };
+  }
+  const projectId = resolveProjectRoute(projects, workspaceSlug, projectSlug);
+  return projectId ? { status: 'resolved', value: projectId } : { status: 'not-found' };
+}

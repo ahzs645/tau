@@ -1,0 +1,70 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createActor, createMachine } from 'xstate';
+import type { ParameterSetActor } from '@taucad/parameters/set-machine';
+import { browserHostLabels, closeParameterActors, hostBuildOf } from '#workers/agent-host.impl.js';
+
+/* W6.r2 M1 (D15): a parameter actor's close is bounded; one past the bound or left uncertain is stopped, and a
+ * retried close passes a stopped actor instead of waiting the bound again. */
+describe('closeParameterActors', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /* An actor whose write never settles, and one whose write settles uncertain once closed. */
+  const stuck = createMachine({ initial: 'open', states: { open: { initial: 'writing', states: { writing: {} } } } });
+  // The write is uncertain before the close arrives, so the close finds it there.
+  const uncertain = createMachine({
+    initial: 'open',
+    states: { open: { initial: 'uncertain', states: { uncertain: {} } } },
+  });
+  const parameterActor = (onClose?: 'uncertain'): ParameterSetActor =>
+    (onClose === 'uncertain' ? createActor(uncertain) : createActor(stuck)).start() as unknown as ParameterSetActor;
+
+  it('should stop an actor whose write outlives the bound, and pass it when the close is retried', async () => {
+    vi.useFakeTimers();
+    const actor = parameterActor();
+    let failures: unknown[] | undefined;
+    const closing = (async () => {
+      failures = await closeParameterActors(new Map([['main.ts', actor]]));
+    })();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(failures).toHaveLength(1);
+    expect(actor.getSnapshot().status).toBe('stopped');
+    await closing;
+    await expect(closeParameterActors(new Map([['main.ts', actor]]))).resolves.toEqual([]);
+  });
+
+  it('should stop an actor whose write stays uncertain, and report it', async () => {
+    const actor = parameterActor('uncertain');
+
+    const failures = await closeParameterActors(new Map([['main.ts', actor]]));
+
+    expect(failures).toEqual([new Error('Parameter write for main.ts remains uncertain.')]);
+    expect(actor.getSnapshot().status).toBe('stopped');
+  });
+});
+
+describe('hostBuildOf', () => {
+  it('reports the page release from the provide message', () => {
+    expect(hostBuildOf('abc1234')).toBe('abc1234');
+  });
+
+  it('reports no build for the unknown label, so an observation shows unknown and never 0000000', () => {
+    expect(hostBuildOf('0000000')).toBeUndefined();
+    /* An older page sends none; the worker's own read has no define or window.ENV and is the unknown label. */
+    expect(hostBuildOf(undefined)).toBeUndefined();
+  });
+});
+
+describe('browserHostLabels', () => {
+  it('labels every gateway call as the browser host with the build its evidence reports (LW17)', () => {
+    expect(browserHostLabels('abc1234')).toEqual({ kind: 'browser', build: 'abc1234' });
+  });
+
+  it('sends no build for the unknown label, as its evidence reports none', () => {
+    expect(browserHostLabels('0000000')).toEqual({ kind: 'browser' });
+    expect(browserHostLabels(undefined)).toEqual({ kind: 'browser' });
+  });
+});

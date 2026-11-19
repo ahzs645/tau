@@ -1,486 +1,334 @@
 import type { ReasoningUIPart } from 'ai';
-import { describe, it, expect, expectTypeOf } from 'vitest';
-import { uiMessagesSchema } from '#schemas/message.schema.js';
-import type { MyUIMessage, MyMessagePart } from '#types/message.types.js';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import { safeValidateUiMessages, validateUiMessages } from '#schemas/message.schema.js';
 import type { CommonReasoningMetadata } from '#schemas/common-reasoning-metadata.schema.js';
-import { toolName } from '#constants/tool.constants.js';
+import type { MyMessagePart, MyUIMessage } from '#types/message.types.js';
 
 const userMessage: MyUIMessage = { id: 'm0', role: 'user', parts: [{ type: 'text', text: 'hello' }] };
 
-const findToolPart = <PartType extends MyMessagePart['type']>(
-  parts: readonly MyMessagePart[],
-  type: PartType,
-): Extract<MyMessagePart, { type: PartType }> => {
-  const part = parts.find((p): p is Extract<MyMessagePart, { type: PartType }> => p.type === type);
-  if (!part) {
-    throw new Error(`expected a ${type} part`);
-  }
-  return part;
-};
-
-const baseMessage = (parts: MyUIMessage['parts']): MyUIMessage => ({
-  id: 'm1',
-  role: 'assistant',
-  parts,
-});
-
-const reasoningPart = (
-  providerMetadata?: ReasoningUIPart['providerMetadata'],
-  state: 'streaming' | 'done' = 'done',
-): MyUIMessage['parts'][number] => ({
+const reasoningPart = (providerMetadata?: ReasoningUIPart['providerMetadata']): MyUIMessage['parts'][number] => ({
   type: 'reasoning',
   text: 'thinking…',
-  state,
+  state: 'done',
   providerMetadata,
 });
 
-const findReasoning = (parts: readonly MyMessagePart[]): MyMessagePart & { type: 'reasoning' } => {
-  const part = parts.find((p): p is MyMessagePart & { type: 'reasoning' } => p.type === 'reasoning');
+const findPart = <PartType extends MyMessagePart['type']>(
+  messages: MyUIMessage[],
+  type: PartType,
+): Extract<MyMessagePart, { type: PartType }> => {
+  const part = messages.flatMap(({ parts }) => parts).find((value) => value.type === type);
   if (!part) {
-    throw new Error('expected a reasoning part');
+    throw new Error(`Expected ${type} part`);
   }
-  return part;
+  return part as Extract<MyMessagePart, { type: PartType }>;
 };
 
-describe('uiMessagesSchema reasoning part narrowing', () => {
-  describe('backwards compatibility', () => {
-    it('should accept a legacy persisted reasoning part with no providerMetadata', () => {
-      const result = uiMessagesSchema.safeParse([baseMessage([reasoningPart()])]);
-
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findReasoning(result.data[0]?.parts ?? []);
-      expect(part.providerMetadata).toBeUndefined();
-    });
-
-    it('should preserve a legacy provider-only namespace (anthropic) with no common keys', () => {
-      const result = uiMessagesSchema.safeParse([
-        baseMessage([reasoningPart({ anthropic: { thinkingSignature: 'abc' } })]),
-      ]);
-
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findReasoning(result.data[0]?.parts ?? []);
-      expect(part.providerMetadata).toEqual({ anthropic: { thinkingSignature: 'abc' } });
-    });
-
-    it('should accept reasoning parts in mixed messages with text parts and no metadata', () => {
-      const result = uiMessagesSchema.safeParse([
-        baseMessage([reasoningPart(), { type: 'text', text: 'Hello', state: 'done' }]),
-      ]);
-
-      expect(result.success).toBe(true);
-    });
+describe('safeValidateUiMessages Tau wire extensions', () => {
+  it('delegates generic UI-message validation to the AI SDK', async () => {
+    const result = await safeValidateUiMessages([{ id: 'bad', role: 'user', parts: [{ type: 'text' }] }]);
+    expect(result.success).toBe(false);
   });
 
-  describe('common namespace acceptance', () => {
-    it('should accept and preserve typed reasoningStartedAtMs and reasoningEndedAtMs', () => {
-      const result = uiMessagesSchema.safeParse([
-        baseMessage([
-          reasoningPart({
-            common: {
-              reasoningStartedAtMs: 1_700_000_000_000,
-              reasoningEndedAtMs: 1_700_000_002_000,
-            },
-          }),
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findReasoning(result.data[0]?.parts ?? []);
-      expect(part.providerMetadata).toEqual({
-        common: {
-          reasoningStartedAtMs: 1_700_000_000_000,
-          reasoningEndedAtMs: 1_700_000_002_000,
-        },
-      });
-    });
-
-    it('should accept mixed common + anthropic namespaces and retain both', () => {
-      const result = uiMessagesSchema.safeParse([
-        baseMessage([
-          reasoningPart({
-            common: {
-              reasoningStartedAtMs: 1_700_000_000_000,
-              reasoningEndedAtMs: 1_700_000_001_000,
-            },
-            anthropic: { thinkingSignature: 'abc' },
-          }),
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findReasoning(result.data[0]?.parts ?? []);
-      expect(part.providerMetadata).toEqual({
-        common: {
-          reasoningStartedAtMs: 1_700_000_000_000,
-          reasoningEndedAtMs: 1_700_000_001_000,
-        },
-        anthropic: { thinkingSignature: 'abc' },
-      });
-    });
-
-    it('should accept common containing only one endpoint (in-progress block)', () => {
-      const result = uiMessagesSchema.safeParse([
-        baseMessage([reasoningPart({ common: { reasoningStartedAtMs: 1_700_000_000_000 } }, 'streaming')]),
-      ]);
-
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findReasoning(result.data[0]?.parts ?? []);
-      expect(part.providerMetadata).toEqual({ common: { reasoningStartedAtMs: 1_700_000_000_000 } });
-    });
+  it('validates Tau message metadata', async () => {
+    const result = await safeValidateUiMessages([
+      { ...userMessage, metadata: { createdAt: 1, status: 'not-a-status' } },
+    ]);
+    expect(result.success).toBe(false);
   });
 
-  describe('common namespace rejection', () => {
-    it('should reject a negative reasoningStartedAtMs', () => {
-      const result = uiMessagesSchema.safeParse([
-        baseMessage([reasoningPart({ common: { reasoningStartedAtMs: -1 } })]),
-      ]);
-
-      expect(result.success).toBe(false);
-      if (result.success) {
-        return;
-      }
-      expect(result.error.issues.some((issue) => issue.path.includes('reasoningStartedAtMs'))).toBe(true);
-    });
-
-    it('should reject a string reasoningStartedAtMs', () => {
-      const result = uiMessagesSchema.safeParse([
-        baseMessage([reasoningPart({ common: { reasoningStartedAtMs: 'oops' } })]),
-      ]);
-
-      expect(result.success).toBe(false);
-    });
-
-    it('should reject a non-integer reasoningEndedAtMs', () => {
-      const result = uiMessagesSchema.safeParse([
-        baseMessage([reasoningPart({ common: { reasoningEndedAtMs: 1.5 } })]),
-      ]);
-
-      expect(result.success).toBe(false);
-    });
+  it('validates Tau data parts', async () => {
+    const result = await safeValidateUiMessages([
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [{ type: 'data-usage', data: { type: 'usage', id: 'usage_1' } }],
+      },
+    ]);
+    expect(result.success).toBe(false);
   });
 
-  describe('interrupted tool parts (output-error with partial input)', () => {
-    const interruptedReadFilePart = (overrides: Partial<MyMessagePart> = {}): MyMessagePart => {
-      const literal = {
-        type: 'tool-read_file',
-        toolCallId: 'call_test',
-        state: 'output-error',
-        input: { limit: 15 },
-        errorText: JSON.stringify({
-          errorCode: 'USER_INTERRUPTED',
-          message: 'Interrupted by user.',
-          toolName: 'read_file',
-          toolCallId: 'call_test',
-        }),
-        ...overrides,
-      };
-      return literal as unknown as MyMessagePart;
+  it('accepts and preserves common reasoning timing beside provider metadata', async () => {
+    const providerMetadata = {
+      common: { reasoningStartedAtMs: 1_700_000_000_000, reasoningEndedAtMs: 1_700_000_002_000 },
+      anthropic: { thinkingSignature: 'abc' },
     };
+    const result = await safeValidateUiMessages([
+      { id: 'm1', role: 'assistant', parts: [reasoningPart(providerMetadata)] },
+    ]);
 
-    it('should accept tool-read_file in output-error with partial input lacking required fields', () => {
-      const result = uiMessagesSchema.safeParse([userMessage, baseMessage([interruptedReadFilePart()])]);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(findPart(result.data, 'reasoning').providerMetadata).toEqual(providerMetadata);
+    }
+  });
 
-      expect(result.success).toBe(true);
-    });
-
-    it('should accept tool-read_file in output-error with rawInput populated and input cleared', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          interruptedReadFilePart({
-            input: undefined,
-            rawInput: { limit: 15 },
-          } as unknown as Partial<MyMessagePart>),
-        ]),
+  it.each([{ reasoningStartedAtMs: -1 }, { reasoningStartedAtMs: 'oops' }, { reasoningEndedAtMs: 1.5 }])(
+    'rejects malformed common reasoning timing',
+    async (common) => {
+      const result = await safeValidateUiMessages([
+        { id: 'm1', role: 'assistant', parts: [reasoningPart({ common })] },
       ]);
+      expect(result.success).toBe(false);
+    },
+  );
 
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findToolPart(result.data[1]?.parts ?? [], 'tool-read_file');
-      expect(part.state).toBe('output-error');
-      if (part.state !== 'output-error') {
-        return;
-      }
-      expect(part.input).toBeUndefined();
-      expect((part as { rawInput?: unknown }).rawInput).toEqual({ limit: 15 });
-    });
-
-    it('should accept tool-test_model (empty-input) in output-error with rawInput populated', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          {
-            type: `tool-${toolName.testModel}`,
-            toolCallId: 'call_test_model',
-            state: 'output-error',
-            input: undefined,
-            rawInput: { stray: 'ignored partial' },
-            errorText: JSON.stringify({
-              errorCode: 'USER_INTERRUPTED',
-              message: 'Interrupted by user.',
-              toolName: 'test_model',
-              toolCallId: 'call_test_model',
-            }),
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-    });
-
-    it('should heal a legacy persisted output-error part by moving invalid input to rawInput', () => {
-      const result = uiMessagesSchema.safeParse([userMessage, baseMessage([interruptedReadFilePart()])]);
-
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findToolPart(result.data[1]?.parts ?? [], 'tool-read_file');
-      expect(part.state).toBe('output-error');
-      if (part.state !== 'output-error') {
-        return;
-      }
-      expect(part.input).toBeUndefined();
-      expect((part as { rawInput?: unknown }).rawInput).toEqual({ limit: 15 });
-    });
-
-    it('should preserve a strictly valid output-error input untouched', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          interruptedReadFilePart({
-            input: { targetFile: 'main.ts', limit: 15 },
-          } as unknown as Partial<MyMessagePart>),
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findToolPart(result.data[1]?.parts ?? [], 'tool-read_file');
-      expect(part.state).toBe('output-error');
-      if (part.state !== 'output-error') {
-        return;
-      }
-      expect(part.input).toEqual({ targetFile: 'main.ts', limit: 15 });
-      expect((part as { rawInput?: unknown }).rawInput).toBeUndefined();
-    });
-
-    it('should leave non-output-error tool parts untouched even if their input is unusual', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
+  it('heals invalid interrupted static-tool input into rawInput', async () => {
+    const result = await safeValidateUiMessages([
+      userMessage,
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
           {
             type: 'tool-read_file',
-            toolCallId: 'call_streaming',
-            state: 'input-streaming',
+            toolCallId: 'call_read',
+            state: 'output-error',
             input: { limit: 15 },
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
+            errorText: 'Interrupted by user.',
+          },
+        ],
+      },
+    ]);
 
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        return;
-      }
-      const part = findToolPart(result.data[1]?.parts ?? [], 'tool-read_file');
-      expect(part.state).toBe('input-streaming');
-      if (part.state !== 'input-streaming') {
-        return;
-      }
-      expect(part.input).toEqual({ limit: 15 });
-    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(findPart(result.data, 'tool-read_file')).toMatchObject({
+        state: 'output-error',
+        input: undefined,
+        rawInput: { limit: 15 },
+      });
+    }
+  });
 
-    it('should accept dynamic-tool in output-error with rawInput populated', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
+  it('preserves valid interrupted static-tool input', async () => {
+    const result = await safeValidateUiMessages([
+      userMessage,
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
           {
-            type: 'dynamic-tool',
-            toolName: 'experimental_tool',
-            toolCallId: 'call_dynamic',
+            type: 'tool-read_file',
+            toolCallId: 'call_read',
             state: 'output-error',
-            input: undefined,
-            rawInput: { partial: true },
-            errorText: 'interrupted',
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
+            input: { targetFile: 'main.ts', limit: 15 },
+            errorText: 'Interrupted by user.',
+          },
+        ],
+      },
+    ]);
 
-      expect(result.success).toBe(true);
-    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(findPart(result.data, 'tool-read_file')).toMatchObject({
+        state: 'output-error',
+        input: { targetFile: 'main.ts', limit: 15 },
+      });
+    }
   });
 
-  /**
-   * Backfill of the AI SDK approval lifecycle. The upstream
-   * `validateUIMessages` schema accepts `approval-requested`,
-   * `approval-responded`, and `output-denied` for both static and dynamic tool
-   * parts. Mirroring those keeps `uiMessagesSchema` forward-compatible the
-   * moment any tool starts emitting approval UI, without a follow-up schema
-   * change blocking the UX work.
-   */
-  describe('AI SDK approval-lifecycle tool-part states', () => {
-    it('should accept a static tool-read_file part in approval-requested state', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
+  it('terminalizes stale historical static tool parts before validation', async () => {
+    const result = await safeValidateUiMessages([
+      userMessage,
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
           {
             type: 'tool-read_file',
-            toolCallId: 'call_approval_request',
-            state: 'approval-requested',
-            input: { targetFile: 'main.ts' },
-            approval: { id: 'approval_1' },
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
+            toolCallId: 'call_read',
+            state: 'input-available',
+            input: { limit: 40 },
+          },
+        ],
+      },
+      { id: 'm2', role: 'user', parts: [{ type: 'text', text: 'continue' }] },
+    ]);
 
-      expect(result.success).toBe(true);
-    });
-
-    it('should accept a static tool-read_file part in approval-responded state', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          {
-            type: 'tool-read_file',
-            toolCallId: 'call_approval_response',
-            state: 'approval-responded',
-            input: { targetFile: 'main.ts' },
-            approval: { id: 'approval_1', approved: true, reason: 'looks safe' },
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-    });
-
-    it('should accept a static tool-read_file part in output-denied state', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          {
-            type: 'tool-read_file',
-            toolCallId: 'call_denied',
-            state: 'output-denied',
-            input: { targetFile: 'main.ts' },
-            approval: { id: 'approval_1', approved: false, reason: 'forbidden path' },
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-    });
-
-    it('should accept an empty-input tool-test_model part in approval-requested state', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          {
-            type: `tool-${toolName.testModel}`,
-            toolCallId: 'call_test_model_approval',
-            state: 'approval-requested',
-            input: {},
-            approval: { id: 'approval_test_model' },
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-    });
-
-    it('should accept a dynamic-tool part in approval-requested state', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          {
-            type: 'dynamic-tool',
-            toolName: 'experimental_tool',
-            toolCallId: 'call_dynamic_approval',
-            state: 'approval-requested',
-            input: { foo: 'bar' },
-            approval: { id: 'approval_dynamic' },
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-    });
-
-    it('should accept a dynamic-tool part in approval-responded state', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          {
-            type: 'dynamic-tool',
-            toolName: 'experimental_tool',
-            toolCallId: 'call_dynamic_response',
-            state: 'approval-responded',
-            input: { foo: 'bar' },
-            approval: { id: 'approval_dynamic', approved: true },
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-    });
-
-    it('should accept a dynamic-tool part in output-denied state', () => {
-      const result = uiMessagesSchema.safeParse([
-        userMessage,
-        baseMessage([
-          {
-            type: 'dynamic-tool',
-            toolName: 'experimental_tool',
-            toolCallId: 'call_dynamic_denied',
-            state: 'output-denied',
-            input: { foo: 'bar' },
-            approval: { id: 'approval_dynamic', approved: false, reason: 'no' },
-          } as unknown as MyMessagePart,
-        ]),
-      ]);
-
-      expect(result.success).toBe(true);
-    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(findPart(result.data, 'tool-read_file')).toMatchObject({
+        state: 'output-error',
+        input: undefined,
+        rawInput: { limit: 40 },
+      });
+    }
   });
 
-  describe('type-level narrowing', () => {
-    it('should treat the typed common namespace as assignable to MyMessagePart reasoning providerMetadata', () => {
-      const typedCommon: { common: CommonReasoningMetadata } = {
-        common: {
-          reasoningStartedAtMs: 1_700_000_000_000,
-          reasoningEndedAtMs: 1_700_000_001_000,
+  it.each([
+    ['string', 'partial'],
+    ['array', ['partial']],
+  ])('rejects active static input-streaming %s input that is not a typed partial', async (_kind, input) => {
+    const result = await safeValidateUiMessages([
+      userMessage,
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [{ type: 'tool-read_file', toolCallId: 'call_streaming', state: 'input-streaming', input }],
+      },
+    ]);
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts active static input-streaming input that matches the partial tool schema', async () => {
+    const result = await safeValidateUiMessages([
+      userMessage,
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          { type: 'tool-read_file', toolCallId: 'call_streaming', state: 'input-streaming', input: { limit: 15 } },
+        ],
+      },
+    ]);
+
+    expect(result.success).toBe(true);
+  });
+
+  it.each(['approval-requested', 'approval-responded', 'output-denied'] as const)(
+    'rejects incomplete static input in %s state',
+    async (state) => {
+      const approval =
+        state === 'approval-requested'
+          ? { id: 'approval_1' }
+          : { id: 'approval_1', approved: state === 'approval-responded' };
+      const result = await safeValidateUiMessages([
+        userMessage,
+        {
+          id: 'm1',
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-read_file',
+              toolCallId: 'call_approval',
+              state,
+              input: { limit: 15 },
+              approval,
+            },
+          ],
         },
-      };
-      const part: MyMessagePart = {
-        type: 'reasoning',
-        text: 'hello',
-        state: 'done',
-        providerMetadata: typedCommon,
-      };
+      ]);
 
-      expect(part.providerMetadata).toEqual(typedCommon);
-      expectTypeOf<CommonReasoningMetadata>().toExtend<{
-        reasoningStartedAtMs?: number | undefined;
-        reasoningEndedAtMs?: number | undefined;
-      }>();
-    });
+      expect(result.success).toBe(false);
+    },
+  );
+
+  it('terminalizes stale historical dynamic tool parts without a static schema', async () => {
+    const result = await safeValidateUiMessages([
+      userMessage,
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'dynamic-tool',
+            toolName: 'future_tool',
+            toolCallId: 'call_dynamic',
+            state: 'input-streaming',
+            input: { partial: true },
+          },
+        ],
+      },
+      { id: 'm2', role: 'user', parts: [{ type: 'text', text: 'continue' }] },
+    ]);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const part = findPart(result.data, 'dynamic-tool');
+      expect(part).toMatchObject({
+        state: 'output-error',
+        input: { partial: true },
+      });
+      expect(part.state === 'output-error' && part.errorText).toContain('USER_INTERRUPTED');
+    }
+  });
+
+  it('repairs historical slash-prefixed project paths before strict tool validation', async () => {
+    const messages = await validateUiMessages([
+      {
+        id: 'm-path',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-evaluate_model',
+            toolCallId: 'call-path',
+            state: 'output-available',
+            input: { targetFile: '/main.ts' },
+            output: { status: 'error', kernelIssues: [], issues: [], truncated: false },
+          },
+        ],
+      },
+    ]);
+
+    expect(findPart(messages, 'tool-evaluate_model')).toMatchObject({ input: { targetFile: 'main.ts' } });
+  });
+
+  it('keeps common reasoning metadata assignable to MyMessagePart', () => {
+    const typedCommon: CommonReasoningMetadata = { reasoningStartedAtMs: 10, reasoningEndedAtMs: 30 };
+    const part = reasoningPart({ common: typedCommon });
+    expect(part.type === 'reasoning' && part.providerMetadata).toEqual({ common: typedCommon });
+    expectTypeOf<CommonReasoningMetadata>().toExtend<{
+      reasoningStartedAtMs?: number | undefined;
+      reasoningEndedAtMs?: number | undefined;
+    }>();
+  });
+
+  it('validates a mixed transcript whose external calls are dynamic tool parts', async () => {
+    /* V3: an external agent's call is a `dynamic-tool` part, never a static
+     * `tool-<title>` one. The static form fails here with "Unsupported static
+     * tool: tool-List files", which would 400 the whole turn the moment a chat
+     * containing a Codex turn is posted back to the API. */
+    const result = await safeValidateUiMessages([
+      userMessage,
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'dynamic-tool',
+            toolName: 'listFiles',
+            toolCallId: 'list-1',
+            state: 'output-available',
+            title: 'List files',
+            toolMetadata: { tau: { kind: 'read', nativeName: 'listFiles', origin: 'external', agentId: 'codex' } },
+            input: { path: '.' },
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- Codex's own `rawOutput` field name.
+            output: { formatted_output: 'tau.json' },
+          },
+          {
+            type: 'tool-read_file',
+            toolCallId: 'read-1',
+            state: 'output-available',
+            input: { targetFile: 'main.scad' },
+            output: { content: 'cube(10);', size: 9, contentKind: 'text', totalLines: 1 },
+          },
+          { type: 'text', text: 'Done.' },
+        ],
+      },
+    ]);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('refuses the static tool part an external call must never become', async () => {
+    const result = await safeValidateUiMessages([
+      userMessage,
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-List files',
+            toolCallId: 'list-1',
+            state: 'input-available',
+            input: { title: 'List files' },
+          },
+        ],
+      },
+    ]);
+
+    expect(result.success).toBe(false);
   });
 });

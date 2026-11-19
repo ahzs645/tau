@@ -2,36 +2,73 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { defineConfig } from 'vite';
-import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { VitePluginNode as vitePluginNode } from 'vite-plugin-node';
 import { oxcRuntimeEsm } from '@taucad/vite/oxc-runtime-esm';
-import { tsModuleUrlServePlugin } from '@taucad/vite/ts-module-url';
-import { corsBaseConfiguration } from '#constants/cors.constant.js';
+import { createApiDevViteNodeLifecycle } from '#api-dev-vite-node-lifecycle.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export default defineConfig(({ mode }) => {
+const tunnelHost = (value: string | undefined): string[] | undefined => {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return [URL.canParse(trimmed) ? new URL(trimmed).hostname : trimmed];
+};
+
+export default defineConfig(({ command, mode }) => {
+  // Nx loads apps/api/.env before Vite evaluates this config. Force Vite's
+  // documented production semantics so import.meta.env.DEV branches compile
+  // correctly even when the application env says NODE_ENV=development.
+  if (command === 'build') {
+    process.env.NODE_ENV = 'production';
+  }
+
   const isTest = mode === 'test';
+  const apiDevPlugins = isTest
+    ? []
+    : (() => {
+        const apiDevLifecycle = createApiDevViteNodeLifecycle();
+
+        return [
+          apiDevLifecycle.plugin,
+          vitePluginNode({
+            adapter: apiDevLifecycle.adapter,
+            appPath: './app/main.ts',
+            outputFormat: 'module',
+            exportName: 'viteNodeApp',
+            initAppOnBoot: false,
+          }),
+        ];
+      })();
 
   return {
     root: __dirname,
+    // Nest owns application environment loading. Letting Vite also read the
+    // local .env turns NODE_ENV=development into import.meta.env.DEV=true
+    // during `vite build` and tree-shakes the standalone server bootstrap.
+    envDir: false,
     cacheDir: '../../node_modules/.vite/apps/api',
     build: {
       outDir: 'dist',
+      sourcemap: 'hidden',
     },
     server: {
       // Vite server configs, for details see [vite doc](https://vitejs.dev/config/#server-host)
       port: Number(process.env.PORT),
-      cors: {
-        origin: [process.env.TAU_FRONTEND_URL],
-        ...corsBaseConfiguration,
-      },
+      // Nest owns the canonical API CORS policy. Vite otherwise intercepts
+      // desktop preflights before they reach the application.
+      cors: false,
+      /* A webhook tunnel (ngrok) arrives with its own Host, which Vite's host
+       * check rejects with a 403 before Nest sees the delivery. Opt in per
+       * shell — TAU_DEV_TUNNEL_HOST=<host or URL> — so the default dev posture
+       * keeps the DNS-rebinding guard. ngrok prints the tunnel as a URL, and
+       * Vite compares bare hostnames, so a pasted URL is reduced to its host. */
+      allowedHosts: tunnelHost(process.env['TAU_DEV_TUNNEL_HOST']),
     },
     plugins: [
       oxcRuntimeEsm(),
-      tsModuleUrlServePlugin(),
-      nxViteTsPaths(),
       viteStaticCopy({
         // `vite-plugin-node` builds an SSR environment; the plugin defaults to
         // 'client' and silently no-ops without this override (broke when
@@ -39,26 +76,23 @@ export default defineConfig(({ mode }) => {
         environment: 'ssr',
         targets: [
           {
-            src: 'app/database/migrations/**/*',
+            src: '../libs/api-database/src/migrations/**/*',
             dest: 'migrations',
-            // Strip the `app/database/migrations/` prefix so files land at
+            // Strip the `../libs/api-database/src/migrations/` prefix so files land at
             // `dist/migrations/<file>` (drizzle expects `meta/_journal.json`
             // directly under the migrations folder).
-            rename: { stripBase: 3 },
+            rename: { stripBase: 4 },
+          },
+          {
+            // The default images the API seeds into the public bucket at boot
+            // (`app/storage/storage-seed.module.ts` reads them from `dist/seed/`).
+            src: '../../infra/seed/*',
+            dest: 'seed',
+            rename: { stripBase: 2 },
           },
         ],
       }),
-      ...(isTest
-        ? []
-        : [
-            vitePluginNode({
-              adapter: 'nest',
-              appPath: './app/main.ts',
-              outputFormat: 'module',
-              exportName: 'viteNodeApp',
-              initAppOnBoot: true,
-            }),
-          ]),
+      ...apiDevPlugins,
     ],
     optimizeDeps: {
       // Vite does not work well with optionnal dependencies,
@@ -84,7 +118,7 @@ export default defineConfig(({ mode }) => {
       reporter: ['verbose'], // Ensure detailed test output
       coverage: {
         provider: 'v8',
-        reportsDirectory: '../../coverage/apps/api',
+        reportsDirectory: '../../out/reports/coverage/apps/api',
         include: ['app/**/*'],
         exclude: ['app/**/*.{test,spec}.ts', 'app/main.ts'],
       },

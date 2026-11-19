@@ -1,0 +1,1167 @@
+import { downloadBlob } from '@taucad/utils/file';
+import { getWorkspaceRendererIdentity } from '#components/geometry/debug/workspace-renderer-diagnostics.js';
+import type {
+  SectionViewTestBridgeApi,
+  SectionViewTestCameraState,
+  SectionViewTestCameraTransitionDiagnostics,
+  SectionViewTestCapCompleteness,
+  SectionViewTestCut,
+  SectionViewTestHelperMaterialState,
+  SectionViewTestHelperSummary,
+  SectionViewTestProjectedPoint,
+  SectionViewTestRenderedModelComponentState,
+} from '#components/geometry/debug/section-view-test-bridge-api.js';
+import { webGpuFallbackReason } from '@taucad/viewer/graphics/graphics-backend';
+import { useViewerEnvironment } from '@taucad/viewer/environment/viewer-environment';
+import { resolveRenderTier } from '@taucad/viewer/graphics/three/render-tier';
+import type { RenderTier } from '@taucad/viewer/graphics/three/render-tier';
+import { selectPresentedRenderTier } from '@taucad/viewer/machines/canvas.machine';
+import React, { useEffect } from 'react';
+import * as THREE from 'three';
+import { renderLoopObservers } from '@taucad/viewer/graphics/three/render-loop-observer';
+import { createRenderFrameTimer } from '@taucad/viewer/graphics/three/render-frame-timing';
+import { useFrame, useThree } from '@react-three/fiber';
+import type { RendererInstance } from '@taucad/viewer/graphics/three/renderer';
+import { perspectiveVerticalSpan, resolveCameraUp } from '@taucad/camera';
+import type { RenderFrame } from '@taucad/spatial';
+import { fromThreeRenderBounds, fromThreeRenderPoint, toThreeRenderPoint } from '@taucad/three/spatial';
+import { useFeature } from '#flags/use-feature.js';
+import { useProject } from '#hooks/use-project.js';
+import { graphicsSettingsForView } from '@taucad/workbench-panes/records/view-record';
+import type { GraphicsContext } from '@taucad/viewer/machines/graphics.machine';
+import { areSectionCutsEqual, resolveSectionPieces } from '@taucad/viewer/graphics/section-cuts';
+import type { SectionHandleTarget } from '@taucad/viewer/graphics/three/controls/section-handles';
+import {
+  useCameraConnectorRef,
+  useCameraRig,
+  useGraphics,
+  useModelInteractionRef,
+  useSetRenderFrame,
+} from '@taucad/viewer/hooks/use-graphics';
+import { getModelComponentIdInHierarchy } from '@taucad/viewer/graphics/three/utils/model-component-owner';
+import { getModelInteractionUnitState } from '@taucad/viewer/machines/model-interaction.machine';
+import { getControlsDistance } from '@taucad/viewer/graphics/three/utils/camera-controls-adapter';
+import { hasSceneTag, sceneTag } from '@taucad/viewer/graphics/three/utils/scene-tags';
+import {
+  sectionCapOutlineDebugUserDataKey,
+  sectionCapStencilDebugUserDataKey,
+} from '@taucad/viewer/graphics/three/utils/section-cap-stencil-debug';
+import type {
+  SectionCapOutlineDebugControl,
+  SectionCapStencilDiagnostics,
+} from '@taucad/viewer/graphics/three/utils/section-cap-stencil-debug';
+import { selectGraphicsViewportGizmoLocked } from '@taucad/viewer/machines/graphics.machine';
+import { getSceneRenderRoots } from '@taucad/viewer/graphics/three/scene-overlay';
+import {
+  infiniteGridFadeEndVisibleSpans,
+  infiniteGridPresentationPlaneByUpDirection,
+} from '@taucad/viewer/graphics/three/utils/infinite-grid-frame';
+
+/** Whether the person is holding a camera gesture. */
+const selectGestureHeld = (cameraRef: GraphicsContext['cameraRef']): boolean =>
+  cameraRef.getSnapshot().matches({ gesture: 'held' });
+
+/** Renderers this page's bridges have seen, numbered in the order they were first asked about. */
+const rendererGenerations = new WeakMap<RendererInstance, number>();
+let lastRendererGeneration = 0;
+
+function isActuallyVisible(object: THREE.Object3D): boolean {
+  let current: THREE.Object3D | undefined = object;
+  while (current) {
+    if (!current.visible) {
+      return false;
+    }
+    current = current.parent ?? undefined;
+  }
+  return true;
+}
+
+/** Report visible component surfaces and fat edges separately without changing aggregate visibility. */
+export function getSectionViewTestRenderedModelComponentState(
+  scene: THREE.Object3D,
+  componentId: string,
+): SectionViewTestRenderedModelComponentState {
+  let meshCount = 0;
+  let visibleMeshCount = 0;
+  const materialOpacities: number[] = [];
+  const surfaceMaterialOpacities: number[] = [];
+  const edgeMaterialOpacities: number[] = [];
+  scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh) || getModelComponentIdInHierarchy(object) !== componentId) {
+      return;
+    }
+    meshCount++;
+    if (isActuallyVisible(object)) {
+      visibleMeshCount++;
+      const opacities = getObjectMaterials(object).map((material) => material.opacity);
+      materialOpacities.push(...opacities);
+      if (object.type === 'LineSegments2') {
+        edgeMaterialOpacities.push(...opacities);
+      } else if (!hasSceneTag(object, sceneTag.gltfSurfacePresentation)) {
+        surfaceMaterialOpacities.push(...opacities);
+      }
+    }
+  });
+  return {
+    meshCount,
+    visibleMeshCount,
+    materialOpacities,
+    surfaceMaterialOpacities,
+    edgeMaterialOpacities,
+  };
+}
+
+/** Visit triangle vertices in render-world coordinates, excluding fat-line proxy geometry. */
+function visitRenderedSurfacePoints(
+  scene: THREE.Object3D,
+  componentId: string,
+  visit: (point: THREE.Vector3) => void,
+): void {
+  const point = new THREE.Vector3();
+  scene.updateWorldMatrix(true, true);
+  scene.traverse((object) => {
+    if (
+      !(object instanceof THREE.Mesh) ||
+      object.type === 'LineSegments2' ||
+      getModelComponentIdInHierarchy(object) !== componentId
+    ) {
+      return;
+    }
+    const geometry = object.geometry as THREE.BufferGeometry;
+    if (!('position' in geometry.attributes)) {
+      return;
+    }
+    const position = geometry.getAttribute('position');
+    for (let index = 0; index < position.count; index++) {
+      visit(point.fromBufferAttribute(position, index).applyMatrix4(object.matrixWorld));
+    }
+  });
+}
+
+/** Read actual surface bounds in physical metres, including the live mechanism pose. */
+export function getRenderedModelComponentSurfaceBounds(
+  scene: THREE.Object3D,
+  componentId: string,
+  renderFrame: RenderFrame,
+):
+  | Readonly<{
+      min: readonly [number, number, number];
+      max: readonly [number, number, number];
+    }>
+  | undefined {
+  const bounds = new THREE.Box3();
+  visitRenderedSurfacePoints(scene, componentId, (point) => bounds.expandByPoint(point));
+  return bounds.isEmpty() ? undefined : fromThreeRenderBounds({ renderFrame, bounds });
+}
+
+/** Read actual triangle positions in physical metres for independent geometric observations. */
+export function getRenderedModelComponentSurfacePoints(
+  scene: THREE.Object3D,
+  componentId: string,
+  renderFrame: RenderFrame,
+): Array<readonly [number, number, number]> {
+  const points: Array<readonly [number, number, number]> = [];
+  visitRenderedSurfacePoints(scene, componentId, (point) => {
+    points.push(fromThreeRenderPoint({ renderFrame, point }));
+  });
+  return points;
+}
+
+export const getSectionViewTestControlState = ({
+  controls,
+  viewportGizmoLocked,
+}: {
+  readonly controls: unknown;
+  /** Whether the view cube's gesture holds the interaction lock (its `interactionLocked` tag). */
+  readonly viewportGizmoLocked: boolean;
+}): Pick<SectionViewTestCameraState, 'controlsEnabled' | 'viewportGizmoLockActive'> => {
+  const enabled = (controls as { enabled?: unknown } | undefined)?.enabled;
+
+  return {
+    controlsEnabled: typeof enabled === 'boolean' ? enabled : true,
+    viewportGizmoLockActive: viewportGizmoLocked,
+  };
+};
+
+/** Whether the view's cube holds the interaction lock, read when the bridge reports the camera. */
+/**
+ * Resolves `tier` once the graphics actor's canvas presents a frame with it, or `undefined` as soon as that canvas
+ * incarnation can no longer present it: the canvas is lost, fails, stops, hosts another renderer's tier, or `signal`
+ * aborts. Kept outside the bridge component so the wait reads the canvas actor as actor logic, not as a render read.
+ */
+async function whenRenderTierPresented(
+  graphicsActor: ReturnType<typeof useGraphics>,
+  tier: RenderTier,
+  signal: AbortSignal,
+): Promise<RenderTier | undefined> {
+  const canvasRef = graphicsActor.getSnapshot().context.canvas?.ref;
+  if (!canvasRef || signal.aborted) {
+    return undefined;
+  }
+  return new Promise<RenderTier | undefined>((resolve) => {
+    const settle = (presented: RenderTier | undefined): void => {
+      subscription.unsubscribe();
+      signal.removeEventListener('abort', abandon);
+      resolve(presented);
+    };
+    const abandon = (): void => {
+      settle(undefined);
+    };
+    const observe = (snapshot: ReturnType<typeof canvasRef.getSnapshot>): void => {
+      const hosted = snapshot.context.tier;
+      if (
+        snapshot.status !== 'active' ||
+        snapshot.matches('lost') ||
+        snapshot.matches('failed') ||
+        (hosted !== undefined && hosted !== tier)
+      ) {
+        settle(undefined);
+        return;
+      }
+      if (selectPresentedRenderTier(snapshot) === tier) {
+        settle(tier);
+      }
+    };
+    const subscription = canvasRef.subscribe({ next: observe, complete: abandon, error: abandon });
+    signal.addEventListener('abort', abandon, { once: true });
+    observe(canvasRef.getSnapshot());
+  });
+}
+
+const selectViewportGizmoLockActive = (graphicsActor: ReturnType<typeof useGraphics>): boolean =>
+  selectGraphicsViewportGizmoLocked(graphicsActor.getSnapshot());
+
+export const getSectionViewTestMeasurementUiMeshCount = (scene: THREE.Object3D): number => {
+  const meshes = new Set<THREE.Object3D>();
+
+  for (const root of getSceneRenderRoots(scene as THREE.Scene)) {
+    root.traverse((child) => {
+      if (child instanceof THREE.Mesh && hasSceneTag(child, sceneTag.measurementUi)) {
+        meshes.add(child);
+      }
+    });
+  }
+
+  return meshes.size;
+};
+
+/** A point in normalized device coordinates, in viewport pixels; visible inside the view volume. */
+const toProjectedPoint = (
+  projected: THREE.Vector3,
+  rect: Pick<DOMRect, 'height' | 'left' | 'top' | 'width'>,
+): SectionViewTestProjectedPoint => ({
+  x: rect.left + ((projected.x + 1) / 2) * rect.width,
+  y: rect.top + ((1 - projected.y) / 2) * rect.height,
+  visible:
+    projected.x >= -1 &&
+    projected.x <= 1 &&
+    projected.y >= -1 &&
+    projected.y <= 1 &&
+    projected.z >= -1 &&
+    projected.z <= 1,
+});
+
+function getLineSegments2SegmentCount(object: THREE.Object3D): number {
+  const attributes = (object as { geometry?: THREE.BufferGeometry }).geometry?.attributes;
+  const instanceStartCount = attributes?.['instanceStart']?.count;
+  if (typeof instanceStartCount === 'number') {
+    return instanceStartCount;
+  }
+
+  const positionCount = attributes?.['position']?.count;
+  return typeof positionCount === 'number' ? Math.floor(positionCount / 2) : 0;
+}
+
+function getObjectMaterials(object: THREE.Object3D): THREE.Material[] {
+  const { material } = object as {
+    material?: THREE.Material | THREE.Material[];
+  };
+  if (!material) {
+    return [];
+  }
+
+  return Array.isArray(material) ? material : [material];
+}
+
+export const getSectionViewTestHelperSummary = (scene: THREE.Object3D): SectionViewTestHelperSummary => {
+  let sectionHelperMeshCount = 0;
+  let sectionHelperLineSegments2Count = 0;
+  let sectionHelperContourSegmentCount = 0;
+  const meshRenderOrders: number[] = [];
+  const lineSegments2RenderOrders: number[] = [];
+  const sectionHelperMaterialStates: SectionViewTestHelperMaterialState[] = [];
+
+  const visitSectionHelper = (child: THREE.Object3D): void => {
+    if (!hasSceneTag(child, sceneTag.sectionViewHelper)) {
+      return;
+    }
+
+    if (child.type === 'LineSegments2') {
+      sectionHelperLineSegments2Count++;
+      sectionHelperContourSegmentCount += getLineSegments2SegmentCount(child);
+      lineSegments2RenderOrders.push(child.renderOrder);
+    } else if (child instanceof THREE.Mesh) {
+      sectionHelperMeshCount++;
+      meshRenderOrders.push(child.renderOrder);
+    }
+
+    for (const material of getObjectMaterials(child)) {
+      sectionHelperMaterialStates.push({
+        objectType: child.type,
+        materialType: material.type,
+        renderOrder: child.renderOrder,
+        transparent: material.transparent,
+        depthTest: material.depthTest,
+        depthWrite: material.depthWrite,
+      });
+    }
+  };
+  for (const root of getSceneRenderRoots(scene as THREE.Scene)) {
+    root.traverse(visitSectionHelper);
+  }
+
+  return {
+    sectionHelperMeshCount,
+    sectionHelperLineSegments2Count,
+    sectionHelperContourSegmentCount,
+    sectionHelperRenderOrders: {
+      meshes: meshRenderOrders,
+      lineSegments2: lineSegments2RenderOrders,
+    },
+    sectionHelperMaterialStates,
+  };
+};
+
+/**
+ * Where a section handle is on screen: the centre of the bounds of its hit meshes, which the handles name
+ * `kind:cutId`; undefined while none is drawn.
+ */
+export const projectSectionViewTestHandle = ({
+  target,
+  camera,
+  rect,
+  scene,
+}: {
+  readonly target: SectionHandleTarget;
+  readonly camera: THREE.Camera;
+  readonly rect: Pick<DOMRect, 'height' | 'left' | 'top' | 'width'>;
+  readonly scene: THREE.Object3D;
+}): SectionViewTestProjectedPoint | undefined => {
+  const name = `${target.kind}:${target.cutId}`;
+  const bounds = new THREE.Box3();
+  for (const root of getSceneRenderRoots(scene as THREE.Scene)) {
+    root.updateMatrixWorld(true);
+    root.traverse((child) => {
+      if (child.name === name && hasSceneTag(child, sceneTag.sectionViewHelper) && isActuallyVisible(child)) {
+        bounds.expandByObject(child);
+      }
+    });
+  }
+  return bounds.isEmpty() ? undefined : toProjectedPoint(bounds.getCenter(new THREE.Vector3()).project(camera), rect);
+};
+
+export const getSectionViewTestCapStencilDiagnostics = (
+  scene: THREE.Object3D,
+): SectionCapStencilDiagnostics | undefined => {
+  let diagnostics: SectionCapStencilDiagnostics | undefined;
+
+  scene.traverse((child) => {
+    const candidate = (child.userData as Record<string, unknown>)[sectionCapStencilDebugUserDataKey];
+    if (candidate && typeof candidate === 'object') {
+      diagnostics = candidate as SectionCapStencilDiagnostics;
+    }
+  });
+
+  return diagnostics;
+};
+
+export function SectionViewTestBridge({ isGeometryFramed }: { readonly isGeometryFramed: boolean }): React.ReactNode {
+  const isTauDebugEnabled = useFeature('tauDebug');
+  const graphicsActor = useGraphics();
+  const project = useProject({ enableNoContext: true });
+  const cameraRig = useCameraRig();
+  const cameraConnectorRef = useCameraConnectorRef();
+  const setRenderFrame = useSetRenderFrame();
+  const modelInteractionRef = useModelInteractionRef();
+  const get = useThree((state) => state.get);
+  const { renderTierOverride } = useViewerEnvironment();
+  const bridgeRef = React.useRef<SectionViewTestBridgeApi | undefined>(undefined);
+  const pendingCaptureRef = React.useRef(false);
+  const pendingCameraTransitionRef = React.useRef<
+    { readonly camera: THREE.Camera; readonly requestedAt: number } | undefined
+  >(undefined);
+  const cameraTransitionDiagnosticsRef = React.useRef<SectionViewTestCameraTransitionDiagnostics>({
+    requests: 0,
+    frames: 0,
+    actorSyncFailures: 0,
+    averageRequestToActorSyncMilliseconds: 0,
+    maximumRequestToActorSyncMilliseconds: 0,
+    maximumRequestToFrameMilliseconds: 0,
+    staleFrames: 0,
+  });
+
+  useFrame((state) => {
+    if (pendingCaptureRef.current) {
+      const { context } = graphicsActor.getSnapshot();
+      if (
+        context.gltfPresentation.requestedRevision !== context.gltfPresentation.presentedRevision ||
+        (context.isSectionViewActive && !areSectionCutsEqual(context.sectionCuts, context.committedSectionCuts))
+      ) {
+        state.invalidate();
+      } else {
+        pendingCaptureRef.current = false;
+        state.gl.domElement.toBlob((blob) => {
+          if (blob) {
+            downloadBlob(blob, 'workspace-viewport.png');
+          }
+        });
+      }
+    }
+    const pending = pendingCameraTransitionRef.current;
+    if (!pending) {
+      return;
+    }
+    const controlsCamera =
+      (state.controls as { camera?: unknown; object?: unknown } | undefined)?.camera ??
+      (state.controls as { object?: unknown } | undefined)?.object;
+    const isStale =
+      state.camera !== pending.camera ||
+      cameraRig.activeCamera !== pending.camera ||
+      (controlsCamera !== undefined && controlsCamera !== pending.camera);
+    const elapsed = performance.now() - pending.requestedAt;
+    const diagnostics = cameraTransitionDiagnosticsRef.current;
+    cameraTransitionDiagnosticsRef.current = {
+      ...diagnostics,
+      frames: diagnostics.frames + 1,
+      maximumRequestToFrameMilliseconds: Math.max(diagnostics.maximumRequestToFrameMilliseconds, elapsed),
+      staleFrames: diagnostics.staleFrames + (isStale ? 1 : 0),
+    };
+    pendingCameraTransitionRef.current = undefined;
+  }, 4);
+
+  useEffect(() => {
+    if (!isTauDebugEnabled) {
+      return undefined;
+    }
+
+    const { scene } = get();
+    const bridgeGlobal = globalThis;
+    const getActiveUnitId = (): string | undefined => graphicsActor.getSnapshot().context.modelInteractionUnitId;
+    const setFovAngle = (angle: number): void => {
+      const expectedCamera = angle === 0 ? cameraRig.orthographicCamera : cameraRig.perspectiveCamera;
+      const requestedAt = performance.now();
+      pendingCameraTransitionRef.current = {
+        camera: expectedCamera,
+        requestedAt,
+      };
+      cameraRig.actorRef.send({
+        type: 'setVerticalFieldOfView',
+        verticalFieldOfView: angle,
+      });
+      const elapsed = performance.now() - requestedAt;
+      const diagnostics = cameraTransitionDiagnosticsRef.current;
+      const requests = diagnostics.requests + 1;
+      const actorSynced =
+        cameraRig.actorRef.getSnapshot().context.view.requestedVerticalFieldOfView === angle &&
+        cameraRig.activeCamera === expectedCamera;
+      cameraTransitionDiagnosticsRef.current = {
+        ...diagnostics,
+        requests,
+        actorSyncFailures: diagnostics.actorSyncFailures + (actorSynced ? 0 : 1),
+        averageRequestToActorSyncMilliseconds:
+          (diagnostics.averageRequestToActorSyncMilliseconds * diagnostics.requests + elapsed) / requests,
+        maximumRequestToActorSyncMilliseconds: Math.max(diagnostics.maximumRequestToActorSyncMilliseconds, elapsed),
+      };
+    };
+    const addSectionCut = (cut: SectionViewTestCut): string | undefined => {
+      const count = graphicsActor.getSnapshot().context.sectionCuts.length;
+      graphicsActor.send({
+        type: 'addSectionCut',
+        payload: cut.kind === 'plane' ? { kind: 'plane', plane: cut.plane } : { kind: 'revolution', axis: cut.axis },
+      });
+      const added = graphicsActor.getSnapshot().context.sectionCuts[count];
+      if (added) {
+        // The cut is its own patch: a patch ignores `kind`, and a value left out keeps the default.
+        graphicsActor.send({
+          type: 'updateSectionCut',
+          payload: { id: added.id, patch: cut },
+        });
+      }
+      return added?.id;
+    };
+    // Aborted when this bridge unmounts: every `whenPresented` still waiting then settles.
+    const unmounted = new AbortController();
+    const bridge: SectionViewTestBridgeApi = {
+      async whenPresented() {
+        // The tier is resolved once per renderer, so the canvas actor holds this very object only while it hosts this
+        // bridge's renderer.
+        const ownTier = resolveRenderTier(get().gl, renderTierOverride);
+        const tier = await whenRenderTierPresented(graphicsActor, ownTier, unmounted.signal);
+        return tier ? { rendererGeneration: bridge.getRendererGeneration(), tier } : undefined;
+      },
+      getViewSettings() {
+        if (!project) {
+          return undefined;
+        }
+        /* The view id is the Dockview panel id the project keyed this graphics actor by, so the
+         * bridge finds its own record without a prop drilled through the whole R3F tree. */
+        const viewId = [...project.projectRef.getSnapshot().context.viewGraphics.entries()].find(
+          ([, actor]) => actor === graphicsActor,
+        )?.[0];
+        return viewId === undefined
+          ? undefined
+          : project.viewRecords.get(viewId)
+            ? graphicsSettingsForView(project.viewRecords.get(viewId)!)
+            : undefined;
+      },
+      getGraphicsBackend() {
+        const renderer = get().gl as unknown as {
+          readonly backend?: { readonly isWebGPUBackend?: boolean };
+        };
+        return renderer.backend?.isWebGPUBackend === true ? 'webgpu' : 'webgl';
+      },
+      getRendererIdentity() {
+        return getWorkspaceRendererIdentity(get().gl as RendererInstance);
+      },
+      getWebGpuFallbackReason() {
+        return webGpuFallbackReason();
+      },
+      getRendererGeneration() {
+        const renderer = get().gl as RendererInstance;
+        let generation = rendererGenerations.get(renderer);
+        if (generation === undefined) {
+          generation = ++lastRendererGeneration;
+          rendererGenerations.set(renderer, generation);
+        }
+        return generation;
+      },
+      async measureRenderFrames(options = {}) {
+        const state = get();
+        const initialCamera = bridge.getCamera();
+        const offset = new THREE.Vector3(...initialCamera.position).sub(new THREE.Vector3(...initialCamera.target));
+        const renderer = state.gl as RendererInstance;
+        const previousFrameloop = state.frameloop;
+        const previousAutoReset = renderer.info.autoReset;
+        const timer = createRenderFrameTimer(renderer, options.gpuTiming === true);
+        const gpu: Array<number | undefined> = [];
+        let firstSubmission = 0;
+        const submission: number[] = [];
+        const completion: number[] = [];
+        // Three exposes the native device on its backend; its declaration omits the device field.
+        const device =
+          'backend' in renderer
+            ? (Reflect.get(renderer.backend, 'device') as {
+                queue: { onSubmittedWorkDone(): Promise<void> };
+              })
+            : undefined;
+        let drawCalls = 0;
+        let triangles = 0;
+        state.setFrameloop('never');
+        renderer.info.autoReset = false;
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- serialize frames so completion covers this frame alone.
+          for (let index = 0; index < 140; index++) {
+            // Three advances its FRAME node cache on RAF; exclude pacing from the measured work.
+            // oxlint-disable-next-line no-await-in-loop -- each sample must render a fresh scene pass.
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => {
+                resolve();
+              });
+            });
+            renderer.info.reset();
+            if (options.orbit) {
+              const position = offset.clone().applyAxisAngle(new THREE.Vector3(0, 0, 1), index * 0.005);
+              position.add(new THREE.Vector3(...initialCamera.target));
+              bridge.setCamera({
+                position: [position.x, position.y, position.z],
+                target: initialCamera.target,
+                zoom: initialCamera.zoom,
+              });
+            }
+            timer.begin();
+            const startedAt = performance.now();
+            state.advance(startedAt / 1000, false);
+            const submittedAt = performance.now();
+            timer.end();
+            if (index === 0) {
+              firstSubmission = submittedAt - startedAt;
+            }
+            if (device) {
+              // oxlint-disable-next-line no-await-in-loop -- completion fence for the measured frame.
+              await device.queue.onSubmittedWorkDone();
+            } else if (renderer instanceof THREE.WebGLRenderer) {
+              renderer.getContext().finish();
+            }
+            const completedAt = performance.now();
+            // oxlint-disable-next-line no-await-in-loop -- resolve all passes from this frame before the next.
+            const gpuDuration = await timer.resolve();
+            if (index >= 20) {
+              gpu.push(gpuDuration);
+              submission.push(submittedAt - startedAt);
+              completion.push(completedAt - startedAt);
+            }
+            drawCalls =
+              'drawCalls' in renderer.info.render ? renderer.info.render.drawCalls : renderer.info.render.calls;
+            triangles = renderer.info.render.triangles;
+          }
+        } finally {
+          renderer.info.autoReset = previousAutoReset;
+          timer.dispose();
+          if (options.orbit) {
+            bridge.setCamera({
+              position: initialCamera.position,
+              target: initialCamera.target,
+              zoom: initialCamera.zoom,
+            });
+          }
+          state.setFrameloop(previousFrameloop);
+          state.invalidate();
+        }
+        return {
+          submission,
+          completion,
+          gpu,
+          gpuMethod: timer.method,
+          firstSubmission,
+          geometries: renderer.info.memory.geometries,
+          textures: renderer.info.memory.textures,
+          drawCalls,
+          triangles,
+          revision: THREE.REVISION,
+          width: renderer.domElement.width,
+          height: renderer.domElement.height,
+          pixelRatio: renderer.getPixelRatio(),
+        };
+      },
+      startRenderLoopCapture() {
+        const observer = renderLoopObservers.get(get().gl.domElement);
+        if (!observer) {
+          throw new Error('Render-loop observer is not mounted');
+        }
+        observer.startCapture(performance.now());
+      },
+      finishRenderLoopCapture() {
+        const observer = renderLoopObservers.get(get().gl.domElement);
+        if (!observer) {
+          throw new Error('Render-loop observer is not mounted');
+        }
+        return observer.finishCapture(performance.now());
+      },
+      getViewportCanvas() {
+        return get().gl.domElement;
+      },
+      isGeometryFramed() {
+        const { size } = get();
+        const cameraSnapshot = cameraRig.actorRef.getSnapshot();
+        return (
+          isGeometryFramed &&
+          cameraConnectorRef.current !== undefined &&
+          cameraSnapshot.status === 'active' &&
+          cameraSnapshot.context.view.viewport.width === size.width &&
+          cameraSnapshot.context.view.viewport.height === size.height
+        );
+      },
+      setSectionCuts(cuts) {
+        for (const { id } of graphicsActor.getSnapshot().context.sectionCuts) {
+          graphicsActor.send({ type: 'removeSectionCut', payload: id });
+        }
+        const ids = cuts.flatMap((cut) => addSectionCut(cut) ?? []);
+        graphicsActor.send({ type: 'selectSectionCut', payload: undefined });
+        return ids;
+      },
+      addSectionCut,
+      updateSectionCut(id, patch) {
+        graphicsActor.send({
+          type: 'updateSectionCut',
+          payload: { id, patch },
+        });
+      },
+      removeSectionCut(id) {
+        graphicsActor.send({ type: 'removeSectionCut', payload: id });
+      },
+      selectSectionCut(id) {
+        graphicsActor.send({ type: 'selectSectionCut', payload: id });
+      },
+      setSectionViewActive(active) {
+        graphicsActor.send({ type: 'setSectionViewActive', payload: active });
+      },
+      getSectionState() {
+        const { context } = graphicsActor.getSnapshot();
+        return {
+          isActive: context.isSectionViewActive,
+          cuts: context.sectionCuts,
+          selectedCutId: context.selectedSectionCutId,
+          hoveredCutId: context.hoveredSectionCutId,
+          committedCuts: context.committedSectionCuts,
+          committedPieces: resolveSectionPieces(context.committedSectionCuts),
+          isCommitted: areSectionCutsEqual(context.committedSectionCuts, context.sectionCuts),
+        };
+      },
+      projectSectionHandle(kind, cutId) {
+        const { camera, gl } = get();
+        return projectSectionViewTestHandle({
+          target: { kind, cutId },
+          camera,
+          rect: gl.domElement.getBoundingClientRect(),
+          scene,
+        });
+      },
+      setPresentation(presentation) {
+        graphicsActor.send({
+          type: 'setSurfaceVisibility',
+          payload: presentation.surfaces,
+        });
+        graphicsActor.send({
+          type: 'setLinesVisibility',
+          payload: presentation.lines,
+        });
+      },
+      setGridPresentationClipPolicy(policy) {
+        const { upDirection } = graphicsActor.getSnapshot().context;
+        cameraRig.setClipPlanes(
+          policy.far || policy.near
+            ? {
+                farPaddingVerticalSpans: policy.far ? infiniteGridFadeEndVisibleSpans : 0,
+                ...(policy.near
+                  ? {
+                      presentationPlane: infiniteGridPresentationPlaneByUpDirection[upDirection],
+                    }
+                  : {}),
+              }
+            : undefined,
+        );
+      },
+      getModelComponents() {
+        const { context } = modelInteractionRef.getSnapshot();
+        const activeUnitId = getActiveUnitId();
+        const unit = activeUnitId ? getModelInteractionUnitState(context, activeUnitId) : undefined;
+        return (unit?.manifest?.nodeOrder ?? [])
+          .filter((id) => id !== unit?.manifest?.rootId)
+          .map((id) => ({
+            id,
+            name: unit?.manifest?.nodesById[id]?.name ?? id,
+          }));
+      },
+      getModelVisibility() {
+        const { context } = modelInteractionRef.getSnapshot();
+        const activeUnitId = getActiveUnitId();
+        const unit = activeUnitId ? getModelInteractionUnitState(context, activeUnitId) : undefined;
+        return {
+          hiddenComponentIds: [...(unit?.hiddenComponentIds ?? [])],
+          isolatedComponentIds: [...(unit?.isolatedComponentIds ?? [])],
+        };
+      },
+      getRenderedModelComponentState(componentId) {
+        return getSectionViewTestRenderedModelComponentState(scene, componentId);
+      },
+      getRenderedModelComponentSurfaceBounds(componentId) {
+        return getRenderedModelComponentSurfaceBounds(scene, componentId, cameraRig.renderFrame);
+      },
+      getRenderedModelComponentSurfacePoints(componentId) {
+        return getRenderedModelComponentSurfacePoints(scene, componentId, cameraRig.renderFrame);
+      },
+      projectModelComponent(componentId) {
+        const { camera, gl } = get();
+        const rect = gl.domElement.getBoundingClientRect();
+        const points: SectionViewTestProjectedPoint[] = [];
+        scene.updateMatrixWorld(true);
+        scene.traverse((object) => {
+          if (!(object instanceof THREE.Mesh) || getModelComponentIdInHierarchy(object) !== componentId) {
+            return;
+          }
+
+          const geometry = object.geometry as THREE.BufferGeometry;
+          const position = geometry.getAttribute('position');
+          const { index } = geometry;
+          const triangleCount = Math.floor((index?.count ?? position.count) / 3);
+          const sampleStep = Math.max(1, Math.floor(triangleCount / 24));
+          for (let triangle = 0; triangle < triangleCount && points.length < 24; triangle += sampleStep) {
+            const vertices = [0, 1, 2].map((offset) =>
+              new THREE.Vector3()
+                .fromBufferAttribute(position, index?.getX(triangle * 3 + offset) ?? triangle * 3 + offset)
+                .applyMatrix4(object.matrixWorld),
+            );
+            const projected = vertices[0]!
+              .add(vertices[1]!)
+              .add(vertices[2]!)
+              .multiplyScalar(1 / 3)
+              .project(camera);
+            points.push(toProjectedPoint(projected, rect));
+          }
+        });
+        return points;
+      },
+      hideModelComponent(componentId) {
+        const activeUnitId = getActiveUnitId();
+        if (activeUnitId) {
+          graphicsActor.send({
+            type: 'hideModelComponent',
+            unitId: activeUnitId,
+            componentId,
+            source: 'screenshot',
+          });
+        }
+      },
+      isolateModelComponent(componentId) {
+        const activeUnitId = getActiveUnitId();
+        if (activeUnitId) {
+          graphicsActor.send({
+            type: 'isolateModelComponent',
+            unitId: activeUnitId,
+            componentId,
+            source: 'screenshot',
+          });
+        }
+      },
+      resetModelVisibility() {
+        const activeUnitId = getActiveUnitId();
+        if (activeUnitId) {
+          graphicsActor.send({
+            type: 'showHiddenModelComponents',
+            unitId: activeUnitId,
+            source: 'screenshot',
+          });
+          graphicsActor.send({
+            type: 'clearModelComponentIsolation',
+            unitId: activeUnitId,
+            source: 'screenshot',
+          });
+        }
+      },
+      setCamera(nextCamera) {
+        const currentView = cameraRig.actorRef.getSnapshot().context.view;
+        const target = new THREE.Vector3(...(nextCamera.target ?? [0, 0, 0]));
+        const position = new THREE.Vector3(...nextCamera.position);
+        const offset = position.sub(target);
+        const distance = offset.length();
+        if (distance <= 0) {
+          throw new RangeError('Section view test camera position must differ from its target.');
+        }
+        const direction = offset.normalize();
+        const up = new THREE.Vector3(
+          ...resolveCameraUp({
+            direction: [direction.x, direction.y, direction.z],
+            preferredUp: currentView.up,
+            defaultUp: [THREE.Object3D.DEFAULT_UP.x, THREE.Object3D.DEFAULT_UP.y, THREE.Object3D.DEFAULT_UP.z],
+          }),
+        ).applyAxisAngle(direction, nextCamera.rollRadians ?? 0);
+        const requestedFov = nextCamera.fov ?? currentView.requestedVerticalFieldOfView;
+        const verticalSpan =
+          requestedFov > 0
+            ? perspectiveVerticalSpan({
+                distance,
+                verticalFieldOfView: requestedFov,
+                zoom: nextCamera.zoom ?? 1,
+              })
+            : currentView.verticalSpan / (nextCamera.zoom ?? 1);
+        cameraRig.actorRef.send({
+          type: 'poseObserved',
+          source: 'input',
+          target: [target.x, target.y, target.z],
+          direction: [direction.x, direction.y, direction.z],
+          up: [up.x, up.y, up.z],
+          verticalSpan,
+          ...(requestedFov > 0 ? { perspectiveZoom: nextCamera.zoom ?? 1 } : {}),
+        });
+        if (nextCamera.fov !== undefined) {
+          setFovAngle(nextCamera.fov);
+        }
+      },
+      setFovAngle(angle) {
+        setFovAngle(angle);
+      },
+      getCamera() {
+        const { camera, controls } = get();
+        const actorSnapshot = cameraRig.actorRef.getSnapshot();
+        const cameraContext = actorSnapshot.context;
+        const cameraView = cameraContext.view;
+        const physicalCamera = cameraRig.readState();
+        const controlState = getSectionViewTestControlState({
+          controls,
+          viewportGizmoLocked: selectViewportGizmoLockActive(graphicsActor),
+        });
+        const state: SectionViewTestCameraState = {
+          actorStatus: actorSnapshot.status,
+          // The camera keeps a defect its root caught as `fault` and stays active (MC-R12), so either one fails a check.
+          actorError:
+            actorSnapshot.error instanceof Error
+              ? `${actorSnapshot.error.name}: ${actorSnapshot.error.message}`
+              : cameraContext.fault,
+          projection: camera instanceof THREE.OrthographicCamera ? 'orthographic' : 'perspective',
+          requestedFov: cameraView.requestedVerticalFieldOfView,
+          requestedPerspectiveZoom: cameraView.perspectiveZoom,
+          bounds: cameraView.bounds,
+          handoffFov: cameraContext.handoffVerticalFieldOfView,
+          verticalSpan: cameraView.verticalSpan,
+          revision: cameraContext.revision,
+          lastChangeSource: cameraContext.lastChange.source,
+          position: physicalCamera.position,
+          quaternion: [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w],
+          target: physicalCamera.target,
+          controlsDistance:
+            getControlsDistance({ camera, controls: controls ?? undefined }) *
+            cameraRig.renderFrame.metersPerRenderUnit,
+          fov: camera instanceof THREE.PerspectiveCamera ? camera.fov : undefined,
+          zoom:
+            camera instanceof THREE.PerspectiveCamera || camera instanceof THREE.OrthographicCamera
+              ? camera.zoom
+              : undefined,
+          aspect:
+            camera instanceof THREE.PerspectiveCamera
+              ? camera.aspect
+              : camera instanceof THREE.OrthographicCamera
+                ? (camera.right - camera.left) / (camera.top - camera.bottom)
+                : 1,
+          clipping: physicalCamera.clipping,
+          nativeClipping: { near: camera.near, far: camera.far },
+          ...controlState,
+        };
+
+        return state;
+      },
+      getCameraTransitionDiagnostics() {
+        return cameraTransitionDiagnosticsRef.current;
+      },
+      resetCameraTransitionDiagnostics() {
+        pendingCameraTransitionRef.current = undefined;
+        cameraTransitionDiagnosticsRef.current = {
+          requests: 0,
+          frames: 0,
+          actorSyncFailures: 0,
+          averageRequestToActorSyncMilliseconds: 0,
+          maximumRequestToActorSyncMilliseconds: 0,
+          maximumRequestToFrameMilliseconds: 0,
+          staleFrames: 0,
+        };
+      },
+      getRenderFrame() {
+        return cameraRig.renderFrame;
+      },
+      setRenderFrame(nextRenderFrame) {
+        setRenderFrame(nextRenderFrame);
+      },
+      projectWorldPoint(point) {
+        const { camera, gl } = get();
+        const rect = gl.domElement.getBoundingClientRect();
+        const projected = toThreeRenderPoint({
+          renderFrame: cameraRig.renderFrame,
+          pointMeters: point,
+        }).project(camera);
+
+        return toProjectedPoint(projected, rect);
+      },
+      getModelHoverState() {
+        const { context } = modelInteractionRef.getSnapshot();
+        const activeUnitId = getActiveUnitId();
+        const hoveredComponentId = activeUnitId
+          ? getModelInteractionUnitState(context, activeUnitId).hoveredComponentId
+          : undefined;
+
+        return { activeUnitId, hoveredComponentId };
+      },
+      setMeasureActive(active) {
+        graphicsActor.send({ type: 'setMeasureActive', payload: active });
+      },
+      getMeasureState() {
+        const { context } = graphicsActor.getSnapshot();
+        return {
+          isMeasureActive: context.isMeasureActive,
+          cameraInteracting: selectGestureHeld(context.cameraRef),
+          measurementUiMeshCount: getSectionViewTestMeasurementUiMeshCount(scene),
+          rendererGeometryCount: get().gl.info.memory.geometries,
+          snapDistancePx: context.measureSnapDistance,
+          candidates: context.measureCandidates,
+          activeCandidateId: context.measureActiveCandidateId,
+          lockedTargetId: context.measureLockedTargetId,
+          mode: context.measureMode,
+          currentStart: context.currentMeasurementStart,
+          measurements: context.measurements.map(
+            ({ id, distance, startPoint, endPoint, operation, quality, status, unavailableReason }) => ({
+              id,
+              distance,
+              startPoint,
+              endPoint,
+              operation,
+              quality,
+              status,
+              unavailableReason,
+            }),
+          ),
+        };
+      },
+      getSectionHelperSummary() {
+        return getSectionViewTestHelperSummary(scene);
+      },
+      getSectionCapCompleteness() {
+        let completeness: SectionViewTestCapCompleteness | undefined;
+        scene.traverse((child) => {
+          completeness =
+            (child.userData['sectionCapCompleteness'] as SectionViewTestCapCompleteness | undefined) ?? completeness;
+        });
+        return completeness;
+      },
+      getSectionCapStencilDiagnostics() {
+        return getSectionViewTestCapStencilDiagnostics(scene);
+      },
+      setSectionCapOutlinesVisible(visible) {
+        let found = false;
+        scene.traverse((child) => {
+          if (sectionCapStencilDebugUserDataKey in child.userData) {
+            const control: SectionCapOutlineDebugControl = { hidden: !visible };
+            child.userData[sectionCapOutlineDebugUserDataKey] = control;
+            found = true;
+          }
+        });
+        get().invalidate();
+        return found;
+      },
+    };
+
+    bridgeRef.current = bridge;
+    const bridges = bridgeGlobal.__TAU_SECTION_VIEW_TEST_BRIDGES__ ?? [];
+    bridges.push(bridge);
+    bridgeGlobal.__TAU_SECTION_VIEW_TEST_BRIDGES__ = bridges;
+    bridgeGlobal.__TAU_SECTION_VIEW_TEST__ = bridge;
+
+    return () => {
+      unmounted.abort();
+      if (bridgeRef.current === bridge) {
+        bridgeRef.current = undefined;
+      }
+      const index = bridges.indexOf(bridge);
+      if (index !== -1) {
+        bridges.splice(index, 1);
+      }
+      if (bridgeGlobal.__TAU_SECTION_VIEW_TEST__ === bridge) {
+        bridgeGlobal.__TAU_SECTION_VIEW_TEST__ = bridges.at(-1);
+      }
+      if (bridges.length === 0) {
+        delete bridgeGlobal.__TAU_SECTION_VIEW_TEST__;
+        delete bridgeGlobal.__TAU_SECTION_VIEW_TEST_BRIDGES__;
+      }
+    };
+  }, [
+    cameraConnectorRef,
+    cameraRig,
+    get,
+    graphicsActor,
+    isGeometryFramed,
+    isTauDebugEnabled,
+    modelInteractionRef,
+    project,
+    renderTierOverride,
+    setRenderFrame,
+  ]);
+
+  useEffect(() => {
+    if (!isTauDebugEnabled) {
+      return undefined;
+    }
+    const readBridge = (): SectionViewTestBridgeApi => {
+      const bridge = bridgeRef.current;
+      if (!bridge) {
+        throw new Error('Workspace renderer diagnostics are not ready');
+      }
+      return bridge;
+    };
+    const { gl } = get();
+    const container = gl.domElement.parentElement;
+    const originalWidth = container?.style.width;
+    const originalHeight = container?.style.height;
+    const originalDpr = get().viewport.dpr;
+    let hasBufferOverride = false;
+    const restoreViewport = (): void => {
+      if (container && hasBufferOverride) {
+        container.style.width = originalWidth ?? '';
+        container.style.height = originalHeight ?? '';
+        get().setDpr(originalDpr);
+        hasBufferOverride = false;
+        get().invalidate();
+      }
+    };
+    const report = (): Record<string, unknown> => ({
+      capturedAt: new Date().toISOString(),
+      renderer: readBridge().getRendererIdentity(),
+      camera: readBridge().getCamera(),
+      section: readBridge().getSectionState(),
+      caps: readBridge().getSectionCapCompleteness(),
+      capStencil: readBridge().getSectionCapStencilDiagnostics(),
+      hover: readBridge().getModelHoverState(),
+      settings: readBridge().getViewSettings(),
+      geometryFramed: readBridge().isGeometryFramed(),
+      threeRevision: THREE.REVISION,
+    });
+    const panel = document.createElement('details');
+    panel.className =
+      'pointer-events-auto absolute top-10 left-2 z-10 max-w-sm rounded-sm bg-background p-2 text-xs text-foreground';
+    const heading = document.createElement('summary');
+    heading.textContent = 'Renderer diagnostics';
+    const output = document.createElement('output');
+    output.className = 'block break-words font-mono';
+    output.setAttribute('aria-label', 'Workspace renderer snapshot');
+    const refresh = (): void => {
+      output.textContent = JSON.stringify(readBridge().getRendererIdentity());
+    };
+    panel.append(heading, output);
+    for (const [label, action] of [
+      ['Refresh renderer snapshot', refresh],
+      [
+        'Use 5K drawing buffer',
+        () => {
+          if (!container) {
+            return;
+          }
+          // Set the R3F measured container, not only gl.setSize: camera and pointer mapping must agree.
+          container.style.width = '2560px';
+          container.style.height = '1440px';
+          hasBufferOverride = true;
+          get().setDpr(2);
+          get().invalidate();
+          output.textContent = 'Requested 5120×2880; refresh to verify the actual buffer.';
+        },
+      ],
+      ['Restore viewport size', restoreViewport],
+      [
+        'Download workspace report',
+        () => {
+          refresh();
+          downloadBlob(
+            new Blob([JSON.stringify(report(), null, 2)], { type: 'application/json' }),
+            'workspace-renderer-report.json',
+          );
+        },
+      ],
+      [
+        'Capture workspace viewport',
+        () => {
+          pendingCaptureRef.current = true;
+          get().invalidate();
+        },
+      ],
+    ] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.className = 'm-1 rounded-sm border px-2 py-1';
+      button.addEventListener('click', action);
+      panel.append(button);
+    }
+    // Events belong to these controls, not the canvas pointer/selection handler.
+    panel.addEventListener('pointerdown', (event) => {
+      event.stopPropagation();
+    });
+    panel.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+    panel.addEventListener('toggle', refresh);
+    container?.append(panel);
+
+    return () => {
+      restoreViewport();
+      panel.remove();
+      pendingCaptureRef.current = false;
+    };
+  }, [get, isTauDebugEnabled]);
+
+  return undefined;
+}

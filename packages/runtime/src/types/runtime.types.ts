@@ -8,21 +8,29 @@
  * see runtime-kernel.types.ts.
  */
 
+import type { ContentDigest } from '@taucad/cache-core';
 import type { backendProviders, kernelProviders } from '@taucad/types/constants';
-import type { ExportFidelity, ExportFile, Geometry, GeometryResponse } from '@taucad/types';
+import type { ExportFidelity, ExportFile } from '@taucad/types';
 import type { JSONSchema7 } from '@taucad/json-schema';
+import type { ParameterDeclaration, ParameterManifest } from '@taucad/parameters';
 import type {
   CollectFormatMap,
   CollectKernelIds,
+  ExportContentFor,
   KernelPlugin,
   KnownSourceFormats,
   KnownTargetFormats,
   KnownTranscoderIds,
   MergeExportMap,
+  MiddlewarePlugin,
+  RenderContentFor,
   RenderOptionsFor,
+  RuntimePluginPermissions,
   TranscoderPlugin,
 } from '#plugins/plugin-types.js';
-import type { TransportDescriptor } from '#transport/runtime-transport.types.js';
+import type { TransportDescriptor } from '#transport/runtime-transport-descriptor.types.js';
+import type { KernelIssueCode } from '#types/kernel-issue-codes.js';
+import type { RuntimeContentInput, RuntimeContentKey } from '#types/runtime-content.types.js';
 
 // =============================================================================
 // Error Types
@@ -30,7 +38,7 @@ import type { TransportDescriptor } from '#transport/runtime-transport.types.js'
 
 /**
  * Classification for stack frame origin.
- * - `user` -- the developer's project code. Visible by default. Used for Monaco error markers.
+ * - `user` -- the developer's project code. Visible by default. Used for editor error markers.
  * - `library` -- third-party CAD libraries the user imported (replicad, @jscad/modeling). Visible by default.
  * - `framework` -- runtime worker infrastructure (Proxy traps, bundler, esbuild). Hidden by default.
  * - `runtime` -- V8/Emscripten/WASM boundary frames, `node:` internals, native code. Hidden by default.
@@ -77,34 +85,46 @@ export type KernelIssueType = 'compilation' | 'runtime' | 'kernel' | 'connection
 export type IssueSeverity = 'error' | 'warning' | 'info';
 
 /**
- * Discriminator codes for {@link KernelIssue.code}. Consumers use these
- * verbatim instead of regex-matching `issue.message` to classify failures.
+ * What a capacity limit refused, in the producer's own unit.
+ *
+ * `KernelIssue.details` stays `unknown`: a producer opts in with
+ * `satisfies ResourceLimitDetails`, and a reader checks the shape before it
+ * trusts it, so an older or third-party producer yields no limit details rather
+ * than a guessed number. A supervisor that kills a host for a limit reports the
+ * same shape as the host exit's `exceeded`.
  *
  * @public
  *
- * @remarks
- * - `RENDER_TIMEOUT` — render loop exceeded `setRenderTimeout`.
- * - `RENDER_ABORTED` — cooperative abort fired (supersession or explicit).
- * - `KERNEL_BINDING_FAILED` — `kernelClass()` constructor threw inside the
- *   worker (e.g. WASM init failure). Routed through `RuntimeConnectionError`
- *   with `causeKind: 'kernel-binding'`.
- * - `KERNEL_CAPABILITY_MISSING` — kernel reports it cannot service the
- *   requested format/route.
- * - `BUNDLER_FAILED` — the active bundler rejected the source.
- * - `MIDDLEWARE_FAILED` — a middleware stage threw.
- * - `RUNTIME` — generic runtime failure inside user code (default fallback
- *   for legacy callsites; tests assert it is rare).
- * - `UNKNOWN` — issue source code did not declare a discriminator.
+ * @example <caption>Report the limit a build refused</caption>
+ * ```typescript
+ * import type { KernelIssue, ResourceLimitDetails } from '@taucad/runtime/types';
+ *
+ * const issue: KernelIssue = {
+ *   message: 'The SDF expression compiles to more instructions than PicoVoxel allows.',
+ *   code: 'RESOURCE_LIMIT',
+ *   severity: 'error',
+ *   details: {
+ *     limit: 'picovoxel.tape.instructions',
+ *     unit: '{instruction}',
+ *     maximum: 65_536,
+ *     demand: { kind: 'unknown' },
+ *     origin: 'default',
+ *   } satisfies ResourceLimitDetails,
+ * };
+ * ```
  */
-export type KernelIssueCode =
-  | 'RENDER_TIMEOUT'
-  | 'RENDER_ABORTED'
-  | 'KERNEL_BINDING_FAILED'
-  | 'KERNEL_CAPABILITY_MISSING'
-  | 'BUNDLER_FAILED'
-  | 'MIDDLEWARE_FAILED'
-  | 'RUNTIME'
-  | 'UNKNOWN';
+export type ResourceLimitDetails = Readonly<{
+  /** Stable id `{owner}.{limit}`, such as `picovoxel.tape.instructions` or `host.utility.resident`. */
+  limit: string;
+  /** UCUM unit of `maximum` and `demand`: `By`, `{triangle}`, `{instance}`, `ms`. */
+  unit: string;
+  /** The effective limit that applied. */
+  maximum: number;
+  /** What the refused work needed. Unknown is not zero. */
+  demand: Readonly<{ kind: 'measured' | 'estimated'; value: number }> | Readonly<{ kind: 'unknown' }>;
+  /** Where `maximum` came from. */
+  origin: 'default' | 'host-option' | 'profile';
+}>;
 
 /**
  * Diagnostic produced by a kernel operation — displayed in the editor's
@@ -125,6 +145,7 @@ export type KernelIssue = {
   location?: ErrorLocation;
   stack?: string;
   stackFrames?: KernelStackFrame[];
+  details?: unknown;
   type?: KernelIssueType;
   severity: IssueSeverity;
 };
@@ -134,6 +155,26 @@ export type KernelIssue = {
 // =============================================================================
 
 /**
+ * The exact source a request-scoped kernel operation read, in the digest vocabulary that
+ * `ParameterManifest.identity.sourceFiles` already uses.
+ *
+ * `files` covers the entry **and** its resolved dependency closure: one entry per project source
+ * file the operation resolved, keyed by rooted path, valued with the SHA-256 digest of the bytes
+ * this operation read, or `'missing'` for an import that resolved to no file. It is the closure the
+ * operation actually hashed, so it excludes `node_modules` and anything the kernel never read.
+ *
+ * Comparing it with the digest a write reported for the same path is what makes a stale answer
+ * self-diagnosing (blueprint R4, invariant I5).
+ * @public
+ */
+export type SourceRevision = Readonly<{
+  /** Rooted path of the entry file the operation evaluated. */
+  entry: string;
+  /** Content digest per rooted source path; `'missing'` where the import resolved to no file. */
+  files: Readonly<Record<string, ContentDigest | 'missing'>>;
+}>;
+
+/**
  * Successful kernel operation outcome. Non-fatal warnings are preserved in `issues` alongside the operation data.
  * @public
  */
@@ -141,7 +182,24 @@ export type KernelSuccessResult<T> = {
   success: true;
   data: T;
   issues: KernelIssue[];
-  serializedHandle?: unknown;
+  serializedNativeHandle?: unknown;
+  /**
+   * The source revision this result was computed from.
+   *
+   * Populated by the request-scoped operations (`evaluateModel`, `getParameters`, `exportModel`,
+   * `snapshotSource`); absent on autonomous preview results and on results produced before any
+   * closure was resolved.
+   */
+  sourceRevision?: SourceRevision;
+  /**
+   * Produce the durable native-handle snapshot on demand (D12).
+   *
+   * No display render reads a snapshot, so a kernel that can make one hands over this thunk and
+   * pays for it only where something asks: an export, a reheat, or a cache write. It resolves
+   * `undefined` once the handle it would read has been disposed, and is stripped from every
+   * published result — it is a function, and functions do not cross the wire.
+   */
+  serializeNativeHandleSnapshot?: () => unknown;
 };
 
 /**
@@ -151,6 +209,13 @@ export type KernelSuccessResult<T> = {
 export type KernelErrorResult = {
   success: false;
   issues: KernelIssue[];
+  /**
+   * The source revision the failing operation had already resolved, when it got that far.
+   *
+   * A failure is the case provenance matters most for — "render failed" against bytes the caller
+   * has since replaced reads exactly like a failure against the current ones.
+   */
+  sourceRevision?: SourceRevision;
 };
 
 /**
@@ -164,7 +229,7 @@ export type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 // =============================================================================
 
 /**
- * Identifier for a first-party CAD kernel shipped alongside `@taucad/runtime` (replicad, jscad, manifold, zoo, plus the GPL-isolated `@taucad/openscad`).
+ * Application-recognized first-party CAD kernel identifier.
  * @public
  */
 export type KernelProvider = (typeof kernelProviders)[number];
@@ -175,10 +240,10 @@ export type KernelProvider = (typeof kernelProviders)[number];
 export type BackendProvider = (typeof backendProviders)[number];
 
 /**
- * All first-party kernel IDs including internal-only kernels.
+ * All recognized first-party kernel IDs.
  * @public
  */
-export type KnownKernelProvider = KernelProvider | 'tau';
+export type KnownKernelProvider = KernelProvider;
 
 /**
  * Kernel provider identifier.
@@ -209,7 +274,7 @@ export type KernelRegistration = {
    */
   builtinModuleNames?: string[];
   /**
-   * URL of the defineKernel module for this kernel (e.g. replicad.kernel.js).
+   * URL of the defineKernel module for this kernel.
    * The runtime worker dynamically imports this module to load the kernel.
    */
   kernelModuleUrl: string;
@@ -280,29 +345,17 @@ export type BundlerRegistrations = BundlerRegistration[];
 // Operation Result Types
 // =============================================================================
 
-/**
- * Result type for createGeometry.
- * Used by kernel workers and middleware - geometries don't have hash yet.
- * The hash is added by kernel-worker.ts after the middleware chain.
- * @public
- */
-export type CreateGeometryResult = KernelResult<GeometryResponse[]>;
-
-/**
- * Completed result type for createGeometry.
- * Returned to consumers - geometries have hash for React keys and caching.
- * @public
- */
-export type HashedGeometryResult = KernelResult<Geometry[]>;
+/** Internal result of replaying evaluation to restore a native handle. @public */
+export type CreateGeometryResult = KernelResult<undefined>;
 
 /**
  * Outcome of extracting customizer parameters from a CAD script, used to render the parameter editor UI.
  * @public
  */
-export type GetParametersResult = KernelResult<{
-  defaultParameters: Record<string, unknown>;
-  jsonSchema: unknown;
-}>;
+export type GetParameterDeclarationsResult = KernelResult<ParameterDeclaration>;
+
+/** Admitted effective parameter manifest returned after the complete middleware chain. @public */
+export type GetParametersResult = KernelResult<ParameterManifest>;
 
 /**
  * Outcome of inferring a human-readable name from a CAD script, used as the default project title.
@@ -319,6 +372,34 @@ export type ExportGeometryResult = KernelResult<ExportFile[]>;
 // =============================================================================
 // Capabilities Manifest Types
 // =============================================================================
+
+type RuntimeCapabilityRegistrationCommon = {
+  readonly id: string;
+  readonly permissions?: RuntimePluginPermissions;
+};
+
+type RuntimeKernelRegistration<Kernel> = Kernel extends {
+  readonly id: infer Id extends string;
+  readonly extensions: infer Extensions extends readonly string[];
+}
+  ? RuntimeCapabilityRegistrationCommon & {
+      readonly kind: 'kernel';
+      readonly id: Id;
+      readonly extensions: Extensions;
+      /** The kernel's {@link KernelPlugin.builtinDependencies}. */
+      readonly builtinDependencies?: Readonly<Record<string, string>>;
+    }
+  : never;
+
+/** One capability registration surfaced through the capabilities manifest. @public */
+export type RuntimeCapabilityRegistration<
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- variance over concrete kernel registrations
+  Kernels extends ReadonlyArray<KernelPlugin<any, any, any, any, any, any>> = KernelPlugin[],
+> =
+  | RuntimeKernelRegistration<Kernels[number]>
+  | (RuntimeCapabilityRegistrationCommon & {
+      readonly kind: 'middleware' | 'bundler' | 'transcoder';
+    });
 
 /**
  * A single export route exposed by the worker. Represents either a direct
@@ -344,8 +425,9 @@ export type ExportGeometryResult = KernelResult<ExportFile[]>;
  */
 // oxlint-disable @typescript-eslint/no-explicit-any -- variance: bag projection over heterogeneous tuples
 export type ExportRoute<
-  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
-  Transcoders extends readonly TranscoderPlugin<any, any, any>[] = TranscoderPlugin[],
+  Kernels extends ReadonlyArray<KernelPlugin<any, any, any, any, any, any>> = KernelPlugin[],
+  Middleware extends ReadonlyArray<MiddlewarePlugin<any, any, any>> = MiddlewarePlugin[],
+  Transcoders extends ReadonlyArray<TranscoderPlugin<any, any, any, any, any>> = TranscoderPlugin[],
   Format extends KnownTargetFormats<Kernels, Transcoders> = KnownTargetFormats<Kernels, Transcoders>,
   Kernel extends CollectKernelIds<Kernels> = CollectKernelIds<Kernels>,
 > = {
@@ -354,20 +436,30 @@ export type ExportRoute<
   sourceFormat: KnownSourceFormats<Kernels>;
   transcoderId?: KnownTranscoderIds<Transcoders>;
   fidelity: ExportFidelity;
-  schema: JSONSchema7;
-  defaults: Format extends keyof MergeExportMap<CollectFormatMap<Kernels>, Transcoders>
-    ? MergeExportMap<CollectFormatMap<Kernels>, Transcoders>[Format]
-    : Record<string, unknown>;
+  exportOptions: {
+    schema: JSONSchema7;
+    defaults: Format extends keyof MergeExportMap<
+      CollectFormatMap<ReadonlyArray<Extract<Kernels[number], KernelPlugin<any, any, Kernel, any, any>>>>,
+      Transcoders
+    >
+      ? MergeExportMap<
+          CollectFormatMap<ReadonlyArray<Extract<Kernels[number], KernelPlugin<any, any, Kernel, any, any>>>>,
+          Transcoders
+        >[Format]
+      : Record<string, unknown>;
+  };
+  /** Framework content supported by this exact concrete route. Omitted when empty. */
+  content?: ContentCapability<ExportContentFor<Kernels, Middleware, Transcoders, Format, Kernel>>;
 };
 // oxlint-enable @typescript-eslint/no-explicit-any
 
 /**
  * Pre-computed JSON Schema and defaults for a kernel's render options.
- * Indexed by kernel id in {@link CapabilitiesManifest.renderSchemas} for O(1)
+ * Indexed by kernel id in {@link CapabilitiesManifest.renderCapabilities} for O(1)
  * lookup of the active kernel's render-option form.
  *
  * The `Kernel` generic narrows `defaults` to the specific render options
- * inferred from the registered kernel's `renderSchema` via
+ * inferred from the registered kernel's `render.optionsSchema` via
  * {@link RenderOptionsFor}.
  *
  * @template Kernels - Tuple of registered `KernelPlugin`s
@@ -375,12 +467,19 @@ export type ExportRoute<
  * @public
  */
 // oxlint-disable @typescript-eslint/no-explicit-any -- variance: bag projection over heterogeneous tuples
-export type KernelRenderSchema<
-  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
+export type RenderCapability<
+  Kernels extends ReadonlyArray<KernelPlugin<any, any, any, any, any, any>> = KernelPlugin[],
+  Middleware extends ReadonlyArray<MiddlewarePlugin<any, any, any>> = MiddlewarePlugin[],
   Kernel extends CollectKernelIds<Kernels> = CollectKernelIds<Kernels>,
 > = {
-  schema: JSONSchema7;
-  defaults: RenderOptionsFor<Kernels, Kernel>;
+  renderOptions: {
+    schema: JSONSchema7;
+    defaults: RenderOptionsFor<Kernels, Kernel>;
+  };
+  /** Framework content supported by this kernel's composed render route. */
+  content?: ContentCapability<RenderContentFor<Kernels, Middleware, Kernel>>;
+  /** Cooperative cancellation support for in-flight renders. */
+  cancellation?: 'cooperative';
 };
 // oxlint-enable @typescript-eslint/no-explicit-any
 
@@ -403,20 +502,27 @@ export type KernelRenderSchema<
  */
 // oxlint-disable @typescript-eslint/no-explicit-any -- variance: bag projection over heterogeneous tuples
 export type CapabilitiesManifest<
-  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
-  Transcoders extends readonly TranscoderPlugin<any, any, any>[] = TranscoderPlugin[],
+  Kernels extends ReadonlyArray<KernelPlugin<any, any, any, any, any, any>> = KernelPlugin[],
+  Middleware extends ReadonlyArray<MiddlewarePlugin<any, any, any>> = MiddlewarePlugin[],
+  Transcoders extends ReadonlyArray<TranscoderPlugin<any, any, any, any, any>> = TranscoderPlugin[],
 > = {
-  routes: ReadonlyArray<ExportRoute<Kernels, Transcoders>>;
+  registrations: ReadonlyArray<RuntimeCapabilityRegistration<Kernels>>;
+  routes: ReadonlyArray<ExportRoute<Kernels, Middleware, Transcoders>>;
   // Inline the per-kernel schema shape (rather than referencing
-  // `KernelRenderSchema<Kernels, K>`) so the mapped-type expansion does not
+  // `RenderCapability<Kernels, K>`) so the mapped-type expansion does not
   // bind the named generic invariantly. This preserves narrow → wide
   // assignability at the structural level: every narrow
   // `{ <id>?: { schema; defaults } }` collapses cleanly into the wide
   // index signature `{ [x: string]?: { schema; defaults } }`.
-  renderSchemas: {
+  renderCapabilities: {
     [K in CollectKernelIds<Kernels>]?: {
-      schema: JSONSchema7;
-      defaults: RenderOptionsFor<Kernels, K>;
+      renderOptions: {
+        schema: JSONSchema7;
+        defaults: RenderOptionsFor<Kernels, K>;
+      };
+      content?: ContentCapability<RenderContentFor<Kernels, Middleware, K>>;
+      /** Cooperative cancellation support for in-flight renders. */
+      cancellation?: 'cooperative';
     };
   };
 };
@@ -435,23 +541,9 @@ export type TransportCapabilities = {
 };
 
 /**
- * The single rolled-up capabilities surface exposed at
- * {@link RuntimeClient.capabilities}. Layers kernel-derived information
- * (every field of {@link CapabilitiesManifest}) under the same object as
- * transport-derived information (`autonomousRenderLoop`, `transport.*`)
- * so consumers reach for one property instead of branching between
- * `capabilities` and a separate `transportCapabilities`.
- *
- * - `autonomousRenderLoop` reflects whether the active transport drives
- *   its own render loop. `false` on no-worker hostings (browser main
- *   thread, edge worker) where consumers must call `client.render(...)`
- *   explicitly; `true` for in-process and worker transports.
- * - `transport.descriptor` is diagnostic only — `RuntimeClient` does not
- *   branch on transport identity.
- *
- * Both `Kernels` and `Transcoders` flow through from
- * {@link CapabilitiesManifest} so route narrowing carries over to the
- * rolled-up surface.
+ * Kernel-derived capabilities and diagnostic transport descriptor exposed at
+ * {@link RuntimeClient.capabilities}. Whether external file edits trigger a
+ * document evaluation depends on the filesystem adapter's `watch` support.
  *
  * @template Kernels - Tuple of registered `KernelPlugin`s
  * @template Transcoders - Tuple of registered `TranscoderPlugin`s
@@ -459,10 +551,16 @@ export type TransportCapabilities = {
  */
 // oxlint-disable @typescript-eslint/no-explicit-any -- variance: bag projection over heterogeneous tuples
 export type RuntimeCapabilities<
-  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
-  Transcoders extends readonly TranscoderPlugin<any, any, any>[] = TranscoderPlugin[],
-> = CapabilitiesManifest<Kernels, Transcoders> & {
-  readonly autonomousRenderLoop: boolean;
+  Kernels extends ReadonlyArray<KernelPlugin<any, any, any, any, any>> = KernelPlugin[],
+  Middleware extends ReadonlyArray<MiddlewarePlugin<any, any, any>> = MiddlewarePlugin[],
+  Transcoders extends ReadonlyArray<TranscoderPlugin<any, any, any, any, any>> = TranscoderPlugin[],
+> = CapabilitiesManifest<Kernels, Middleware, Transcoders> & {
   readonly transport: TransportCapabilities;
 };
 // oxlint-enable @typescript-eslint/no-explicit-any
+
+/** JSON Schema plus operation defaults for the content keys on one route. @public */
+export type ContentCapability<Keys extends RuntimeContentKey = RuntimeContentKey> = {
+  schema: JSONSchema7;
+  defaults: Pick<RuntimeContentInput, Keys>;
+};

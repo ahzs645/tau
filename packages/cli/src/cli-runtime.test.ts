@@ -1,0 +1,265 @@
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import { nativeDeploymentsOf } from '@taucad/native-process-core/store';
+import { definePlugin, deriveImportExtensions } from '@taucad/runtime/plugin';
+import { resolveRuntimeDefinition } from '@taucad/runtime/worker';
+import { assertKernelRosterCoverage } from '@taucad/runtime-testing/roster';
+import { kernelConfigurations } from '@taucad/types/constants';
+import { createCliRuntime } from '#cli-runtime.js';
+import type { CliRuntimeOptions, DefaultInvocablePluginFactory } from '#cli-runtime.js';
+
+/*
+ * Plugin/capability order is the CLI's kernel-selection precedence. The ids come from the
+ * plugin packages themselves (`defineKernel({ id })`) — this test pins the composition, not
+ * the format tables, which the CLI must never restate.
+ */
+const builtInKernelIds = [
+  'replicad',
+  'opencascade',
+  'openrscad',
+  'jscad',
+  'manifold',
+  'picovoxel',
+  'smlib',
+  'gltf',
+  'brep',
+  'cadmpeg',
+  'tscircuit',
+  'zoo',
+  'smlibpy',
+  'build123d',
+  'picogk',
+  'assimp',
+];
+
+const composeCli = async (options: CliRuntimeOptions = {}) =>
+  resolveRuntimeDefinition(await createCliRuntime(options), undefined);
+
+const taucadImports = (source: string): string[] => [
+  ...new Set(
+    ts
+      .preProcessFile(source, true, true)
+      .importedFiles.map(({ fileName }) => fileName)
+      .filter((specifier) => specifier.startsWith('@taucad/'))
+      .map((specifier) => specifier.split('/').slice(0, 2).join('/')),
+  ),
+];
+
+const novelPlugin = definePlugin({
+  meta: { name: '@example/novel' },
+  kernels: { novel: () => ({ id: 'novel', extensions: ['novel'] }) },
+  presets: { default: ['kernels.novel'] },
+});
+
+const configuredReplicad = definePlugin({
+  meta: { name: '@taucad/replicad' },
+  kernels: { configured: () => ({ id: 'configured-replicad', extensions: ['configured'] }) },
+  presets: { default: ['kernels.configured'] },
+});
+
+const requiresOptions = definePlugin({
+  meta: { name: '@example/requires-options' },
+  kernels: {
+    configured: (options: { readonly endpoint: string }) => ({
+      id: options.endpoint,
+      extensions: ['required'],
+    }),
+  },
+  presets: { default: ['kernels.configured'] },
+});
+
+describe('createCliRuntime', () => {
+  it('keeps the built-in plugin roster equal to production package dependencies', async () => {
+    const sourceUrl = new URL('cli-runtime.ts', import.meta.url);
+    const manifestUrl = new URL('../package.json', import.meta.url);
+    const [source, manifestSource] = await Promise.all([readFile(sourceUrl, 'utf8'), readFile(manifestUrl, 'utf8')]);
+    const manifest = JSON.parse(manifestSource) as { dependencies?: Record<string, string> };
+    const expected = Object.keys(manifest.dependencies ?? {}).filter(
+      (name) =>
+        name.startsWith('@taucad/') &&
+        ![
+          '@taucad/agent-host',
+          // Package install support used by `tau install`, not runtime plugins.
+          '@taucad/bundler-core',
+          // A required peer of `@taucad/image` and `@taucad/workbench`, not a runtime plugin.
+          '@taucad/camera',
+          '@taucad/filesystem',
+          '@taucad/host',
+          // The worker launcher `tau serve` brokers native kernels with, not a runtime plugin.
+          '@taucad/native-process-core',
+          '@taucad/parameters',
+          '@taucad/runtime',
+          '@taucad/skills',
+        ].includes(name),
+    );
+    const actual = taucadImports(source).filter((name) => name !== '@taucad/runtime');
+
+    expect(actual.toSorted()).toEqual(expected.toSorted());
+  });
+
+  it('routes KCL to Zoo through the named Tau proxy, never with a credential in its options', async () => {
+    const runtime = await composeCli({ zooProxyUrl: 'ws://localhost:4001/v1/kernels/zoo' });
+    const zooKernel = runtime.kernels.find(({ id }) => id === 'zoo');
+
+    expect(zooKernel?.extensions).toEqual(['kcl']);
+    expect(zooKernel?.options).toMatchObject({
+      baseUrl: 'ws://localhost:4001/v1/kernels/zoo',
+      closeErrors: { 4401: expect.stringContaining('TAU_AUTH_TOKEN') as unknown },
+    });
+    expect(zooKernel?.options).not.toHaveProperty('token');
+  });
+
+  it('defaults Zoo to the Tau Cloud proxy', async () => {
+    const runtime = await composeCli();
+
+    expect(runtime.kernels.find(({ id }) => id === 'zoo')?.options).toMatchObject({
+      baseUrl: 'wss://api.tau.new/v1/kernels/zoo',
+    });
+  });
+
+  it('keeps the built-in PicoVoxel kernel on its default wasm selection', async () => {
+    const runtime = await composeCli();
+
+    expect(runtime.kernels.find(({ id }) => id === 'picovoxel')).not.toHaveProperty('options.wasm');
+  });
+
+  it('composes every built-in plugin in declared order', async () => {
+    const runtime = await composeCli();
+
+    expect(runtime.kernels.map(({ id }) => id)).toEqual(builtInKernelIds);
+    expect(runtime.bundlers.map(({ id }) => id)).toEqual(['esbuild']);
+    expect(runtime.middleware.length).toBeGreaterThan(0);
+    expect(runtime.transcoders.map(({ id }) => id)).toEqual([
+      'gltf',
+      'slicer',
+      'assimp',
+      'render',
+      'svg',
+      'raster',
+      'heif',
+    ]);
+  });
+
+  it('composes the bundler under the locked acquisition profile only when asked', async () => {
+    const open = await composeCli();
+    const locked = await composeCli({ acquisition: 'locked' });
+
+    expect(open.bundlers.find(({ id }) => id === 'esbuild')).not.toHaveProperty('options.acquisition');
+    expect(locked.bundlers.find(({ id }) => id === 'esbuild')?.options).toMatchObject({ acquisition: 'locked' });
+  });
+
+  it('registers the assimp import kernel through the pinned "all" preset', async () => {
+    const runtime = await composeCli();
+    const extensions = deriveImportExtensions(runtime);
+
+    expect(extensions).toContain('ts');
+    expect(extensions).toContain('obj');
+  });
+
+  it('covers the product catalog, native kernels included', async () => {
+    assertKernelRosterCoverage({ runtime: await composeCli(), catalog: kernelConfigurations });
+  });
+
+  it('lists the native kernels as ordinary plugins that carry their deployments, before assimp', async () => {
+    const runtime = await composeCli();
+
+    expect(
+      nativeDeploymentsOf(runtime).map(({ deployment, kernels }) => ({
+        package: deployment.package,
+        kernels: kernels.map(({ id, extensions }) => ({ id, extensions })),
+      })),
+    ).toEqual([
+      { package: '@taucad/smlibpy', kernels: [{ id: 'smlibpy', extensions: ['py'] }] },
+      { package: '@taucad/build123d', kernels: [{ id: 'build123d', extensions: ['py'] }] },
+      { package: '@taucad/picogk', kernels: [{ id: 'picogk', extensions: ['cs'] }] },
+    ]);
+    /* Listed with no closure: each binds to the sealed closure the dependency store holds when it initializes. */
+    expect(runtime.kernels.find(({ id }) => id === 'build123d')).not.toHaveProperty('options.closure');
+    expect(deriveImportExtensions(runtime)).toEqual(expect.arrayContaining(['py', 'cs']));
+  });
+
+  it('rejects an explicit plugin that duplicates a built-in', async () => {
+    const { gltf } = await import('@taucad/gltf');
+
+    await expect(composeCli({ explicitFactories: [gltf] })).rejects.toThrow(
+      'Tau plugin "@taucad/gltf" from --plugin collides with a built-in. Use --config',
+    );
+  });
+
+  it('appends a novel explicit plugin after the built-ins', async () => {
+    const runtime = await composeCli({ explicitFactories: [novelPlugin] });
+
+    expect(runtime.kernels.map(({ id }) => id)).toEqual([...builtInKernelIds, 'novel']);
+  });
+
+  it('replaces a configured built-in in place', async () => {
+    const runtime = await composeCli({ configuredPlugins: [configuredReplicad()] });
+
+    expect(runtime.kernels.map(({ id }) => id)).toEqual(['configured-replicad', ...builtInKernelIds.slice(1)]);
+  });
+
+  it('appends a configured novel plugin after the built-ins', async () => {
+    const runtime = await composeCli({ configuredPlugins: [novelPlugin()] });
+
+    expect(runtime.kernels.map(({ id }) => id)).toEqual([...builtInKernelIds, 'novel']);
+  });
+
+  it('explains that --plugin invokes factories with defaults', async () => {
+    await expect(
+      composeCli({ explicitFactories: [requiresOptions as unknown as DefaultInvocablePluginFactory] }),
+    ).rejects.toThrow('Tau plugin "@example/requires-options" could not be invoked with defaults for --plugin');
+  });
+
+  /*
+   * The CLI must never restate format knowledge the plugin packages own; the forbidden
+   * literals are derived from the composed runtime rather than listed here, so this guard
+   * grows with the plugins instead of drifting from them.
+   */
+  it('restates no plugin-owned extension literal in CLI source', async () => {
+    const runtime = await composeCli();
+    const extensions = deriveImportExtensions(runtime);
+    const sourceDirectory = dirname(fileURLToPath(import.meta.url));
+    const entries = await readdir(sourceDirectory, { recursive: true, withFileTypes: true });
+    const sources = entries.filter(
+      (entry) => entry.isFile() && entry.name.endsWith('.ts') && !entry.name.includes('.test'),
+    );
+
+    const offenders: string[] = [];
+    await Promise.all(
+      sources.map(async (entry) => {
+        const path = join(entry.parentPath, entry.name);
+        const content = await readFile(path, 'utf8');
+        const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
+        for (const extension of extensions) {
+          let ownsExtension = false;
+          const visit = (node: ts.Node): void => {
+            if (ts.isStringLiteral(node) && node.text === extension) {
+              const { parent } = node;
+              const comparedExpression = ts.isBinaryExpression(parent)
+                ? parent.left === node
+                  ? parent.right
+                  : parent.left
+                : undefined;
+              const isComputeMode =
+                comparedExpression !== undefined &&
+                ts.isPropertyAccessExpression(comparedExpression) &&
+                comparedExpression.name.text === 'computeMode';
+              ownsExtension ||= !isComputeMode;
+            }
+            ts.forEachChild(node, visit);
+          };
+          visit(source);
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- recursive AST traversal mutates this flag.
+          if (ownsExtension) {
+            offenders.push(`${entry.name}: '${extension}'`);
+          }
+        }
+      }),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+});

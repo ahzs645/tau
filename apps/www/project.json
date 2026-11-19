@@ -1,0 +1,81 @@
+{
+  "name": "www",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/www/app",
+  "projectType": "application",
+  "tags": ["scope:ui", "type:app", "layer:feature", "deploy:staging", "ci:browser"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/packages/agent-plugin/package.json",
+        {
+          "env": "WWW_ORIGIN"
+        },
+        {
+          "env": "WWW_LAUNCH"
+        },
+        {
+          "env": "WWW_ANALYTICS_ENDPOINT"
+        },
+        {
+          "env": "WWW_INSTALLER_CATALOG"
+        }
+      ],
+      "outputs": ["{projectRoot}/build", "{projectRoot}/.netlify"],
+      "options": {
+        "commands": ["react-router build", "node scripts/prepare-assets.ts"],
+        "cwd": "apps/www",
+        "parallel": false
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/prepare-assets.ts --dev && react-router dev",
+        "cwd": "apps/www"
+      }
+    },
+    "typegen": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "outputs": ["{projectRoot}/.react-router"],
+      "options": {
+        "command": "react-router typegen",
+        "cwd": "apps/www"
+      }
+    },
+    "lint": {
+      "dependsOn": ["typegen"]
+    },
+    "typecheck": {
+      "dependsOn": ["typegen"],
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "command": "tsgo --project apps/www/tsconfig.json --noEmit"
+      },
+      "inputs": ["default", "^production", "{workspaceRoot}/apps/ui/app/components/geometry/loader/metal-morph*.ts"]
+    },
+    "test-download-browser": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "apps/www",
+        "command": "pnpm exec vitest run --config vitest.downloads.config.ts"
+      }
+    },
+    "verify-browser": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build", "test-download-browser"],
+      "options": {
+        "command": "node apps/www/scripts/verify-browser.ts"
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/packages/agent-plugin/package.json"]
+    }
+  },
+  "implicitDependencies": ["!ui"]
+}

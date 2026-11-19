@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
-import { cn } from '#utils/ui.utils.js';
-import { PaneButton } from '#components/ui/pane-button.js';
+import { cn } from '@taucad/ui/utils/cn';
+import { PaneButton } from '@taucad/workbench-panes/components/pane-button';
 
 type DockviewPaneActionProperties = {
   readonly className?: string;
   readonly children: ReactNode;
   readonly onClick?: React.MouseEventHandler<HTMLButtonElement>;
+  readonly onContextMenu?: React.MouseEventHandler<HTMLButtonElement>;
   readonly 'aria-label': string;
   readonly ref?: React.Ref<HTMLButtonElement>;
   readonly tooltip?: ReactNode;

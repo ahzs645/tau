@@ -1,0 +1,226 @@
+/**
+ * Browser-safe surface: the port, its commit codec and identity layer and the
+ * `isomorphic-git` adapter. The lifecycle machines and the effects behind them
+ * have their own subpaths; adapters that spawn an engine live on
+ * `@taucad/revisions/node`, so a page importing this barrel never pulls
+ * `node:child_process` into its bundle.
+ */
+
+export { createIsomorphicGitRevisionPort } from '#isomorphic-git-adapter.js';
+export type { IsomorphicGitCheckoutOptions } from '#isomorphic-git-adapter.js';
+export { createRawObjectReader } from '#object-store/raw-object-reader.js';
+export { createInlineCompute, serveComputeWorker } from '#compute-worker/compute-worker.js';
+export type { ComputePort, ComputeWorker } from '#compute-worker/compute-worker.js';
+export { ComputeWorkerCrashedError } from '#compute-worker/errors.js';
+export type { ComputeMethod } from '#compute-worker/errors.js';
+export { createSupervisedComputeWorker } from '#compute-worker/supervisor.js';
+export type { ComputeCrashReport } from '#compute-worker/supervisor.js';
+export { bootstrapRemoteRevisionStore } from '#remote-bootstrap.js';
+export { coveredByIgnoreListing } from '#git-ignore.js';
+export { revisionBranchName } from '#revision-authority.js';
+export type {
+  BranchHeadUpdateResult,
+  RecordedProvenance,
+  Revision,
+  RevisionActor,
+  RevisionBranchName,
+  RevisionCaptureIdentity,
+  RevisionIdentity,
+  RevisionProvenance,
+  RevisionSummary,
+  RevisionUserActor,
+  RevisionVia,
+} from '#revision-authority.js';
+export { decodeCommit, decodeTag, encodeCommit, encodeTag, GitObjectError } from '#git-objects.js';
+export type { DecodedCommit, GitSignature } from '#git-objects.js';
+export { bytesToHex, concatBytes, digest, digestHex, hexToBytes, objectIdByteLength } from '#object-hash.js';
+export type { ObjectFormat } from '#object-hash.js';
+export {
+  deriveChangeId,
+  parseRevisionCommitMessage,
+  parseRevisionTagMessage,
+  revisionAuthorSignature,
+  revisionCommitAuthorSchema,
+  revisionCommitMessage,
+  revisionCommitterSignature,
+  revisionTagMessage,
+  taggerSignature,
+} from '#revision-headers.js';
+export type { RevisionCommitAuthor, RevisionTrailer } from '#revision-headers.js';
+export { withCommitAuthor } from '#commit-author.js';
+export { RevisionPortError, versionTagName, versionTagRef } from '#revision-port.js';
+export type {
+  AddCheckoutInput,
+  Checkout,
+  CheckoutRecord,
+  ConflictRecord,
+  CreateRevisionTagInput,
+  InitRevisionStoreInput,
+  ListRevisionTagsInput,
+  RevisionConflict,
+  RevisionDiffEntry,
+  RevisionDiffInput,
+  RevisionDivergence,
+  RevisionDivergenceInput,
+  RevisionEngineDescriptor,
+  RevisionGitOperation,
+  RevisionHead,
+  RevisionLogEntry,
+  RevisionLogInput,
+  ReadTreeOptions,
+  RevisionPort,
+  RevisionReceipt,
+  RevisionRecord,
+  RemoteRef,
+  RevisionRemoteAddress,
+  RevisionFetchInput,
+  RevisionFetchResult,
+  RevisionPushInput,
+  RevisionPushRef,
+  RevisionPushRefResult,
+  RevisionPushResult,
+  RevisionPushSession,
+  RevisionRef,
+  RevisionTag,
+  UpdateRevisionRefInput,
+  UpdateRevisionRefResult,
+  WriteRevisionInput,
+} from '#revision-port.js';
+export {
+  chatIdOfRef,
+  chatLogFileName,
+  chatRecordFileName,
+  chatRecordsPath,
+  chatRefName,
+  chatRefPrefix,
+  projectChats,
+  readChatRecord,
+  replayChatSegment,
+  writeChatRef,
+} from '#chat-ref.js';
+export { cleanLargeObjects, lfsObjectPath, lfsPointerFor, readLfsPointer } from '#lfs.js';
+export type { LfsPointer } from '#lfs.js';
+/* `remoteMachine` and `selectRemoteFacet` are deliberately absent: one subpath
+ * per machine (P8), which is why `./remote-machine` exists and why no other
+ * machine is here either. Keeping them would put `xstate` in the graph of every
+ * page that imports a remote *type* from this barrel. */
+export { createLfsClient, LfsQuotaError, withQuotaPaths } from '#lfs-client.js';
+export type { LfsTransport } from '#lfs-client.js';
+export { createRevisionHttpClient, keepaliveLimitBytes } from '#http-client.js';
+export type { RevisionHttpClient, RevisionHttpRequest, RevisionHttpResponse } from '#http-client.js';
+/*
+ * The sync scheduler's public value types (W13).
+ *
+ * The machine itself stays on its own subpath (`@taucad/revisions/sync-machine`)
+ * so `xstate` is not in the graph of every consumer of this barrel; these are
+ * the shapes a *renderer* needs — the Sync row, the header chip and the queue.
+ */
+/* The close flush's last POST (W13): a browser host wraps its client with
+ * `recordLastPush` and offers that recorded POST again on `pagehide`. */
+export { recordLastPush, sendKeepalivePush } from '#sync-keepalive.js';
+export type { KeepalivePushOutcome, PushRecorder } from '#sync-keepalive.js';
+/* The marker itself stays module-private: nothing outside this package should
+   match on the sentence by hand (AC23 would call it an unimported export). */
+export { isCeilingRefusal, isStorageRefusal } from '#refusal-markers.js';
+export {
+  createGitRemoteTransport,
+  gitRemoteUrlProblem,
+  isGithubRemoteUrl,
+  isHostLocalRef,
+  isTauApiUrl,
+  lfsRemoteUnsupportedMessage,
+  publishFailureMessage,
+  publishOverHttp,
+  readRemoteStorageOverHttp,
+  refPatternIsHostLocal,
+  registerProjectFailureMessage,
+  registerProjectOverHttp,
+  remoteCarriesLargeObjects,
+  remoteOf,
+  remoteTrackingRef,
+  remoteTransportError,
+  tauCatalogueUrl,
+  tauRemoteName,
+  tauRemoteUrl,
+} from '#remotes.js';
+export type { GitRemoteCredential, Remote, RemoteKind, RemoteReauthorizationCode } from '#remotes.js';
+/* B4c: the one rule every host registers a GitHub-linked project by. */
+export { registrationOrigin } from '#registration-origin.js';
+/* D13: the client half of a project's `revision` stream, which both hosts bind to their own auth. */
+export { watchRevisionStream } from '#revision-stream.js';
+export type { RevisionStreamHandlers } from '#revision-stream.js';
+export type { TauCloudAuth } from '#remotes.js';
+export {
+  conflictLabels,
+  conflictLineOf,
+  isReservedBranchName,
+  materializeConflict,
+  parseConflictLine,
+  readConflictTerms,
+} from '#revision-conflict.js';
+export type { ConflictPerspective, RevisionConflictTerms } from '#revision-conflict.js';
+export { readRevisionDiff, readRevisionLog, readRevisionPlace } from '#revision-verbs.js';
+export type { RevisionLogRequest, RevisionPlace, RevisionRow, RevisionRowWho } from '#revision-verbs.js';
+export { versionNumberOfTag } from '#version-numbers.js';
+export {
+  parseStartRecord,
+  serializeStartRecord,
+  startReadingOf,
+  startRecordPath,
+  startSummary,
+  startTrigger,
+} from '#start-version.js';
+export type { StartOrigin, StartReading } from '#start-version.js';
+export { readRevisionGraph } from '#revision-graph.js';
+export type { RevisionGraph, RevisionGraphRequest, RevisionGraphRow } from '#revision-graph.js';
+export {
+  generatedGitattributesContent,
+  generatedGitattributesPath,
+  generatedIgnoreContent,
+  generatedIgnorePath,
+  generatedSetupPaths,
+  largeObjectThresholdBytes,
+} from '#workspace-config.js';
+
+/* Plain data types of the lifecycle machines, machine-free so the root stays XState-free (K-17 follow-up). */
+export type {
+  SyncFacet,
+  SyncFailureReason,
+  SyncPushOutcome,
+  SyncQueueEntry,
+  SyncQueueRecord,
+  SyncRefOutcome,
+  VersionRenumbering,
+} from '#sync.types.js';
+export type {
+  RemoteFacet,
+  RemoteMachineEvent,
+  RemoteRefusedReplacement,
+  RemoteStorage,
+  RemoteStorageSupplier,
+  RevisionChildToast,
+} from '#remote.types.js';
+export type {
+  PublishDraft,
+  PublishFacet,
+  PublishPublicationActorInput,
+  PublishPublicationActorOutput,
+  PublishVisibility,
+} from '#publish.types.js';
+export type {
+  LargeObjectsFacet,
+  LargeObjectsReport,
+  ProjectReadiness,
+  RevisionBranchFacet,
+  RevisionConflictFacet,
+  RevisionLine,
+  RevisionStatusProjection,
+} from '#project-revisions.types.js';
+export { reachesReadiness, readinessOf, settleReadiness } from '#open/readiness.js';
+export { PendingError } from '#open/content-reads.js';
+export type { ContentReadOptions, PlaceholderRequest, ReadOutcome } from '#open/content-reads.js';
+export type { ProjectReadinessReading } from '#open/readiness.js';
+export type { BranchOperation } from '#branch.types.js';
+export type { ResolutionSide } from '#resolution.types.js';
+/* W5 RM-S9: the attempt key every turn verb and answer carries (D14); plain data, so the barrel stays free of `xstate`. */
+export type { TurnAttemptKey } from '#turn.types.js';

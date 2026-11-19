@@ -1,0 +1,1041 @@
+import { createActor, createAsyncLogic, createCallbackLogic } from 'xstate';
+import type { CanvasHostCommand } from '#machines/canvas.machine.js';
+import { graphicsMachine } from '#machines/graphics.machine.js';
+import { selectCanvasAwaitingFrame, selectCanvasBackend } from '#machines/canvas.machine.js';
+import type * as ReactThreeFiber from '@react-three/fiber';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
+import type { JSX } from 'react';
+import { StrictMode, Suspense, use, useEffect, useLayoutEffect } from 'react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import {
+  OrthographicCamera,
+  PerspectiveCamera,
+  Raycaster,
+  Vector2,
+  WebGLCoordinateSystem,
+  WebGPUCoordinateSystem,
+} from 'three';
+import type { Camera, CoordinateSystem } from 'three';
+import { mock } from 'vitest-mock-extended';
+
+import { WebglErrorBoundary } from '#cad/webgl-error-boundary.jsx';
+import { WebglErrorFallback } from '#cad/webgl-fallback.jsx';
+import { ThreeCanvasInstance } from '#graphics/three/three-canvas-instance.jsx';
+import { subscribeViewerLoadTiming } from '#lib/viewer-load-timing.js';
+import type { ViewerLoadSpan } from '#lib/viewer-load-timing.js';
+import * as CanvasGl from '#graphics/three/canvas-three-gl.js';
+import {
+  infiniteGridFadeEndVisibleSpans,
+  infiniteGridPresentationPlaneByUpDirection,
+} from '#graphics/three/utils/infinite-grid-frame.js';
+import type * as ViewerEnvironmentModule from '#environment/viewer-environment.jsx';
+import type { ViewportGizmoAdapterEvent, ViewportGizmoAdapterLogic } from '#machines/viewport-gizmo-gesture.machine.js';
+import { hardwareRenderTier } from '#graphics/three/render-tier.js';
+
+/**
+ * Dispatches context-loss handlers registered via the latest stub `<Canvas>`
+ * (`onCreated` runs in a microtask so `ThreeCanvasInstance` has a measurable gap before it attaches the controls).
+ */
+let fireLatestWebGlContextLost: (() => void) | undefined;
+let latestCanvasEventSource: ReactThreeFiber.CanvasProps['eventSource'] | undefined;
+let latestCanvasEventPrefix: ReactThreeFiber.CanvasProps['eventPrefix'] | undefined;
+let latestCanvasCamera: ReactThreeFiber.CanvasProps['camera'] | undefined;
+let latestCanvasGl: ReactThreeFiber.CanvasProps['gl'] | undefined;
+let latestCanvasDpr: ReactThreeFiber.CanvasProps['dpr'] | undefined;
+let exposureAfterCreated: number | undefined;
+let latestCanvasState: StubRootState | undefined;
+/** The camera the stub root rays from; a test replaces it. */
+let stubRootCamera: Camera = new PerspectiveCamera();
+let stubCoordinateSystem: CoordinateSystem = WebGLCoordinateSystem;
+
+type StubPointerEvent = Readonly<Record<'offsetX' | 'offsetY' | 'clientX' | 'clientY', number>>;
+type StubCompute = (event: StubPointerEvent, state: StubRootState, previous?: StubRootState) => void;
+/** The slice of R3F's root state that `onCreated` and pointer compute read. */
+type StubRootState = {
+  gl: Record<string, unknown>;
+  get: () => StubRootState;
+  invalidate: () => void;
+  viewport: Readonly<{ dpr: number }>;
+  internal: {
+    subscribe: (ref: { current: (state: StubFrameState) => void }, priority: number) => () => void;
+  };
+  camera: Camera;
+  pointer: Vector2;
+  raycaster: Raycaster;
+  size: Readonly<{ width: number; height: number }>;
+  events: { compute?: StubCompute };
+  setEvents: (events: { compute?: StubCompute }) => void;
+};
+const rigCamera = new PerspectiveCamera();
+const orthographicCamera = new OrthographicCamera();
+const cameraRig = { activeCamera: rigCamera, perspectiveCamera: rigCamera, orthographicCamera };
+/** Frame callbacks registered inside the stub root, run by a test as R3F's loop would. */
+type StubFrameState = { size: { width: number; height: number } };
+const frameCallbacks = vi.hoisted(
+  (): Array<{ callback: (state: StubFrameState) => void; priority: number | undefined }> => [],
+);
+/** The stub root's size as R3F reports it; a test sets it to zero. */
+const stubSize = vi.hoisted(() => ({ width: 800, height: 600 }));
+/** Frame requests made inside the stub root. */
+const stubInvalidate = vi.hoisted(() => vi.fn());
+/** The graphics actor the canvas attaches to; each test starts a fresh one. */
+const graphicsHolder = vi.hoisted(
+  (): { current: ReturnType<typeof createActor<typeof graphicsMachine>> | undefined } => ({ current: undefined }),
+);
+const enabledFeatures = vi.hoisted(() => new Set<string>());
+/** When set, the mocked renderer factory throws it, as three's `WebGLRenderer` does without a context. */
+const rendererFailure = vi.hoisted((): { error: Error | undefined } => ({ error: undefined }));
+
+vi.mock('#graphics/three/renderer.js', () => ({
+  async createRenderer() {
+    if (rendererFailure.error) {
+      throw rendererFailure.error;
+    }
+    let pixelRatio = 1;
+    return {
+      coordinateSystem: WebGLCoordinateSystem,
+      getPixelRatio: () => pixelRatio,
+      setPixelRatio(value: number) {
+        pixelRatio = value;
+      },
+    };
+  },
+}));
+
+vi.mock('#graphics/three/render-fps-overlay.jsx', () => ({
+  RenderFpsOverlay: () => <output aria-label='Render-loop submission FPS'>FPS · idle</output>,
+}));
+
+vi.mock('#hooks/use-graphics.jsx', () => ({
+  useCameraRig: () => cameraRig,
+  useCameraConnectorRef: () => adapters.connectorRef,
+  useCameraConsumersRef: () => adapters.consumersRef,
+  useGraphics: () => graphicsHolder.current,
+}));
+
+vi.mock('@react-three/fiber', async (importOriginal) => {
+  const actual = await importOriginal<typeof ReactThreeFiber>();
+
+  type StubCanvasProps = {
+    readonly children?: React.ReactNode;
+    readonly camera?: ReactThreeFiber.CanvasProps['camera'];
+    readonly gl?: ReactThreeFiber.CanvasProps['gl'];
+    readonly dpr?: ReactThreeFiber.CanvasProps['dpr'];
+    readonly eventPrefix?: ReactThreeFiber.CanvasProps['eventPrefix'];
+    readonly eventSource?: ReactThreeFiber.CanvasProps['eventSource'];
+    readonly onCreated?: (state: StubRootState) => void;
+  };
+
+  function StubCanvas({
+    camera,
+    children,
+    dpr,
+    eventPrefix,
+    eventSource,
+    gl: glFactory,
+    onCreated,
+  }: StubCanvasProps): JSX.Element {
+    latestCanvasCamera = camera;
+    latestCanvasGl = glFactory;
+    latestCanvasDpr = dpr;
+    latestCanvasEventPrefix = eventPrefix;
+    latestCanvasEventSource = eventSource;
+
+    useEffect(() => {
+      const webglListeners: EventListener[] = [];
+      const domElement = {
+        addEventListener(type: string, listener: EventListener): void {
+          if (type === 'webglcontextlost') {
+            webglListeners.push(listener);
+          }
+        },
+        removeEventListener(type: string, listener: EventListener): void {
+          if (type === 'webglcontextlost' && webglListeners.includes(listener)) {
+            webglListeners.splice(webglListeners.indexOf(listener), 1);
+          }
+        },
+      };
+
+      const gl = {
+        toneMappingExposure: 0.37,
+        coordinateSystem: stubCoordinateSystem,
+        domElement,
+      };
+
+      // As R3F's root: its default compute reads offset coordinates, and an `eventPrefix` Canvas swaps in a compute
+      // reading `${eventPrefix}X` just before `onCreated`. Both ray with three's own `setFromCamera`.
+      const computeFrom =
+        (prefix: 'offset' | 'client'): StubCompute =>
+        (event, state) => {
+          state.pointer.set(
+            (event[`${prefix}X`] / state.size.width) * 2 - 1,
+            -(event[`${prefix}Y`] / state.size.height) * 2 + 1,
+          );
+          state.raycaster.setFromCamera(state.pointer, state.camera);
+        };
+      const state: StubRootState = {
+        gl,
+        get: () => state,
+        invalidate: stubInvalidate,
+        viewport: { dpr: 1 },
+        internal: {
+          // As R3F's loop: the host adapter observes frames through the root's own subscription.
+          subscribe(ref, priority) {
+            const entry = {
+              callback: (frame: StubFrameState): void => {
+                ref.current(frame);
+              },
+              priority,
+            };
+            frameCallbacks.push(entry);
+            return () => {
+              frameCallbacks.splice(frameCallbacks.indexOf(entry), 1);
+            };
+          },
+        },
+        camera: stubRootCamera,
+        pointer: new Vector2(),
+        raycaster: new Raycaster(),
+        size: stubSize,
+        events: { compute: computeFrom('offset') },
+        setEvents(events) {
+          state.events = { ...state.events, ...events };
+        },
+      };
+
+      const microtaskHandle = (): void => {
+        if (eventPrefix === 'client') {
+          state.setEvents({ compute: computeFrom('client') });
+        }
+        onCreated?.(state);
+        latestCanvasState = state;
+        exposureAfterCreated = gl.toneMappingExposure;
+        fireLatestWebGlContextLost = (): void => {
+          for (const listener of webglListeners) {
+            listener({ preventDefault: vi.fn() } as unknown as Event);
+          }
+        };
+      };
+
+      queueMicrotask(microtaskHandle);
+    }, [eventPrefix, onCreated]);
+
+    return <div data-testid='stub-canvas'>{children}</div>;
+  }
+
+  function useStubFrame(callback: (state: StubFrameState) => void, priority?: number): void {
+    useEffect(() => {
+      const entry = { callback, priority };
+      frameCallbacks.push(entry);
+      return () => {
+        frameCallbacks.splice(frameCallbacks.indexOf(entry), 1);
+      };
+    }, [callback, priority]);
+  }
+
+  const useStubThree = <Selected,>(
+    select: (state: { invalidate: typeof stubInvalidate; size: typeof stubSize }) => Selected,
+  ): Selected => select({ invalidate: stubInvalidate, size: { ...stubSize } });
+
+  return { ...actual, Canvas: StubCanvas, useFrame: useStubFrame, useThree: useStubThree };
+});
+
+vi.mock('#environment/viewer-environment.jsx', async (importOriginal) => ({
+  ...(await importOriginal<typeof ViewerEnvironmentModule>()),
+  useViewerFeature: (key: string) => enabledFeatures.has(key),
+}));
+
+vi.mock('#graphics/three/scene.jsx', () => ({
+  Scene: ({ children, enableGizmo }: { readonly children: React.ReactNode; readonly enableGizmo: boolean }) => (
+    <div>
+      {enableGizmo ? <div role='img' aria-label='View cube' /> : null}
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock('#graphics/three/post-processing.jsx', () => ({
+  PostProcessing: () => null,
+}));
+
+vi.mock('#graphics/three/react/model-emphasis-overlay.jsx', () => ({
+  ModelEmphasisOverlay: () => null,
+}));
+
+vi.mock('#graphics/three/scene-overlay.jsx', () => ({
+  OverlayDepthProvider: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
+  SceneOverlay: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock('#graphics/three/three-graphics-backend-context.jsx', () => ({
+  ThreeGraphicsBackendProvider: ({ children }: { readonly children: React.ReactNode }) => (
+    <div data-testid='graphics-backend-provider'>{children}</div>
+  ),
+}));
+
+vi.mock('#graphics/three/react/axes-helper.jsx', () => ({
+  AxesHelper: () => null,
+}));
+
+vi.mock('#graphics/three/grid.jsx', () => ({
+  Grid: () => null,
+}));
+
+vi.mock('#graphics/three/webgpu-inspector-overlay.jsx', () => ({
+  WebGpuInspectorOverlay: () => <div data-testid='gpu-inspector' />,
+}));
+
+/** The controls adapters graphics ran for this file's canvases: a stand-in that records its start and stop. */
+const adapters = vi.hoisted(() => ({
+  started: 0,
+  stopped: 0,
+  isInteractionLocked: undefined as (() => boolean) | undefined,
+  // Stable, as the provider's are: a new ref each render would re-bind the surface every commit.
+  connectorRef: { current: undefined },
+  consumersRef: { current: new Set<never>() },
+}));
+vi.mock('#graphics/three/adapters/controls-adapter.js', async () => {
+  const { createCallbackLogic } = await import('xstate');
+  return {
+    createControlsAdapter: (dependencies: { readonly isInteractionLocked?: () => boolean }) =>
+      createCallbackLogic(() => {
+        adapters.isInteractionLocked = dependencies.isInteractionLocked;
+        adapters.started++;
+        return () => {
+          adapters.stopped++;
+        };
+      }),
+  };
+});
+
+const canvas = () => graphicsHolder.current?.getSnapshot().context.canvas?.ref;
+/** The view camera graphics holds, which the canvas presents on. */
+const camera = () => graphicsHolder.current!.getSnapshot().context.cameraRef.getSnapshot().context;
+const controlsAdapter = () => graphicsHolder.current?.getSnapshot().context.controlsAdapter;
+
+/** A canvas under a Suspense boundary that a test suspends (hiding the canvas) and then reveals. */
+const suspendable = ({ enableGrid = false }: Readonly<{ enableGrid?: boolean }> = {}) => {
+  let release: () => void = () => undefined;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  function Gate({ hold }: { readonly hold: boolean }): undefined {
+    if (hold) {
+      use(pending);
+    }
+    return undefined;
+  }
+  const tree = (hold: boolean) => (
+    <Suspense fallback={null}>
+      <Gate hold={hold} />
+      <ThreeCanvasInstance enableGrid={enableGrid} graphicsBackend='webgl' onRetry={() => undefined}>
+        {null}
+      </ThreeCanvasInstance>
+    </Suspense>
+  );
+  return {
+    tree,
+    release: (): void => {
+      release();
+    },
+    pending,
+  };
+};
+const backend = () => selectCanvasBackend(canvas()?.getSnapshot());
+const createCallbackLogicStub = () => createCallbackLogic<CanvasHostCommand, undefined>(() => undefined);
+
+/** The bridge's DOM can commit before the stub frame hook's passive effect subscribes. */
+const waitForPresentationObserver = async () =>
+  waitFor(() => {
+    const observer = frameCallbacks.find(({ priority }) => priority === 6);
+    expect(observer).toBeDefined();
+    return observer!;
+  });
+
+function KeyedThreeCanvas({ canvasKey }: { readonly canvasKey: string }) {
+  return (
+    <ThreeCanvasInstance key={canvasKey} graphicsBackend='webgl' onRetry={() => undefined}>
+      {null}
+    </ThreeCanvasInstance>
+  );
+}
+
+describe('ThreeCanvasInstance', () => {
+  beforeEach(() => {
+    adapters.started = 0;
+    adapters.stopped = 0;
+    enabledFeatures.clear();
+    graphicsHolder.current = createActor(
+      graphicsMachine.provide({ actors: { probeWebGpu: createAsyncLogic({ run: async () => false }) } }),
+      { input: {} },
+    ).start();
+    fireLatestWebGlContextLost = undefined;
+    latestCanvasEventPrefix = undefined;
+    latestCanvasEventSource = undefined;
+    latestCanvasCamera = undefined;
+    latestCanvasGl = undefined;
+    latestCanvasDpr = undefined;
+    exposureAfterCreated = undefined;
+    latestCanvasState = undefined;
+    stubRootCamera = new PerspectiveCamera();
+    stubCoordinateSystem = WebGLCoordinateSystem;
+    rendererFailure.error = undefined;
+    frameCallbacks.length = 0;
+    stubInvalidate.mockClear();
+    stubSize.width = 800;
+    stubSize.height = 600;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    graphicsHolder.current?.stop();
+  });
+
+  it('should publish the initialized backend, then clear it on context loss', async () => {
+    const view = render(<ThreeCanvasInstance graphicsBackend='webgpu' onRetry={() => undefined} />);
+    // Only the surface is attached before the renderer exists; no backend is published yet.
+    expect(canvas()?.getSnapshot().value).toBe('creating');
+    expect(backend()).toBeUndefined();
+    await waitFor(() => {
+      expect(backend()).toBe('webgl');
+    });
+    act(() => fireLatestWebGlContextLost?.());
+    expect(backend()).toBeUndefined();
+    view.unmount();
+  });
+
+  it('should publish WebGPU only when the initialized renderer uses its coordinate system', async () => {
+    stubCoordinateSystem = WebGPUCoordinateSystem;
+    const view = render(<ThreeCanvasInstance graphicsBackend='webgpu' onRetry={() => undefined} />);
+    await waitFor(() => {
+      expect(backend()).toBe('webgpu');
+    });
+    view.unmount();
+    expect(canvas()).toBeUndefined();
+  });
+
+  it('should keep one canvas actor and one host through StrictMode and stop it on unmount', async () => {
+    const view = render(
+      <StrictMode>
+        <KeyedThreeCanvas canvasKey='status' />
+      </StrictMode>,
+    );
+    await waitFor(() => {
+      expect(backend()).toBe('webgl');
+    });
+    const ref = canvas();
+    expect(Object.keys(ref?.getSnapshot().children ?? {}).filter((id) => id === 'host')).toEqual(['host']);
+    // A replayed `onCreated` reaches the same actor, which keeps its host.
+    act(() => {
+      ref?.send({
+        type: 'hostCreated',
+        backend: 'webgl',
+        tier: hardwareRenderTier('webgl'),
+        surface: { width: 800, height: 600, pixelRatio: 1 },
+        domElement: document.createElement('canvas'),
+        host: createCallbackLogicStub(),
+      });
+    });
+    expect(canvas()).toBe(ref);
+    expect(frameCallbacks.filter(({ priority }) => priority === 6)).toHaveLength(1);
+    // One surface observer reports resizes to the camera, and one camera surface presents them.
+    expect(frameCallbacks.filter(({ priority }) => priority === -2)).toHaveLength(1);
+    expect(Object.keys(ref?.getSnapshot().children ?? {}).filter((id) => id === 'cameraSurface')).toEqual([
+      'cameraSurface',
+    ]);
+    // The replayed mount neither stops nor duplicates the controls adapter, so its one tick per frame.
+    expect([adapters.started, adapters.stopped]).toEqual([1, 0]);
+    view.unmount();
+    expect(canvas()).toBeUndefined();
+    expect(ref?.getSnapshot().status).toBe('stopped');
+    expect([adapters.started, adapters.stopped]).toEqual([1, 1]);
+  });
+
+  it('retains the renderer before scene layout effects can allocate environment targets', () => {
+    const events: string[] = [];
+    const createFactory = CanvasGl.createTauR3fGlProp;
+    vi.spyOn(CanvasGl, 'createTauR3fGlProp').mockImplementation((...parameters) => {
+      const factory = createFactory(...parameters);
+      const { retainScene } = factory;
+      vi.spyOn(factory, 'retainScene').mockImplementation(() => {
+        events.push('retained');
+        return retainScene();
+      });
+      return factory;
+    });
+    function EnvironmentAllocation(): undefined {
+      useLayoutEffect(() => {
+        events.push('environment-layout');
+      }, []);
+      return undefined;
+    }
+    render(
+      <ThreeCanvasInstance graphicsBackend='webgl' onRetry={() => undefined}>
+        <EnvironmentAllocation />
+      </ThreeCanvasInstance>,
+    );
+    expect(events).toContain('retained');
+    expect(events).toContain('environment-layout');
+    expect(events.indexOf('retained')).toBeLessThan(events.indexOf('environment-layout'));
+  });
+
+  describe('drawing-buffer pixel ratio', () => {
+    const renderAt = (devicePixelRatio: number, coarsePointer: boolean): void => {
+      vi.spyOn(globalThis, 'devicePixelRatio', 'get').mockReturnValue(devicePixelRatio);
+      vi.spyOn(globalThis, 'matchMedia').mockImplementation((query: string) =>
+        mock<MediaQueryList>({
+          matches: coarsePointer && query === '(pointer: coarse)',
+          media: query,
+        }),
+      );
+      render(<ThreeCanvasInstance graphicsBackend='webgl' onRetry={() => undefined} />);
+    };
+
+    it('should cap a coarse-pointer phone at 2, as on desktop, so edges stay sharp', () => {
+      renderAt(3, true);
+      expect(latestCanvasDpr).toBe(2);
+    });
+
+    it('should keep the 2x cap on a fine-pointer display', () => {
+      renderAt(3, false);
+      expect(latestCanvasDpr).toBe(2);
+    });
+
+    it('should never raise the pixel ratio above the device ratio', () => {
+      renderAt(1, true);
+      expect(latestCanvasDpr).toBe(1);
+    });
+  });
+
+  it.each(['webgl', 'webgpu'] as const)(
+    'should show %s FPS only while Tau Debug is enabled and retain the view cube',
+    async (graphicsBackend) => {
+      const view = render(
+        <ThreeCanvasInstance enableGizmo graphicsBackend={graphicsBackend} onRetry={() => undefined} />,
+      );
+      await waitFor(() => {
+        expect(screen.getByRole('img', { name: 'View cube' })).toBeInTheDocument();
+      });
+      expect(screen.queryByLabelText('Render-loop submission FPS')).not.toBeInTheDocument();
+
+      enabledFeatures.add('tauDebug');
+      view.rerender(<ThreeCanvasInstance enableGizmo graphicsBackend={graphicsBackend} onRetry={() => undefined} />);
+      expect(screen.getByRole('img', { name: 'View cube' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Render-loop submission FPS')).toBeInTheDocument();
+
+      view.rerender(
+        <ThreeCanvasInstance enableGizmo={false} graphicsBackend={graphicsBackend} onRetry={() => undefined} />,
+      );
+      expect(screen.queryByRole('img', { name: 'View cube' })).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Render-loop submission FPS')).toBeInTheDocument();
+
+      enabledFeatures.delete('tauDebug');
+      view.rerender(<ThreeCanvasInstance enableGizmo graphicsBackend={graphicsBackend} onRetry={() => undefined} />);
+      expect(screen.getByRole('img', { name: 'View cube' })).toBeInTheDocument();
+      expect(screen.queryByLabelText('Render-loop submission FPS')).not.toBeInTheDocument();
+    },
+  );
+
+  it('should show the WebGL fallback instead of an unhandled rejection when the renderer cannot be created', async () => {
+    rendererFailure.error = new Error('Error creating WebGL context.');
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(
+      <WebglErrorBoundary fallback={(errorProps) => <WebglErrorFallback {...errorProps} />}>
+        <ThreeCanvasInstance graphicsBackend='webgl' onRetry={() => undefined}>
+          {null}
+        </ThreeCanvasInstance>
+      </WebglErrorBoundary>,
+    );
+    const glFactory = latestCanvasGl;
+    if (typeof glFactory !== 'function') {
+      throw new TypeError('Expected the R3F renderer factory.');
+    }
+
+    await act(async () => {
+      // Pending while the canvas is mounted: R3F keeps waiting while the owner swaps in its fallback.
+      void glFactory({ canvas: document.createElement('canvas') });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText('3D rendering failed')).toBeInTheDocument();
+    expect(screen.getByText('Error creating WebGL context.')).toBeInTheDocument();
+    expect(screen.queryByTestId('stub-canvas')).not.toBeInTheDocument();
+  });
+
+  it('loads the inspector only on explicit demand while the lightweight debug bridge remains independent', async () => {
+    enabledFeatures.add('tauDebug');
+    const view = render(<ThreeCanvasInstance graphicsBackend='webgpu' onRetry={() => undefined} />);
+    await waitFor(() => {
+      expect(controlsAdapter()).toBeDefined();
+    });
+    expect(screen.queryByTestId('gpu-inspector')).not.toBeInTheDocument();
+    enabledFeatures.add('webGpuInspector');
+    view.rerender(<ThreeCanvasInstance graphicsBackend='webgpu' onRetry={() => undefined} />);
+    expect(screen.getByTestId('gpu-inspector')).toBeInTheDocument();
+  });
+
+  it('attaches a canvas that awaits its frame from its mounting commit until its context is lost', async () => {
+    render(<ThreeCanvasInstance graphicsBackend='webgl' onRetry={() => undefined} />);
+    expect(selectCanvasAwaitingFrame(canvas()?.getSnapshot())).toBe(true);
+    const ref = canvas();
+    await waitFor(() => {
+      expect(fireLatestWebGlContextLost).toBeDefined();
+    });
+    await act(async () => {
+      fireLatestWebGlContextLost?.();
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Graphics context lost')).toBeInTheDocument();
+    });
+    // The fallback draws no frames, so the stage stops waiting; the lost actor stays until Retry or unmount.
+    expect(canvas()).toBe(ref);
+    expect(ref?.getSnapshot().value).toBe('lost');
+    expect(selectCanvasAwaitingFrame(ref?.getSnapshot())).toBe(false);
+  });
+
+  it('detaches the canvas when it unmounts', () => {
+    const view = render(<ThreeCanvasInstance graphicsBackend='webgl' onRetry={() => undefined} />);
+    const ref = canvas();
+    expect(ref).toBeDefined();
+    view.unmount();
+    expect(canvas()).toBeUndefined();
+    expect(ref?.getSnapshot().status).toBe('stopped');
+  });
+
+  it('shows Graphics context lost fallback when WebGL fires context loss', async () => {
+    const onRetry = vi.fn();
+
+    render(
+      <ThreeCanvasInstance enableGrid graphicsBackend='webgl' onRetry={onRetry}>
+        {null}
+      </ThreeCanvasInstance>,
+    );
+
+    await waitFor(() => {
+      expect(fireLatestWebGlContextLost).toBeDefined();
+    });
+
+    await act(async () => {
+      fireLatestWebGlContextLost?.();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Graphics context lost')).toBeInTheDocument();
+    });
+    expect(camera().clipPolicy).toBeUndefined();
+  });
+
+  it('preserves the lighting owner exposure when the canvas finishes mounting', async () => {
+    render(<KeyedThreeCanvas canvasKey='exposure' />);
+    await waitFor(() => {
+      expect(exposureAfterCreated).toBe(0.37);
+    });
+  });
+
+  it('ignores queued context-loss when the keyed instance already unmounted (stale teardown)', async () => {
+    const { rerender } = render(<KeyedThreeCanvas canvasKey='a' />);
+
+    await waitFor(() => {
+      expect(fireLatestWebGlContextLost).toBeDefined();
+    });
+
+    const staleFire = fireLatestWebGlContextLost;
+
+    rerender(<KeyedThreeCanvas canvasKey='b' />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stub-canvas')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      staleFire?.();
+    });
+
+    expect(screen.queryByText('Graphics context lost')).not.toBeInTheDocument();
+    expect(screen.getByTestId('stub-canvas')).toBeInTheDocument();
+  });
+
+  it('attaches one controls adapter per key mount, once that mount runs onCreated', async () => {
+    const { rerender } = render(<KeyedThreeCanvas canvasKey='a' />);
+
+    await waitFor(() => {
+      expect(controlsAdapter()).toBeDefined();
+    });
+    const first = controlsAdapter();
+
+    rerender(<KeyedThreeCanvas canvasKey='b' />);
+
+    expect(controlsAdapter()).toBeUndefined();
+    expect([adapters.started, adapters.stopped]).toEqual([1, 1]);
+
+    await waitFor(() => {
+      expect(controlsAdapter()).toBeDefined();
+    });
+    expect(controlsAdapter()?.canvasId).not.toBe(first?.canvasId);
+    expect([adapters.started, adapters.stopped]).toEqual([2, 1]);
+  });
+
+  it("holds the controls step while the view cube's gesture holds its interaction lock", async () => {
+    render(<KeyedThreeCanvas canvasKey='a' />);
+
+    await waitFor(() => {
+      expect(controlsAdapter()).toBeDefined();
+    });
+    // A scripted view cube: graphics runs its gesture, which tags the lock while a press turns the camera.
+    let report: ((event: ViewportGizmoAdapterEvent) => void) | undefined;
+    const adapter: ViewportGizmoAdapterLogic = createCallbackLogic(({ sendBack }) => {
+      report = sendBack;
+      return undefined;
+    });
+    graphicsHolder.current?.send({ type: 'viewportGizmoAttached', gizmoId: 'cube', adapter });
+    expect(adapters.isInteractionLocked?.()).toBe(false);
+
+    report?.({ type: 'gizmoPressed' });
+    report?.({ type: 'gizmoTurned', cause: 'drag' });
+
+    expect(adapters.isInteractionLocked?.()).toBe(true);
+    report?.({ type: 'gizmoReleased' });
+    expect(adapters.isInteractionLocked?.()).toBe(false);
+  });
+
+  it('attaches the controls adapter only after deferred onCreated completes (stub microtask)', async () => {
+    render(
+      <ThreeCanvasInstance graphicsBackend='webgl' onRetry={() => undefined}>
+        {null}
+      </ThreeCanvasInstance>,
+    );
+
+    expect(controlsAdapter()).toBeUndefined();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(controlsAdapter()).toBeDefined();
+    expect(adapters.started).toBe(1);
+  });
+
+  it('reports the first frame only once it has reached the screen, then observes no further frames', async () => {
+    render(<KeyedThreeCanvas canvasKey='first-frame' />);
+    const observer = await waitForPresentationObserver();
+    expect(observer).toBeDefined();
+    // The canvas may have drawn before the observer subscribed: it asks for exactly one frame to observe.
+    expect(stubInvalidate).toHaveBeenCalledTimes(1);
+    // Submitting the frame is not presenting it: nothing is reported until two animation frames later.
+    act(() => {
+      observer.callback({ size: stubSize });
+    });
+    expect(canvas()?.getSnapshot().value).toBe('ready');
+    await waitFor(() => {
+      expect(canvas()?.getSnapshot().value).toBe('presented');
+    });
+    // The observer stays only to report surface changes; it asked for no frame beyond the first.
+    expect(frameCallbacks.filter(({ priority }) => priority === 6)).toHaveLength(1);
+    expect(stubInvalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('hosts the canvas again on its live root when a Suspense boundary hides and reveals it', async () => {
+    const { tree, release, pending } = suspendable();
+    const spans: ViewerLoadSpan[] = [];
+    const unsubscribe = subscribeViewerLoadTiming((span) => {
+      spans.push(span);
+    });
+    const { rerender } = render(tree(false));
+    const observer = await waitForPresentationObserver();
+    act(() => {
+      observer.callback({ size: stubSize });
+    });
+    await waitFor(() => {
+      expect(canvas()?.getSnapshot().value).toBe('presented');
+    });
+    const first = canvas();
+
+    // Hidden: the surface detaches, its actor stops, and its host stops observing the root.
+    act(() => {
+      rerender(tree(true));
+    });
+    expect(canvas()).toBeUndefined();
+    expect(first?.getSnapshot().status).toBe('stopped');
+    expect(frameCallbacks.some(({ priority }) => priority === 6)).toBe(false);
+
+    // Revealed: R3F keeps its root and does not call `onCreated` again, so the surface hosts the new actor on it.
+    await act(async () => {
+      release();
+      await pending;
+      rerender(tree(false));
+    });
+    const revealed = canvas();
+    expect(revealed).toBeDefined();
+    expect(revealed).not.toBe(first);
+    expect(revealed?.getSnapshot().value).toBe('ready');
+    expect(backend()).toBe('webgl');
+    // The hidden surface's adapter stopped with it; the revealed surface runs a new one on the same root.
+    expect([adapters.started, adapters.stopped]).toEqual([2, 1]);
+    expect(controlsAdapter()).toBeDefined();
+    const replacement = await waitForPresentationObserver();
+    act(() => {
+      replacement.callback({ size: stubSize });
+    });
+    await waitFor(() => {
+      expect(canvas()?.getSnapshot().value).toBe('presented');
+    });
+    // Nothing mounted again: the reveal times no second mount or first frame.
+    expect(spans.map(({ phase, outcome }) => [phase, outcome])).toEqual([
+      ['canvas.mount', 'ok'],
+      ['frame.first', 'ok'],
+    ]);
+    unsubscribe();
+  });
+
+  it('shows the context-lost fallback again when a Suspense boundary reveals a lost canvas', async () => {
+    const { tree, release, pending } = suspendable();
+    const { rerender } = render(tree(false));
+    await waitFor(() => {
+      expect(fireLatestWebGlContextLost).toBeDefined();
+    });
+    await act(async () => {
+      fireLatestWebGlContextLost?.();
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Graphics context lost')).toBeInTheDocument();
+    });
+
+    act(() => {
+      rerender(tree(true));
+    });
+    expect(canvas()).toBeUndefined();
+    await act(async () => {
+      release();
+      await pending;
+      rerender(tree(false));
+    });
+    expect(canvas()?.getSnapshot().value).toBe('lost');
+    expect(selectCanvasAwaitingFrame(canvas()?.getSnapshot())).toBe(false);
+    expect(screen.getByText('Graphics context lost')).toBeVisible();
+  });
+
+  it('waits for the canvas to have area before it observes a frame', async () => {
+    stubSize.width = 0;
+    render(<KeyedThreeCanvas canvasKey='no-area' />);
+    const observer = await waitForPresentationObserver();
+    expect(stubInvalidate).not.toHaveBeenCalled();
+    const frame = vi.spyOn(globalThis, 'requestAnimationFrame');
+    act(() => {
+      observer.callback({ size: stubSize });
+    });
+    expect(frame).not.toHaveBeenCalled();
+    stubSize.width = 800;
+    act(() => {
+      observer.callback({ size: stubSize });
+    });
+    expect(frame).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the pending animation frame when it unmounts between the two frames', async () => {
+    const view = render(<KeyedThreeCanvas canvasKey='unmount-between' />);
+    const observer = await waitForPresentationObserver();
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const cancel = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+    act(() => {
+      observer.callback({ size: stubSize });
+    });
+    // The first animation frame arrives and requests the second; the canvas unmounts before it.
+    expect(callbacks).toHaveLength(1);
+    callbacks[0]!(0);
+    expect(callbacks).toHaveLength(2);
+    view.unmount();
+    expect(cancel).toHaveBeenCalledWith(2);
+    expect(canvas()).toBeUndefined();
+  });
+
+  it('forwards explicit Canvas event routing props to R3F', async () => {
+    const eventSource: React.RefObject<HTMLElement> = { current: document.createElement('div') };
+
+    await act(async () => {
+      render(
+        <ThreeCanvasInstance
+          eventPrefix='client'
+          eventSource={eventSource}
+          graphicsBackend='webgl'
+          onRetry={() => undefined}
+        >
+          {null}
+        </ThreeCanvasInstance>,
+      );
+      await Promise.resolve();
+    });
+
+    expect(latestCanvasEventPrefix).toBe('client');
+    expect(latestCanvasEventSource).toBe(eventSource);
+  });
+
+  it.each([['default', undefined] as const, ['eventPrefix', 'client'] as const])(
+    'should start orthographic pointer rays on the camera plane under WebGPU reversed depth with the %s compute',
+    async (_compute, eventPrefix) => {
+      // At z 6 looking down −z, as the WebGPU renderer (`reversedDepthBuffer: true`) leaves an orthographic camera.
+      const camera = new OrthographicCamera(-1, 1, 1, -1, 0.1, 20);
+      Object.assign(camera, { coordinateSystem: WebGPUCoordinateSystem, _reversedDepth: true });
+      camera.position.set(0, 0, 6);
+      camera.updateMatrixWorld();
+      camera.updateProjectionMatrix();
+      stubRootCamera = camera;
+
+      await act(async () => {
+        render(
+          <ThreeCanvasInstance eventPrefix={eventPrefix} graphicsBackend='webgpu' onRetry={() => undefined}>
+            {null}
+          </ThreeCanvasInstance>,
+        );
+        await Promise.resolve();
+      });
+      const state = latestCanvasState;
+      if (!state) {
+        throw new TypeError('Expected the Canvas to be created.');
+      }
+      state.events.compute?.({ offsetX: 400, offsetY: 300, clientX: 400, clientY: 300 }, state);
+
+      expect(state.raycaster.ray.origin.z).toBeCloseTo(6);
+      expect(state.raycaster.ray.direction.z).toBeCloseTo(-1);
+    },
+  );
+
+  it('uses the provider-owned native camera from the first Canvas render', async () => {
+    await act(async () => {
+      render(
+        <ThreeCanvasInstance graphicsBackend='webgl' onRetry={() => undefined}>
+          {null}
+        </ThreeCanvasInstance>,
+      );
+      await Promise.resolve();
+    });
+
+    expect(latestCanvasCamera).toBe(rigCamera);
+  });
+
+  it('should restore both retained camera depth conventions when AO is disabled', async () => {
+    for (const camera of [rigCamera, orthographicCamera]) {
+      Object.assign(camera, { coordinateSystem: WebGPUCoordinateSystem, _reversedDepth: true });
+      camera.updateProjectionMatrix();
+    }
+    await act(async () => {
+      render(
+        <ThreeCanvasInstance
+          graphicsBackend='webgl'
+          postProcessingSettings={{ aoEnabled: false }}
+          onRetry={() => undefined}
+        >
+          {null}
+        </ThreeCanvasInstance>,
+      );
+    });
+    if (typeof latestCanvasGl !== 'function') {
+      throw new TypeError('Expected the R3F renderer factory.');
+    }
+    await latestCanvasGl({ canvas: document.createElement('canvas') });
+
+    for (const camera of [rigCamera, orthographicCamera]) {
+      expect(camera.coordinateSystem).toBe(WebGLCoordinateSystem);
+      expect(camera.reversedDepth).toBe(false);
+    }
+  });
+
+  it('presents the grid clip policy on the camera while the grid is in the scene', () => {
+    const grid = (upDirection: 'x' | 'y' | 'z') => ({
+      farPaddingVerticalSpans: infiniteGridFadeEndVisibleSpans,
+      presentationPlane: infiniteGridPresentationPlaneByUpDirection[upDirection],
+    });
+    const { rerender, unmount } = render(
+      <ThreeCanvasInstance enableGrid graphicsBackend='webgl' onRetry={() => undefined}>
+        {null}
+      </ThreeCanvasInstance>,
+    );
+    expect(camera().clipPolicy).toEqual(grid('z'));
+
+    rerender(
+      <ThreeCanvasInstance className='unchanged-policy' enableGrid graphicsBackend='webgl' onRetry={() => undefined}>
+        {null}
+      </ThreeCanvasInstance>,
+    );
+    expect(camera().clipPolicy).toEqual(grid('z'));
+    // The grid lies across graphics' world up, as `Grid` draws it: the policy turns with the camera's up, in the
+    // macrostep graphics takes the new axis, before React renders again.
+    graphicsHolder.current?.send({ type: 'setUpDirection', payload: 'x' });
+    expect(camera().clipPolicy).toEqual(grid('x'));
+
+    // The grid the canvas draws decides the policy, whatever graphics' own grid setting says.
+    rerender(
+      <ThreeCanvasInstance enableGrid={false} graphicsBackend='webgl' onRetry={() => undefined}>
+        {null}
+      </ThreeCanvasInstance>,
+    );
+    expect(graphicsHolder.current?.getSnapshot().context.enableGrid).toBe(true);
+    expect(camera().clipPolicy).toBeUndefined();
+    rerender(
+      <ThreeCanvasInstance enableGrid graphicsBackend='webgl' onRetry={() => undefined}>
+        {null}
+      </ThreeCanvasInstance>,
+    );
+    expect(camera().clipPolicy).toEqual(grid('x'));
+
+    unmount();
+    expect(camera().clipPolicy).toBeUndefined();
+  });
+
+  it('hands a canvas that attaches after a new world up the axis graphics holds', () => {
+    graphicsHolder.current?.send({ type: 'setUpDirection', payload: 'y' });
+    const { unmount } = render(
+      <ThreeCanvasInstance enableGrid graphicsBackend='webgl' onRetry={() => undefined}>
+        {null}
+      </ThreeCanvasInstance>,
+    );
+
+    expect(camera().clipPolicy).toEqual({
+      farPaddingVerticalSpans: infiniteGridFadeEndVisibleSpans,
+      presentationPlane: infiniteGridPresentationPlaneByUpDirection.y,
+    });
+    unmount();
+  });
+
+  it('re-reports the drawn grid to a new canvas actor while the scene stays mounted', async () => {
+    // As after a Suspense reveal in real R3F: the surface's canvas actor is replaced, but the scene (its own root) and
+    // the grid marker in it never unmount, so only the marker's new callback identity can tell the new actor.
+    const view = render(
+      <ThreeCanvasInstance enableGrid graphicsBackend='webgl' onRetry={() => undefined}>
+        {null}
+      </ThreeCanvasInstance>,
+    );
+    await waitFor(() => {
+      expect(backend()).toBe('webgl');
+    });
+    const { canvasId } = graphicsHolder.current!.getSnapshot().context.canvas!;
+    const marker = screen.getByTestId('graphics-backend-provider').querySelector('group');
+    act(() => {
+      graphicsHolder.current?.send({ type: 'canvasDetached', canvasId });
+    });
+    expect(camera().clipPolicy).toBeUndefined();
+    act(() => {
+      graphicsHolder.current?.send({ type: 'canvasAttached', canvasId, kind: 'canvas', reattached: true });
+    });
+    // The same marker element: nothing in the scene re-mounted.
+    expect(screen.getByTestId('graphics-backend-provider').querySelector('group')).toBe(marker);
+    expect(camera().clipPolicy).toEqual({
+      farPaddingVerticalSpans: infiniteGridFadeEndVisibleSpans,
+      presentationPlane: infiniteGridPresentationPlaneByUpDirection.z,
+    });
+    view.unmount();
+  });
+
+  it('presents the surface size on the camera from the renderer it creates', async () => {
+    const view = render(<KeyedThreeCanvas canvasKey='viewport' />);
+    await waitFor(() => {
+      expect(backend()).toBe('webgl');
+    });
+    expect(camera().view.viewport).toEqual({ width: 800, height: 600, pixelRatio: 1 });
+    view.unmount();
+  });
+});

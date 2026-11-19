@@ -1,0 +1,144 @@
+import { archiveTooLargeCode } from '@taucad/filesystem/content-ops';
+import { formatBytes } from '@taucad/ui-core/lib/format-bytes';
+import type { FileProvenance, FileProvenanceSource } from '@taucad/types';
+
+export type FileTreeDownloadPolicy =
+  | { readonly allowed: true }
+  | {
+      readonly allowed: false;
+      readonly code: 'not-project-content';
+      readonly message: string;
+    };
+
+export type FileTreeDownloadErrorCode =
+  | 'path-not-found'
+  | 'permission-read-only'
+  | 'zip-generation-failed'
+  | 'browser-download-failed'
+  | 'user-cancelled';
+
+export class FileTreeDownloadError extends Error {
+  public readonly code: FileTreeDownloadErrorCode;
+  public readonly path: string;
+
+  public constructor(options: {
+    readonly code: FileTreeDownloadErrorCode;
+    readonly path: string;
+    readonly message: string;
+    readonly cause?: unknown;
+  }) {
+    super(options.message, { cause: options.cause });
+    this.name = 'FileTreeDownloadError';
+    this.code = options.code;
+    this.path = options.path;
+  }
+}
+
+/** How the refusal names the source it refused; the row's own badge copy is the label catalog's. */
+const sourceName: Record<Exclude<FileProvenanceSource, 'project'>, string> = {
+  dependencies: 'Dependency',
+  'system-skills': 'System skill',
+};
+
+/**
+ * Whether a row may be downloaded.
+ *
+ * Anything a view composes above the checkout — a dependency mount's build
+ * output, a bundled skill — is Tau's own bytes rather than the user's, so the
+ * user's access is `source === 'project'` (ruling P10) and never the spelling.
+ * Records rows the project owns stay downloadable.
+ *
+ * @param provenance - What the composed view (or the dependency mount) says about the row.
+ * @returns Allowed, or the refusal with its user-facing message.
+ */
+export function getFileTreeDownloadPolicy(provenance: FileProvenance | undefined): FileTreeDownloadPolicy {
+  if (provenance !== undefined && provenance.source !== 'project') {
+    return {
+      allowed: false,
+      code: 'not-project-content',
+      message: `${sourceName[provenance.source]} files are read-only and cannot be downloaded.`,
+    };
+  }
+
+  return { allowed: true };
+}
+
+export function createFileTreeDownloadError(options: {
+  readonly code: FileTreeDownloadErrorCode;
+  readonly path: string;
+  readonly cause?: unknown;
+}): FileTreeDownloadError {
+  return new FileTreeDownloadError({
+    code: options.code,
+    path: options.path,
+    cause: options.cause,
+    message: getDownloadErrorMessage(options.code, options.path, options.cause),
+  });
+}
+
+/**
+ * The archive's own refusal, at whichever depth it arrives.
+ *
+ * It crosses the bridge wire as a bare `Error` carrying `code`, and a file-tree
+ * download wraps that as the `cause` of a `zip-generation-failed`; both spell
+ * the ceiling as a raw byte count, which is not a message for a person. The
+ * archive streams and has no ceiling of its own: this answers the download's,
+ * which the caller passes as it asked for it.
+ */
+const isArchiveTooLarge = (error: unknown): boolean =>
+  error instanceof Error &&
+  ((error as { code?: unknown }).code === archiveTooLargeCode || isArchiveTooLarge(error.cause));
+
+/**
+ * The refusal a person reads, naming the ceiling the archive was refused at.
+ *
+ * @param maxBytes - The ceiling the download asked for, when the caller knows it.
+ */
+export const archiveTooLargeMessage = (maxBytes?: number): string =>
+  maxBytes === undefined
+    ? 'This folder is larger than a ZIP download can hold in this browser. Download a smaller folder instead.'
+    : `This folder is larger than the ${formatBytes(maxBytes)} a ZIP download can hold in this browser. Download a smaller folder instead.`;
+
+/**
+ * The message a download's toast shows for a failure.
+ *
+ * @param error   - The failure, at whatever depth the archive's refusal arrives.
+ * @param ceiling - The `{ maxBytes }` the download asked for (`zipDownloadCeiling()`).
+ */
+export function getFileTreeDownloadErrorMessage(error: unknown, ceiling?: Readonly<{ maxBytes?: number }>): string {
+  if (isArchiveTooLarge(error)) {
+    return archiveTooLargeMessage(ceiling?.maxBytes);
+  }
+  if (error instanceof FileTreeDownloadError) {
+    return error.message;
+  }
+
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getDownloadErrorMessage(code: FileTreeDownloadErrorCode, path: string, cause: unknown): string {
+  switch (code) {
+    case 'path-not-found': {
+      return `'${path}' was not found.`;
+    }
+    case 'permission-read-only': {
+      return 'Read-only dependency paths cannot be downloaded.';
+    }
+    case 'zip-generation-failed': {
+      return `Failed to create ZIP for '${path}': ${formatCause(cause)}`;
+    }
+    case 'browser-download-failed': {
+      return `Download failed for '${path}': ${formatCause(cause)}`;
+    }
+    case 'user-cancelled': {
+      return `Download cancelled for '${path}'.`;
+    }
+  }
+}
+
+function formatCause(cause: unknown): string {
+  if (cause instanceof Error) {
+    return cause.message;
+  }
+  return String(cause);
+}

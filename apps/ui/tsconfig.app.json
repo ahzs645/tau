@@ -5,16 +5,28 @@
     "app/**/*.tsx",
     "app/**/*.js",
     "app/**/*.jsx",
+    "desktop/**/*.ts",
+    "desktop/**/*.tsx",
     "server.ts",
-    "scripts/**/*.mts",
+    "netlify/edge-functions/*.ts",
+    "geospec-mt-assets.vite-plugin.ts",
+    "openscad-language-assets.vite-plugin.ts",
+    "asset-integrity.vite-plugin.ts",
+    "server-output-assets.vite-plugin.ts",
+    "geospec-mt-assets-cache-key.ts",
+    "csharp-language-assets.vite-plugin.ts",
+    "csharp-language-assets-cache-key.ts",
+    "vite.calibration.config.ts",
     "react-router.config.ts",
     "vite-environment.d.ts",
     "types/**/*.d.ts",
     ".react-router/types/**/*",
-    ".source/**/*", // Fumadocs collections
-    "package.json"
+    "package.json",
+    "picogk-browser-assets.vite-plugin.ts",
+    "picogk-browser-assets-cache-key.ts"
   ],
   "compilerOptions": {
+    "rewriteRelativeImportExtensions": true,
     "outDir": "./out-tsc/lib",
     "rootDirs": [".", "./.react-router/types"],
     "lib": ["DOM", "DOM.Iterable", "ES2024"],
@@ -22,12 +34,8 @@
     "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "target": "ES2024",
-    "paths": {
-      "package.json": ["./package.json"],
-      "#*": ["./app/*"],
-      "fumadocs-mdx:collections/*": ["./.source/*"]
-    }
+    "resolveJsonModule": true,
+    "target": "ES2024"
   },
   "exclude": [
     "tests/**/*.spec.ts",
@@ -39,6 +47,7 @@
     "tests/**/*.spec.jsx",
     "tests/**/*.test.jsx",
     "app/**/*.test.ts",
+    "netlify/**/*.test.ts",
     "app/**/*.spec.ts",
     "app/**/*.test.tsx",
     "app/**/*.spec.tsx",

@@ -1,12 +1,38 @@
+import { WorkerChangeChannel } from '@taucad/fs-client/worker-change-channel';
+import type { RootedContentClient } from '@taucad/fs-client/rooted-content-client';
+import type { WatchRequest, WatchEvent, ProjectRootConfiguration } from '@taucad/filesystem';
+import { RootedFileSystemError } from '@taucad/filesystem';
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
+import type * as HandleStore from '@taucad/files-ui/filesystem/handle-store';
 import type { ReactNode } from 'react';
-import { renderHook, act } from '@testing-library/react';
-import { createActor } from 'xstate';
+import { renderToString } from 'react-dom/server';
+import { StrictMode, Suspense, use, useEffect, useState } from 'react';
+import {
+  renderHook as renderHookBare,
+  render as renderBare,
+  screen,
+  act,
+  fireEvent,
+  waitFor,
+  configure,
+  getConfig,
+  cleanup,
+  within,
+} from '@testing-library/react';
+import { hydrateRoot } from 'react-dom/client';
+import type { RenderHookOptions, RenderOptions } from '@testing-library/react';
+import { StepClock } from '@taucad/xstate-testing/clock';
+import { createActor, createMachine } from 'xstate';
+import type { FileManagerRef } from '#machines/file-manager.machine.types.js';
 import { mock } from 'vitest-mock-extended';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type * as WorkspaceTelemetryModule from '#utils/workspace-telemetry.utils.js';
-import type { WorkspaceTelemetry } from '#utils/workspace-telemetry.utils.js';
+import type * as RuntimeFileSystemModule from '@taucad/runtime/filesystem';
+import type { WorkspaceTelemetry } from '@taucad/files-ui/utils/workspace-telemetry.utils';
+import type { WorkspaceEntry } from '@taucad/files-ui/filesystem/handle-store';
+import type { AppRuntimeFiles } from '#runtime/app-runtime.js';
 
 const workerTestState = vi.hoisted(() => {
   // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- recursive type cannot be expressed inline
@@ -20,8 +46,8 @@ const workerTestState = vi.hoisted(() => {
   return { instances };
 });
 
-vi.mock('#machines/file-manager.worker.js?worker', () => ({
-  default: class MockWorker {
+vi.mock('#machines/file-manager-worker.js', () => {
+  class MockWorker {
     public terminate = vi.fn();
     public postMessage = vi.fn();
     public addEventListener = vi.fn((type: string, handler: (event: Event) => void) => {
@@ -42,16 +68,45 @@ vi.mock('#machines/file-manager.worker.js?worker', () => ({
       }
       return true;
     }
-  },
-}));
+  }
+  return { createFileManagerWorker: () => new MockWorker() };
+});
 
 const mockMount = vi.fn<(prefix: string, config: unknown) => Promise<void>>();
 const mockUnmount = vi.fn<(prefix: string) => void>();
+const mockConfigureProjectRoots = vi.fn<(configuration: ProjectRootConfiguration) => Promise<void>>();
 const mockInvalidateStandaloneProvider = vi.fn<(backend: string, workspaceId?: string) => void>();
-const mockProxyMkdir = vi.fn<(path: string, options?: { recursive?: boolean }) => Promise<void>>(async () => {});
-const mockProxyRmdir = vi.fn<(path: string, options?: { recursive?: boolean }) => Promise<void>>(async () => {});
-const mockProxyWriteFile = vi.fn<(path: string, data: unknown, options?: unknown) => Promise<void>>(async () => {});
+const mockProxyMkdir = vi.fn<(path: string, options?: { recursive?: boolean }) => Promise<void>>(async () => undefined);
+const mockProxyRmdir = vi.fn<(path: string, options?: { recursive?: boolean }) => Promise<void>>(async () => undefined);
+const mockProxyWriteFile = vi.fn<(path: string, data: unknown, options?: unknown) => Promise<void>>(
+  async () => undefined,
+);
+const mockProxyCanDelete = vi.fn<(path: string) => Promise<unknown>>(async () => true);
+const mockProxyMove = vi.fn<(source: string, target: string) => Promise<unknown>>(async () => ({
+  type: 'file',
+  size: 0,
+  mtimeMs: 0,
+}));
+const mockProxyContents =
+  vi.fn<(path: string, filter?: { versionedOnly?: boolean }) => Promise<Record<string, Uint8Array<ArrayBuffer>>>>();
+const mockProxyExists = vi.fn<(path: string) => Promise<boolean>>();
+const mockProxyReadFile = vi.fn<(path: string) => Promise<Uint8Array<ArrayBuffer>>>();
+const mockReadMachineSettings = vi.fn(
+  async (_bridge: { worker?: unknown }, _typeId: string): Promise<{ status: 'absent' }> => ({
+    status: 'absent',
+  }),
+);
+const mockProxyDispose = vi.fn();
+const bridgeProxyDisposals = new Map<unknown, () => void>();
+const disposedBridges = new Map<unknown, boolean>();
+const bridgeEventListeners = new Map<unknown, Set<(data: unknown) => void>>();
+let readFileForBridge: ((bridge: { worker?: unknown }, path: string) => Promise<Uint8Array<ArrayBuffer>>) | undefined;
+let readyForBridge: (() => Promise<void>) | undefined;
 const mockWaitForWorkerReady = vi.fn<() => Promise<void>>();
+const mockVerifyProjectRoute = vi.fn(
+  async (_input: { projectId: string }) => ({ status: 'discovery-required' }) as const,
+);
+const mockListProjectManifests = vi.fn<() => Promise<{ roots: readonly unknown[]; entries: readonly unknown[] }>>();
 const mockCreateFileSystemBridge = vi.fn(() => ({
   port: {
     postMessage: vi.fn(),
@@ -60,23 +115,128 @@ const mockCreateFileSystemBridge = vi.fn(() => ({
   },
   dispose: vi.fn(),
 }));
+const mockOpenFileSystemBridge = vi.fn((_worker: unknown, _options: unknown) => ({
+  port: new MessageChannel().port1,
+  dispose: vi.fn(),
+  worker: _worker,
+}));
 
-vi.mock('@taucad/runtime/transport-internals', () => ({
+/* Observe the connection the opaque runtime filesystem opens, without changing
+ * it: the thunk is only called when a runtime binds, so the pin calls it. */
+const runtimeBridgeOpens = vi.hoisted(() => [] as Array<() => unknown>);
+
+vi.mock('@taucad/runtime/filesystem', async (importOriginal) => {
+  const original = await importOriginal<typeof RuntimeFileSystemModule>();
+  return {
+    ...original,
+    fromFileSystemBridge: (open: Parameters<(typeof RuntimeFileSystemModule)['fromFileSystemBridge']>[0]) => {
+      runtimeBridgeOpens.push(open);
+      return original.fromFileSystemBridge(open);
+    },
+  };
+});
+
+vi.mock('@taucad/fs-bridge', () => ({
   createFileSystemBridge: () => mockCreateFileSystemBridge(),
+  openFileSystemBridge: (worker: unknown, options: unknown) => mockOpenFileSystemBridge(worker, options),
   waitForWorkerReady: async () => mockWaitForWorkerReady(),
-  createBridgeProxy: vi.fn(() => ({
-    mount: mockMount,
-    unmount: mockUnmount,
-    invalidateStandaloneProvider: mockInvalidateStandaloneProvider,
-    getDirectoryStat: vi.fn(async () => []),
-    readShallowDirectory: vi.fn(async () => []),
-    readDirectory: vi.fn(async () => []),
-    mkdir: mockProxyMkdir,
-    rmdir: mockProxyRmdir,
-    writeFile: mockProxyWriteFile,
-    dispose: vi.fn(),
-    listen: vi.fn(() => vi.fn()),
-  })),
+  createFileSystemBridgeProxy: vi.fn((bridge: { worker?: unknown }) => {
+    const ready = readyForBridge?.() ?? Promise.resolve();
+    return {
+      /* A live worker never settles it; `ready` fails over when it does (G2c-2). A case kills one with `proxyDeaths`. */
+      closed: new Promise<void>((resolve) => {
+        proxyDeaths.push(resolve);
+      }),
+      ready,
+      hello: { payload: { state: 'ready' } },
+      configureProjectRoots: mockConfigureProjectRoots,
+      mount: mockMount,
+      unmount: mockUnmount,
+      disposeStorageRoot: mockInvalidateStandaloneProvider,
+      getDirectoryStat: vi.fn(async () => []),
+      /* The authority's wire spells its three scoped reads for the scope they
+       * require; a routed read has a root that owns it (W11). */
+      readScopedShallowDirectory: vi.fn(async () => []),
+      readScopedFile: vi.fn(async () => new Uint8Array()),
+      getScopedZippedDirectory: vi.fn(async () => new Blob()),
+      readDirectory: vi.fn(async () => []),
+      readdirWithStats: vi.fn(async () => []),
+      canDelete: mockProxyCanDelete,
+      move: mockProxyMove,
+      contents: mockProxyContents,
+      exists: async (path: string): Promise<boolean> => {
+        if (disposedBridges.get(bridge)) {
+          throw new Error('Bridge port was closed.');
+        }
+        const exists = await mockProxyExists(path);
+        if (disposedBridges.get(bridge)) {
+          throw new Error('Bridge port was closed.');
+        }
+        return exists;
+      },
+      readFile: async (path: string): Promise<Uint8Array<ArrayBuffer>> => {
+        await ready;
+        if (disposedBridges.get(bridge)) {
+          throw new Error('Bridge port was closed.');
+        }
+        const bytes = readFileForBridge ? await readFileForBridge(bridge, path) : await mockProxyReadFile(path);
+        if (disposedBridges.get(bridge)) {
+          throw new Error('Bridge port was closed.');
+        }
+        return bytes;
+      },
+      readMachineSettings: async (typeId: string) => mockReadMachineSettings(bridge, typeId),
+      /* The rooted half of the same proxy: the file services read the project
+       through its composed view, and a mutation asks it who owns the path. */
+      provenance: vi.fn(async (path: string) =>
+        path.startsWith('.agents/skills/')
+          ? { source: 'system-skills', versioned: false, agentAccess: 'read-only', identity: 'skill:demo@1.0.0#f' }
+          : { source: 'project', versioned: true, agentAccess: 'read-write' },
+      ),
+      listProjectManifests: mockListProjectManifests,
+      verifyProjectRoute: mockVerifyProjectRoute,
+      mkdir: mockProxyMkdir,
+      rmdir: mockProxyRmdir,
+      writeFile: mockProxyWriteFile,
+      dispose: (() => {
+        const dispose = vi.fn((): void => {
+          disposedBridges.set(bridge, true);
+          mockProxyDispose();
+        });
+        bridgeProxyDisposals.set(bridge, dispose);
+        return dispose;
+      })(),
+      watchReady: (request: WatchRequest, handler: (event: WatchEvent) => void) => {
+        const channel = new WorkerChangeChannel({
+          transport: {
+            listen: (_event, listener) => {
+              const listeners = bridgeEventListeners.get(bridge) ?? new Set<(data: unknown) => void>();
+              listeners.add(listener);
+              bridgeEventListeners.set(bridge, listeners);
+              return () => listeners.delete(listener);
+            },
+          },
+        });
+        const watch = channel.watchReady(request, handler);
+        return {
+          ready: watch.ready,
+          closed: watch.closed,
+          unsubscribe: () => {
+            watch.dispose();
+            channel.dispose();
+          },
+        };
+      },
+      listen: vi.fn((_event: string, handler: (data: unknown) => void) => {
+        const listeners = bridgeEventListeners.get(bridge) ?? new Set<(data: unknown) => void>();
+        listeners.add(handler);
+        bridgeEventListeners.set(bridge, listeners);
+        return () => {
+          listeners.delete(handler);
+        };
+      }),
+    };
+  }),
 }));
 
 const mockGetProjectFileSystemConfig =
@@ -90,16 +250,46 @@ const mockGetProjectFileSystemConfig =
 
 const mockSetProjectFileSystemConfig =
   vi.fn<(config: { projectId: string; backend: 'webaccess'; workspaceId: string }) => Promise<void>>();
+const mockGetProjectRootConfigs = vi.fn<() => Promise<ProjectRootConfiguration>>();
+const mockGetHomeStorageBackend = vi.fn<() => Promise<'indexeddb' | 'opfs'>>();
+const handleStoreTestState = vi.hoisted(() => ({
+  updateWorkspaceHandle: vi.fn(async () => undefined),
+  disconnectWorkspace: vi.fn<(workspaceId: string) => Promise<WorkspaceEntry | undefined>>(async () => undefined),
+  restoreWorkspaceHandle: vi.fn(async () => false),
+  /* WP9: the input a start went on without, and Home's engine mirror; neither is set outside the database rows. */
+  degraded: undefined as { input: 'records' | 'grants'; errorName: string } | undefined,
+  mirror: undefined as 'indexeddb' | 'opfs' | 'node' | undefined,
+  resetHomeRecords: vi.fn(async () => undefined),
+}));
 
-vi.mock('#filesystem/handle-store.js', () => ({
-  getDefaultWorkspace: vi.fn(async () => undefined),
+vi.mock('@taucad/files-ui/filesystem/handle-store', () => ({
+  getHomeStorageBackend: async () => mockGetHomeStorageBackend(),
+  getProjectRootConfigs: async () => mockGetProjectRootConfigs(),
+  readProjectRootConfigs: async () => ({
+    configuration: await mockGetProjectRootConfigs(),
+    degraded: handleStoreTestState.degraded,
+  }),
+  readHomeBackendMirror: () => handleStoreTestState.mirror,
+  resetHomeRecords: handleStoreTestState.resetHomeRecords,
   getWorkspace: vi.fn(async () => undefined),
+  getWorkspaceMetadata: vi.fn(async () => undefined),
   getProjectFileSystemConfig: async () => mockGetProjectFileSystemConfig(),
   checkHandlePermission: vi.fn(async () => 'granted'),
   createWorkspace: vi.fn(),
   setProjectFileSystemConfig: async (config: { projectId: string; backend: 'webaccess'; workspaceId: string }) =>
     mockSetProjectFileSystemConfig(config),
   requestHandlePermission: vi.fn(async () => true),
+  updateWorkspaceHandle: handleStoreTestState.updateWorkspaceHandle,
+  disconnectWorkspace: handleStoreTestState.disconnectWorkspace,
+  restoreWorkspaceHandle: handleStoreTestState.restoreWorkspaceHandle,
+}));
+
+/* W6 RV1-F1: the agent host re-broker the root provider fires when its worker is replaced. */
+const mockReprovideAgentHostProjects = vi.hoisted(() => vi.fn(async () => undefined));
+/* One `closed` settler per proxy the file manager opened, newest last: settling it is that worker's death. */
+const proxyDeaths = vi.hoisted(() => [] as Array<() => void>);
+vi.mock('#services/agent-host-client.js', () => ({
+  reprovideAgentHostProjects: mockReprovideAgentHostProjects,
 }));
 
 // Stub the workspace-telemetry hook so the provider doesn't pull in
@@ -115,15 +305,85 @@ vi.mock('#utils/workspace-telemetry.utils.js', async (importOriginal) => {
   };
 });
 
-const { waitForFileManagerServices, FileManagerProvider, useFileManager } = await import('#hooks/use-file-manager.js');
+const {
+  waitForFileManagerServices,
+  FileManagerProvider,
+  HomeFileManagerProvider,
+  SessionFileManagerProvider,
+  HomeFileManagerNotice,
+  RootFileManagerProvider,
+  useFileManager,
+  useHomeStorageBackend,
+  SharedWorkerGate,
+} = await import('#hooks/use-file-manager.js');
+const { createAppRuntime, selectRuntimeFileManagerHost, selectRuntimeFiles, selectRuntimeRootFiles } =
+  await import('#runtime/app-runtime.js');
+const { AppRuntimeProvider } = await import('#runtime/app-runtime-provider.js');
+const { leaseGraceMilliseconds } = await import('#runtime/leases.machine.js');
+const { openSessionFileManager, trackSessionFileManager } = await import('#runtime/session-file-manager.js');
+
+/*
+ * A1b: every file manager is the app runtime's, so each case renders under one. The runtime's `rootFiles` reads
+ * Home's engine only in the cases that ask for it (`readsHome`); elsewhere the read never settles, so `rootFiles`
+ * never connects a worker of its own and a case's leased provider is the only file manager running. Time is the
+ * runtime's `StepClock`: a lease's grace passes only when a case advances it.
+ */
+let testClock = new StepClock();
+/* The host's own read of Home's engine; `rootFiles`'s worker connection reads it again through the handle store. */
+const hostHomeRead = vi.fn(async () => mockGetHomeStorageBackend());
+let readsHome = false;
+let testRuntime = createAppRuntime({ clock: testClock });
+const newTestRuntime = (): ReturnType<typeof createAppRuntime> =>
+  createAppRuntime({
+    clock: testClock,
+    loadHomeBackend: async () => (readsHome ? hostHomeRead() : Promise.withResolvers<never>().promise),
+  });
+
+const newTestRuntimeWith = (options: Parameters<typeof createAppRuntime>[0]): ReturnType<typeof createAppRuntime> =>
+  createAppRuntime({
+    clock: testClock,
+    loadHomeBackend: async () => (readsHome ? hostHomeRead() : Promise.withResolvers<never>().promise),
+    ...options,
+  });
+
+beforeEach(() => {
+  testClock = new StepClock();
+  readsHome = false;
+  testRuntime = newTestRuntime();
+});
+
+afterEach(() => {
+  cleanup();
+  testRuntime.stop();
+});
+
+function TestRuntime({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  return <AppRuntimeProvider runtime={testRuntime}>{children}</AppRuntimeProvider>;
+}
+
+const withRuntime =
+  (Inner?: React.JSXElementConstructor<{ children: React.ReactNode }>) =>
+  ({ children }: { readonly children: ReactNode }): React.JSX.Element => (
+    <TestRuntime>{Inner === undefined ? children : <Inner>{children}</Inner>}</TestRuntime>
+  );
+
+const render = (ui: React.ReactNode, options: RenderOptions = {}) =>
+  renderBare(ui, { ...options, wrapper: withRuntime(options.wrapper) });
+
+const renderHook = <Result, Props>(callback: (props: Props) => Result, options: RenderHookOptions<Props> = {}) =>
+  renderHookBare(callback, { ...options, wrapper: withRuntime(options.wrapper) });
 
 describe('waitForFileManagerServices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readFileForBridge = undefined;
     workerTestState.instances.length = 0;
     mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
     mockWaitForWorkerReady.mockResolvedValue(undefined);
     mockSetProjectFileSystemConfig.mockResolvedValue(undefined);
+    mockGetHomeStorageBackend.mockResolvedValue('opfs');
+    mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+    mockConfigureProjectRoots.mockResolvedValue(undefined);
   });
 
   it('should resolve immediately when both services are already bound', async () => {
@@ -218,6 +478,681 @@ describe('waitForFileManagerServices', () => {
   });
 });
 
+describe('HomeFileManagerProvider', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWaitForWorkerReady.mockResolvedValue(undefined);
+    mockGetHomeStorageBackend.mockResolvedValue('opfs');
+    readsHome = true;
+  });
+
+  const probed: Array<ReturnType<typeof useFileManager>['fileManagerRef']> = [];
+  function LeaseProbe(): React.JSX.Element {
+    probed.push(useFileManager().fileManagerRef);
+    return <span hidden />;
+  }
+
+  /* A revealed Suspense boundary that re-suspends hides the subtree but keeps it mounted: its file manager lives on
+   * however long the boundary stays hidden, as `useActorRef`'s did. */
+  it('keeps a lease while a re-suspended boundary hides it for longer than the grace', async () => {
+    const never = Promise.withResolvers<undefined>().promise;
+    const control = { suspend: (_value: boolean): void => undefined };
+    function MaySuspend(): React.JSX.Element {
+      const [suspended, setSuspended] = useState(false);
+      control.suspend = setSuspended;
+      if (suspended) {
+        use(never);
+      }
+      return <LeaseProbe />;
+    }
+    const view = render(
+      <Suspense fallback={<i>Loading</i>}>
+        <HomeFileManagerProvider rootDirectory='/projects/hidden'>
+          <MaySuspend />
+        </HomeFileManagerProvider>
+      </Suspense>,
+    );
+    const shown = probed.at(-1)!;
+    expect(shown.getSnapshot().status).toBe('active');
+    await act(async () => {
+      control.suspend(true);
+    });
+    expect(screen.getByText('Loading')).toBeInTheDocument();
+    act(() => {
+      testClock.advance(leaseGraceMilliseconds * 2);
+    });
+    expect(shown.getSnapshot().status).toBe('active');
+    await act(async () => {
+      control.suspend(false);
+    });
+    expect(probed.at(-1)).toBe(shown);
+    view.unmount();
+  });
+
+  /* A render that commits after its unretained lease's grace (a transition held by a slow lazy chunk) finds the entry
+   * dropped: the mount renders again and leases a fresh file manager instead of keeping the stopped one (MC-R24). The
+   * late commit is staged by ending the grace inside the lease's render, which no real scheduler can be made to do. */
+  it('leases a fresh file manager when its render commits after the grace', async () => {
+    const view = render(<span>before</span>);
+    const files = selectRuntimeFiles(testRuntime) as { leaseFileManager: AppRuntimeFiles['leaseFileManager'] };
+    const lease = files.leaseFileManager;
+    const leased: Array<ReturnType<AppRuntimeFiles['leaseFileManager']>> = [];
+    files.leaseFileManager = (key, spec) => {
+      const entry = lease(key, spec);
+      if (leased.length === 0) {
+        testClock.advance(leaseGraceMilliseconds);
+      }
+      leased.push(entry);
+      return entry;
+    };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      view.rerender(
+        <HomeFileManagerProvider rootDirectory='/projects/late'>
+          <LeaseProbe />
+        </HomeFileManagerProvider>,
+      );
+    } finally {
+      files.leaseFileManager = lease;
+    }
+    const late = leased[0]!;
+    expect(late.isDropped()).toBe(true);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('was retained after it was dropped'));
+    error.mockRestore();
+
+    const committed = probed.at(-1)!;
+    expect(committed).not.toBe(late.actor);
+    await waitFor(() => {
+      expect(committed.getSnapshot().value).toBe('ready');
+    });
+    view.unmount();
+  });
+
+  /* A server render and the first client render agree: the runtime is created and not started, `rootFiles` and a
+   * leased file manager both exist with their initial snapshots, and nothing reads storage or starts a worker. */
+  it('renders useful HTML without selecting storage or starting a worker', () => {
+    const before = workerTestState.instances.length;
+    const serverRuntime = newTestRuntime();
+    const page = (
+      <RootFileManagerProvider>
+        <HomeFileManagerProvider rootDirectory='/projects/p1' projectId='p1'>
+          <input aria-label='Project name' />
+        </HomeFileManagerProvider>
+      </RootFileManagerProvider>
+    );
+    const html = renderToString(<AppRuntimeProvider runtime={serverRuntime}>{page}</AppRuntimeProvider>);
+    expect(html).toContain('aria-label="Project name"');
+    expect(mockGetHomeStorageBackend).not.toHaveBeenCalled();
+    expect(serverRuntime.getSnapshot().status).toBe('active');
+    expect(selectRuntimeRootFiles(serverRuntime).getSnapshot().value).toBe('initializing');
+    expect(workerTestState.instances).toHaveLength(before);
+
+    serverRuntime.stop();
+  });
+
+  /* The client hydrates that HTML in StrictMode: its first render reads the same unstarted snapshots, then the commit
+   * retains the lease and the runtime starts, with no mismatch and nothing created or started twice. */
+  it('hydrates the server HTML with no mismatch, and starts each file manager once', async () => {
+    const page = (
+      <StrictMode>
+        <AppRuntimeProvider runtime={testRuntime}>
+          <RootFileManagerProvider>
+            <HomeFileManagerProvider rootDirectory='/projects/p1' projectId='p1'>
+              <LeaseProbe />
+              <input aria-label='Project name' />
+            </HomeFileManagerProvider>
+          </RootFileManagerProvider>
+        </AppRuntimeProvider>
+      </StrictMode>
+    );
+    const serverRuntime = newTestRuntime();
+    const container = document.createElement('div');
+    container.innerHTML = renderToString(
+      <AppRuntimeProvider runtime={serverRuntime}>
+        <RootFileManagerProvider>
+          <HomeFileManagerProvider rootDirectory='/projects/p1' projectId='p1'>
+            <LeaseProbe />
+            <input aria-label='Project name' />
+          </HomeFileManagerProvider>
+        </RootFileManagerProvider>
+      </AppRuntimeProvider>,
+    );
+    serverRuntime.stop();
+    document.body.append(container);
+    const served = within(container).getByRole('textbox', { name: 'Project name' });
+    probed.length = 0;
+    const workersBefore = workerTestState.instances.length;
+    const onRecoverableError = vi.fn();
+    const consoleError = vi.spyOn(console, 'error');
+    let root: ReturnType<typeof hydrateRoot> | undefined;
+    try {
+      await act(async () => {
+        root = hydrateRoot(container, page, { onRecoverableError });
+      });
+      expect(onRecoverableError).not.toHaveBeenCalled();
+      expect(consoleError.mock.calls.flat().join(' ')).not.toMatch(/hydrat/i);
+      expect(within(container).getByRole('textbox', { name: 'Project name' })).toBe(served);
+      /* One leased actor across StrictMode's double render and remount, started once by the commit. */
+      expect(new Set(probed).size).toBe(1);
+      expect(testRuntime.getSnapshot().status).toBe('active');
+      await waitFor(() => {
+        expect(probed[0]!.getSnapshot().value).toBe('ready');
+      });
+      /* No gate here, so the lease was built before `rootFiles` had a worker: each started one, and none twice. */
+      expect(workerTestState.instances.length - workersBefore).toBe(2);
+    } finally {
+      act(() => {
+        root?.unmount();
+      });
+      container.remove();
+      consoleError.mockRestore();
+    }
+  });
+
+  it('preserves the page and actor identity when the pending backend resolves', async () => {
+    const selection = Promise.withResolvers<'opfs'>();
+    mockGetHomeStorageBackend.mockReturnValueOnce(selection.promise);
+    const seen: unknown[] = [];
+    function Page(): React.JSX.Element {
+      const { fileManagerRef } = useFileManager();
+      seen.push(fileManagerRef);
+      return <input aria-label='Draft' defaultValue='Keep this draft' />;
+    }
+    render(
+      <RootFileManagerProvider>
+        <Page />
+      </RootFileManagerProvider>,
+    );
+    const original = screen.getByRole('textbox', { name: 'Draft' });
+    await act(async () => {
+      selection.resolve('opfs');
+      await selection.promise;
+    });
+    expect(screen.getByRole('textbox', { name: 'Draft' })).toBe(original);
+    expect(original).toHaveValue('Keep this draft');
+    expect(new Set(seen).size).toBe(1);
+    expect(seen[0]).toBe(selectRuntimeRootFiles(testRuntime));
+  });
+
+  /* Row S17: an actor built while the backend was pending is sent `resolveInitialBackend` once, by the host. */
+  it('sends a file manager built while Home resolves its backend once, when the host resolves it', async () => {
+    const selection = Promise.withResolvers<'opfs'>();
+    mockGetHomeStorageBackend.mockReturnValueOnce(selection.promise);
+    const resolutions: unknown[] = [];
+    const leased: Array<ReturnType<typeof useFileManager>['fileManagerRef']> = [];
+    function Probe(): React.JSX.Element {
+      const { fileManagerRef } = useFileManager();
+      leased.push(fileManagerRef);
+      return <input aria-label='Draft' />;
+    }
+    const inspected = newTestRuntimeWith({
+      inspect: (inspection) => {
+        if (inspection.type === '@xstate.transition' && inspection.event.type === 'resolveInitialBackend') {
+          resolutions.push(inspection.event);
+        }
+      },
+    });
+    testRuntime.stop();
+    testRuntime = inspected;
+    render(
+      <HomeFileManagerProvider rootDirectory='/projects/p1' projectId='p1'>
+        <Probe />
+      </HomeFileManagerProvider>,
+    );
+    const actor = leased.at(-1)!;
+    expect(actor.getSnapshot().context.backendType).toBeUndefined();
+    await act(async () => {
+      selection.resolve('opfs');
+      await selection.promise;
+    });
+    await waitFor(() => {
+      expect(actor.getSnapshot().value).toBe('ready');
+    });
+    /* One for `rootFiles`, one for the leased actor, and none later. */
+    expect(resolutions).toEqual([
+      { type: 'resolveInitialBackend', backend: 'opfs' },
+      { type: 'resolveInitialBackend', backend: 'opfs' },
+    ]);
+    expect(new Set(leased).size).toBe(1);
+  });
+
+  /* A mount that changes its root leases a fresh file manager built for that root, where it used to send `setRoot`;
+   * the old lease is released after the grace (B3). */
+  it('leases a file manager built for the latest root and releases the old one after the grace', async () => {
+    const actors: Array<ReturnType<typeof useFileManager>['fileManagerRef']> = [];
+    function Probe(): React.JSX.Element {
+      const { fileManagerRef } = useFileManager();
+      actors.push(fileManagerRef);
+      return <input aria-label='Draft' />;
+    }
+    const tree = (rootDirectory: string): React.JSX.Element => (
+      <HomeFileManagerProvider rootDirectory={rootDirectory}>
+        <Probe />
+      </HomeFileManagerProvider>
+    );
+    const view = render(tree('/old'));
+    const old = actors.at(-1)!;
+    view.rerender(tree('/latest'));
+    const latest = actors.at(-1)!;
+    expect(latest).not.toBe(old);
+    expect(latest.getSnapshot().context.rootDirectory).toBe('/latest');
+    await waitFor(() => {
+      expect(latest.getSnapshot().value).toBe('ready');
+    });
+    expect(old.getSnapshot().status).toBe('active');
+    act(() => {
+      testClock.advance(leaseGraceMilliseconds);
+    });
+    expect(old.getSnapshot().status).toBe('stopped');
+    expect(latest.getSnapshot().status).toBe('active');
+    view.unmount();
+  });
+
+  it('does not start a worker after a pending Home provider unmounts and its grace passes', async () => {
+    const selection = Promise.withResolvers<'opfs'>();
+    mockGetHomeStorageBackend.mockReturnValueOnce(selection.promise);
+    const before = workerTestState.instances.length;
+    const view = render(
+      <HomeFileManagerProvider rootDirectory='/projects/p1' projectId='p1'>
+        <input aria-label='Draft' />
+      </HomeFileManagerProvider>,
+    );
+    view.unmount();
+    act(() => {
+      testClock.advance(leaseGraceMilliseconds);
+    });
+    /* Only `rootFiles` connects once Home resolves: the released lease was stopped before it had an engine. */
+    await act(async () => {
+      selection.resolve('opfs');
+      await selection.promise;
+    });
+    await waitFor(() => {
+      expect(selectRuntimeRootFiles(testRuntime).getSnapshot().value).toBe('ready');
+    });
+    expect(workerTestState.instances).toHaveLength(before + 1);
+  });
+
+  /* Row S37: the backend failing, the notice offering a retry, and resolving after `retry`. */
+  it('keeps a draft available and retries a failed Home selection without choosing another engine', async () => {
+    mockGetHomeStorageBackend.mockRejectedValueOnce(new Error('Pin could not be read')).mockResolvedValue('opfs');
+    render(
+      <RootFileManagerProvider>
+        <main>
+          <HomeFileManagerNotice />
+          <input aria-label='Draft' defaultValue='Keep this draft' />
+        </main>
+        <SharedWorkerGate shouldReportFailure={false}>
+          <span>files ready</span>
+        </SharedWorkerGate>
+      </RootFileManagerProvider>,
+    );
+    const original = screen.getByRole('textbox', { name: 'Draft' });
+    expect(await screen.findByRole('alert', { name: "Couldn't open Home" })).toBeInTheDocument();
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(selectRuntimeFileManagerHost(testRuntime).getSnapshot().value).toBe('failed');
+    expect(selectRuntimeRootFiles(testRuntime).getSnapshot().context.backendType).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+    expect(await screen.findByText('files ready')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Draft' })).toBe(original);
+    expect(original).toHaveValue('Keep this draft');
+    expect(hostHomeRead).toHaveBeenCalledTimes(2);
+    expect(selectRuntimeRootFiles(testRuntime).getSnapshot().context.backendType).toBe('opfs');
+  });
+
+  it('resolves Home once and shares the selected engine with nested mounts', async () => {
+    const wrapper = ({ children }: { readonly children: ReactNode }): React.JSX.Element => (
+      <RootFileManagerProvider>
+        <HomeFileManagerProvider rootDirectory='/nested' shouldInitializeOnStart={false}>
+          {children}
+        </HomeFileManagerProvider>
+      </RootFileManagerProvider>
+    );
+    const { result } = renderHook(() => ({ backend: useHomeStorageBackend(), manager: useFileManager() }), {
+      wrapper,
+    });
+
+    await vi.waitFor(() => {
+      expect(result.current.backend).toBe('opfs');
+    });
+    expect(hostHomeRead).toHaveBeenCalledOnce();
+    expect(result.current.manager.fileManagerRef.getSnapshot().context.backendType).toBe('opfs');
+  });
+
+  /* A StrictMode render creates and starts nothing twice: one lease, one actor, started once, kept across the
+   * simulated remount, and released only after the grace once the mount is gone. */
+  it('keeps one lease across a StrictMode remount and releases it after the grace', async () => {
+    const actors = new Set<unknown>();
+    function Probe(): React.JSX.Element {
+      actors.add(useFileManager().fileManagerRef);
+      return <span>leased</span>;
+    }
+    const before = workerTestState.instances.length;
+    const view = render(
+      <StrictMode>
+        <RootFileManagerProvider>
+          <HomeFileManagerProvider rootDirectory='/projects/p1' projectId='p1'>
+            <Probe />
+          </HomeFileManagerProvider>
+        </RootFileManagerProvider>
+      </StrictMode>,
+    );
+    expect(actors.size).toBe(1);
+    const [actor] = [...actors] as Array<ReturnType<typeof useFileManager>['fileManagerRef']>;
+    await waitFor(() => {
+      expect(actor!.getSnapshot().value).toBe('ready');
+    });
+    /* `rootFiles` and the leased file manager: one worker each, since the lease was built before the root's. */
+    expect(workerTestState.instances).toHaveLength(before + 2);
+    act(() => {
+      testClock.advance(leaseGraceMilliseconds);
+    });
+    expect(actor!.getSnapshot().status).toBe('active');
+    view.unmount();
+    expect(actor!.getSnapshot().status).toBe('active');
+    act(() => {
+      testClock.advance(leaseGraceMilliseconds);
+    });
+    expect(actor!.getSnapshot().status).toBe('stopped');
+  });
+});
+
+/** The desktop shell's recovery members, on a desktop build: the panel reads them only there. */
+const stubDesktopShell = (shell: Record<string, unknown>): void => {
+  vi.stubEnv('TAU_TARGET', 'desktop');
+  vi.stubGlobal('tau', shell);
+};
+
+describe('SharedWorkerGate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workerTestState.instances.length = 0;
+    mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
+    mockSetProjectFileSystemConfig.mockResolvedValue(undefined);
+    mockGetHomeStorageBackend.mockResolvedValue('opfs');
+    mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+    readsHome = true;
+  });
+
+  /* R7: a machine that gave up used to leave the gate's whole subtree blank. */
+  it('explains a failed worker connection instead of rendering nothing', async () => {
+    mockWaitForWorkerReady.mockRejectedValue(new Error('worker never became ready'));
+
+    render(
+      <RootFileManagerProvider>
+        <SharedWorkerGate>
+          <div>subtree</div>
+        </SharedWorkerGate>
+      </RootFileManagerProvider>,
+    );
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('heading', { name: "Couldn't start the file service" })).toBeInTheDocument();
+    });
+    expect(screen.queryByText('subtree')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+
+  /* D24 (A11): no gate sits above the shell any more, so the notice fills the region its gate stands in. */
+  it('fills the gate\u2019s own region with the notice', async () => {
+    mockWaitForWorkerReady.mockRejectedValue(new Error('worker never became ready'));
+
+    render(
+      <RootFileManagerProvider>
+        <SharedWorkerGate>
+          <div>subtree</div>
+        </SharedWorkerGate>
+      </RootFileManagerProvider>,
+    );
+
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveClass('size-full');
+    expect(notice).not.toHaveClass('h-dvh');
+  });
+
+  /* Connecting is progress, and a route that knows what it is opening says so instead of a blank. */
+  it('shows the caller\u2019s placeholder while the worker connects', async () => {
+    /* `Once`, so the pending promise does not leak into the suites below (`clearAllMocks` keeps implementations). */
+    mockWaitForWorkerReady.mockReturnValueOnce(Promise.withResolvers<undefined>().promise);
+
+    render(
+      <RootFileManagerProvider>
+        <SharedWorkerGate placeholder={<div>opening</div>}>
+          <div>subtree</div>
+        </SharedWorkerGate>
+      </RootFileManagerProvider>,
+    );
+
+    expect(await screen.findByText('opening')).toBeInTheDocument();
+    expect(screen.queryByText('subtree')).not.toBeInTheDocument();
+  });
+
+  /*
+   * T-B5.3 (B5, B7, R5): a deterministic failure gets a panel whose actions change the input. The desktop actions are
+   * the shell's optional `tau.troubleshooting` and `tau.updates` members, shown only when the shell provides them.
+   */
+  describe('classified start failure', () => {
+    const troubleshooting = {
+      showLogs: vi.fn(async () => undefined),
+      open: vi.fn(async () => undefined),
+      restartInSafeMode: vi.fn(async () => undefined),
+    };
+    const updates = { check: vi.fn(async () => undefined) };
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    });
+
+    const renderFailure = async (error: Error) => {
+      mockWaitForWorkerReady.mockRejectedValue(error);
+      render(
+        <RootFileManagerProvider>
+          <SharedWorkerGate>
+            <div>subtree</div>
+          </SharedWorkerGate>
+        </RootFileManagerProvider>,
+      );
+      /* The one automatic retry of a first, transient failure, once the failure is in. */
+      await screen.findByRole('alert');
+      testClock.advance(1000);
+      /* The panel is rendered again after the retry: read it afresh each time. */
+      return () => screen.getByRole('alert');
+    };
+    const named = (name: string, message: string): Error => Object.assign(new Error(message), { name });
+
+    it('offers Update Tau, Show logs and Troubleshooting for a database a newer Tau opened', async () => {
+      stubDesktopShell({ troubleshooting, updates });
+      const panel = await renderFailure(named('VersionError', 'The requested version is less than the existing one'));
+
+      await vi.waitFor(() => {
+        expect(within(panel()).getByRole('button', { name: 'Update Tau' })).toBeInTheDocument();
+      });
+      expect(within(panel()).getByRole('button', { name: 'Show logs' })).toBeInTheDocument();
+      expect(within(panel()).getByRole('button', { name: 'Troubleshooting' })).toBeInTheDocument();
+      expect(within(panel()).queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+      fireEvent.click(within(panel()).getByRole('button', { name: 'Update Tau' }));
+      expect(updates.check).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks to close the other Tau window when the database is blocked', async () => {
+      stubDesktopShell({ troubleshooting, updates });
+      const panel = await renderFailure(named('StorageUpgradeBlockedError', 'Opening the database is blocked'));
+
+      await vi.waitFor(() => {
+        expect(within(panel()).getByText(/close the other Tau window/iu)).toBeInTheDocument();
+      });
+      expect(within(panel()).getByRole('button', { name: 'Show logs' })).toBeInTheDocument();
+    });
+
+    it('offers Restart in Safe Mode, Check for Updates and Show logs when the services utility will not start', async () => {
+      stubDesktopShell({ troubleshooting, updates });
+      const panel = await renderFailure(
+        Object.assign(new Error('The services utility did not start'), { code: 'SERVICES_UNAVAILABLE' }),
+      );
+
+      await vi.waitFor(() => {
+        expect(within(panel()).getByRole('button', { name: 'Restart in Safe Mode' })).toBeInTheDocument();
+      });
+      expect(within(panel()).getByRole('button', { name: 'Check for Updates' })).toBeInTheDocument();
+      expect(within(panel()).getByRole('button', { name: 'Show logs' })).toBeInTheDocument();
+      fireEvent.click(within(panel()).getByRole('button', { name: 'Restart in Safe Mode' }));
+      expect(troubleshooting.restartInSafeMode).toHaveBeenCalledTimes(1);
+    });
+
+    it('hides a desktop action the shell does not provide', async () => {
+      stubDesktopShell({ updates });
+      const panel = await renderFailure(named('VersionError', 'The requested version is less than the existing one'));
+
+      await vi.waitFor(() => {
+        expect(within(panel()).getByRole('button', { name: 'Update Tau' })).toBeInTheDocument();
+      });
+      expect(within(panel()).queryByRole('button', { name: 'Show logs' })).not.toBeInTheDocument();
+      expect(within(panel()).queryByRole('button', { name: 'Troubleshooting' })).not.toBeInTheDocument();
+    });
+
+    it('opens safe mode as a page load on the web and offers no logs', async () => {
+      const panel = await renderFailure(
+        Object.assign(new Error('The services utility did not start'), { code: 'SERVICES_UNAVAILABLE' }),
+      );
+
+      await vi.waitFor(() => {
+        expect(within(panel()).getByRole('link', { name: 'Restart in Safe Mode' })).toHaveAttribute('href', '/?safe=1');
+      });
+      expect(within(panel()).queryByRole('button', { name: 'Show logs' })).not.toBeInTheDocument();
+    });
+  });
+
+  /* A pending storage selection must not hide the page or admit a worker. */
+  it('renders the page while Home\u2019s storage engine resolves', async () => {
+    mockGetHomeStorageBackend.mockReturnValueOnce(Promise.withResolvers<'indexeddb' | 'opfs'>().promise);
+
+    render(
+      <RootFileManagerProvider>
+        <div>subtree</div>
+      </RootFileManagerProvider>,
+    );
+
+    expect(screen.getByText('subtree')).toBeInTheDocument();
+    expect(workerTestState.instances).toHaveLength(0);
+  });
+});
+
+/*
+ * T-B5.5, T-B5.7 (B5, R7; the component half): a start that went on with Home alone because its records could not be
+ * read says so beside Home and offers the action for the cause. On the desktop the reset is the shell's quarantine of
+ * the local database; on the web it is offered only when Home's engine mirror exists, so Home opens on the same engine.
+ */
+describe('database panel', () => {
+  const troubleshooting = {
+    showLogs: vi.fn(async () => undefined),
+    open: vi.fn(async () => undefined),
+    restartInSafeMode: vi.fn(async () => undefined),
+    resetLocalDatabase: vi.fn(async () => undefined),
+  };
+  const updates = { check: vi.fn(async () => undefined) };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workerTestState.instances.length = 0;
+    mockGetHomeStorageBackend.mockResolvedValue('opfs');
+    mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+    mockWaitForWorkerReady.mockResolvedValue(undefined);
+    readsHome = true;
+  });
+
+  afterEach(() => {
+    handleStoreTestState.degraded = undefined;
+    handleStoreTestState.mirror = undefined;
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const renderHome = async (): Promise<HTMLElement> => {
+    render(
+      <RootFileManagerProvider>
+        <HomeFileManagerNotice />
+        <SharedWorkerGate>
+          <span>files ready</span>
+        </SharedWorkerGate>
+      </RootFileManagerProvider>,
+    );
+    expect(await screen.findByText('files ready')).toBeInTheDocument();
+    return screen.findByRole('alert', { name: "Tau's local database is unavailable" });
+  };
+
+  it('should keep Home open and offer Reset local database on the desktop', async () => {
+    stubDesktopShell({ troubleshooting, updates });
+    handleStoreTestState.degraded = { input: 'records', errorName: 'UnknownError' };
+
+    const panel = await renderHome();
+
+    expect(within(panel).getByText(/Home is open/u)).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Show logs' })).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Reset local database' }));
+    expect(troubleshooting.resetLocalDatabase).toHaveBeenCalledTimes(1);
+  });
+
+  it('should offer Update Tau beside the reset for a database a newer Tau opened', async () => {
+    stubDesktopShell({ troubleshooting, updates });
+    handleStoreTestState.degraded = { input: 'records', errorName: 'VersionError' };
+
+    const panel = await renderHome();
+
+    expect(within(panel).getByRole('button', { name: 'Update Tau' })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Reset local database' })).toBeInTheDocument();
+  });
+
+  it('should ask to close the other Tau window when the database is blocked, and offer Try again', async () => {
+    stubDesktopShell({ troubleshooting, updates });
+    handleStoreTestState.degraded = { input: 'records', errorName: 'StorageUpgradeBlockedError' };
+
+    const panel = await renderHome();
+
+    expect(within(panel).getByText(/close the other Tau window/iu)).toBeInTheDocument();
+    /* Try again reloads the page, which opens the database afresh once the other window is gone. */
+    expect(within(panel).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: 'Reset local database' })).not.toBeInTheDocument();
+  });
+
+  it('should offer no reset on the web without Home\u2019s engine mirror', async () => {
+    handleStoreTestState.degraded = { input: 'records', errorName: 'UnknownError' };
+
+    const panel = await renderHome();
+
+    expect(within(panel).queryByRole('button', { name: /^Reset/u })).not.toBeInTheDocument();
+  });
+
+  it('should offer Reset folder list on the web when Home\u2019s engine mirror exists', async () => {
+    handleStoreTestState.degraded = { input: 'records', errorName: 'UnknownError' };
+    handleStoreTestState.mirror = 'opfs';
+
+    const panel = await renderHome();
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Reset folder list' }));
+    await waitFor(() => {
+      expect(handleStoreTestState.resetHomeRecords).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('should show no database panel when the grant list, not the database, could not be read', async () => {
+    stubDesktopShell({ troubleshooting, updates });
+    handleStoreTestState.degraded = { input: 'grants', errorName: 'Error' };
+    render(
+      <RootFileManagerProvider>
+        <HomeFileManagerNotice />
+        <SharedWorkerGate>
+          <span>files ready</span>
+        </SharedWorkerGate>
+      </RootFileManagerProvider>,
+    );
+
+    expect(await screen.findByText('files ready')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset local database' })).not.toBeInTheDocument();
+  });
+});
+
 describe('FileManagerProvider — bindProjectToWorkspace', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -225,7 +1160,27 @@ describe('FileManagerProvider — bindProjectToWorkspace', () => {
     mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
     mockWaitForWorkerReady.mockResolvedValue(undefined);
     mockSetProjectFileSystemConfig.mockResolvedValue(undefined);
+    mockListProjectManifests.mockResolvedValue({ roots: [], entries: [] });
   });
+
+  const setDiscoveredProject = (projectId: string, workspaceId: string): void => {
+    mockListProjectManifests.mockResolvedValue({
+      roots: [],
+      entries: [
+        {
+          status: 'valid',
+          projectId,
+          manifest: { name: projectId },
+          locator: {
+            backend: 'webaccess',
+            workspaceId,
+            storageRootKey: `webaccess:${workspaceId}`,
+            relativeDirectory: `/${projectId}`,
+          },
+        },
+      ],
+    });
+  };
 
   const renderProvider = (projectId: string | undefined) => {
     // Audit R4 / R15: `FileManagerProvider` requires an explicit
@@ -245,8 +1200,54 @@ describe('FileManagerProvider — bindProjectToWorkspace', () => {
     return renderHook(() => useFileManager(), { wrapper });
   };
 
+  /* Finding 7: a provider's first worker replaced no host's bridges, so mounting one (the share page's among them)
+   * never re-brokers the agent host. */
+  it('should not re-broker agent project hosts when a provider mounts its first worker', async () => {
+    const { result } = renderProvider('proj-first');
+
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+
+    expect(mockReprovideAgentHostProjects).not.toHaveBeenCalled();
+  });
+
+  /* RV1-F1 (W6.r1 round 3): a restart replaces the root mount's worker, so each open agent project host is re-brokered
+   * onto the new one, once. */
+  it('should re-broker agent project hosts when the file manager restarts its worker', async () => {
+    /* The root mount is the runtime's `rootFiles` (A1b), on Home's engine. */
+    readsHome = true;
+    mockGetHomeStorageBackend.mockResolvedValue('opfs');
+    const { result } = renderHook(() => useFileManager(), { wrapper: RootFileManagerProvider });
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+    const firstContentService = result.current.contentService;
+    const workers = workerTestState.instances.length;
+    mockReprovideAgentHostProjects.mockClear();
+
+    /* The root mount's worker dies, so every proxy over it closes; the file manager restarts it once, unasked (RV1-F1). */
+    act(() => {
+      for (const die of proxyDeaths.splice(0)) {
+        die();
+      }
+    });
+
+    await vi.waitFor(() => {
+      expect(workerTestState.instances.length).toBe(workers + 1);
+      expect(result.current.contentService).toBeDefined();
+      expect(result.current.contentService).not.toBe(firstContentService);
+      expect(mockReprovideAgentHostProjects).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('should persist ProjectFileSystemConfig before dispatching reloadWorkspace', async () => {
     const { result } = renderProvider('proj-bind');
+    setDiscoveredProject('proj-bind', 'wsp_target');
+
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
 
     await act(async () => {
       await result.current.bindProjectToWorkspace('wsp_target');
@@ -256,6 +1257,7 @@ describe('FileManagerProvider — bindProjectToWorkspace', () => {
       projectId: 'proj-bind',
       backend: 'webaccess',
       workspaceId: 'wsp_target',
+      providerBasePath: '/proj-bind',
     });
     // The IDB write completes before the event reaches the actor — call
     // order is the binding-transaction contract.
@@ -271,6 +1273,7 @@ describe('FileManagerProvider — bindProjectToWorkspace', () => {
     }));
 
     const { result } = renderProvider('proj-reload');
+    setDiscoveredProject('proj-reload', 'wsp_next');
 
     await vi.waitFor(() => {
       expect(mockGetProjectFileSystemConfig).toHaveBeenCalled();
@@ -303,6 +1306,7 @@ describe('FileManagerProvider — bindProjectToWorkspace', () => {
     });
 
     const { result } = renderProvider('proj-tele');
+    setDiscoveredProject('proj-tele', 'wsp_new');
 
     // Wait for the initial init so `activeWorkspaceId` is populated.
     await vi.waitFor(() => {
@@ -329,7 +1333,9 @@ describe('FileManagerProvider — bindProjectToWorkspace', () => {
 
 describe('FileManagerProvider — client + workspace facades', () => {
   beforeEach(() => {
+    readyForBridge = undefined;
     vi.clearAllMocks();
+    bridgeEventListeners.clear();
     workerTestState.instances.length = 0;
     mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
     mockWaitForWorkerReady.mockResolvedValue(undefined);
@@ -345,25 +1351,344 @@ describe('FileManagerProvider — client + workspace facades', () => {
     return renderHook(() => useFileManager(), { wrapper });
   };
 
-  it('exposes a typed client facade whose methods route through the worker proxy', async () => {
+  it('watches live workbench records through their own root while the selected code root is a checkout', async () => {
+    const wrapper = ({ children }: { readonly children: ReactNode }): React.JSX.Element => (
+      <StrictMode>
+        <FileManagerProvider initialBackend='indexeddb' projectId='p' rootDirectory='/checkouts/c'>
+          {children}
+        </FileManagerProvider>
+      </StrictMode>
+    );
+    const { result, unmount } = renderHook(() => useFileManager(), { wrapper });
+    const liveBridges = (): unknown[] =>
+      mockOpenFileSystemBridge.mock.calls.flatMap(([, options], index) => {
+        const bridge: unknown = mockOpenFileSystemBridge.mock.results[index]?.value;
+        return typeof options === 'object' &&
+          options !== null &&
+          'root' in options &&
+          options.root === '/projects/p' &&
+          'consumer' in options &&
+          options.consumer === 'working-copy'
+          ? [bridge]
+          : [];
+      });
+    const changed = vi.fn();
+    const path = '.tau/workbench/layout.json';
+    const watch = result.current.watchRecordFile(`/projects/p/${path}`, changed);
+    await watch.ready;
+    const firstBridge = liveBridges()[0];
+    act(() => {
+      for (const handler of bridgeEventListeners.get(firstBridge) ?? []) {
+        handler({ type: 'fileWritten', path, backend: 'opfs' });
+        handler({ type: 'fileWritten', path: 'src/model.ts', backend: 'opfs' });
+      }
+    });
+    expect(changed).toHaveBeenCalledOnce();
+    act(() => {
+      for (const handler of bridgeEventListeners.get(firstBridge) ?? []) {
+        handler({ type: 'directoryRenamed', oldPath: '.tau/workbench', newPath: '.tau/other', backend: 'opfs' });
+        handler({ type: 'directoryCopied', sourcePath: 'src/records', targetPath: '.tau/workbench', backend: 'opfs' });
+      }
+    });
+    expect(changed).toHaveBeenCalledTimes(3);
+    watch.dispose();
+    act(() => {
+      for (const handler of bridgeEventListeners.get(firstBridge) ?? []) {
+        handler({ type: 'fileDeleted', path, backend: 'opfs' });
+      }
+    });
+    expect(changed).toHaveBeenCalledTimes(3);
+    const firstService = result.current.contentService;
+    act(() => {
+      result.current.fileManagerRef.send({ type: 'setRoot', path: '/checkouts/other', projectId: 'p' });
+    });
+    await vi.waitFor(() => {
+      expect(result.current.contentService).not.toBe(firstService);
+    });
+    expect(bridgeEventListeners.get(firstBridge)?.size).toBe(0);
+    const secondWatch = result.current.watchRecordFile(`/projects/p/${path}`, changed);
+    await secondWatch.ready;
+    const secondBridge = liveBridges()[1];
+    act(() => {
+      for (const handler of bridgeEventListeners.get(secondBridge) ?? []) {
+        handler({ type: 'fileWritten', path, backend: 'opfs' });
+      }
+    });
+    expect(changed).toHaveBeenCalledTimes(4);
+    expect(bridgeProxyDisposals.get(firstBridge)).toHaveBeenCalledOnce();
+    secondWatch.dispose();
+    unmount();
+    expect(bridgeProxyDisposals.get(secondBridge)).toHaveBeenCalledOnce();
+  });
+
+  it('should complete a rooted record read begun before the worker connects', async () => {
+    const ready = Promise.withResolvers<void>();
+    mockWaitForWorkerReady.mockReturnValueOnce(ready.promise);
+    mockProxyExists.mockResolvedValue(true);
+    const { result } = renderProvider();
+
+    const read = result.current.recordFiles.exists('/projects/root/.tau/workbench/layout.json');
+    await act(async () => {
+      ready.resolve();
+    });
+
+    await expect(read).resolves.toBe(true);
+    expect(mockProxyExists).toHaveBeenCalledExactlyOnceWith('.tau/workbench/layout.json');
+  });
+
+  it('should reopen a rejected record bridge after the project becomes available', async () => {
+    const { result, unmount } = renderProvider();
+    try {
+      await vi.waitFor(() => {
+        expect(result.current.contentService).toBeDefined();
+      });
+      const disposalsBefore = mockProxyDispose.mock.calls.length;
+      const readiness = Promise.withResolvers<void>();
+      readyForBridge = vi.fn(async () => readiness.promise);
+      const files = result.current.recordFiles;
+      const path = '/projects/new-project/thumbnail.webp';
+      const rejected = expect(files.readFile(path)).rejects.toThrow(RootedFileSystemError);
+      await vi.waitFor(() => {
+        expect(readyForBridge).toHaveBeenCalledOnce();
+      });
+      readiness.reject(new RootedFileSystemError('ROOT_UNAVAILABLE'));
+      await rejected;
+      expect(mockProxyDispose).toHaveBeenCalledTimes(disposalsBefore + 1);
+      readyForBridge = undefined;
+      const bytes = new Uint8Array([4, 5, 6]);
+      mockProxyReadFile.mockResolvedValueOnce(bytes);
+      await expect(files.readFile(path)).resolves.toEqual(bytes);
+      expect(mockProxyReadFile).toHaveBeenCalledWith('thumbnail.webp');
+    } finally {
+      readyForBridge = undefined;
+      unmount();
+    }
+  });
+
+  it('should reopen a held rooted record client after the worker changes', async () => {
+    mockProxyExists.mockResolvedValue(true);
+    const { result } = renderProvider();
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+    const files = result.current.recordFiles;
+    const path = '/projects/root/.tau/workbench/layout.json';
+    await expect(files.exists(path)).resolves.toBe(true);
+    const firstService = result.current.contentService;
+
+    act(() => {
+      result.current.fileManagerRef.send({ type: 'setRoot', path: '/projects/root', projectId: 'other' });
+    });
+    await vi.waitFor(() => {
+      expect(result.current.contentService).not.toBe(firstService);
+    });
+    await expect(files.exists(path)).resolves.toBe(true);
+
+    const opens = mockOpenFileSystemBridge.mock.calls.filter(
+      ([, options]) =>
+        typeof options === 'object' && options !== null && 'consumer' in options && options.consumer === 'working-copy',
+    );
+    expect(opens).toHaveLength(2);
+    expect(mockProxyExists).toHaveBeenCalledTimes(2);
+  });
+
+  it('fences a delayed machine-settings read on its original worker after root rotation', async () => {
+    const { result } = renderProvider();
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+    const firstWorker = workerTestState.instances[0];
+    const oldSettings = result.current.machineSettings;
+    let releaseRead!: () => void;
+    const heldRead = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    mockReadMachineSettings.mockImplementationOnce(async () => {
+      await heldRead;
+      return { status: 'absent' };
+    });
+    const oldRead = oldSettings.refresh('bambu.x1c');
+    const oldReadClosed = expect(oldRead).rejects.toThrow('Settings observation closed');
+    await vi.waitFor(() => {
+      expect(mockReadMachineSettings).toHaveBeenCalledOnce();
+    });
+    act(() => {
+      result.current.fileManagerRef.send({ type: 'setRoot', path: '/checkouts/next', projectId: 'p' });
+    });
+    await vi.waitFor(() => {
+      expect(result.current.machineSettings).not.toBe(oldSettings);
+      expect(workerTestState.instances).toHaveLength(2);
+    });
+    const currentSettings = result.current.machineSettings;
+    await oldReadClosed;
+    const retiredProjection = oldSettings.get('bambu.x1c');
+    releaseRead();
+    await currentSettings.refresh('bambu.x1c');
+    expect(oldSettings.get('bambu.x1c')).toBe(retiredProjection);
+
+    const settingsWorkers = mockReadMachineSettings.mock.calls.map(([bridge]) => bridge.worker);
+    expect(settingsWorkers).toHaveLength(2);
+    expect(settingsWorkers[0]).toBe(firstWorker);
+    expect(settingsWorkers[1]).toBe(workerTestState.instances[1]);
+    const oldBridge = mockReadMachineSettings.mock.calls[0]?.[0];
+    await vi.waitFor(() => {
+      expect(bridgeProxyDisposals.get(oldBridge)).toHaveBeenCalledOnce();
+    });
+    expect(currentSettings.get('bambu.x1c').file.status).toBe('absent');
+  });
+
+  it('reads replacement-worker bytes from a child effect before the provider effects run', async () => {
+    const path = '/projects/root/.tau/workbench/layout.json';
+    mockProxyExists.mockResolvedValue(true);
+    const reads: Array<{ service: unknown; bytes: Promise<Uint8Array<ArrayBuffer> | Error> }> = [];
+    let replaceWorker = (): void => {
+      throw new Error('Child has not rendered.');
+    };
+    readFileForBridge = async (bridge) => new Uint8Array([bridge.worker === workerTestState.instances[0] ? 1 : 2]);
+
+    const Child = (): React.JSX.Element => {
+      const { contentService, fileManagerRef, recordFiles } = useFileManager();
+      replaceWorker = () => {
+        fileManagerRef.send({ type: 'setRoot', path: '/projects/root', projectId: 'other' });
+      };
+      useEffect(() => {
+        const bytes = (async (): Promise<Uint8Array<ArrayBuffer> | Error> => {
+          try {
+            if (!(await recordFiles.exists(path))) {
+              throw new Error('Record missing.');
+            }
+            return await recordFiles.readFile(path);
+          } catch (error) {
+            return error instanceof Error ? error : new Error(String(error));
+          }
+        })();
+        reads.push({ service: contentService, bytes });
+      }, [contentService, recordFiles]);
+      return <span hidden />;
+    };
+
+    render(
+      <FileManagerProvider initialBackend='indexeddb' rootDirectory='/projects/root'>
+        <Child />
+      </FileManagerProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(reads.some((read) => read.service !== undefined)).toBe(true);
+    });
+    const initialReadyRead = reads.find((read) => read.service !== undefined);
+    await expect(initialReadyRead?.bytes).resolves.toEqual(new Uint8Array([1]));
+    const firstBridgeIndex = mockOpenFileSystemBridge.mock.calls.findIndex(
+      ([, options]) =>
+        typeof options === 'object' && options !== null && 'consumer' in options && options.consumer === 'working-copy',
+    );
+    const firstBridge: unknown = mockOpenFileSystemBridge.mock.results[firstBridgeIndex]?.value;
+    expect(firstBridge).toBeDefined();
+
+    const readCountBeforeReplacement = reads.length;
+    act(() => {
+      replaceWorker();
+    });
+    await vi.waitFor(() => {
+      expect(reads.slice(readCountBeforeReplacement).some((read) => read.service !== undefined)).toBe(true);
+    });
+    const replacementReads = reads.slice(readCountBeforeReplacement);
+    await expect(Promise.all(replacementReads.map(async (read) => read.bytes))).resolves.toEqual(
+      replacementReads.map(() => new Uint8Array([2])),
+    );
+    expect(bridgeProxyDisposals.get(firstBridge)).toHaveBeenCalledOnce();
+  });
+
+  it('reads versioned files and only registry-selected writable record subtrees for duplication', async () => {
+    mockProxyExists.mockResolvedValue(true);
+    mockProxyContents.mockImplementation(
+      async (path): Promise<Record<string, Uint8Array<ArrayBuffer>>> =>
+        path === ''
+          ? { 'main.ts': new Uint8Array([1]), 'tau.json': new Uint8Array([2]) }
+          : {
+              'layout.json': new Uint8Array([3]),
+              'views/v-abc12345.json': new Uint8Array([4]),
+              'entries.json': new Uint8Array([5]),
+            },
+    );
+    const { result } = renderProvider();
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+
+    const files = await result.current.readDuplicateProjectFiles('/projects/source');
+
+    expect(files).toEqual({
+      'main.ts': new Uint8Array([1]),
+      'tau.json': new Uint8Array([2]),
+      '.tau/workbench/layout.json': new Uint8Array([3]),
+      '.tau/workbench/views/v-abc12345.json': new Uint8Array([4]),
+      '.tau/workbench/entries.json': new Uint8Array([5]),
+    });
+    expect(mockOpenFileSystemBridge).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ root: '/projects/source', consumer: 'user' }),
+    );
+    expect(mockProxyContents.mock.calls).toEqual([['', { versionedOnly: true }], ['.tau/workbench']]);
+    expect(mockProxyExists.mock.calls).toEqual([['.tau/workbench']]);
+    expect(mockProxyReadFile).not.toHaveBeenCalled();
+    expect(mockProxyDispose).toHaveBeenCalledOnce();
+  });
+
+  it('skips absent writable records without reading chats, control plane or cache', async () => {
+    mockProxyExists.mockResolvedValue(false);
+    mockProxyContents.mockResolvedValue({ 'main.ts': new Uint8Array([1]) });
+    const { result } = renderProvider();
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+
+    await expect(result.current.readDuplicateProjectFiles('/projects/source')).resolves.toEqual({
+      'main.ts': new Uint8Array([1]),
+    });
+    expect(mockProxyContents.mock.calls).toEqual([['', { versionedOnly: true }]]);
+    expect(mockProxyExists.mock.calls).toEqual([['.tau/workbench']]);
+    expect(mockProxyReadFile).not.toHaveBeenCalled();
+    expect(mockProxyDispose).toHaveBeenCalledOnce();
+  });
+
+  it('forwards exact project verification through the ready workspace authority', async () => {
+    const { result } = renderProvider();
+    await act(async () => {
+      await expect(result.current.client.verifyProjectRoute({ projectId: 'selected' })).resolves.toEqual({
+        status: 'discovery-required',
+      });
+    });
+    expect(mockVerifyProjectRoute).toHaveBeenCalledExactlyOnceWith({ projectId: 'selected' });
+    expect(mockListProjectManifests).not.toHaveBeenCalled();
+  });
+
+  it('exposes a scope-required storage facade whose reads route through the worker proxy', async () => {
     const { result } = renderProvider();
 
     expect(result.current.client).toBeDefined();
-    // Spot-check method shape: `client.readShallowDirectory` is gated on
-    // proxy readiness and forwards to the worker.
+    // Spot-check method shape: a physical scope the mount table does not route
+    // is gated on proxy readiness and forwards to the authority (charter D5).
     await act(async () => {
-      const nodes = await result.current.client.readShallowDirectory('/', { scope: { backend: 'indexeddb' } });
+      const nodes = await result.current.scopedStorage.readShallowDirectory('/', { scope: { backend: 'indexeddb' } });
       expect(nodes).toEqual([]);
     });
   });
 
-  it('exposes a workspace facade that wires mount/unmount/invalidateStandaloneProvider to the proxy', async () => {
+  it('exposes a workspace facade that wires mount/unmount/root teardown to the proxy', async () => {
     const { result } = renderProvider();
 
     await act(async () => {
-      await result.current.workspace.mount('/scratch', { backend: 'memory' });
+      await result.current.workspace.mount('/scratch', {
+        class: 'authored',
+        backend: 'memory',
+        storageRootKey: 'memory:0',
+      });
     });
-    expect(mockMount).toHaveBeenCalledExactlyOnceWith('/scratch', { backend: 'memory' });
+    expect(mockMount).toHaveBeenCalledExactlyOnceWith('/scratch', {
+      class: 'authored',
+      backend: 'memory',
+      storageRootKey: 'memory:0',
+    });
 
     await act(async () => {
       result.current.workspace.unmount('/scratch');
@@ -373,30 +1698,482 @@ describe('FileManagerProvider — client + workspace facades', () => {
     });
 
     await act(async () => {
-      await result.current.workspace.invalidateStandaloneProvider('webaccess', 'wsp_x');
+      await result.current.workspace.disposeStorageRoot('webaccess:wsp_x');
     });
-    expect(mockInvalidateStandaloneProvider).toHaveBeenCalledExactlyOnceWith('webaccess', 'wsp_x');
+    expect(mockInvalidateStandaloneProvider).toHaveBeenCalledExactlyOnceWith('webaccess:wsp_x');
   });
 
-  it('routes mkdir through the worker proxy without writing any .gitkeep placeholder', async () => {
+  it('synchronizes the initiating tab after replacing, disconnecting, or restoring a workspace handle', async () => {
+    const { result } = renderProvider();
+    const handle = mock<FileSystemDirectoryHandle>();
+
+    await act(async () => {
+      await result.current.workspace.replaceWorkspaceHandle('wsp_x', handle);
+    });
+    expect(handleStoreTestState.updateWorkspaceHandle).toHaveBeenCalledExactlyOnceWith('wsp_x', handle);
+    expect(mockInvalidateStandaloneProvider).toHaveBeenCalledExactlyOnceWith('webaccess:wsp_x');
+    expect(mockConfigureProjectRoots).toHaveBeenCalledWith(await mockGetProjectRootConfigs());
+
+    vi.clearAllMocks();
+    handleStoreTestState.disconnectWorkspace.mockResolvedValue({
+      workspace: {
+        workspaceId: 'wsp_x',
+        name: 'Workspace',
+        slug: 'workspace',
+        lastConnectedAt: 1,
+      },
+      handle,
+    });
+    await act(async () => {
+      await result.current.workspace.disconnectWorkspace('wsp_x');
+    });
+    expect(handleStoreTestState.disconnectWorkspace).toHaveBeenCalledExactlyOnceWith('wsp_x');
+    expect(mockInvalidateStandaloneProvider).toHaveBeenCalledExactlyOnceWith('webaccess:wsp_x');
+    expect(mockConfigureProjectRoots).toHaveBeenCalledWith(await mockGetProjectRootConfigs());
+
+    vi.clearAllMocks();
+    handleStoreTestState.restoreWorkspaceHandle.mockResolvedValue(true);
+    await act(async () => {
+      await result.current.workspace.restoreWorkspaceHandle('wsp_x', handle);
+    });
+    expect(handleStoreTestState.restoreWorkspaceHandle).toHaveBeenCalledExactlyOnceWith('wsp_x', handle);
+    expect(mockInvalidateStandaloneProvider).toHaveBeenCalledExactlyOnceWith('webaccess:wsp_x');
+    expect(mockConfigureProjectRoots).toHaveBeenCalledWith(await mockGetProjectRootConfigs());
+  });
+
+  it('keeps root sync usable from a passive effect after StrictMode layout replay', async () => {
+    mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+    const priorStrictMode = getConfig().reactStrictMode;
+    configure({ reactStrictMode: true });
+    const started = vi.fn();
+    const completed = vi.fn();
+    const failed = vi.fn();
+    const effects: Array<Promise<void>> = [];
+    const wrapper = ({ children }: { readonly children: ReactNode }): React.JSX.Element => (
+      <FileManagerProvider initialBackend='indexeddb' rootDirectory='/projects/root'>
+        {children}
+      </FileManagerProvider>
+    );
+    const { result, unmount } = renderHook(
+      () => {
+        const manager = useFileManager();
+        const { workspace } = manager;
+        useEffect(() => {
+          const controller = new AbortController();
+          started();
+          effects.push(
+            (async () => {
+              try {
+                await workspace.syncProjectRoots();
+                if (!controller.signal.aborted) {
+                  completed();
+                }
+              } catch (error) {
+                if (!controller.signal.aborted) {
+                  failed(error);
+                }
+              }
+            })(),
+          );
+          return () => {
+            controller.abort();
+          };
+        }, [workspace]);
+        return manager;
+      },
+      { wrapper },
+    );
+    try {
+      await waitFor(() => {
+        expect(completed).toHaveBeenCalledOnce();
+      });
+      expect(started).toHaveBeenCalledTimes(2);
+      expect(failed).not.toHaveBeenCalled();
+      const configured = mockConfigureProjectRoots.mock.calls.length;
+      await act(async () => {
+        await result.current.workspace.syncProjectRoots();
+      });
+      expect(mockConfigureProjectRoots).toHaveBeenCalledTimes(configured + 1);
+    } finally {
+      unmount();
+      await Promise.allSettled(effects);
+      configure({ reactStrictMode: priorStrictMode });
+    }
+  });
+
+  it('bounds overlapping root sync to a fresh trailing reconcile', async () => {
+    mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+    const { result, unmount } = renderProvider();
+    await waitFor(() => {
+      expect(result.current.treeService).toBeDefined();
+    });
+    mockGetProjectRootConfigs.mockClear();
+    mockConfigureProjectRoots.mockClear();
+    const held = Promise.withResolvers<void>();
+    mockConfigureProjectRoots.mockImplementationOnce(async () => held.promise);
+    const first = result.current.workspace.syncProjectRoots();
+    await waitFor(() => {
+      expect(mockConfigureProjectRoots).toHaveBeenCalledOnce();
+    });
+    const settled = vi.fn();
+    const second = (async () => {
+      await result.current.workspace.syncProjectRoots();
+      settled();
+    })();
+    const third = (async () => {
+      await result.current.workspace.syncProjectRoots();
+      settled();
+    })();
+    const fourth = (async () => {
+      await result.current.workspace.syncProjectRoots();
+      settled();
+    })();
+    try {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect.soft(settled).not.toHaveBeenCalled();
+      expect.soft(mockConfigureProjectRoots).toHaveBeenCalledOnce();
+      held.resolve();
+      await act(async () => {
+        await Promise.all([first, second, third, fourth]);
+      });
+      expect(mockGetProjectRootConfigs).toHaveBeenCalledTimes(2);
+      expect(mockConfigureProjectRoots).toHaveBeenCalledTimes(2);
+      expect(settled).toHaveBeenCalledTimes(3);
+    } finally {
+      held.resolve();
+      await Promise.allSettled([first, second, third, fourth]);
+      unmount();
+    }
+  });
+
+  it('runs another fresh root sync for calls arriving during the trailing pass', async () => {
+    mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+    const { result, unmount } = renderProvider();
+    await waitFor(() => {
+      expect(result.current.treeService).toBeDefined();
+    });
+    mockConfigureProjectRoots.mockClear();
+    const head = Promise.withResolvers<void>();
+    const trailing = Promise.withResolvers<void>();
+    mockConfigureProjectRoots
+      .mockImplementationOnce(async () => head.promise)
+      .mockImplementationOnce(async () => trailing.promise);
+    const first = result.current.workspace.syncProjectRoots();
+    await waitFor(() => {
+      expect(mockConfigureProjectRoots).toHaveBeenCalledOnce();
+    });
+    const second = result.current.workspace.syncProjectRoots();
+    await act(async () => {
+      head.resolve();
+      await first;
+    });
+    await waitFor(() => {
+      expect(mockConfigureProjectRoots).toHaveBeenCalledTimes(2);
+    });
+    const settled = vi.fn();
+    const third = (async () => {
+      await result.current.workspace.syncProjectRoots();
+      settled();
+    })();
+    try {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect.soft(settled).not.toHaveBeenCalled();
+      expect.soft(mockConfigureProjectRoots).toHaveBeenCalledTimes(2);
+      trailing.resolve();
+      await act(async () => {
+        await Promise.all([first, second, third]);
+      });
+      expect(mockConfigureProjectRoots).toHaveBeenCalledTimes(3);
+      expect(settled).toHaveBeenCalledOnce();
+    } finally {
+      head.resolve();
+      trailing.resolve();
+      await Promise.allSettled([first, second, third]);
+      unmount();
+    }
+  });
+
+  it('rejects only the failed root sync pass and still reconciles queued callers and retries', async () => {
+    mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+    const { result, unmount } = renderProvider();
+    await waitFor(() => {
+      expect(result.current.treeService).toBeDefined();
+    });
+    mockConfigureProjectRoots.mockClear();
+    const held = Promise.withResolvers<void>();
+    mockConfigureProjectRoots.mockImplementationOnce(async () => held.promise);
+    const first = result.current.workspace.syncProjectRoots();
+    const firstResult = (async () => {
+      try {
+        await first;
+        return 'unexpected-success';
+      } catch (error) {
+        return error;
+      }
+    })();
+    await waitFor(() => {
+      expect(mockConfigureProjectRoots).toHaveBeenCalledOnce();
+    });
+    const settled = vi.fn();
+    const second = (async () => {
+      await result.current.workspace.syncProjectRoots();
+      settled();
+    })();
+    try {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect.soft(settled).not.toHaveBeenCalled();
+      const failure = new Error('first root configuration refused');
+      await act(async () => {
+        held.reject(failure);
+        await firstResult;
+      });
+      expect(await firstResult).toBe(failure);
+      await act(async () => {
+        await second;
+      });
+      await act(async () => {
+        await result.current.workspace.syncProjectRoots();
+      });
+      expect(mockConfigureProjectRoots).toHaveBeenCalledTimes(3);
+      expect(settled).toHaveBeenCalledOnce();
+    } finally {
+      held.resolve();
+      await Promise.allSettled([first, second]);
+      unmount();
+    }
+  });
+
+  it('keeps a recreated workspace root sync independent of a disposed provider pending pass', async () => {
+    mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+    const old = renderProvider();
+    await waitFor(() => {
+      expect(old.result.current.treeService).toBeDefined();
+    });
+    mockConfigureProjectRoots.mockClear();
+    const held = Promise.withResolvers<void>();
+    mockConfigureProjectRoots.mockImplementationOnce(async () => held.promise);
+    const pending = old.result.current.workspace.syncProjectRoots();
+    const pendingResult = (async () => {
+      try {
+        await pending;
+        return 'unexpected-success';
+      } catch (error) {
+        return error;
+      }
+    })();
+    await waitFor(() => {
+      expect(mockConfigureProjectRoots).toHaveBeenCalledOnce();
+    });
+    const oldWorkspace = old.result.current.workspace;
+    const queued = [oldWorkspace.syncProjectRoots(), oldWorkspace.syncProjectRoots()];
+    const queuedResults = Promise.allSettled(queued);
+    old.unmount();
+    const current = renderProvider();
+    try {
+      await waitFor(() => {
+        expect(current.result.current.treeService).toBeDefined();
+      });
+      const polling = vi.spyOn(current.result.current.treeService!, 'stopPolling');
+      await act(async () => {
+        await current.result.current.workspace.syncProjectRoots();
+      });
+      const configured = mockConfigureProjectRoots.mock.calls.length;
+      const sourceReads = mockGetProjectRootConfigs.mock.calls.length;
+      const pollingCalls = polling.mock.calls.length;
+      await act(async () => {
+        held.resolve();
+        await pendingResult;
+      });
+      expect(await queuedResults).toEqual([
+        expect.objectContaining({ status: 'rejected' }),
+        expect.objectContaining({ status: 'rejected' }),
+      ]);
+      await expect(oldWorkspace.syncProjectRoots()).rejects.toThrow('disposed');
+      expect(mockGetProjectRootConfigs).toHaveBeenCalledTimes(sourceReads);
+      expect(mockConfigureProjectRoots).toHaveBeenCalledTimes(configured);
+      expect(polling).toHaveBeenCalledTimes(pollingCalls);
+      await act(async () => {
+        await current.result.current.workspace.syncProjectRoots();
+      });
+      expect(mockConfigureProjectRoots).toHaveBeenCalledTimes(configured + 1);
+    } finally {
+      held.resolve();
+      await Promise.all([pendingResult, queuedResults]);
+      current.unmount();
+    }
+  });
+
+  it('freshly reconciles an invocation after a completed durable config mutation while its predecessor is held', async () => {
+    const priorIndexedDb = globalThis.indexedDB;
+    const priorStorage = Object.getOwnPropertyDescriptor(navigator, 'storage');
+    globalThis.indexedDB = new IDBFactory();
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: {} });
+    const store = await vi.importActual<typeof HandleStore>('@taucad/files-ui/filesystem/handle-store');
+    const projectId = 'proj_000000000000000000009';
+    await store.setProjectFileSystemConfig({ projectId, backend: 'indexeddb', providerBasePath: 'before' });
+    mockGetProjectRootConfigs.mockImplementation(store.getProjectRootConfigs);
+    const { result, unmount } = renderProvider();
+    const held = Promise.withResolvers<void>();
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    try {
+      await waitFor(() => {
+        expect(result.current.treeService).toBeDefined();
+      });
+      mockConfigureProjectRoots.mockClear();
+      mockConfigureProjectRoots.mockImplementationOnce(async () => held.promise);
+      first = result.current.workspace.syncProjectRoots();
+      await waitFor(() => {
+        expect(mockConfigureProjectRoots).toHaveBeenCalledOnce();
+      });
+      expect(mockConfigureProjectRoots.mock.calls[0]?.[0].projects).toEqual(
+        expect.arrayContaining([expect.objectContaining({ projectId, providerBasePath: 'before' })]),
+      );
+      await store.setProjectFileSystemConfig({ projectId, backend: 'indexeddb', providerBasePath: 'after' });
+      await expect(store.getProjectFileSystemConfig(projectId)).resolves.toMatchObject({ providerBasePath: 'after' });
+      second = result.current.workspace.syncProjectRoots();
+      held.resolve();
+      await act(async () => {
+        await Promise.all([first, second]);
+      });
+      expect(mockConfigureProjectRoots.mock.calls.at(-1)?.[0].projects).toEqual(
+        expect.arrayContaining([expect.objectContaining({ projectId, providerBasePath: 'after' })]),
+      );
+    } finally {
+      held.resolve();
+      await Promise.allSettled([first, second]);
+      unmount();
+      mockGetProjectRootConfigs.mockResolvedValue({ projects: [], roots: [] });
+      globalThis.indexedDB = priorIndexedDb;
+      if (priorStorage === undefined) {
+        Reflect.deleteProperty(navigator, 'storage');
+      } else {
+        Object.defineProperty(navigator, 'storage', priorStorage);
+      }
+    }
+  });
+
+  it('starts external polling when a webaccess root is connected after provider boot', async () => {
+    const { result } = renderProvider();
+    await vi.waitFor(() => {
+      expect(result.current.treeService).toBeDefined();
+    });
+    const startPolling = vi.spyOn(result.current.treeService!, 'startPolling');
+    mockGetProjectRootConfigs.mockResolvedValue({
+      projects: [],
+      roots: [
+        {
+          backend: 'webaccess',
+          workspaceId: 'wsp_late',
+          directoryHandle: mock<FileSystemDirectoryHandle>(),
+        },
+      ],
+    });
+
+    await act(async () => {
+      await result.current.workspace.syncProjectRoots();
+    });
+
+    expect(startPolling).toHaveBeenCalledOnce();
+  });
+
+  /* Charter D12: the project content facade writes on the project's own rooted
+   * connection, so the call arrives in the view's namespace, not the
+   * authority's. */
+  it('routes createDirectory through the project content facade in the view namespace', async () => {
     const { result } = renderProvider();
 
     await act(async () => {
-      await result.current.mkdir('newfolder', { recursive: true });
+      await result.current.createDirectory('newfolder', { recursive: true });
     });
 
     expect(mockProxyMkdir).toHaveBeenCalledExactlyOnceWith('newfolder', { recursive: true });
     expect(mockProxyWriteFile).not.toHaveBeenCalled();
   });
 
-  it('routes rmdir through the worker proxy with recursive: true and does not call unlink per file', async () => {
+  it('routes deleteDirectory through the project content facade in the view namespace', async () => {
     const { result } = renderProvider();
 
     await act(async () => {
-      await result.current.rmdir('subtree', { recursive: true });
+      await result.current.deleteDirectory('subtree', { recursive: true });
     });
 
+    /* `{ recursive: true }` has to survive the view too, or a folder delete from
+     * the Files pane answers ENOTEMPTY. */
     expect(mockProxyRmdir).toHaveBeenCalledExactlyOnceWith('subtree', { recursive: true });
+  });
+
+  /*
+   * A1 review R1: the Files pane's own facade must get the view's answer. The
+   * authority has never heard of an overlay path, so asking it yields
+   * `NOT_FOUND` where the row is really read-only, and a move onto a bundle
+   * silently shadows the whole unit (V8).
+   */
+  it('refuses a Files-pane delete of a system skill file as read-only, without asking the authority', async () => {
+    const { result } = renderProvider();
+
+    await expect(result.current.canDelete('.agents/skills/demo/SKILL.md')).resolves.toMatchObject({
+      code: 'READ_ONLY_MOUNT',
+    });
+    expect(mockProxyCanDelete).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Files-pane move of a project file onto a system skill path', async () => {
+    const { result } = renderProvider();
+
+    await expect(result.current.moveFile('main.ts', '.agents/skills/demo/SKILL.md')).rejects.toMatchObject({
+      code: 'EROFS',
+    });
+    expect(mockProxyMove).not.toHaveBeenCalled();
+  });
+
+  /* Quick Look and the RPC handlers run project code the agent wrote through this
+   * runtime, so it opens the agent's view and not the working copy (CI1, W14). */
+  it('should open the runtime filesystem as the agent consumer', async () => {
+    const { result } = renderProvider();
+
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+
+    const open = runtimeBridgeOpens.at(-1);
+    if (!open) {
+      throw new TypeError('Expected the runtime filesystem to hold a bridge opener.');
+    }
+    mockOpenFileSystemBridge.mockClear();
+    open();
+
+    expect(mockOpenFileSystemBridge).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ consumer: 'agent' }),
+    );
+  });
+
+  it('rotates the opaque runtime filesystem when replacement services become authoritative', async () => {
+    const { result } = renderProvider();
+
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+
+    const firstContentService = result.current.contentService;
+    const firstRuntimeFileSystem = result.current.runtimeFileSystem;
+
+    act(() => {
+      result.current.fileManagerRef.send({ type: 'reloadWorkspace' });
+    });
+
+    await vi.waitFor(() => {
+      expect(result.current.contentService).not.toBe(firstContentService);
+    });
+
+    expect(result.current.runtimeFileSystem).not.toBe(firstRuntimeFileSystem);
   });
 
   it('does not expose the deleted scoped suffix or top-level admin callbacks on the context value', () => {
@@ -407,8 +2184,210 @@ describe('FileManagerProvider — client + workspace facades', () => {
     expect(value).not.toHaveProperty('deleteFileScoped');
     expect(value).not.toHaveProperty('deleteDirectoryScoped');
     expect(value).not.toHaveProperty('getZippedDirectoryScoped');
+    expect(value).not.toHaveProperty('mkdir');
+    expect(value).not.toHaveProperty('rmdir');
     expect(value).not.toHaveProperty('mount');
     expect(value).not.toHaveProperty('unmount');
     expect(value).not.toHaveProperty('invalidateStandaloneProvider');
+  });
+});
+
+describe('SessionFileManagerProvider — a view of the session child (A6c)', () => {
+  beforeEach(() => {
+    readyForBridge = undefined;
+    vi.clearAllMocks();
+    bridgeEventListeners.clear();
+    workerTestState.instances.length = 0;
+    mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
+    mockWaitForWorkerReady.mockResolvedValue(undefined);
+  });
+
+  /* What the session's `fileManager` child opens and records for the provider: the real module, over a file manager
+   * built for the project. The returned `close` untracks it first, as the child does. */
+  const openForSession = (projectId = 'p') => {
+    const opened = openSessionFileManager(projectId, {
+      build: (spec) => ({
+        actor: createActor(fileManagerMachine, {
+          clock: testClock,
+          input: { rootDirectory: spec.rootDirectory, projectId, initialBackend: 'indexeddb' },
+        }),
+        dispose: () => undefined,
+      }),
+      awaitServices: async (fileManager, gone) =>
+        selectRuntimeFiles(testRuntime).awaitFileManager(fileManager, 'services', {
+          reason: 'services-timeout',
+          gone,
+        }),
+    });
+    const untrack = trackSessionFileManager(opened);
+    return {
+      ...opened,
+      close: () => {
+        untrack();
+        opened.close();
+      },
+    };
+  };
+
+  it("refuses a record read with machine-error once the session's file manager is in error, as the scope did", async () => {
+    mockWaitForWorkerReady.mockReturnValue(
+      new Promise<void>(() => {
+        /* Never resolves: the worker's error event ends the connect. */
+      }),
+    );
+    const opened = openForSession();
+    await vi.waitFor(() => {
+      expect(workerTestState.instances).toHaveLength(1);
+    });
+    workerTestState.instances[0]!.dispatchEvent(new Event('error'));
+    await vi.waitFor(() => {
+      expect(opened.fileManagerRef.getSnapshot().value).toBe('error');
+    });
+
+    await expect(
+      opened.owner.workingCopyFiles.get().exists('/projects/p/.tau/workbench/layout.json'),
+    ).rejects.toMatchObject({ name: 'FileManagerNotReadyError', code: 'machine-error' });
+    opened.close();
+  });
+
+  it("serves the subtree the client the session's port holds, and follows each one the port announces", async () => {
+    const opened = openForSession();
+    /* A port whose clients are sentinels: the scope's own connections could never hand these out. */
+    let current = { name: 'first' } as unknown as RootedContentClient;
+    const listeners: Array<() => void> = [];
+    const announce = (next: RootedContentClient): void => {
+      current = next;
+      for (const listener of listeners) {
+        listener();
+      }
+    };
+    const untrackOpened = trackSessionFileManager({
+      ...opened,
+      owner: {
+        ...opened.owner,
+        workingCopyFiles: {
+          get: () => current,
+          subscribe: (listener) => {
+            listeners.push(listener);
+            return () => {
+              listeners.splice(listeners.indexOf(listener), 1);
+            };
+          },
+        },
+      },
+    });
+    const wrapper = ({ children }: { readonly children: ReactNode }): React.JSX.Element => (
+      <SessionFileManagerProvider fileManagerRef={opened.fileManagerRef} projectId='p' rootDirectory='/projects/p'>
+        {children}
+      </SessionFileManagerProvider>
+    );
+    const { result, unmount } = renderHook(() => useFileManager(), { wrapper });
+
+    expect(result.current.parameterFiles).toBe(current);
+    const second = { name: 'second' } as unknown as RootedContentClient;
+    act(() => {
+      announce(second);
+    });
+    expect(result.current.parameterFiles).toBe(second);
+    expect(result.current.recordFiles).toBe(second);
+
+    unmount();
+    expect(listeners).toHaveLength(0);
+    untrackOpened();
+    opened.close();
+  });
+
+  it('reports a workspace that failed to open once, when the focused view sits beside the session subtree (A11)', () => {
+    /* A file manager already refused its workspace: the scope reports that from its context. */
+    const fileManagerRef = createActor(
+      createMachine({
+        context: { unavailableReason: 'permission', activeWorkspaceId: 'w', rootDirectory: '/projects/p' },
+      }),
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- a started actor over only the context fields the scope reads stands in for the file manager machine
+    ).start() as unknown as FileManagerRef;
+    const view = render(
+      <SessionFileManagerProvider fileManagerRef={fileManagerRef} projectId='p' rootDirectory='/projects/p'>
+        <SessionFileManagerProvider fileManagerRef={fileManagerRef} projectId='p' rootDirectory='/projects/p' isView>
+          <span>view</span>
+        </SessionFileManagerProvider>
+      </SessionFileManagerProvider>,
+    );
+
+    expect(workspaceTelemetryMock.workspaceOpenFailed).toHaveBeenCalledTimes(1);
+    expect(workspaceTelemetryMock.workspacePermissionRevoked).toHaveBeenCalledTimes(1);
+    view.unmount();
+  });
+
+  it('renders nothing before the session reports its file manager', () => {
+    const view = render(
+      <SessionFileManagerProvider fileManagerRef={undefined} projectId='p' rootDirectory='/projects/p'>
+        <span>workbench</span>
+      </SessionFileManagerProvider>,
+    );
+
+    expect(view.queryByText('workbench')).toBeNull();
+  });
+
+  it("hands the subtree the session's file manager and the child's working copy, and stops nothing when it unmounts", async () => {
+    const opened = openForSession();
+    const wrapper = ({ children }: { readonly children: ReactNode }): React.JSX.Element => (
+      <SessionFileManagerProvider fileManagerRef={opened.fileManagerRef} projectId='p' rootDirectory='/projects/p'>
+        {children}
+      </SessionFileManagerProvider>
+    );
+    const { result, unmount } = renderHook(() => useFileManager(), { wrapper });
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+
+    expect(result.current.fileManagerRef).toBe(opened.fileManagerRef);
+    /* A6a's `parameterFiles` port is fed from the session child (ruling R-b): the provider hands on its client. */
+    expect(result.current.parameterFiles).toBe(opened.owner.workingCopyFiles.get());
+    expect(result.current.recordFiles).toBe(opened.owner.workingCopyFiles.get());
+
+    unmount();
+    expect(opened.fileManagerRef.getSnapshot().status).toBe('active');
+
+    opened.close();
+    expect(opened.fileManagerRef.getSnapshot().status).toBe('stopped');
+    expect(opened.owner.dropped.aborted).toBe(true);
+  });
+
+  it('follows the child when a re-root replaces the working copy, and the session close releases its connections', async () => {
+    mockProxyExists.mockResolvedValue(true);
+    const opened = openForSession();
+    const heard = vi.fn();
+    opened.owner.workingCopyFiles.subscribe(heard);
+    const wrapper = ({ children }: { readonly children: ReactNode }): React.JSX.Element => (
+      <SessionFileManagerProvider fileManagerRef={opened.fileManagerRef} projectId='p' rootDirectory='/projects/p'>
+        {children}
+      </SessionFileManagerProvider>
+    );
+    const { result, unmount } = renderHook(() => useFileManager(), { wrapper });
+    await vi.waitFor(() => {
+      expect(result.current.contentService).toBeDefined();
+    });
+    const first = result.current.parameterFiles;
+    await expect(first.exists('/projects/p/.tau/workbench/layout.json')).resolves.toBe(true);
+    const firstService = result.current.contentService;
+    const heardBefore = heard.mock.calls.length;
+
+    act(() => {
+      opened.fileManagerRef.send({ type: 'setRoot', path: '/projects/p', projectId: 'other' });
+    });
+    await vi.waitFor(() => {
+      expect(result.current.contentService).not.toBe(firstService);
+    });
+
+    expect(heard.mock.calls.length).toBeGreaterThan(heardBefore);
+    expect(result.current.parameterFiles).toBe(opened.owner.workingCopyFiles.get());
+    expect(result.current.parameterFiles).not.toBe(first);
+    await expect(result.current.parameterFiles.exists('/projects/p/.tau/workbench/layout.json')).resolves.toBe(true);
+    const disposalsBefore = mockProxyDispose.mock.calls.length;
+
+    unmount();
+    expect(mockProxyDispose).toHaveBeenCalledTimes(disposalsBefore);
+    opened.close();
+    expect(mockProxyDispose.mock.calls.length).toBeGreaterThan(disposalsBefore);
   });
 });

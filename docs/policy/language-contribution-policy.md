@@ -1,85 +1,100 @@
 ---
 title: 'Language Contribution Policy'
-description: 'Norms for Monaco language features that read the workspace filesystem (URI-only wire, shared pool, LSP sync).'
+description: 'CodeMirror and Lezer language support, code-pane admission, shared filesystem tiers, checked edits and TypeScript worker ownership'
 status: active
 created: '2026-05-07'
-updated: '2026-05-09'
+updated: '2026-11-07'
 related:
   - docs/research/language-fs-bridge-implementation.md
   - docs/research/scalable-language-contribution-fs-architecture.md
   - docs/policy/filesystem-policy.md
+  - docs/policy/library-api-policy.md
 ---
 
 # Language Contribution Policy
 
-Internal reference for Monaco language contributions that resolve imports or library files from the user workspace (KCL LSP, OpenSCAD `use`/`include`, future kernels).
+Language contributions share one workspace filesystem contract and activate only when their language is needed. CodeMirror, the Lezer grammar registry, LSP workers, and the custom TypeScript worker may expose different capabilities, but they must agree on language identity, URI semantics, and declaration ownership.
 
 ## Rationale
 
-Language servers and providers must not invent ad-hoc main-thread RPC envelopes or path guessing. A single `fs/*` JSON-RPC contract and a shared file-pool read path keep behavior consistent, testable, and safe across workers and in-process hosts.
+Editor loading must follow actual source-pane use, while document persistence and language services retain independent lifetimes. Shared filesystem and grammar owners keep split views, closed-file edits and documentation consistent.
 
 ## Rules
 
-### 1. Protocol ownership
+### 1. Use `@taucad/lsp-fs` for language workspace access
 
-Implement workspace reads with `@taucad/lsp-fs` (`fs/content`, `fs/stat`, `fs/readDir`, `fs/findFiles`). Do not add parallel request-type enums or duplicate base64 wire encodings in app code.
+The shared protocol owns `fs/content`, `fs/stat`, `fs/readDir`, and `fs/findFiles`, plus its pool and synchronous channel. Do not add a contribution-specific request enum, base64 encoding, or filesystem bridge.
 
-**Why**: One schema for tooling, middleware, and tests.
+### 2. Use `file://` URIs across the asynchronous wire
 
-### 2. URI-only on the wire
+Tier 1 JSON-RPC requests carry canonical `file://` URIs. Convert them to workspace-relative paths only in the main-thread bridge through `languageFileUriToWorkspaceRelative` and `WorkspacePathResolver`.
 
-All `fs/*` requests use Monaco-style `file://` URIs (`params.uri`). Resolve to workspace-relative keys only inside `serveLanguageFileSystemRequests` (or equivalent bridge), via `monacoFileUriToWorkspaceRelative` and `WorkspacePathResolver`. Do not pass ambiguous raw paths or multi-candidate fallbacks across the bridge.
+Do not send ambiguous raw paths or probe multiple guessed workspace keys.
 
-**Why**: Eliminates path-resolution drift between worker WASM, main thread, and the file manager.
+### 3. Use the defined read tiers
 
-### 3. Tiered reads
+- Tier 1 uses the `fs/*` JSON-RPC bridge. (There is no Tier 0: the shared file pool it read from was removed.)
+- Tier 2 uses the `@taucad/lsp-fs/sync` SharedArrayBuffer request channel for synchronous TypeScript language-service probes.
 
-Consumers use `attachLanguageFsClient`: Tier 0 `SharedPool.resolveCopy` when `filePoolBuffer` is present; Tier 1 `fs/*` JSON-RPC when the pool misses. Do not add ad-hoc “sync” blocking reads (Tier 2) in contributions until explicitly specified in research/policy.
+Tier 2 is TypeScript-worker infrastructure. Other language contributions must not add blocking reads without an explicit architecture change and cross-origin-isolation support.
 
-**Why**: Keeps hot paths fast and IPC bounded.
+Tier 2 answers `fileExists`, `directoryExists` and script versions from the worker's mirror of the root's Project Index (filesystem capability charter D13). The file manager sends the whole index once on attach and then the index's own changes after each change set, so these probes make no slot round trip and read no bytes. File content and directory listings still go over the slot. So does any probe of a path the index never holds, because a miss in the mirror says nothing about those paths. Those paths are `node_modules` at any depth, the other policy rows nothing watches, the index's reserved paths, and each nested mount below the root, which the feed names in every message.
 
-### 4. Main-thread bridge
+The mirror is eventually consistent. It applies a change set only after the file manager's next `changedSince` answer reaches the worker, and the worker reads its port between requests. One guard keeps that ordering from caching a stale answer. Every mirror message names the D6 change-set generation it reflects. The feed also posts an `ahead` notice with a change set's generation as soon as it hears it, before it asks the index. Any other change notice that reaches the worker must pass its generation to the client's `noteChangeSet`. While the worker has heard of a change set newer than the one the mirror reflects, `fromMirror` declines and the slot answers every presence and version probe. A language request that runs before any notice of a write reaches the worker can still see the old state. Once the change set arrives the next request sees it, because the TypeScript service asks every script's version and presence again on each program update. Code must not rely on a probe seeing a write within the same request that caused it. If the feed fails to ask the index, it sends `stale` and the slot answers every probe until the feed, retrying with backoff, sends the index whole again.
 
-Register `fs/*` handlers with `serveLanguageFileSystemRequests` on a `JSONRPCServer` that is fed requests from workers or in-process clients. Delegate to `FileManagerApi.readFile`, `FileTreeService`, and `FileSystemClient.searchFiles` only—never to ad-hoc fetch or guessing.
+### 4. Keep the file manager authoritative
 
-**Why**: FM remains the sole writer to the pool and authoritative for tree state.
+`serveLanguageFileSystemRequests` and `LanguageFsBridge` delegate to the current `FileManagerApi`, `FileTreeService`, and filesystem search owner. They must not fetch workspace files independently or maintain a second tree.
 
-### 5. Monaco document sync
+Filesystem authority events update the pool and worker view. Polling may detect missed change signals but must remain a bounded fallback. The Tier 2 index mirror is not a second tree: it holds only what the authority's index sends it, and the authority's change sets drive every update.
 
-Wire `textDocument/didOpen` / `didChange` / `didClose` through `bindMonacoModelsToLspConnection` (or the same lifecycle semantics). Do not duplicate model listeners per feature in ways that can double-notify the server.
+### 5. Keep the TypeScript worker entry explicit
 
-**Why**: One consistent sync contract for every LSP-backed language.
+`apps/libs/lsp/src/typescript-worker/worker.entry.ts` owns module-worker boot and the actual TypeScript language service. Bind the rooted synchronous filesystem before admitting requests that need closed-file reads. Use the worker protocol's versioned UTF-16 document changes; never run the TypeScript service on the main thread as a silent fallback.
 
-### 6. Worker init shape
+Do not configure `customWorkerPath`, `importScripts` or other classic-worker paths.
 
-Pass `filePoolBuffer` and workspace root into workers that use `attachLanguageFsClient`, matching `LanguageWorkerHandle` / `KclLspWorkerOptions`. Do not rely on implicit globals for cwd or pool attachment.
+### 6. Preserve TypeScript host fallback order
 
-**Why**: Makes initialization explicit and parallel to `RuntimeClient.connect`.
+The TypeScript host checks versioned open documents and standard/static/extra libraries before Tier 2. Closed workspace files may then use the synchronous client. Preserve stable script versions and the synthetic `node_modules` and `@types` directory behavior required by module resolution.
 
-### 7. URI → model materialisation
+Mount generated dependency declarations at their canonical `/node_modules` paths. Do not copy declarations into each workspace or make optional `repos/` checkouts a runtime requirement. When a generator projects a canonical virtual-module map into a directory, remove the prior projection before writing the current map so deleted modules cannot survive as stale declarations.
 
-Navigation providers (definitions, links, etc.) must return `Location` values with a target `uri` and must **not** call `monaco.editor.createModel` to force-open imported targets. The `MonacoWorkspaceFs` registry materialises models through `openTextDocument`, `openTextProvider`, and `peekModel`, after workspace / ATA resolution.
+### 7. Activate contributions on demand
 
-Workspace-relative `file://` reads may fall through to Monaco `addExtraLib` / ATA virtual typings via `WorkspaceFileSystemProvider` extra-lib lookup so Cmd+Click on `file:///node_modules/...` stays consistent with the TS worker.
+Import CodeMirror only when a real source pane renders. Import the matching syntax family through `editor-syntax.ts`, and acquire its semantic service separately through `editor-language-runtime.ts`. Metadata modules must not import runtime editor code.
 
-Enforced by `tau-lint/no-monaco-create-model` (see `.oxlintrc.json`).
+Before admission, request no editor-only JavaScript, CSS, grammar, worker or declarations. This applies to link hover, route prefetch, service-worker precache, viewer-only and shared-model surfaces, Markdown preview and hidden mobile tabs. Do not activate unrelated language families or preload every kernel's declarations. `apps/ui-e2e/src/language-service-laziness.spec.ts` checks this against a production build. A new language service adds its adapter chunk, worker and staged assets to that spec's `languageResources`.
 
-## Anti-Patterns
+Share backend services per project session and mirror each document once. Abort pending acquisition on pane closure; dispose per-view extensions and release the backend when its last view closes. Cached code modules do not justify keeping workers alive.
 
-- Custom `postMessage` envelopes for file bytes alongside LSP traffic when `fs/*` JSON-RPC suffices.
-- Opening every imported file eagerly in Monaco solely to satisfy the language service; prefer lazy reads through `fs/content`.
-- String-slicing `file://` paths instead of `vscode-uri` at boundaries that affect resolution.
+### 8. Highlight every code surface through one grammar registry
 
-## Summary Checklist
+Every code surface in the app (the editor, hover, signature and completion documentation, chat code blocks, the code and diff viewers, and the conflict editor) highlights through the Lezer registry in `libs/grammars`: `loadLanguage` and `peekLanguage` for parsers, `tauHighlighter` for `tok-*` token classes, and `apps/ui/app/styles/syntax-highlight.css` for the one palette. A surface never resolves languages or paints tokens on its own; `apps/ui/app/components/code/code-surfaces.test.tsx` checks every surface against every language's fixture.
 
-- [ ] `fs/*` methods and types imported from `@taucad/lsp-fs/protocol` (or `server-side` where appropriate).
-- [ ] URIs at the bridge; workspace-relative keys only inside the bridge.
-- [ ] Pool + JSON-RPC tiers used for reads; no duplicate encodings.
-- [ ] Model lifecycle bound via `bindMonacoModelsToLspConnection` for LSP languages.
-- [ ] No direct `monaco.editor.createModel` calls in contribution code (use `MonacoWorkspaceFs`; rule: `tau-lint/no-monaco-create-model`).
+Grammars are committed with their generated parser tables; do not fetch or compile grammars at runtime. Documentation code takes the source document's language for untagged fences, and an adapter maps fence tags its server uses loosely (KCL documentation fences KCL as `js`). Highlighting a code block never starts a language service. Follow the `add-editor-language` skill for a new language.
 
-## References
+### 9. Fail visibly without breaking basic editing
 
-- Implementation contract: `docs/research/language-fs-bridge-implementation.md`
-- Parent blueprint: `docs/research/scalable-language-contribution-fs-architecture.md`
-- Filesystem rules: `docs/policy/filesystem-policy.md`
+If an optional LSP or materializing provider cannot start, report a diagnostic and keep syntax highlighting and ordinary text editing available. Do not swallow initialization failures or silently run heavy worker code on the main thread.
+
+### 10. Preserve document and edit authority
+
+`EditorDocumentSession` owns checked persistence, conflict recording and the shared document history. Views retain independent selection, scroll, focus and decorations. Language workers mirror versioned text; they do not become the filesystem authority.
+
+Before applying a semantic workspace edit, verify every target against the exact worker text used to compute it, validate offsets and read-only provenance, then use the session's checked save path. Refuse stale results before changing any target. Do not acknowledge a failed save as durable success.
+
+### 11. Test each boundary
+
+Cover URI normalization, Tier 1 reads, Tier 2 closed-file reads, version lookup, synthetic dependency directories, worker boot ordering, lazy activation, and disposal. Use the smallest real worker integration needed to prove the browser boundary.
+
+## Ownership
+
+- Shared protocol and clients: `apps/libs/lsp-fs/src`
+- Tier 2 client/server: `apps/libs/lsp-fs/src/sync`
+- Main-thread bridge: `apps/libs/lsp/src/language-fs-bridge.ts`
+- TypeScript worker: `apps/libs/lsp/src/typescript-worker`
+- UI language contributions: `apps/libs/editor-ui/src/lib/*-language`, dispatched by `apps/libs/editor-ui/src/lib/editor-language-runtime.ts`; the app supplies build-owned inputs (staged assets, the KCL worker) through `apps/ui/app/lib/editor-language-runtime.ts`
+- TypeScript view adapters and declarations: `apps/libs/editor-ui/src/lib/typescript-language`
+- Neutral document and checked-edit owners: `apps/libs/editor-ui/src/lib/editor-document-session.ts`, `apps/libs/editor-ui/src/lib/editor-workspace-edits.ts`
+- Shared grammars: `libs/grammars`

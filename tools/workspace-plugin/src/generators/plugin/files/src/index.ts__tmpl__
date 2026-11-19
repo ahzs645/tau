@@ -1,0 +1,9 @@
+/* oxlint-disable no-barrel-files/no-barrel-files -- public package entry */
+export { <%= alias %>, <%= alias %> as plugin } from '#<%= sourceName %>.plugin.js';
+<% for (const capability of capabilities) { %>
+export { <%= capability.factoryName %> } from '#<%= capability.fileName %>.js';
+<% } %>
+<% if (nativeLanguage) { %>
+export { <%= alias %>ClosureSchema, <%= alias %>OptionsSchema } from '#<%= sourceName %>.schemas.js';
+export { <%= alias %>Native } from '#native.js';
+<% } %>

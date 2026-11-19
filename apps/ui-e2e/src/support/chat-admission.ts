@@ -1,0 +1,381 @@
+/**
+ * The admission vertical's shared reads and gestures.
+ *
+ * `chat-multi-turn.spec.ts` and the gesture sweep grew two copies of these
+ * ~110 lines, and the copies had already diverged — the sweep's `admissionRefusals`
+ * was a stale list, which is exactly how the capability's own comment says a row
+ * "stayed green through the next one". One owner, both halves (blueprint
+ * Finding 10; T5 defect 4).
+ */
+import { expect } from 'vitest';
+import type { RefusalCode } from '@taucad/agent-host/wire';
+import { page as selectors } from 'vitest/browser';
+import * as target from '#support/external-target.js';
+import type { GatewayScriptTurn } from '#support/agent-host-gateway-script.js';
+import type { ChatLogExpectation, LogRecord } from '#support/chat-admission-log.js';
+import { foldChatLog } from '#support/chat-admission-log.js';
+import {
+  composerSelector,
+  editComposerSelector,
+  pdfModelName,
+  prepareComposerPage,
+  readHomeGlobText,
+  seededChatIds,
+  selectModel,
+  sendDraft,
+} from '#support/chat-attachments.js';
+
+/**
+ * A scripted plain-text assistant turn.
+ *
+ * @param text - The reply the turn streams.
+ * @param extra - Any other scripted field, `gated` above all.
+ * @returns The scripted turn.
+ */
+export const reply = (text: string, extra: Partial<GatewayScriptTurn> = {}): GatewayScriptTurn => ({
+  text,
+  usage: { inputTokens: 20, outputTokens: 4 },
+  ...extra,
+});
+
+/**
+ * Every record of one chat's durable log, oldest first.
+ *
+ * @param chatId - The chat whose log to read.
+ * @returns Its records.
+ */
+export const chatLog = async (chatId: string): Promise<readonly LogRecord[]> => {
+  const text = await readHomeGlobText(`/*/.tau/chats/${chatId}/events.jsonl`);
+  return (text ?? '')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as LogRecord);
+};
+
+/**
+ * Assert the admission and attempt invariants over one chat's log, waiting for
+ * them to hold.
+ *
+ * The last attempt's settlement is written as its turn leaves `finishing`, a
+ * moment after its reply is on screen, so a single read races it: every row of
+ * this file failed with `settlements: 0` on the last run when the machine was
+ * loaded. Waiting cannot hide a missing settlement — an attempt that never
+ * settles still fails the row, it just takes the timeout to say so.
+ *
+ * @param chatId - The chat to read.
+ * @param expected - The run count, or the full expectation.
+ * @returns Nothing.
+ */
+export const expectLogInvariant = async (chatId: string, expected: number | ChatLogExpectation): Promise<void> => {
+  const wanted: ChatLogExpectation = typeof expected === 'number' ? { runs: expected } : expected;
+  await expect
+    .poll(async () => foldChatLog(await chatLog(chatId), wanted), { timeout: wanted.timeoutMilliseconds ?? 60_000 })
+    .toEqual({
+      runs: wanted.runs,
+      ...(wanted.settlements === undefined ? {} : { settlements: wanted.settlements }),
+      ...(wanted.attempts === undefined ? {} : { attempts: wanted.attempts }),
+      violations: [],
+    });
+};
+
+/* The admission refusals, named from the one registry, so a renamed or dropped code fails typecheck here (D11). */
+export const admissionRefusalCodes = [
+  'CHAT_RUN_LIVE',
+  'RUN_ID_TAKEN',
+  'RESUME_UNAVAILABLE',
+  'RUN_ABANDONED',
+  'NO_RUN_ADMITTED',
+  'HISTORY_PREFIX_INVALID',
+  'SETTLEMENT_CONFLICT',
+  'SETTLEMENT_WITHOUT_RUN',
+  'TURN_ALREADY_LEASED',
+  'LEADERSHIP_LOST',
+  'RUN_UNREADABLE',
+  'HISTORY_INVALID',
+] as const satisfies readonly RefusalCode[];
+
+/** One way an admission is refused. */
+export type AdmissionRefusalCode = (typeof admissionRefusalCodes)[number];
+
+/*
+ * W1/W5: refusals that still travel as prose only. Each ended a turn as *Work
+ * interrupted* at some point in this capability's history and none of them has
+ * a code yet, so the union above cannot exclude them. Delete each line as its
+ * owner gives it a code.
+ */
+export const uncodedAdmissionRefusals = [
+  /* The chat's host registration was empty when a rewinding dispatch ran (F1). */
+  'is not configured',
+  /* The durable live-run refusal, thrown bare by `tau-agent-host` (T5 P1 #4). */
+  'has a non-terminal run',
+  /* Page-side, `chat-host-binding.ts` (T5 (d)). */
+  'This turn was replaced before it started.',
+  'This chat is not ready to run a turn yet.',
+] as const;
+
+/**
+ * Assert that no admission was refused while the row ran.
+ *
+ * One list rather than one assertion per row: a row that only excluded the
+ * refusal it was written for stayed green through the next one.
+ *
+ * @param allowed - Codes this row drives on purpose, so they are not failures.
+ * @returns Nothing.
+ */
+export const expectNoAdmissionRefusal = async (allowed: readonly AdmissionRefusalCode[] = []): Promise<void> => {
+  const markers = [...admissionRefusalCodes.filter((code) => !allowed.includes(code)), ...uncodedAdmissionRefusals];
+  const { consoleMessages, pageErrors } = await target.events();
+  const refused = (text: string): boolean => markers.some((marker) => text.includes(marker));
+  expect(consoleMessages.filter((message) => refused(message.text)).map((message) => message.text)).toEqual([]);
+  expect(pageErrors.filter((error) => refused(JSON.stringify(error))).map((error) => JSON.stringify(error))).toEqual(
+    [],
+  );
+};
+
+/**
+ * How many provider calls the gateway fixture has captured.
+ *
+ * @returns The cumulative count, refused calls included.
+ */
+export const gatewayRequestCount = async (): Promise<number> => {
+  const requests = await target.readAgentHostGatewayRequests();
+  return requests.length;
+};
+
+/**
+ * Fresh provider asks per turn, in the order the turns were first asked.
+ *
+ * The contract a row wants is *one ask per attempt*: a turn re-asked after a
+ * reload is a second charge, and a cumulative total cannot say so because a
+ * later turn's own call satisfies the same `>=`.
+ *
+ * @returns One `{ turn, asks }` per turn.
+ */
+export const gatewayAsksByTurn = async (): Promise<ReadonlyArray<{ readonly turn: string; readonly asks: number }>> => {
+  const { turns } = await target.readAgentHostGatewayState();
+  return turns.map(({ turn, asks }) => ({ turn, asks }));
+};
+
+/**
+ * How many provider requests are parked at a fixture gate right now.
+ *
+ * @returns The pending count.
+ */
+export const gatewayPendingCount = async (): Promise<number> => {
+  const { parked } = await target.readAgentHostGatewayState();
+  return parked.length;
+};
+
+/**
+ * The user text of every provider call this fixture captured, oldest first.
+ *
+ * @returns One JSON-stringified content per call.
+ */
+export const gatewayUserTexts = async (): Promise<readonly string[]> => {
+  const requests = (await target.readAgentHostGatewayRequests()) as ReadonlyArray<
+    Readonly<{ messages?: ReadonlyArray<Readonly<{ role?: string; content?: unknown }>> }>
+  >;
+  return requests.map((request) =>
+    JSON.stringify(request.messages?.findLast((message) => message.role === 'user')?.content ?? null),
+  );
+};
+
+/**
+ * Open the chat fixture with a scripted gateway and pick the fixture's wire model.
+ *
+ * @param script - The scripted assistant turns.
+ * @param query - Extra fixture query, e.g. `'?chats=2'`.
+ * @returns The seeded chat ids.
+ */
+export const openChat = async (script: readonly GatewayScriptTurn[], query = ''): Promise<readonly string[]> => {
+  await prepareComposerPage();
+  await target.installAgentHostGatewayFixture(script);
+  await target.setViewport({ width: 1440, height: 960 });
+  await target.navigate(`/__e2e/chat-attachments${query}`);
+  await target.expectUrl(/\/w\/[^/]+\/[^/?]+\?/u, 60_000);
+  await target.expectVisible(selectors.getByCss(composerSelector).first(), 60_000);
+  await selectModel(pdfModelName);
+  const { chatIds } = await seededChatIds();
+  return chatIds;
+};
+
+/**
+ * Wait for a chat's log to record this many finalized turns.
+ *
+ * A turn that changed no file shows no *Save status*: its settlement names no
+ * revision, so `deriveTurnRevisionState` renders nothing for it
+ * (`chat-turn-revision-state.ts`, since 47d78b9dca). A reply-only turn's
+ * settlement is therefore read from the log, where it is written.
+ *
+ * @param chatId - The chat to read.
+ * @param count - How many `turn.finalized` rows the log must hold.
+ * @returns Nothing.
+ */
+export const expectFinalizedTurns = async (chatId: string, count: number): Promise<void> => {
+  const finalized = async (): Promise<number> => {
+    const records = await chatLog(chatId);
+    return records.filter((record) => record.type === 'turn.finalized').length;
+  };
+  await expect.poll(finalized, { timeout: 60_000 }).toBe(count);
+};
+
+/**
+ * Send the first message and wait out its reply and its settlement.
+ *
+ * @param chatId - The chat the message is sent in.
+ * @returns Nothing.
+ */
+export const completeFirstTurn = async (chatId: string): Promise<void> => {
+  await sendDraft('First plain message.');
+  await target.expectVisible(selectors.getByText('Reply one.', { exact: true }).last(), 120_000);
+  await expectFinalizedTurns(chatId, 1);
+  await expect.poll(gatewayRequestCount, { timeout: 30_000 }).toBe(1);
+};
+
+/**
+ * Edit the first user message in place and send it, with `suffix` appended.
+ *
+ * @param suffix - Text appended to the message before it is sent.
+ * @returns Nothing.
+ */
+export const editFirstMessage = async (suffix: string): Promise<void> => {
+  await target.click(selectors.getByRole('button', { name: /First plain message/u }).first());
+  const editComposer = selectors.getByCss(editComposerSelector).first();
+  await target.expectVisible(editComposer, 30_000);
+  /* The edit composer opens with the caret at the start, so a long message keeps
+   * its first line in view (5e74b24f48, #590). Typing there prepended the suffix
+   * and sent `Edited.First plain message.`; the suffix belongs at the end. */
+  await target.press(editComposer, 'ControlOrMeta+End');
+  await target.type(editComposer, suffix);
+  await target.press(editComposer, 'Enter');
+};
+
+/**
+ * The error card's one continuing action.
+ *
+ * A refusal the host can resume reads *Resume* (the paused-turn card); one it
+ * cannot reads *Try again*. Both press the same gesture, and which it is
+ * belongs to the row's assertions, not here — so one locator, owned here rather
+ * than copied into each spec that waits for the card.
+ */
+export const continueAction = selectors.getByRole('button', { name: /^(?:Resume|Try again)$/u });
+
+/**
+ * Refuse the next provider call with a refusal a resume can continue, send
+ * `text`, and wait for the saved-turn card.
+ *
+ * `INVALID_REQUEST` is the gateway's own code for a call it will not make, and
+ * it is in `resumableRunFailureCodes` — so the turn stays whole, the card reads
+ * *Resume* and the continuation runs under the run the host still holds (I1).
+ * The fixture's default refusal carries the upstream provider's `api_error`,
+ * which maps to `UNKNOWN_GATEWAY_ERROR` and is *not* resumable; a row that
+ * means to drive the rewind arms that one itself.
+ *
+ * @param text - The message to send.
+ * @returns Nothing.
+ */
+export const sendRefused = async (text: string): Promise<void> => {
+  await target.setAgentHostGatewayFailure({ status: 400, message: 'Refused once.', type: 'INVALID_REQUEST' });
+  await sendDraft(text);
+  await target.expectVisible(continueAction, 120_000);
+  await target.setAgentHostGatewayFailure();
+};
+
+/**
+ * Press the error card's *Try again* — the fifth admission route.
+ *
+ * @returns Nothing.
+ */
+export const tryAgain = async (): Promise<void> => {
+  await target.click(continueAction);
+};
+
+/** The sentence Tau's gateway refuses a paused route with; the card must never show it (IS3). */
+export const routePausedGatewaySentence = "This model route is paused by Tau's operators.";
+
+/** The paused-route card, found by its page-owned heading (W6). */
+export const routePausedCard = selectors.getByRole('alert').filter({ hasText: 'This model is paused' });
+
+/** The error card's model switch, which opens the composer's own picker. */
+export const switchModelAction = selectors.getByRole('button', { name: 'Switch model', exact: true });
+
+/**
+ * Pause the fixture's model route the way an operator pause reaches the browser
+ * host (W6, T-E1): every provider call is refused with the gateway's own
+ * `MODEL_ROUTE_PAUSED` 503, which is what admission answers while
+ * `billing-command pause-route` holds the route. No operator, API or database
+ * is needed — the host reads the refusal off the gateway wire exactly as it
+ * reads a live one. The fixture refuses every call while armed, so a row lifts
+ * the pause with {@link resumeModelRoute} before it recovers on another model,
+ * and proves the recovery went elsewhere from the captured request bodies.
+ *
+ * @returns Nothing.
+ */
+export const pauseModelRoute = async (): Promise<void> => {
+  await target.setAgentHostGatewayFailure({
+    status: 503,
+    message: routePausedGatewaySentence,
+    type: 'MODEL_ROUTE_PAUSED' satisfies RefusalCode,
+  });
+};
+
+/**
+ * Lift the fixture's paused route.
+ *
+ * @returns Nothing.
+ */
+export const resumeModelRoute = async (): Promise<void> => {
+  await target.setAgentHostGatewayFailure();
+};
+
+/**
+ * Choose another model from the error card's *Switch model* picker.
+ *
+ * The browser-host fixture serves Tau's Anthropic wire only, so the search
+ * narrows the catalog to that provider's routes; the first one that is not
+ * `current` is the other route. The row's assertions read which model the
+ * next request named, so this helper picks no model by name.
+ *
+ * @param current - The catalog name of the paused model.
+ * @returns Nothing.
+ */
+export const switchToAnotherGatewayModel = async (current: string): Promise<void> => {
+  await target.click(switchModelAction.last());
+  const search = selectors.getByPlaceholder('Search models…').last();
+  await target.expectVisible(search, 30_000);
+  await target.type(search, 'anthropic');
+  await target.click(selectors.getByRole('option').filter({ hasNotText: current }).first());
+  await target.expectHidden(search, 30_000);
+};
+
+/**
+ * The model each captured provider call named, oldest first.
+ *
+ * @returns One model identifier per call, refused calls included.
+ */
+export const gatewayRequestModels = async (): Promise<ReadonlyArray<string | undefined>> => {
+  const requests = (await target.readAgentHostGatewayRequests()) as ReadonlyArray<Readonly<{ model?: string }>>;
+  return requests.map((request) => request.model);
+};
+
+/**
+ * Click the named chat in the sidebar and wait for it to become the active row.
+ *
+ * @param name - The chat's sidebar label.
+ * @returns Nothing.
+ */
+export const switchToChat = async (name: string): Promise<void> => {
+  await target.click(selectors.getByRole('link', { name, exact: true }));
+  await expect
+    .poll(async () =>
+      target.evaluate(
+        (expected) =>
+          [...document.querySelectorAll<HTMLElement>('[data-slot="chat-trigger"]')]
+            .find((row) => row.dataset['active'] === 'true')
+            ?.querySelector('a')
+            ?.textContent.trim() === expected,
+        name,
+      ),
+    )
+    .toBe(true);
+};

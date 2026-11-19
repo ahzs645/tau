@@ -1,16 +1,76 @@
 // oxlint-disable-next-line eslint-plugin-import/no-named-as-default -- standard zod default import
 import z from 'zod';
-import { messageStatuses } from '#constants/message.constants.js';
+import {
+  cameraPresets,
+  paneIdSchema,
+  projectPathSchema,
+  workbenchIdSchema,
+  workbenchLanesSchema,
+  workbenchTabSchema,
+} from '@taucad/workbench';
+import { fileDigestSchema, refusalReasons } from '#schemas/tools/arrange-workbench.tool.schema.js';
+import { messageStatuses, snapshotKernelUnavailableReason } from '#constants/message.constants.js';
+import { binaryFileContentMetadataSchema, textFileContentMetadataSchema } from '#schemas/file-metadata.schema.js';
+import { cadReferencesSchema } from '#references/cad-reference.schema.js';
+import { kernelPreferences, kernelProviders } from '@taucad/types/constants';
 
 /**
  * Schema for a file entry in the project filesystem.
  * Constrained to match the FileTreeEntry type from @taucad/types.
  */
-const fileTreeEntrySchema = z.object({
+const baseFileTreeEntrySchema = z.object({
   path: z.string(),
   name: z.string(),
-  type: z.enum(['file', 'dir']),
-  size: z.number(),
+  size: z.number().int().nonnegative(),
+});
+
+const fileTreeEntrySchema = z.union([
+  baseFileTreeEntrySchema.extend({ type: z.literal('dir') }).strict(),
+  baseFileTreeEntrySchema.extend({ type: z.literal('file'), ...textFileContentMetadataSchema.shape }).strict(),
+  baseFileTreeEntrySchema.extend({ type: z.literal('file'), ...binaryFileContentMetadataSchema.shape }).strict(),
+  baseFileTreeEntrySchema.extend({ type: z.literal('file') }).strict(),
+]);
+
+const baseFileReferenceSchema = z
+  .object({
+    path: z.string(),
+    name: z.string(),
+  })
+  .strict();
+
+const fileReferenceSchema = z.union([
+  baseFileReferenceSchema
+    .extend({ size: z.number().int().nonnegative(), ...textFileContentMetadataSchema.shape })
+    .strict(),
+  baseFileReferenceSchema
+    .extend({ size: z.number().int().nonnegative(), ...binaryFileContentMetadataSchema.shape })
+    .strict(),
+  baseFileReferenceSchema,
+]);
+
+/** The most files a snapshot's `fileTree` lists (D18). @public */
+export const maxSnapshotFileTreeEntries = 500;
+
+/**
+ * The snapshot's `kernel` object (automatic kernel selection blueprint D4, AKS-7): what an external agent needs to
+ * choose or keep a kernel. The snapshot reaches the vendor of an ACP agent, so an unavailable kernel carries only the
+ * neutral reason and the object names no plan.
+ *
+ * @public
+ */
+export const snapshotKernelSchema = z.strictObject({
+  /** The chat's preference: `auto`, or the kernel the person picked. */
+  preference: z.enum(kernelPreferences),
+  /** The kernel the runtime binds for the project's main entry; absent while the project is entry-less. */
+  owner: z.strictObject({ kernel: z.enum(kernelProviders), entryPath: projectPathSchema }).optional(),
+  /** The kernels routing may choose here, in catalog order. */
+  available: z.array(z.enum(kernelProviders)),
+  /** Every other catalog kernel, each with the neutral reason. */
+  unavailable: z.array(
+    z.strictObject({ kernel: z.enum(kernelProviders), reason: z.literal(snapshotKernelUnavailableReason) }),
+  ),
+  /** The rendered `kernel_skill` text for the current state: the routing card while the project is entry-less. */
+  guidance: z.string(),
 });
 
 /**
@@ -19,31 +79,74 @@ const fileTreeEntrySchema = z.object({
  * @public
  */
 export const snapshotSchema = z.object({
-  /** Array of file entries representing the project filesystem */
+  /**
+   * The project's files, shallowest first and then by path. The producer bounds
+   * it at {@link maxSnapshotFileTreeEntries} so a large project costs the turn a
+   * fixed amount of context (D18); the schema does not, so a client from before
+   * the bound, which sends every file, is still accepted rather than refused.
+   */
   fileTree: z.array(fileTreeEntrySchema).optional(),
+  /** How many files the bound left out of `fileTree`; absent when it lists them all. */
+  fileTreeOmitted: z.number().int().positive().optional(),
   /** The file currently being rendered by the CAD engine */
   activeFile: z
-    .object({
-      path: z.string(),
-      name: z.string(),
-    })
+    .union([
+      baseFileReferenceSchema
+        .extend({ size: z.number().int().nonnegative(), ...textFileContentMetadataSchema.shape })
+        .strict(),
+      baseFileReferenceSchema
+        .extend({ size: z.number().int().nonnegative(), ...binaryFileContentMetadataSchema.shape })
+        .strict(),
+      baseFileReferenceSchema,
+    ])
     .optional(),
   /** The files currently open in editor tabs */
-  openFiles: z
-    .array(
-      z.object({
-        path: z.string(),
-        name: z.string(),
-      }),
-    )
+  openFiles: z.array(fileReferenceSchema).optional(),
+  workbench: z
+    .strictObject({
+      layoutDigest: fileDigestSchema,
+      lanes: workbenchLanesSchema,
+      visible: z.array(workbenchTabSchema).max(32),
+      views: z
+        .array(
+          z.strictObject({
+            id: workbenchIdSchema,
+            name: z.string().max(40),
+            entryPath: projectPathSchema.nullable(),
+            camera: z.union([z.enum(cameraPresets), z.enum(['look', 'pose'])]),
+          }),
+        )
+        .max(16),
+      entries: z
+        .array(
+          z.strictObject({
+            path: projectPathSchema,
+            renderTimeout: z.number().int().optional(),
+            hidden: z.number().int(),
+          }),
+        )
+        .max(16),
+      unavailable: z.array(paneIdSchema).max(16),
+      refused: z.array(z.strictObject({ tab: workbenchTabSchema, reason: z.enum(refusalReasons) })).max(16),
+    })
+    .optional(),
+  /** Kernel preference, owner, availability and the rendered kernel text (automatic kernel selection, AKS-7). */
+  kernel: snapshotKernelSchema.optional(),
+  /** The components the person has selected in the viewer, in the entry the viewer shows (blueprint D6). */
+  viewerSelection: z
+    .strictObject({
+      entryPath: projectPathSchema,
+      selected: cadReferencesSchema,
+    })
     .optional(),
 });
 
 /**
  * Per-message metadata stamped onto `MyUIMessage` rows for UI display:
  * creation timestamp (badges, ordering) and lifecycle status
- * (`pending` / `success` / `error` / `cancelled` — drives spinners, retry
- * affordances, and the hydration auto-regenerate path).
+ * (`pending` / `success` / `error` / `cancelled` — drives spinners and retry
+ * affordances). Persisted command intent, such as one-shot startup
+ * auto-submit, must live outside message metadata.
  *
  * Per-turn agent configuration (kernel, model, mode, toolChoice,
  * testingEnabled, snapshot, contextPayload) lives on `body.agent` and is
@@ -55,4 +158,6 @@ export const snapshotSchema = z.object({
 export const messageMetadataSchema = z.object({
   createdAt: z.number().optional(),
   status: z.enum(messageStatuses).optional(),
+  /** The structured geometry references a user message carries; its text holds each one's `@cad[...]` token. */
+  references: cadReferencesSchema.optional(),
 });

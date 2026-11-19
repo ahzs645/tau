@@ -1,0 +1,2851 @@
+{
+  "metadata": {
+    "language": "openscad",
+    "packageName": "openrscad",
+    "packageVersion": "0.11.0-beta.4",
+    "extractor": "openrscad-lsp BUILTINS table + evaluator-verified signatures",
+    "extractionDate": "2026-10-07T20:49:14.768Z",
+    "totalEntries": 88,
+    "breakdown": {
+      "module": 40,
+      "function": 37,
+      "constant": 11
+    }
+  },
+  "entries": [
+    {
+      "name": "cube",
+      "kind": "module",
+      "category": "3D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "size",
+              "optional": true,
+              "defaultValue": "[1, 1, 1]"
+            },
+            {
+              "name": "center",
+              "optional": true,
+              "defaultValue": "false"
+            }
+          ],
+          "text": "cube(size = [1, 1, 1], center = false)"
+        }
+      ],
+      "docs": {
+        "summary": "Axis-aligned box. `size` is a scalar or `[x,y,z]`.",
+        "remarks": "`size` may be a scalar for a cube."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 57
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:cube"
+    },
+    {
+      "name": "sphere",
+      "kind": "module",
+      "category": "3D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "r",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "sphere(r = 1, $fn, $fa, $fs)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "d",
+              "optional": false
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "sphere(d, $fn, $fa, $fs)"
+        }
+      ],
+      "docs": {
+        "summary": "Sphere of radius `r` (or diameter `d`)."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 63
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:sphere"
+    },
+    {
+      "name": "cylinder",
+      "kind": "module",
+      "category": "3D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "h",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "r",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "center",
+              "optional": true,
+              "defaultValue": "false"
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "cylinder(h = 1, r = 1, center = false, $fn, $fa, $fs)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "h",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "r1",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "r2",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "center",
+              "optional": true,
+              "defaultValue": "false"
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "cylinder(h = 1, r1 = 1, r2 = 1, center = false, $fn, $fa, $fs)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "h",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "d",
+              "optional": false
+            },
+            {
+              "name": "center",
+              "optional": true,
+              "defaultValue": "false"
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "cylinder(h = 1, d, center = false, $fn, $fa, $fs)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "h",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "d1",
+              "optional": false
+            },
+            {
+              "name": "d2",
+              "optional": false
+            },
+            {
+              "name": "center",
+              "optional": true,
+              "defaultValue": "false"
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "cylinder(h = 1, d1, d2, center = false, $fn, $fa, $fs)"
+        }
+      ],
+      "docs": {
+        "summary": "Cylinder or cone of height `h`.",
+        "remarks": "Positional order is h, r1, r2, center; pass r, d, d1 and d2 by name."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 69
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:cylinder"
+    },
+    {
+      "name": "polyhedron",
+      "kind": "module",
+      "category": "3D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "points",
+              "optional": false
+            },
+            {
+              "name": "faces",
+              "optional": false
+            },
+            {
+              "name": "convexity",
+              "optional": true,
+              "defaultValue": "1"
+            }
+          ],
+          "text": "polyhedron(points, faces, convexity = 1)"
+        }
+      ],
+      "docs": {
+        "summary": "Arbitrary solid from vertices and faces."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 75
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:polyhedron"
+    },
+    {
+      "name": "square",
+      "kind": "module",
+      "category": "2D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "size",
+              "optional": true,
+              "defaultValue": "[1, 1]"
+            },
+            {
+              "name": "center",
+              "optional": true,
+              "defaultValue": "false"
+            }
+          ],
+          "text": "square(size = [1, 1], center = false)"
+        }
+      ],
+      "docs": {
+        "summary": "Axis-aligned 2D rectangle.",
+        "remarks": "`size` may be a scalar for a square."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 82
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:square"
+    },
+    {
+      "name": "circle",
+      "kind": "module",
+      "category": "2D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "r",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "circle(r = 1, $fn, $fa, $fs)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "d",
+              "optional": false
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "circle(d, $fn, $fa, $fs)"
+        }
+      ],
+      "docs": {
+        "summary": "2D circle of radius `r` (or diameter `d`)."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 88
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:circle"
+    },
+    {
+      "name": "polygon",
+      "kind": "module",
+      "category": "2D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "points",
+              "optional": false
+            },
+            {
+              "name": "paths",
+              "optional": false
+            }
+          ],
+          "text": "polygon(points, paths)"
+        }
+      ],
+      "docs": {
+        "summary": "2D polygon from a list of points."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 94
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:polygon"
+    },
+    {
+      "name": "text",
+      "kind": "module",
+      "category": "2D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "text",
+              "optional": false
+            },
+            {
+              "name": "size",
+              "optional": true,
+              "defaultValue": "10"
+            },
+            {
+              "name": "font",
+              "optional": true,
+              "defaultValue": "\"Liberation Sans\""
+            },
+            {
+              "name": "direction",
+              "optional": true,
+              "defaultValue": "\"ltr\""
+            },
+            {
+              "name": "language",
+              "optional": true,
+              "defaultValue": "\"en\""
+            },
+            {
+              "name": "script",
+              "optional": true,
+              "defaultValue": "\"latin\""
+            },
+            {
+              "name": "halign",
+              "optional": true,
+              "defaultValue": "\"left\""
+            },
+            {
+              "name": "valign",
+              "optional": true,
+              "defaultValue": "\"baseline\""
+            },
+            {
+              "name": "spacing",
+              "optional": true,
+              "defaultValue": "1"
+            }
+          ],
+          "text": "text(text, size = 10, font = \"Liberation Sans\", direction = \"ltr\", language = \"en\", script = \"latin\", halign = \"left\", valign = \"baseline\", spacing = 1)"
+        }
+      ],
+      "docs": {
+        "summary": "2D text outlines.",
+        "remarks": "Curve resolution follows the ambient $fn, not a per-call one."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 100
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:text"
+    },
+    {
+      "name": "import",
+      "kind": "module",
+      "category": "2D primitives",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "file",
+              "optional": false
+            }
+          ],
+          "text": "import(file)"
+        }
+      ],
+      "docs": {
+        "summary": "Import geometry from STL/OFF/DXF/SVG."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 106
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:import"
+    },
+    {
+      "name": "translate",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "v",
+              "optional": true,
+              "defaultValue": "[0, 0, 0]"
+            }
+          ],
+          "text": "translate(v = [0, 0, 0])"
+        }
+      ],
+      "docs": {
+        "summary": "Move children by a vector."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 113
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:translate"
+    },
+    {
+      "name": "rotate",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "a",
+              "optional": true,
+              "defaultValue": "[0, 0, 0]"
+            }
+          ],
+          "text": "rotate(a = [0, 0, 0])"
+        },
+        {
+          "parameters": [
+            {
+              "name": "a",
+              "optional": true,
+              "defaultValue": "0"
+            }
+          ],
+          "text": "rotate(a = 0)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "a",
+              "optional": true,
+              "defaultValue": "0"
+            },
+            {
+              "name": "v",
+              "optional": true,
+              "defaultValue": "[0, 0, 1]"
+            }
+          ],
+          "text": "rotate(a = 0, v = [0, 0, 1])"
+        }
+      ],
+      "docs": {
+        "summary": "Rotate children (degrees).",
+        "remarks": "A vector rotates about X, then Y, then Z; a scalar about Z; with v, about axis v."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 119
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:rotate"
+    },
+    {
+      "name": "scale",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "v",
+              "optional": true,
+              "defaultValue": "[1, 1, 1]"
+            }
+          ],
+          "text": "scale(v = [1, 1, 1])"
+        },
+        {
+          "parameters": [
+            {
+              "name": "v",
+              "optional": true,
+              "defaultValue": "1"
+            }
+          ],
+          "text": "scale(v = 1)"
+        }
+      ],
+      "docs": {
+        "summary": "Scale children by a vector or scalar."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 125
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:scale"
+    },
+    {
+      "name": "resize",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "newsize",
+              "optional": true,
+              "defaultValue": "[0, 0, 0]"
+            },
+            {
+              "name": "auto",
+              "optional": true,
+              "defaultValue": "false"
+            }
+          ],
+          "text": "resize(newsize = [0, 0, 0], auto = false)"
+        }
+      ],
+      "docs": {
+        "summary": "Resize children to absolute dimensions.",
+        "remarks": "`auto` may be per axis."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 131
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:resize"
+    },
+    {
+      "name": "mirror",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "v",
+              "optional": true,
+              "defaultValue": "[1, 0, 0]"
+            }
+          ],
+          "text": "mirror(v = [1, 0, 0])"
+        }
+      ],
+      "docs": {
+        "summary": "Mirror children across a plane through the origin."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 137
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:mirror"
+    },
+    {
+      "name": "multmatrix",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "m",
+              "optional": false
+            }
+          ],
+          "text": "multmatrix(m)"
+        }
+      ],
+      "docs": {
+        "summary": "Apply a 4×3/4×4 affine matrix to children."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 143
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:multmatrix"
+    },
+    {
+      "name": "color",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "c",
+              "optional": true,
+              "defaultValue": "\"name\""
+            },
+            {
+              "name": "alpha",
+              "optional": true,
+              "defaultValue": "1"
+            }
+          ],
+          "text": "color(c = \"name\", alpha = 1)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "c",
+              "optional": true,
+              "defaultValue": "\"#rrggbb\""
+            },
+            {
+              "name": "alpha",
+              "optional": true,
+              "defaultValue": "1"
+            }
+          ],
+          "text": "color(c = \"#rrggbb\", alpha = 1)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "c",
+              "optional": true,
+              "defaultValue": "[r, g, b, a]"
+            }
+          ],
+          "text": "color(c = [r, g, b, a])"
+        }
+      ],
+      "docs": {
+        "summary": "Recolor children for preview.",
+        "remarks": "Vector channels run 0 to 1."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 149
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:color"
+    },
+    {
+      "name": "offset",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "r",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "offset(r = 1, $fn, $fa, $fs)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "delta",
+              "optional": false
+            },
+            {
+              "name": "chamfer",
+              "optional": true,
+              "defaultValue": "false"
+            }
+          ],
+          "text": "offset(delta, chamfer = false)"
+        }
+      ],
+      "docs": {
+        "summary": "Grow/shrink a 2D shape."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 155
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:offset"
+    },
+    {
+      "name": "hull",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "hull()"
+        }
+      ],
+      "docs": {
+        "summary": "Convex hull of all children."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 161
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:hull"
+    },
+    {
+      "name": "minkowski",
+      "kind": "module",
+      "category": "Transforms",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "minkowski()"
+        }
+      ],
+      "docs": {
+        "summary": "Minkowski sum of the children."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 162
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:minkowski"
+    },
+    {
+      "name": "union",
+      "kind": "module",
+      "category": "Booleans",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "union()"
+        }
+      ],
+      "docs": {
+        "summary": "Combine all children into one solid."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 169
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:union"
+    },
+    {
+      "name": "difference",
+      "kind": "module",
+      "category": "Booleans",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "difference()"
+        }
+      ],
+      "docs": {
+        "summary": "Subtract later children from the first."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 175
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:difference"
+    },
+    {
+      "name": "intersection",
+      "kind": "module",
+      "category": "Booleans",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "intersection()"
+        }
+      ],
+      "docs": {
+        "summary": "Keep only the volume shared by all children."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 181
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:intersection"
+    },
+    {
+      "name": "linear_extrude",
+      "kind": "module",
+      "category": "Extrusion / projection",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "height",
+              "optional": true,
+              "defaultValue": "100"
+            },
+            {
+              "name": "center",
+              "optional": true,
+              "defaultValue": "false"
+            },
+            {
+              "name": "twist",
+              "optional": true,
+              "defaultValue": "0"
+            },
+            {
+              "name": "slices",
+              "optional": false
+            },
+            {
+              "name": "scale",
+              "optional": true,
+              "defaultValue": "1"
+            },
+            {
+              "name": "v",
+              "optional": true,
+              "defaultValue": "[0, 0, 1]"
+            }
+          ],
+          "text": "linear_extrude(height = 100, center = false, twist = 0, slices, scale = 1, v = [0, 0, 1])"
+        }
+      ],
+      "docs": {
+        "summary": "Extrude a 2D shape along Z.",
+        "remarks": "Only height is positional. slices defaults to 1, or ceil(|twist| / 15) when twisted."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 188
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:linear_extrude"
+    },
+    {
+      "name": "rotate_extrude",
+      "kind": "module",
+      "category": "Extrusion / projection",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "angle",
+              "optional": true,
+              "defaultValue": "360"
+            },
+            {
+              "name": "start",
+              "optional": true,
+              "defaultValue": "0"
+            },
+            {
+              "name": "$fn",
+              "optional": true
+            },
+            {
+              "name": "$fa",
+              "optional": true
+            },
+            {
+              "name": "$fs",
+              "optional": true
+            }
+          ],
+          "text": "rotate_extrude(angle = 360, start = 0, $fn, $fa, $fs)"
+        }
+      ],
+      "docs": {
+        "summary": "Revolve a 2D shape around the Z axis."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 194
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:rotate_extrude"
+    },
+    {
+      "name": "projection",
+      "kind": "module",
+      "category": "Extrusion / projection",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "cut",
+              "optional": true,
+              "defaultValue": "false"
+            }
+          ],
+          "text": "projection(cut=false)"
+        }
+      ],
+      "docs": {
+        "summary": "Project 3D geometry down to 2D."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 200
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:projection"
+    },
+    {
+      "name": "for",
+      "kind": "module",
+      "category": "Control-flow modules",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "for (i = [start : end]) children"
+        },
+        {
+          "parameters": [],
+          "text": "for (i = [start : step : end]) children"
+        },
+        {
+          "parameters": [],
+          "text": "for (item = [a, b, c]) children"
+        },
+        {
+          "parameters": [],
+          "text": "for (i = [0 : 2], j = [0 : 2]) children"
+        },
+        {
+          "parameters": [],
+          "text": "[for (i = [start : end]) expression]"
+        },
+        {
+          "parameters": [],
+          "text": "[for (i = 0; i < n; i = i + 1) expression]"
+        }
+      ],
+      "docs": {
+        "summary": "Iterate, instantiating children per value.",
+        "remarks": "Ranges include their end. In a list comprehension, for yields one element per value."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 207
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:for"
+    },
+    {
+      "name": "intersection_for",
+      "kind": "module",
+      "category": "Control-flow modules",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "intersection_for (i = [start : end]) children"
+        }
+      ],
+      "docs": {
+        "summary": "Intersect children across all iterations."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 213
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:intersection_for"
+    },
+    {
+      "name": "if",
+      "kind": "module",
+      "category": "Control-flow modules",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "if (condition) children"
+        },
+        {
+          "parameters": [],
+          "text": "if (condition) children else children"
+        },
+        {
+          "parameters": [],
+          "text": "[for (x = list) if (condition) x]"
+        }
+      ],
+      "docs": {
+        "summary": "Conditionally instantiate children."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 219
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:if"
+    },
+    {
+      "name": "let",
+      "kind": "module",
+      "category": "Control-flow modules",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "let (name = value) children"
+        },
+        {
+          "parameters": [],
+          "text": "y = let (name = value) expression;"
+        },
+        {
+          "parameters": [],
+          "text": "[for (i = [start : end]) let (name = value) expression]"
+        }
+      ],
+      "docs": {
+        "summary": "Bind variables for the children scope."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 225
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:let"
+    },
+    {
+      "name": "children",
+      "kind": "module",
+      "category": "Control-flow modules",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "children()"
+        },
+        {
+          "parameters": [
+            {
+              "name": "index",
+              "optional": false
+            }
+          ],
+          "text": "children(index)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "[i, j]",
+              "optional": false
+            }
+          ],
+          "text": "children([i, j])"
+        },
+        {
+          "parameters": [
+            {
+              "name": "[start : end]",
+              "optional": false
+            }
+          ],
+          "text": "children([start : end])"
+        }
+      ],
+      "docs": {
+        "summary": "Instantiate the children passed to a module.",
+        "remarks": "$children counts the children passed in."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 231
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:children"
+    },
+    {
+      "name": "echo",
+      "kind": "module",
+      "category": "Control-flow modules",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "value",
+              "optional": false
+            },
+            {
+              "name": "...",
+              "optional": true,
+              "variadic": true
+            }
+          ],
+          "text": "echo(value, ...)"
+        },
+        {
+          "parameters": [],
+          "text": "y = echo(value) expression;"
+        }
+      ],
+      "docs": {
+        "summary": "Print values to the console.",
+        "remarks": "A named argument prints as name = value."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 237
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:echo"
+    },
+    {
+      "name": "assert",
+      "kind": "module",
+      "category": "Control-flow modules",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "condition",
+              "optional": false
+            },
+            {
+              "name": "message",
+              "optional": false
+            }
+          ],
+          "text": "assert(condition, message)"
+        },
+        {
+          "parameters": [],
+          "text": "y = assert(condition, message) expression;"
+        }
+      ],
+      "docs": {
+        "summary": "Abort with a message if `cond` is false."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 243
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:assert"
+    },
+    {
+      "name": "render",
+      "kind": "module",
+      "category": "Control-flow modules",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "render()"
+        }
+      ],
+      "docs": {
+        "summary": "Force a full CSG render of children.",
+        "remarks": "A passthrough in OpenRSCAD."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 249
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:render"
+    },
+    {
+      "name": "sin",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "deg",
+              "optional": false
+            }
+          ],
+          "text": "sin(deg)"
+        }
+      ],
+      "docs": {
+        "summary": "Sine (degrees)."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 256
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:sin"
+    },
+    {
+      "name": "cos",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "deg",
+              "optional": false
+            }
+          ],
+          "text": "cos(deg)"
+        }
+      ],
+      "docs": {
+        "summary": "Cosine (degrees)."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 257
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:cos"
+    },
+    {
+      "name": "tan",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "deg",
+              "optional": false
+            }
+          ],
+          "text": "tan(deg)"
+        }
+      ],
+      "docs": {
+        "summary": "Tangent (degrees)."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 258
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:tan"
+    },
+    {
+      "name": "asin",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "asin(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Arcsine, in degrees."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 259
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:asin"
+    },
+    {
+      "name": "acos",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "acos(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Arccosine, in degrees."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 260
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:acos"
+    },
+    {
+      "name": "atan",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "atan(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Arctangent, in degrees."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 261
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:atan"
+    },
+    {
+      "name": "atan2",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "y",
+              "optional": false
+            },
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "atan2(y, x)"
+        }
+      ],
+      "docs": {
+        "summary": "Two-argument arctangent, in degrees."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 262
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:atan2"
+    },
+    {
+      "name": "abs",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "abs(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Absolute value."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 268
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:abs"
+    },
+    {
+      "name": "sign",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "sign(x)"
+        }
+      ],
+      "docs": {
+        "summary": "-1, 0, or 1 by sign of `x`."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 269
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:sign"
+    },
+    {
+      "name": "floor",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "floor(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Round down to an integer."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 270
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:floor"
+    },
+    {
+      "name": "ceil",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "ceil(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Round up to an integer."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 271
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:ceil"
+    },
+    {
+      "name": "round",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "round(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Round to the nearest integer."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 272
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:round"
+    },
+    {
+      "name": "sqrt",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "sqrt(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Square root."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 278
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:sqrt"
+    },
+    {
+      "name": "pow",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "base",
+              "optional": false
+            },
+            {
+              "name": "exp",
+              "optional": false
+            }
+          ],
+          "text": "pow(base, exp)"
+        }
+      ],
+      "docs": {
+        "summary": "Exponentiation."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 279
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:pow"
+    },
+    {
+      "name": "exp",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "exp(x)"
+        }
+      ],
+      "docs": {
+        "summary": "e raised to `x`."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 280
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:exp"
+    },
+    {
+      "name": "ln",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "ln(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Natural logarithm."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 281
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:ln"
+    },
+    {
+      "name": "log",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "log(x)"
+        }
+      ],
+      "docs": {
+        "summary": "Base-10 logarithm."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 282
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:log"
+    },
+    {
+      "name": "min",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "a",
+              "optional": false
+            },
+            {
+              "name": "b",
+              "optional": false
+            },
+            {
+              "name": "...",
+              "optional": true,
+              "variadic": true
+            }
+          ],
+          "text": "min(a, b, ...)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "values",
+              "optional": false
+            }
+          ],
+          "text": "min(values)"
+        }
+      ],
+      "docs": {
+        "summary": "Smallest of the arguments."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 283
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:min"
+    },
+    {
+      "name": "max",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "a",
+              "optional": false
+            },
+            {
+              "name": "b",
+              "optional": false
+            },
+            {
+              "name": "...",
+              "optional": true,
+              "variadic": true
+            }
+          ],
+          "text": "max(a, b, ...)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "values",
+              "optional": false
+            }
+          ],
+          "text": "max(values)"
+        }
+      ],
+      "docs": {
+        "summary": "Largest of the arguments."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 289
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:max"
+    },
+    {
+      "name": "norm",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "v",
+              "optional": false
+            }
+          ],
+          "text": "norm(v)"
+        }
+      ],
+      "docs": {
+        "summary": "Euclidean length of a vector."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 295
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:norm"
+    },
+    {
+      "name": "cross",
+      "kind": "function",
+      "category": "Math functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "a",
+              "optional": false
+            },
+            {
+              "name": "b",
+              "optional": false
+            }
+          ],
+          "text": "cross(a, b)"
+        }
+      ],
+      "docs": {
+        "summary": "Cross product of two 3-vectors."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 296
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:cross"
+    },
+    {
+      "name": "len",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "value",
+              "optional": false
+            }
+          ],
+          "text": "len(value)"
+        }
+      ],
+      "docs": {
+        "summary": "Length of a vector or string."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 303
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:len"
+    },
+    {
+      "name": "concat",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "a",
+              "optional": false
+            },
+            {
+              "name": "b",
+              "optional": false
+            },
+            {
+              "name": "...",
+              "optional": true,
+              "variadic": true
+            }
+          ],
+          "text": "concat(a, b, ...)"
+        }
+      ],
+      "docs": {
+        "summary": "Concatenate vectors/values into one list."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 309
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:concat"
+    },
+    {
+      "name": "lookup",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "key",
+              "optional": false
+            },
+            {
+              "name": "table",
+              "optional": false
+            }
+          ],
+          "text": "lookup(key, table)"
+        }
+      ],
+      "docs": {
+        "summary": "Linear-interpolated table lookup."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 315
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:lookup"
+    },
+    {
+      "name": "str",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "value",
+              "optional": false
+            },
+            {
+              "name": "...",
+              "optional": true,
+              "variadic": true
+            }
+          ],
+          "text": "str(value, ...)"
+        }
+      ],
+      "docs": {
+        "summary": "Concatenate values into a string."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 321
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:str"
+    },
+    {
+      "name": "chr",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "code",
+              "optional": false
+            },
+            {
+              "name": "...",
+              "optional": true,
+              "variadic": true
+            }
+          ],
+          "text": "chr(code, ...)"
+        },
+        {
+          "parameters": [
+            {
+              "name": "codes",
+              "optional": false
+            }
+          ],
+          "text": "chr(codes)"
+        }
+      ],
+      "docs": {
+        "summary": "Unicode code point(s) to a string."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 327
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:chr"
+    },
+    {
+      "name": "ord",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "char",
+              "optional": false
+            }
+          ],
+          "text": "ord(char)"
+        }
+      ],
+      "docs": {
+        "summary": "First character to its Unicode code point."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 333
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:ord"
+    },
+    {
+      "name": "search",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "match_value",
+              "optional": false
+            },
+            {
+              "name": "string_or_vector",
+              "optional": false
+            },
+            {
+              "name": "num_returns_per_match",
+              "optional": false
+            },
+            {
+              "name": "index_col_num",
+              "optional": false
+            }
+          ],
+          "text": "search(match_value, string_or_vector, num_returns_per_match, index_col_num)"
+        }
+      ],
+      "docs": {
+        "summary": "Find matches in a list/string.",
+        "remarks": "num_returns_per_match defaults to 1 (0 returns all); index_col_num to 0."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 339
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:search"
+    },
+    {
+      "name": "parent_module",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "index",
+              "optional": false
+            }
+          ],
+          "text": "parent_module(index)"
+        }
+      ],
+      "docs": {
+        "summary": "Name of a user module on the active instantiation stack.",
+        "remarks": "index defaults to 1."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 345
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:parent_module"
+    },
+    {
+      "name": "is_undef",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "is_undef(x)"
+        }
+      ],
+      "docs": {
+        "summary": "True if `x` is undefined."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 351
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:is_undef"
+    },
+    {
+      "name": "is_bool",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "is_bool(x)"
+        }
+      ],
+      "docs": {
+        "summary": "True if `x` is a boolean."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 357
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:is_bool"
+    },
+    {
+      "name": "is_num",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "is_num(x)"
+        }
+      ],
+      "docs": {
+        "summary": "True if `x` is a number."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 363
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:is_num"
+    },
+    {
+      "name": "is_string",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "is_string(x)"
+        }
+      ],
+      "docs": {
+        "summary": "True if `x` is a string."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 364
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:is_string"
+    },
+    {
+      "name": "is_list",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "is_list(x)"
+        }
+      ],
+      "docs": {
+        "summary": "True if `x` is a list/vector."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 370
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:is_list"
+    },
+    {
+      "name": "is_function",
+      "kind": "function",
+      "category": "List / string functions",
+      "signatures": [
+        {
+          "parameters": [
+            {
+              "name": "x",
+              "optional": false
+            }
+          ],
+          "text": "is_function(x)"
+        }
+      ],
+      "docs": {
+        "summary": "True if `x` is a function value."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 376
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:is_function"
+    },
+    {
+      "name": "$fn",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Fixed number of fragments in a circle."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 383
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$fn"
+    },
+    {
+      "name": "$fa",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Minimum angle per fragment (degrees)."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 389
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$fa"
+    },
+    {
+      "name": "$fs",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Minimum fragment size."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 395
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$fs"
+    },
+    {
+      "name": "$t",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Animation time, 0→1."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 396
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$t"
+    },
+    {
+      "name": "$parent_modules",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Number of active user-module instantiations."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 397
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$parent_modules"
+    },
+    {
+      "name": "$preview",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "True during F5 preview, false during F6 render."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 403
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$preview"
+    },
+    {
+      "name": "$vpr",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Viewport rotation `[x,y,z]`."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 409
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$vpr"
+    },
+    {
+      "name": "$vpt",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Viewport translation `[x,y,z]`."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 410
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$vpt"
+    },
+    {
+      "name": "$vpd",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Viewport camera distance."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 411
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$vpd"
+    },
+    {
+      "name": "$vpf",
+      "kind": "constant",
+      "category": "Special variables (offered as completions)",
+      "docs": {
+        "summary": "Viewport field of view."
+      },
+      "source": {
+        "file": "crates/openrscad-lsp/src/builtins.rs",
+        "line": 412
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$vpf"
+    },
+    {
+      "name": "module",
+      "kind": "module",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "module name(param, option = default) { children(); }"
+        }
+      ],
+      "docs": {
+        "summary": "Declare a module, instantiated as a statement with optional children."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:module"
+    },
+    {
+      "name": "function",
+      "kind": "function",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "function name(param, option = default) = expression;"
+        },
+        {
+          "parameters": [],
+          "text": "f = function (x) expression;"
+        }
+      ],
+      "docs": {
+        "summary": "Declare a function, or bind a function literal to a variable.",
+        "remarks": "Call either form as name(...) or f(...)."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:function"
+    },
+    {
+      "name": "include",
+      "kind": "module",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "include <path/file.scad>"
+        }
+      ],
+      "docs": {
+        "summary": "Splice a file in place, running its top-level statements and assignments."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:include"
+    },
+    {
+      "name": "use",
+      "kind": "module",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "use <path/file.scad>"
+        }
+      ],
+      "docs": {
+        "summary": "Import only the modules and functions a file declares; its top-level statements do not run."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:use"
+    },
+    {
+      "name": "each",
+      "kind": "function",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "[each list, item]"
+        },
+        {
+          "parameters": [],
+          "text": "[for (list = lists) each list]"
+        }
+      ],
+      "docs": {
+        "summary": "Splice a list or range into the enclosing list."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:each"
+    },
+    {
+      "name": "$children",
+      "kind": "constant",
+      "category": "Language",
+      "docs": {
+        "summary": "Number of children passed to the current module."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": false
+      },
+      "id": "openscad:$children"
+    },
+    {
+      "name": "#",
+      "kind": "module",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "#cube(10);"
+        }
+      ],
+      "docs": {
+        "summary": "Highlight a subtree in the preview; it still renders."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:#"
+    },
+    {
+      "name": "%",
+      "kind": "module",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "%cube(10);"
+        }
+      ],
+      "docs": {
+        "summary": "Show a subtree as a transparent background, excluded from the result."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:%"
+    },
+    {
+      "name": "!",
+      "kind": "module",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "!cube(10);"
+        }
+      ],
+      "docs": {
+        "summary": "Render only this subtree."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:!"
+    },
+    {
+      "name": "*",
+      "kind": "module",
+      "category": "Language",
+      "signatures": [
+        {
+          "parameters": [],
+          "text": "*cube(10);"
+        }
+      ],
+      "docs": {
+        "summary": "Disable a subtree."
+      },
+      "source": {
+        "file": "crates/openrscad-syntax/src/ast.rs"
+      },
+      "languageSpecific": {
+        "language": "openscad",
+        "isModule": true
+      },
+      "id": "openscad:*"
+    }
+  ]
+}

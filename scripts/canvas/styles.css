@@ -1,0 +1,40 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '../../packages/ui/src/styles/tokens.css';
+@import '../../packages/ui/src/styles/base.css';
+@import '../../apps/ui/app/styles/scroll-shadows.css';
+@source '../../packages/ui/src';
+@source '../../packages/viewer/src';
+@source '../../packages/workbench-panes/src';
+
+@font-face {
+  font-family: 'Geist Sans';
+  src: url('../../apps/ui/public/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../../apps/ui/public/fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@layer base {
+  code,
+  pre {
+    @apply font-mono;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

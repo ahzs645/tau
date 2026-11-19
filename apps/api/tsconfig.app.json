@@ -5,11 +5,8 @@
     "types": ["node"],
     "target": "ESNext",
     "outDir": "./out-tsc/lib",
-    "paths": {
-      "#*": ["./app/*"]
-    },
     "erasableSyntaxOnly": false // Incompatible with NestJS dependency injection.
   },
-  "include": ["app/**/*.ts"],
+  "include": ["app/**/*.ts", "../libs/api-core/src/types/environment.d.ts"],
   "exclude": ["app/**/*.spec.ts", "app/**/*.test.ts"]
 }

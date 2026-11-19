@@ -1,0 +1,571 @@
+/* oxlint-disable no-await-in-loop -- Observe sequential UI saves and bounded filesystem polling. */
+/** Drive the installed renderer over loopback CDP; no main inspector, fixture gateway, or injected filesystem. */
+import { createHash } from 'node:crypto';
+import { readFile, readdir, writeFile, stat } from 'node:fs/promises';
+import { join, relative, resolve, dirname, basename } from 'node:path';
+import { setTimeout as wait } from 'node:timers/promises';
+import { chromium } from 'playwright';
+import type { Page } from 'playwright';
+import { z } from 'zod';
+/* oxlint-disable-next-line no-restricted-imports -- Installed qualification owns its attach failure evidence. */
+import { recordCdpAttachFailure, snapshotTargets } from './qualification-cdp-diagnostics.mjs';
+/* oxlint-disable-next-line no-restricted-imports -- Installed qualification owns its attach readiness. */
+import { waitForCommittedDocument } from './qualification-cdp-ready.mjs';
+/* oxlint-disable-next-line no-restricted-imports -- Installed qualification owns the bounded native close driver. */
+import { requestQualificationQuit } from './qualification-quit.mjs';
+
+const source =
+  'from dataclasses import dataclass\nfrom build123d import Box, Shape\n\n@dataclass(frozen=True)\nclass Params:\n    width: float = 12\n    depth: float = 18\n    height: float = 6\n\ndef main(params: Params) -> Shape:\n    return Box(params.width, params.depth, params.height)\n';
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
+const findSource = async (root: string): Promise<string[]> => {
+  const result: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      result.push(...(await findSource(path)));
+    } else if (entry.name === 'main.py') {
+      result.push(path);
+    }
+  }
+  return result;
+};
+const exportGeometry = async (
+  page: Page,
+  projectRoot: string,
+  formatTimeout: number,
+): Promise<{ path: string; sha256: string; vertices: number }> => {
+  const directory = join(projectRoot, 'exports');
+  // Only finished `.glb` files are observed: the app writes each export to a hidden `.<name>.<pid>.<uuid>.tmp` and
+  // renames it into place, so a temporary name can vanish between `readdir` and `stat` (run 41759324410
+  // debian-apt-x11 failed on exactly that ENOENT after the GLB export had started).
+  const existingNames = await readdir(directory).catch(() => []);
+  const previousNames = existingNames.filter((name) => name.endsWith('.glb'));
+  const before = new Map(
+    await Promise.all(
+      previousNames.map(async (name) => {
+        const entry = await stat(join(directory, name));
+        return [name, entry.mtimeMs] as const;
+      }),
+    ),
+  );
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  // The pane names this section 'Format', singular, and offers one format through a combo box
+  // rather than the multi-select toggles it carried before #1150. Selection mirrors the
+  // maintained pattern in apps/ui-e2e/src/export-pane.spec.ts so the two cannot drift apart again.
+  // The pane shows 'No geometry to export' until the model has rendered, and on a fresh profile
+  // that waits for the first Build123d runtime download (277 MB, run 40998016336 debian-apt-x11).
+  // The visible canvas does not imply geometry, so this wait carries the same budget as the canvas.
+  const format = page.getByRole('region', { name: 'Format', exact: true });
+  await format.waitFor({ state: 'visible', timeout: formatTimeout });
+  const picker = format.getByRole('button', { name: 'Export format' });
+  await picker.waitFor({ state: 'visible' });
+  await picker.click();
+  // Name what was observed when GLB never becomes selectable: the bare click would otherwise
+  // time out anonymously, which is the failure class this selector fix exists to remove. The
+  // original error travels as `cause`, so a detached handle or a crashed browser stays readable
+  // rather than being reported as a missing format.
+  const glb = page.locator('[cmdk-item][data-value="glb"]');
+  await glb.waitFor({ state: 'visible' }).catch((error: unknown) => {
+    throw new Error('GLB did not become selectable in the export picker', { cause: error });
+  });
+  await glb.click();
+  const download = page.getByLabel('Download to disk');
+  if (await download.isChecked()) {
+    await download.click();
+  }
+  const save = page.getByLabel('Save to project');
+  if (!(await save.isChecked())) {
+    await save.click();
+  }
+  await page.getByRole('button', { name: 'Export GLB', exact: true }).click();
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    for (const name of await readdir(directory).catch(() => [])) {
+      if (!name.endsWith('.glb')) {
+        continue;
+      }
+      const path = join(directory, name);
+      const entry = await stat(path);
+      if (entry.mtimeMs === before.get(name)) {
+        continue;
+      }
+      const bytes = await readFile(path);
+      if (
+        bytes.length < 20 ||
+        bytes.readUInt32LE(0) !== 0x46_54_6c_67 ||
+        bytes.readUInt32LE(4) !== 2 ||
+        bytes.readUInt32LE(8) !== bytes.length ||
+        bytes.readUInt32LE(16) !== 0x4e_4f_53_4a
+      ) {
+        throw new Error('Export is not a complete GLB');
+      }
+      const document = JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)).toString()) as {
+        meshes?: Array<{ primitives: Array<{ attributes: { POSITION: number } }> }>;
+        accessors?: Array<{ count: number }>;
+      };
+      const vertices = (document.meshes ?? [])
+        .flatMap((mesh) => mesh.primitives)
+        .reduce((total, primitive) => total + (document.accessors?.[primitive.attributes.POSITION]?.count ?? 0), 0);
+      if (!Number.isSafeInteger(vertices) || vertices < 3) {
+        throw new Error('Export contains no actual geometry');
+      }
+      return { path, sha256: createHash('sha256').update(bytes).digest('hex'), vertices };
+    }
+    await wait(250);
+  }
+  throw new Error('Installed renderer did not produce a fresh geometry export');
+};
+/**
+ * Navigates only after the app's own first load has finished. A launch is waited for only by its debugging port,
+ * so the harness can attach while the main process still awaits `window.loadURL('/')`; navigating then aborts
+ * that load, which rejects the app's bootstrap and exits the app (run 41568143873 macos-dmg-arm64 and
+ * macos-zip-arm64 `ERR_ABORTED; maybe frame was detached?`, then run 41576899441 macos-dmg-arm64 with no app
+ * page left). Waiting for that document lets the app settle; it accepts nothing new.
+ */
+const navigateAfterFirstLoad = async (page: Page, url: string): Promise<void> => {
+  // The page's own document state, not Playwright's lifecycle record of a page it attached to mid-load.
+  await page.waitForFunction(() => document.readyState === 'complete');
+  await page.goto(url);
+};
+
+const main = async (): Promise<void> => {
+  if (process.env['TAU_QUALIFICATION_DISPOSABLE_HOST'] !== '1') {
+    throw new Error('Renderer qualification requires an explicitly disposable host');
+  }
+  const profile = resolve(process.env['TAU_QUALIFICATION_PROFILE'] ?? '');
+  const output = process.env['TAU_QUALIFICATION_RENDERER_OUTPUT'];
+  const stage = process.env['TAU_QUALIFICATION_STAGE'];
+  if (!output || !['a', 'b', 'c'].includes(stage ?? '') || !process.env['TAU_QUALIFICATION_PROFILE']) {
+    throw new Error('Qualification profile, stage and output are required');
+  }
+  const portText = await readFile(join(profile, 'DevToolsActivePort'), 'utf8');
+  const port = Number(portText.split('\n')[0]);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('Invalid renderer debugging port');
+  }
+  const expectedPid = Number(process.env['TAU_QUALIFICATION_EXPECTED_PID']);
+  const recordFailure = async (beforeAttach: unknown): Promise<void> =>
+    recordCdpAttachFailure({
+      port,
+      pid: Number.isSafeInteger(expectedPid) && expectedPid > 0 ? expectedPid : undefined,
+      output,
+      profile,
+      beforeAttach,
+    });
+  // Attach only once the window has committed its first app document. Attaching while that commit is in flight
+  // leaves Playwright waiting for a navigation event Chromium never sends (macOS ZIP `c/reinstall-ui`, runs
+  // 42536450184 and 42563760774); see qualification-cdp-ready.mts. The wait is bounded by the same two minutes
+  // the harness gives the app renderer to appear; no existing timeout changes.
+  await waitForCommittedDocument({
+    port,
+    accept: (href) => href.startsWith('app://tau/'),
+    deadline: Date.now() + 120_000,
+  }).catch(async (error: unknown) => {
+    await recordFailure(await snapshotTargets(port));
+    throw error;
+  });
+  const beforeAttach = await snapshotTargets(port);
+  // A freshly reinstalled app can publish its debugging port before its browser answers CDP target discovery: run
+  // 41745619222 macos-dmg-arm64 connected the reinstall-ui websocket and then hit the default 30s connect timeout.
+  // Allow the same two minutes the harness already gives the app renderer to appear; it accepts nothing new.
+  const attach = chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 120_000 });
+  const browser = await attach.catch(async (error: unknown) => {
+    await recordFailure(beforeAttach);
+    throw error;
+  });
+  let page: Page | undefined;
+  try {
+    const rendererDeadline = Date.now() + 120_000;
+    while (!page && Date.now() < rendererDeadline) {
+      page = browser
+        .contexts()
+        .flatMap((context) => context.pages())
+        .find((candidate) => candidate.url().startsWith('app://tau/'));
+      if (!page) {
+        await wait(100);
+      }
+    }
+    if (!page) {
+      throw new Error('Installed app renderer unavailable');
+    }
+    page.setDefaultTimeout(120_000);
+    const action = process.env['TAU_QUALIFICATION_RENDERER_ACTION'];
+    if (action === 'uri' || action === 'file') {
+      if (action === 'uri') {
+        await page.waitForURL((url) => url.protocol === 'app:' && url.host === 'tau' && url.pathname === '/machines');
+      } else {
+        const filename = process.env['TAU_QUALIFICATION_OPEN_FILE'];
+        if (!filename || basename(filename) !== filename || !filename.endsWith('.glb')) {
+          throw new Error('Expected an exported GLB basename');
+        }
+        // The import route clears `desktop-open` as soon as it consumes the opened file (run 41428110095
+        // macos-dmg-arm64 reached `/import` showing the GLB with the flag already gone), so the route alone is
+        // awaited and the opened file's name on that page is the evidence of the Open With handoff.
+        await page.waitForURL((url) => url.protocol === 'app:' && url.host === 'tau' && url.pathname === '/import');
+        await page.getByText(filename, { exact: true }).first().waitFor({ state: 'visible' });
+      }
+      await writeFile(
+        output,
+        JSON.stringify({
+          stage,
+          action,
+          url: page.url(),
+          filename: process.env['TAU_QUALIFICATION_OPEN_FILE'],
+          observedAt: new Date().toISOString(),
+        }),
+        { flag: 'wx' },
+      );
+      return;
+    }
+    if (action === 'offline' || action === 'check' || action === 'retry') {
+      const interrupted = page.getByRole('button', { name: 'Update interrupted', exact: true });
+      await interrupted.waitFor({ state: 'visible', timeout: 600_000 });
+      if (action === 'check' || action === 'retry') {
+        await interrupted.click();
+        await page.getByRole('button', { name: 'Retry', exact: true }).click();
+        if (action === 'check') {
+          await page
+            .getByRole('button', { name: 'Update ready', exact: true })
+            .waitFor({ state: 'visible', timeout: 600_000 });
+        }
+      }
+      await writeFile(
+        output,
+        JSON.stringify({ stage, action, url: page.url(), observedAt: new Date().toISOString() }),
+        { flag: 'wx' },
+      );
+      return;
+    }
+    if (action === 'quit' || action === 'quit-ready' || action === 'reinstall-quit') {
+      if (action === 'quit-ready') {
+        await page
+          .getByRole('button', { name: 'Update ready', exact: true })
+          .waitFor({ state: 'visible', timeout: 600_000 });
+      }
+      const session = await browser.newBrowserCDPSession();
+      const { processInfo } = await session.send('SystemInfo.getProcessInfo');
+      const mainProcess = processInfo.find((entry) => entry.type === 'browser');
+      if (!mainProcess) {
+        throw new Error('CDP did not identify its browser process');
+      }
+      const expectedPid =
+        action === 'reinstall-quit'
+          ? z.coerce.number().int().positive().parse(process.env['TAU_QUALIFICATION_EXPECTED_PID'])
+          : undefined;
+      await requestQualificationQuit(profile, mainProcess.id, expectedPid);
+      return;
+    }
+    if (action === 'reinstall-ui') {
+      const expectedPid = z.coerce.number().int().positive().parse(process.env['TAU_QUALIFICATION_EXPECTED_PID']);
+      const session = await browser.newBrowserCDPSession();
+      const { processInfo } = await session.send('SystemInfo.getProcessInfo');
+      if (!processInfo.some((entry) => entry.type === 'browser' && entry.id === expectedPid)) {
+        throw new Error('Reinstalled browser PID mismatch');
+      }
+    }
+    const logOffset = Number(process.env['TAU_QUALIFICATION_LOG_OFFSET']);
+    if (!Number.isSafeInteger(logOffset) || logOffset < 0) {
+      throw new Error('Fresh process log offset required');
+    }
+    if (stage !== 'a' || process.env['TAU_QUALIFICATION_PROJECT_URL']) {
+      const projectUrl = process.env['TAU_QUALIFICATION_PROJECT_URL'];
+      if (!projectUrl?.startsWith('app://tau/w/')) {
+        throw new Error('Retained project route required');
+      }
+      await navigateAfterFirstLoad(page, projectUrl);
+    }
+    if (stage === 'a' && !process.env['TAU_QUALIFICATION_PROJECT_URL']) {
+      await navigateAfterFirstLoad(page, 'app://tau/projects/new');
+      await page.getByLabel('Project Name *', { exact: true }).fill('Qualification retained project');
+      await page.locator('label[for="kernel-build123d"]').click();
+      await page.getByRole('button', { name: /^Create Project/u }).click();
+      // The viewer and source panes share a filename; explicitly open the source editor.
+      // A right-click straight after creation can land before the new tab handles it (run 41752524959
+      // macos-zip-arm64 stage A showed the `main.py` tab with no menu for two minutes), so open the menu until its
+      // item shows. The item and the editor it opens are unchanged.
+      const sourceTab = page.getByRole('tab', { name: 'main.py', exact: true }).first();
+      const openInEditor = page.getByRole('menuitem', { name: 'Open in Editor', exact: true });
+      const menuDeadline = Date.now() + 120_000;
+      let menuOpen = false;
+      while (!menuOpen && Date.now() < menuDeadline) {
+        // A menu that opens after the 5 s window covers the tab, and another right-click then waits on the tab for
+        // the page's whole default timeout (run 41813999069 ubuntu-apt-x11 stage A failed on that click with the
+        // menu and its item on screen), so take a late menu as open and let a blocked right-click retry inside
+        // the deadline.
+        if (await openInEditor.isVisible()) {
+          menuOpen = true;
+          break;
+        }
+        await sourceTab
+          .click({ button: 'right', timeout: Math.max(1, Math.min(10_000, menuDeadline - Date.now())) })
+          .catch(() => undefined);
+        menuOpen = await openInEditor.waitFor({ state: 'visible', timeout: 5000 }).then(
+          () => true,
+          () => false,
+        );
+      }
+      if (!menuOpen) {
+        throw new Error('The main.py tab menu did not show Open in Editor');
+      }
+      await openInEditor.click();
+      // Candidates span code-editor generations, so find the editable surface by its textbox role rather than by
+      // one editor's class names, and focus it rather than its surrounding scroll container. Some generations
+      // render that surface with zero width, so wait for it to attach rather than to become visible, then
+      // prove it holds focus before typing into it.
+      const editor = page.locator('.editor-container:visible').last().getByRole('textbox').last();
+      await editor.waitFor({ state: 'attached' });
+      // The tab can take focus back after the context menu closes (run 41561293311 macos-zip-arm64 ended
+      // focused on the `main.py` tab), so refocus until the textbox holds focus across two reads.
+      const focusDeadline = Date.now() + 10_000;
+      const editorPage = page;
+      const editorFocused = async (): Promise<boolean> =>
+        editorPage.evaluate(() => document.activeElement?.getAttribute('role') === 'textbox');
+      for (;;) {
+        await editor.focus();
+        await wait(300);
+        if ((await editorFocused()) && (await wait(300).then(editorFocused))) {
+          break;
+        }
+        if (Date.now() > focusDeadline) {
+          throw new Error('The source editor did not keep focus');
+        }
+      }
+      // This disposable host may have no clipboard owner. Keep the paste payload until save is verified.
+      // A paste can land as nothing (run 42157906680 ubuntu2604-apt-x11 stage A selected all, pasted an empty
+      // buffer and saved an empty main.py), so prove the editor shows the source's last line before saving,
+      // and select, write and paste again until it does. The bytes check after the save is unchanged.
+      const lastLine = source.trimEnd().split('\n').at(-1)?.trim() ?? '';
+      const editorShowsSource = async (): Promise<boolean> =>
+        ((await editor.textContent().catch(() => '')) ?? '').includes(lastLine);
+      const pasteDeadline = Date.now() + 30_000;
+      for (;;) {
+        await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a');
+        await page.evaluate(async (text) => navigator.clipboard.writeText(text), source);
+        await page.keyboard.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+v');
+        const pasteSettled = Date.now() + 3000;
+        while (!(await editorShowsSource()) && Date.now() < pasteSettled) {
+          await wait(250);
+        }
+        if (await editorShowsSource()) {
+          break;
+        }
+        if (Date.now() > pasteDeadline) {
+          throw new Error('The source editor did not show the pasted source');
+        }
+        await editor.focus();
+      }
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s');
+    }
+    const projectMatch = /^\/w\/home\/([a-z0-9-]+)$/u.exec(new URL(page.url()).pathname);
+    if (!projectMatch?.[1]) {
+      throw new Error('Qualification must retain the shipping Home project route');
+    }
+    const activeProjectRoot = join(profile, 'home', projectMatch[1]);
+    let savedPath: string | undefined;
+    const deadline = Date.now() + 120_000;
+    while (!savedPath && Date.now() < deadline) {
+      for (const candidate of await findSource(activeProjectRoot)) {
+        if (sha256(await readFile(candidate, 'utf8')) === sha256(source)) {
+          savedPath = candidate;
+          break;
+        }
+      }
+      if (!savedPath) {
+        await wait(250);
+      }
+    }
+    if (!savedPath) {
+      throw new Error('Shipping renderer did not retain the expected project bytes');
+    }
+    // The frozen candidates stop waiting for the driver's command fifteen minutes after they write
+    // readiness, then close the window. A wait that outlasts that window ends in a closed page with no
+    // failure evidence (run 41342192947 macos-dmg-x64), so both viewer waits share what remains of it,
+    // less a minute kept for the failure observations below. The reinstalled launch runs without the
+    // probe, writes no new readiness and has no such window, so it keeps the full limits.
+    const readiness = await stat(join(profile, 'route-qualification.ready.json'));
+    const readyAt = readiness.mtimeMs;
+    const remaining = (limit: number): number =>
+      action === 'reinstall-ui' ? limit : Math.max(1000, Math.min(limit, readyAt + 15 * 60_000 - 60_000 - Date.now()));
+    await page
+      .getByTestId('cad-viewer-canvas-region')
+      .locator('canvas')
+      .waitFor({ state: 'visible', timeout: remaining(600_000) });
+    if (await page.getByRole('alert', { name: 'CAD runtime error' }).isVisible()) {
+      throw new Error('Native CAD runtime failed');
+    }
+    const exported = await exportGeometry(page, dirname(savedPath), remaining(900_000));
+    const logBytes = await readFile(join(profile, 'logs', 'desktop.log'));
+    const log = logBytes.subarray(logOffset).toString();
+    const native = log.split('\n').filter((line) => {
+      const match = /^\S+ INFO (native\.store|native\.prepared) (\{.*\})$/u.exec(line);
+      if (!match?.[2]) {
+        return false;
+      }
+      const data = z.record(z.string(), z.unknown()).parse(JSON.parse(match[2]));
+      return match[1] === 'native.store'
+        ? z.array(z.string()).parse(data['kernels']).includes('build123d')
+        : data['status'] === 'ready' && data['kernel'] === 'build123d';
+    });
+    if (native.length === 0) {
+      throw new Error('Installed renderer produced no fresh admitted Build123d payload record');
+    }
+    await page.screenshot({ path: `${output}.png`, fullPage: true });
+    let softwareRenderer: string | undefined;
+    const softwareGraphics = process.env['TAU_QUALIFICATION_GRAPHICS'] === 'isolated-software';
+    // Linux clean-host acceptance asks for the viewer's renderer too, to prove it drew on the host GPU.
+    const reportRenderer = process.env['TAU_QUALIFICATION_REPORT_GL_RENDERER'] === '1';
+    let glRenderer: string | undefined;
+    if (softwareGraphics || reportRenderer) {
+      const renderer = await page
+        .getByTestId('cad-viewer-canvas-region')
+        .locator('canvas')
+        .evaluate((canvas) => {
+          if (!(canvas instanceof HTMLCanvasElement)) {
+            throw new Error('Viewer canvas is not an HTML canvas');
+          }
+          const gl = canvas.getContext('webgl2');
+          const debug = gl?.getExtension('WEBGL_debug_renderer_info');
+          if (!gl || !debug) {
+            throw new Error('Viewer WebGL2 renderer identity unavailable');
+          }
+          const renderer: unknown = gl.getParameter(debug.UNMASKED_RENDERER_WEBGL);
+          if (typeof renderer !== 'string') {
+            throw new TypeError('Viewer WebGL2 renderer identity is not a string');
+          }
+          return renderer;
+        });
+      if (softwareGraphics) {
+        softwareRenderer = renderer;
+        if (!/SwiftShader/iu.test(softwareRenderer)) {
+          throw new Error('Isolated software CI did not observe the SwiftShader viewer backend');
+        }
+      } else {
+        glRenderer = renderer;
+      }
+    }
+    await writeFile(
+      output,
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          stage,
+          url: page.url(),
+          project: { path: relative(profile, savedPath), sha256: sha256(source) },
+          nativeEngineLogs: native,
+          exported,
+          logOffset,
+          observedAt: new Date().toISOString(),
+          ...(softwareRenderer ? { softwareRenderer } : {}),
+          ...(glRenderer ? { glRenderer } : {}),
+        },
+        undefined,
+        2,
+      ),
+      { flag: 'wx' },
+    );
+  } catch (error) {
+    if (page) {
+      // Read-only failure evidence from the disposable fixture, never a substitute for acceptance.
+      const observations = await Promise.allSettled([
+        page.screenshot({ path: `${output}.failure.png`, fullPage: true, timeout: 10_000 }),
+        page.locator('body').evaluate(
+          () => {
+            const describe = (element: Element) => {
+              const bounds = element.getBoundingClientRect();
+              return {
+                tag: element.tagName,
+                role: element.getAttribute('role'),
+                label: element.getAttribute('aria-label'),
+                className: element.className,
+                width: bounds.width,
+                height: bounds.height,
+                display: getComputedStyle(element).display,
+                visibility: getComputedStyle(element).visibility,
+              };
+            };
+            return {
+              url: location.href,
+              focused: document.activeElement ? describe(document.activeElement) : undefined,
+              editors: [...document.querySelectorAll('.editor-container, .editor-container [role="textbox"]')]
+                .slice(0, 20)
+                .map((element) => describe(element)),
+              tabs: [...document.querySelectorAll('[role="tab"]')].slice(0, 30).map((element) => ({
+                ...describe(element),
+                text: element.textContent.slice(0, 200),
+                selected: element.getAttribute('aria-selected'),
+              })),
+              alerts: [...document.querySelectorAll('[role="alert"]')]
+                .slice(0, 10)
+                .map((element) => element.textContent.slice(0, 1000)),
+              statuses: [...document.querySelectorAll('[role="status"]')]
+                .slice(0, 10)
+                .map((element) => element.textContent.slice(0, 1000)),
+              issues: document.querySelector('[role="region"][aria-label="Issues"]')?.textContent.slice(0, 2000),
+              viewer: [...document.querySelectorAll('[data-testid="cad-viewer-canvas-region"]')]
+                .slice(0, 5)
+                .map((element) => ({
+                  ...describe(element),
+                  canvases: [...element.querySelectorAll('canvas')].slice(0, 5).map((canvas) => describe(canvas)),
+                })),
+            };
+          },
+          undefined,
+          { timeout: 10_000 },
+        ),
+        (async () => {
+          const projectMatch = /^\/w\/home\/([a-z0-9-]+)$/u.exec(new URL(page.url()).pathname);
+          if (!projectMatch?.[1]) {
+            return [];
+          }
+          const paths = await findSource(join(profile, 'home', projectMatch[1]));
+          return Promise.all(
+            paths.slice(0, 20).map(async (path) => {
+              const bytes = await readFile(path, 'utf8');
+              return { path: relative(profile, path), bytes: Buffer.byteLength(bytes), sha256: sha256(bytes) };
+            }),
+          );
+        })(),
+        (async () => {
+          // Only this launch's native engine records, the same lines acceptance reads, never the whole log.
+          const offset = Number(process.env['TAU_QUALIFICATION_LOG_OFFSET'] ?? 0);
+          const log = await readFile(join(profile, 'logs', 'desktop.log'));
+          return log
+            .subarray(Number.isSafeInteger(offset) && offset > 0 ? offset : 0)
+            .toString()
+            .split('\n')
+            .filter((line) => /^\S+ \w+ native\./u.test(line))
+            .slice(-40)
+            .map((line) => line.slice(0, 500));
+        })(),
+      ]);
+      await writeFile(
+        `${output}.failure.json`,
+        JSON.stringify(
+          {
+            stage,
+            expectedSourceSha256: sha256(source),
+            error: error instanceof Error ? error.message : String(error),
+            observations: observations.map((result) =>
+              result.status === 'fulfilled'
+                ? { status: result.status, value: Buffer.isBuffer(result.value) ? 'screenshot saved' : result.value }
+                : { status: result.status, error: String(result.reason) },
+            ),
+          },
+          undefined,
+          2,
+        ),
+        { flag: 'wx' },
+      ).catch((diagnosticError: unknown) => {
+        console.error('Could not save renderer failure observations', diagnosticError);
+      });
+    }
+    throw error;
+  } finally {
+    // CDP disconnect leaves the shipping process alive for the actual updater.
+    await browser.close();
+  }
+};
+await main();

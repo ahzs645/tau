@@ -1,0 +1,591 @@
+/**
+ * The read verbs of the revision graph, in the words a person reads (S13, S28).
+ *
+ * `Rev N`, the branch, who made it and what it says: the same four facts the
+ * Revisions pane renders, the `tau revisions` verbs print and the agent's
+ * read-only `revisions` tool returns. One implementation, because three surfaces
+ * that each derived `Rev N` their own way is exactly how a project ended up with
+ * two different answers to "which revision am I on".
+ *
+ * Read-only by construction — nothing here writes a ref, mints a revision or
+ * moves a tree — which is what makes it safe to hand to an agent (I10). The
+ * write verbs are machines (`project-revisions.machine` and its children) and a
+ * caller drives those, not this.
+ *
+ * `Rev N` is the **first-parent ordinal** on the branch (A3, I3): the first
+ * revision on a branch is `Rev 1`, and a revision merged in from elsewhere has
+ * no number of its own on this branch. Numbers are derived at read time from the
+ * graph, so deleting a chat never renumbers anything.
+ */
+
+import type { RevisionId } from '#algorithms/index.js';
+import { revisionId } from '#algorithms/index.js';
+import type { RevisionIdentity, RevisionProvenance } from '#revision-authority.js';
+import { revisionCommitMessage } from '#revision-headers.js';
+import type { RevisionDiffEntry, RevisionLogEntry, RevisionPort } from '#revision-port.js';
+import { generatedSetupPaths } from '#workspace-config.js';
+import { startReadingOf } from '#start-version.js';
+import type { StartReading } from '#start-version.js';
+
+/** One named version on a row: its name and its number, `V<n>` (B6). @public */
+export type RevisionVersion = Readonly<{ name: string; number: number }>;
+
+/**
+ * Who made one revision, as the store holds it (blueprint B2).
+ *
+ * `recorded`: a commit Tau wrote, with the typed identity its trailer names.
+ * `unrecorded`: a commit Tau did not write (an import's upstream history, plain
+ * Git), with the git author name it carries, as GitHub shows it (B3). Nothing
+ * stands in for an identity a commit lacks (I1, I7), and neither arm is a name
+ * to print: who a row shows is decided by the reader, from Tau Cloud's push
+ * record first (I2).
+ *
+ * @public
+ */
+export type RevisionRowWho =
+  | Readonly<{ kind: 'recorded'; identity: RevisionIdentity }>
+  | Readonly<{
+      kind: 'unrecorded';
+      /** The commit's git author name; absent when the commit names none. */
+      authorName?: string;
+      /**
+       * The Tau account its author address names: a commit that person made
+       * with git under their Tau no-reply address. An address, not an identity
+       * Tau recorded, so a reader trusts it only as far as Tau Cloud's push
+       * record confirms it.
+       */
+      authorAccountId?: string;
+    }>;
+
+/** One revision as a person reads it. @public */
+export type RevisionRow = Readonly<{
+  /** First-parent ordinal on the branch, or `undefined` for a revision merged in. */
+  revisionNumber: number | undefined;
+  revisionId: string;
+  changeId: string;
+  /**
+   * Object id of the tree it carries, for engineering details. Optional like
+   * the other fields added after the row: a fixture that predates it is still
+   * a row; every port read carries it.
+   */
+  treeId?: string;
+  /** Who made it, as the store holds it; never a display name on its own (I2). */
+  who: RevisionRowWho;
+  source: RevisionProvenance['source'];
+  /** Milliseconds since the Unix epoch. */
+  createdAt: number;
+  /** The edited title when someone wrote one, the generated one otherwise. */
+  summary: string;
+  conflicted: boolean;
+  /** Stable user-message id of the turn this revision recorded, when a turn did. */
+  turnId: string | undefined;
+  /**
+   * Named versions pointing at this revision, by name (S31, A21).
+   *
+   * On the row rather than in the `RevisionStatus` projection, for the same
+   * reason `Rev N` is: it is derived from the graph at read time (I3), so
+   * History renders the name beside the number from one read and there is no
+   * second copy of the tag set to keep in step.
+   */
+  tags: readonly string[];
+  /**
+   * The same named versions with their numbers, lowest first (blueprint B6):
+   * `V<n>` once per project, read from each tag the way `tags` is. Present
+   * only on a row a version names. The Start entry is V1 and has no tag.
+   */
+  versions?: readonly RevisionVersion[];
+  /**
+   * What asked for this revision (S30), as the trailer's `capture` names it (B1).
+   *
+   * History folds consecutive `idle`, `hidden` and `close` rows into one
+   * *n autosaves* row (A20), and only the capture can tell an autosave from a
+   * `save` the person asked for. Absent on a commit Tau did not record.
+   */
+  capture?: RevisionProvenance['capture'];
+  /**
+   * The `Tau-Metadata` trailer this revision carries, for diagnostics behind
+   * Tau's debug setting only (B5). Absent on a commit Tau did not record.
+   * Rebuilt from the parsed trailer by the one canonical writer, which is the
+   * only shape a version 2 reader admits.
+   */
+  trailer?: string;
+  /**
+   * The revision a restore brought back (D1), by id.
+   *
+   * Present only on the revision a restore minted: the cut that recorded the
+   * checkout before the restore carries the same `restore` capture and none, so
+   * this, never the capture, is what names a *Restored* row (A9).
+   */
+  restoredFrom?: string;
+  /**
+   * Which of a turn's two entries this is (RM-R9): its `base`, the person's own
+   * edits saved before the agent started, or its `result`. Absent on an entry
+   * no turn minted. A base cut is the person's (A5), so its row reads
+   * `source: 'user'` whatever source an earlier build recorded for it.
+   */
+  turnCut?: RevisionProvenance['turnCut'];
+  /**
+   * The revision this one follows: its first parent, by id, or `undefined` for
+   * a branch's first revision. A merge's second parent is the side it brought
+   * in, which History already lists without a number.
+   */
+  parent?: string;
+  /**
+   * A merge's other parents — the sides it brought in — by id; absent on an
+   * ordinary revision. A reader that holds the history below a new head can
+   * append a revision that has none, but must re-read after a merge, whose
+   * sides appear further down the order.
+   */
+  otherParents?: readonly string[];
+  /**
+   * An automatic entry (`idle`, `hidden` or `close`) that changed only Tau's
+   * own setup files, the root `.gitignore` and `.gitattributes` (A4). Decided
+   * at read by which files changed, never by a declared kind, so no one can
+   * fold a model edit out of sight under Tau's name. Absent on every other row.
+   */
+  isSetup?: true;
+  /**
+   * How this entry reads as the Start version, V1, when it is one (A6): the
+   * entry Tau minted when it created the store, or an older project's root
+   * entry. Derived at read like `tags` (I3), so no tag is needed.
+   */
+  start?: StartReading;
+}>;
+
+/** Where the reader is, and what else this project holds. @public */
+export type RevisionPlace = Readonly<{
+  /** The branch the live tree is on, or `undefined` in a project with no revisions yet. */
+  branch: string | undefined;
+  revisionNumber: number | undefined;
+  revisionId: string | undefined;
+  /** Every branch this project has, with the ordinal of its own latest revision. */
+  branches: ReadonlyArray<Readonly<{ name: string; revisionNumber: number; revisionId: string }>>;
+  /** The one line every surface shows: the branch, `main`, or `No history yet` (M11). */
+  line: string;
+}>;
+
+/** What {@link readRevisionLog} was asked for. @public */
+export type RevisionLogRequest = Readonly<{
+  /** Defaults to the branch the live tree is on. */
+  branch?: string | undefined;
+  /**
+   * Newest first; every revision on the branch when absent. A limit bounds the
+   * walk itself, not only the rows returned (E6).
+   */
+  limit?: number | undefined;
+  /**
+   * Start from this revision instead of the branch's head: `{ from, limit: 1 }`
+   * is one revision's row, wherever it sits, for a surface that holds only a
+   * page of the history. `Rev N` is then the ordinal on that revision's own
+   * first-parent line, which is its line's number whenever it lies on the line.
+   */
+  from?: string | undefined;
+}>;
+
+/**
+ * The first-parent chain from one head, newest first.
+ *
+ * @param head - Where to start.
+ * @param entries - Every reachable revision, by id.
+ * @returns Ids from `head` back to the branch's first revision.
+ */
+const firstParentChain = (head: RevisionId, entries: ReadonlyMap<string, RevisionLogEntry>): readonly string[] => {
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  let current: string | undefined = head;
+  while (current !== undefined && !seen.has(current)) {
+    seen.add(current);
+    chain.push(current);
+    current = entries.get(current)?.parents[0];
+  }
+  return chain;
+};
+
+/**
+ * The head this request is about, and the graph behind it in the port's order.
+ *
+ * With a limit the walk itself is bounded — the port reads what the first
+ * `limit` rows need and no more — and `Rev N` comes from {@link numbersOn}
+ * rather than from a count of the whole chain (E6, L4-F5).
+ *
+ * @param port - The store to read.
+ * @param request - The branch to read (the live tree's when absent), how many
+ *   rows newest first (the whole history when absent), and a revision to start
+ *   from instead of the branch's head.
+ * @returns The branch, its head, and the entries read, by id, in the port's order.
+ */
+const readGraph = async (
+  port: RevisionPort,
+  {
+    branch,
+    limit,
+    from,
+  }: Readonly<{ branch: string | undefined; limit: number | undefined; from: string | undefined }>,
+): Promise<
+  Readonly<{ branch: string | undefined; head: RevisionId | undefined; entries: ReadonlyMap<string, RevisionLogEntry> }>
+> => {
+  const live = from === undefined ? await port.readHead() : undefined;
+  const name = branch ?? live?.branch;
+  const head =
+    from === undefined
+      ? name === undefined
+        ? undefined
+        : name === live?.branch
+          ? live.head
+          : await port.readRef(name)
+      : revisionId(from);
+  const entries = new Map<string, RevisionLogEntry>();
+  if (head !== undefined) {
+    /* Rule 20's log cost: bounded once the table can number the page, else the whole line once. */
+    const bounded = seededPorts.has(port) || ordinals.has(head) ? limit : undefined;
+    seededPorts.add(port);
+    for (const entry of await port.log(bounded === undefined ? { heads: [head] } : { heads: [head], limit: bounded })) {
+      entries.set(entry.id, entry);
+    }
+  }
+  return { branch: name, head, entries };
+};
+
+/*
+ * First-parent ordinals already known, by revision id (E6).
+ *
+ * A revision's ordinal is a property of the revision alone — its first-parent
+ * chain is fixed by its id — so an entry is never stale, and one table serves
+ * every port, branch and caller in the process: the ordinal of a new head is
+ * its first parent's plus one.
+ *
+ * ponytail: insertion-order eviction at 4 096 ids (a few hundred KiB). A long
+ * history evicts its oldest ordinals first, and a miss costs one unbounded walk,
+ * which refills the table. An LRU if a workload ever thrashes it.
+ */
+const ordinals = new Map<string, number>();
+const maximumOrdinals = 4096;
+
+/*
+ * Ports whose first read has walked a whole line (rule 20's log cost).
+ *
+ * Until a port has read, the table cannot number anything on its lines, so a
+ * bounded first page would be followed by the whole walk anyway: two walks
+ * (on disk, two `rev-list` and two `cat-file --batch`) where one does. A
+ * port's first read is therefore the whole line, which numbers itself and
+ * seeds the table, unless the table already knows its head; every later read
+ * is bounded. A host keeps one port per project for its lifetime, so this is
+ * at most once per project per process.
+ */
+const seededPorts = new WeakSet<RevisionPort>();
+
+const rememberOrdinal = (id: string, ordinal: number): void => {
+  ordinals.delete(id);
+  ordinals.set(id, ordinal);
+  if (ordinals.size > maximumOrdinals) {
+    ordinals.delete(ordinals.keys().next().value!);
+  }
+};
+
+/**
+ * `Rev N` of every revision on `head`'s first-parent line that `page` holds.
+ *
+ * The line is followed through the page until it meets a revision whose
+ * ordinal is known or the branch's first revision; only when neither is in
+ * reach is the whole chain walked, once, and remembered.
+ *
+ * @param port - The store, for the one walk a cold table needs.
+ * @param head - The branch head.
+ * @param page - The entries read, by id.
+ * @returns Ordinals by revision id, for the page's first-parent line.
+ */
+const numbersOn = async (
+  port: RevisionPort,
+  head: RevisionId,
+  page: ReadonlyMap<string, RevisionLogEntry>,
+): Promise<ReadonlyMap<string, number>> => {
+  /* The page's own stretch of the line, newest first. */
+  const line = firstParentChain(head, page).filter((id) => page.has(id));
+  const knownAt = line.findIndex((id) => ordinals.has(id));
+  const below = page.get(line.at(-1) ?? head)?.parents[0];
+  /* The branch's first revision is `Rev 1`, so a line that reaches it has the head's ordinal as its length. */
+  const belowOrdinal = below === undefined ? 0 : ordinals.get(below);
+  const headOrdinal =
+    knownAt === -1
+      ? belowOrdinal === undefined
+        ? undefined
+        : belowOrdinal + line.length
+      : ordinals.get(line[knownAt]!)! + knownAt;
+  if (headOrdinal === undefined) {
+    /* ponytail: a cold table reads the whole chain once, and remembers it. */
+    const whole = new Map(page);
+    for (const entry of await port.log({ heads: [head] })) {
+      whole.set(entry.id, entry);
+    }
+    const chain = firstParentChain(head, whole);
+    for (const [index, id] of chain.entries()) {
+      rememberOrdinal(id, chain.length - index);
+    }
+    return new Map(chain.flatMap((id, index) => (page.has(id) ? [[id, chain.length - index] as const] : [])));
+  }
+  const numbers = new Map(line.map((id, index) => [id, headOrdinal - index]));
+  for (const [id, ordinal] of numbers) {
+    rememberOrdinal(id, ordinal);
+  }
+  return numbers;
+};
+
+/**
+ * Who made one entry, what asked for it and the trailer it records (B2, B3).
+ *
+ * @param entry - One log entry.
+ * @returns A recorded entry's identity, capture and trailer; an unrecorded one's git author.
+ */
+const whoOf = (
+  entry: RevisionLogEntry,
+): Readonly<{ who: RevisionRowWho; capture?: RevisionProvenance['capture']; trailer?: string }> => {
+  const { actor, capture, via } = entry.provenance;
+  if (actor === undefined || capture === undefined || via === undefined) {
+    return {
+      who: Object.freeze({
+        kind: 'unrecorded',
+        ...(entry.authorName === undefined || entry.authorName === '' ? {} : { authorName: entry.authorName }),
+        ...(entry.authorAccountId === undefined ? {} : { authorAccountId: entry.authorAccountId }),
+      }),
+    };
+  }
+  const message = revisionCommitMessage({
+    parents: entry.parents,
+    provenance: { ...entry.provenance, actor, capture, via },
+    summary: entry.summary,
+  });
+  return {
+    who: Object.freeze({ kind: 'recorded', identity: actor }),
+    capture,
+    /* The trailer block: everything after the title line the writer puts first. */
+    trailer: message.slice(message.indexOf('\n\n') + 2).trimEnd(),
+  };
+};
+
+const rowOf = (
+  entry: RevisionLogEntry,
+  revisionNumber: number | undefined,
+  versions: readonly RevisionVersion[] = [],
+): RevisionRow =>
+  Object.freeze({
+    revisionNumber,
+    revisionId: entry.id,
+    changeId: entry.changeId,
+    treeId: entry.treeId,
+    ...whoOf(entry),
+    /* A5: a turn's base holds the person's bytes, never the agent's. */
+    source: entry.provenance.turnCut === 'base' ? 'user' : entry.provenance.source,
+    createdAt: entry.provenance.createdAt,
+    summary: entry.summary.edited ?? entry.summary.generated,
+    conflicted: entry.conflicted,
+    turnId: entry.provenance.turnId,
+    tags: Object.freeze(versions.map((version) => version.name).toSorted()),
+    ...(versions.length === 0
+      ? {}
+      : { versions: Object.freeze(versions.toSorted((left, right) => left.number - right.number)) }),
+    ...(entry.provenance.restoredFrom === undefined ? {} : { restoredFrom: entry.provenance.restoredFrom }),
+    ...(entry.provenance.turnCut === undefined ? {} : { turnCut: entry.provenance.turnCut }),
+    ...(entry.parents[0] === undefined ? {} : { parent: entry.parents[0] }),
+    ...(entry.parents.length > 1 ? { otherParents: Object.freeze(entry.parents.slice(1)) } : {}),
+    ...startOf(entry),
+  });
+
+/*
+ * Setup verdicts already read, by revision id. A revision's changes against its
+ * first parent are fixed by its id, so an entry is never stale.
+ *
+ * ponytail: insertion-order eviction at 4 096 ids, as `ordinals`; a miss is read again.
+ */
+const setupVerdicts = new Map<string, boolean>();
+
+/**
+ * The entries that are Tau's own setup: automatic saves whose only changes
+ * against their first parent are Tau's setup files (A4). Decided by the files,
+ * never by a declared kind, so a model edit can never be folded under Tau's name.
+ *
+ * @param port - The store, asked once for every entry it has not judged yet.
+ * @param page - The entries read.
+ * @returns The ids of the setup entries among them.
+ */
+const setupEntriesOf = async (port: RevisionPort, page: readonly RevisionLogEntry[]): Promise<ReadonlySet<string>> => {
+  const candidates = page.filter(
+    ({ provenance: { capture }, parents }) =>
+      (capture === 'idle' || capture === 'hidden' || capture === 'close') && parents.length === 1,
+  );
+  /* This page's verdicts, held apart from the cache: a page longer than the
+   * cache's bound would otherwise evict a verdict it is about to read. */
+  const verdicts = new Map<string, boolean>();
+  const unjudged = candidates.filter((entry) => {
+    const known = setupVerdicts.get(entry.id);
+    if (known !== undefined) {
+      verdicts.set(entry.id, known);
+    }
+    return known === undefined;
+  });
+  if (unjudged.length > 0) {
+    const changed =
+      port.firstParentChanges === undefined
+        ? new Map(
+            await Promise.all(
+              unjudged.map(async (entry) => {
+                const changes = await port.diff({ from: entry.parents[0], to: entry.id });
+                return [entry.id, changes.map((change) => change.path)] as const;
+              }),
+            ),
+          )
+        : await port.firstParentChanges(unjudged.map((entry) => entry.id));
+    for (const { id } of unjudged) {
+      const paths = changed.get(id) ?? [];
+      const verdict = paths.length > 0 && paths.every((path) => generatedSetupPaths.has(path));
+      verdicts.set(id, verdict);
+      setupVerdicts.set(id, verdict);
+    }
+    while (setupVerdicts.size > maximumOrdinals) {
+      setupVerdicts.delete(setupVerdicts.keys().next().value!);
+    }
+  }
+  return new Set(candidates.filter((entry) => verdicts.get(entry.id) === true).map((entry) => entry.id));
+};
+
+const startOf = (entry: RevisionLogEntry): Readonly<{ start?: StartReading }> => {
+  const start = startReadingOf(entry);
+  return start === undefined ? {} : { start };
+};
+
+/**
+ * Read one branch's history, newest first.
+ *
+ * @param port - The store to read.
+ * @param request - Which branch, and how many rows.
+ * @returns The rows, newest first; empty in a project with no revisions.
+ * @public
+ *
+ * @example <caption>The five most recent revisions on `main`</caption>
+ * ```typescript
+ * import { readRevisionLog } from '@taucad/revisions';
+ * import type { RevisionPort } from '@taucad/revisions';
+ *
+ * declare const port: RevisionPort;
+ * const rows = await readRevisionLog(port, { branch: 'main', limit: 5 });
+ * rows[0]?.revisionNumber; // 12
+ * ```
+ */
+export const readRevisionLog = async (
+  port: RevisionPort,
+  request: RevisionLogRequest = {},
+): Promise<readonly RevisionRow[]> => {
+  const limit = request.limit === undefined ? undefined : Math.max(0, request.limit);
+  if (limit === 0) {
+    return Object.freeze([]);
+  }
+  const { head, entries } = await readGraph(port, { branch: request.branch, limit, from: request.from });
+  if (head === undefined) {
+    return Object.freeze([]);
+  }
+  const numbers = await numbersOn(port, head, entries);
+  /* The port's own order, not the chain's: a merge is followed by the side it
+   * merged, and those revisions are in this branch's history without being on
+   * its first-parent line, so they appear with no number of their own. */
+  const page = limit === undefined ? [...entries.values()] : [...entries.values()].slice(0, limit);
+  return Object.freeze(await rowsOf(port, page, numbers));
+};
+
+/**
+ * A page of log entries as rows: numbered versions, and the setup verdict (A4).
+ * Shared by {@link readRevisionLog} and the graph read, which numbers nothing.
+ *
+ * @param port - The store, for its tags and the setup verdicts.
+ * @param page - The entries, in the order to return them.
+ * @param numbers - `Rev N` by revision id; an entry it does not hold has none.
+ * @returns One row per entry, in `page`'s order.
+ */
+export const rowsOf = async (
+  port: RevisionPort,
+  page: readonly RevisionLogEntry[],
+  numbers: ReadonlyMap<string, number> = new Map(),
+): Promise<readonly RevisionRow[]> => {
+  /* One `listTags` for the whole page, not one per row; each tag arrives numbered (B6). */
+  const named = new Map<string, RevisionVersion[]>();
+  for (const tag of await port.listTags()) {
+    named.set(tag.revisionId, [
+      ...(named.get(tag.revisionId) ?? []),
+      Object.freeze({ name: tag.name, number: tag.number }),
+    ]);
+  }
+  const setup = await setupEntriesOf(port, page);
+  return page.map((entry) => {
+    const row = rowOf(entry, numbers.get(entry.id), named.get(entry.id));
+    /* The Start entry is V1 and reads as itself, never folded into the setup line. */
+    return setup.has(entry.id) && row.start === undefined ? Object.freeze({ ...row, isSetup: true }) : row;
+  });
+};
+
+/**
+ * Read which paths changed between two revisions.
+ *
+ * Tree-free by contract: paths and how each changed, never content.
+ *
+ * @param port - The store to read.
+ * @param from - The older revision, or `undefined` for the empty tree.
+ * @param to - The newer revision.
+ * @returns One entry per changed path, sorted.
+ * @public
+ */
+export const readRevisionDiff = async (
+  port: RevisionPort,
+  from: string | undefined,
+  to: string,
+): Promise<readonly RevisionDiffEntry[]> =>
+  port.diff({ from: from === undefined ? undefined : revisionId(from), to: revisionId(to) });
+
+/**
+ * Read where the live tree is and what else the project holds.
+ *
+ * @param port - The store to read.
+ * @returns The branch, its `Rev N`, and every branch in the project.
+ * @public
+ *
+ * @example <caption>The line every surface shows</caption>
+ * ```typescript
+ * import { readRevisionPlace } from '@taucad/revisions';
+ * import type { RevisionPort } from '@taucad/revisions';
+ *
+ * declare const port: RevisionPort;
+ * (await readRevisionPlace(port)).line; // 'main'
+ * ```
+ */
+export const readRevisionPlace = async (port: RevisionPort): Promise<RevisionPlace> => {
+  const [live, references] = await Promise.all([port.readHead(), port.listRefs()]);
+  const { branch, head } = { branch: live?.branch, head: live?.head };
+  /* One walk for every head at once, not one per branch (rule 20's log cost). `log` takes the
+   * whole set and answers their union, and `Rev N` is read out of that union by
+   * following first parents — the same ids, in the same order, that a walk per
+   * branch produced at N times the cost. A project with eight branches was
+   * eight full histories every time the place line was refreshed. */
+  const heads = [...new Set([...(head === undefined ? [] : [head]), ...references.map((reference) => reference.head)])];
+  const entries = new Map<string, RevisionLogEntry>();
+  for (const entry of heads.length === 0 ? [] : await port.log({ heads })) {
+    entries.set(entry.id, entry);
+  }
+  const revisionNumber = head === undefined ? undefined : firstParentChain(head, entries).length;
+  const branches = references.map((reference) =>
+    Object.freeze({
+      name: reference.name,
+      revisionNumber: firstParentChain(reference.head, entries).length,
+      revisionId: reference.head,
+    }),
+  );
+  /* This walk already answered every head's ordinal: a later page reads it back. */
+  for (const entry of branches) {
+    rememberOrdinal(entry.revisionId, entry.revisionNumber);
+  }
+  return Object.freeze({
+    branch,
+    revisionNumber,
+    revisionId: head,
+    branches: Object.freeze(branches),
+    /* The words are the operator's (A18, I12, M11): a branch name, never a
+     * number, a commit id, a head or a checkout. A save has no number. */
+    line: branch === undefined || revisionNumber === undefined ? 'No history yet' : branch,
+  });
+};

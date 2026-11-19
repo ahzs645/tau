@@ -1,0 +1,366 @@
+# Staging desktop candidates. Each green `ci.yml` push run on `main` that affects `desktop` or
+# its renderer, `ui`, creates a candidate that release-build.yml packages for Apple silicon only; a
+# dispatch that asks for it (`intel`, which `desktop-route-promotion.yml` sets when it is asked to
+# promote an Apple silicon-only candidate) creates one that also packages Intel. Intel is built where
+# it ships, at promotion and on demand, not on a schedule (operator decision D-DS3, Brain
+# research/desktop-split-blueprint.md). The tag records which: an annotated tag whose message carries a
+# `Mac architectures: arm64 x64` line is a full candidate, a lightweight tag is arm64 only.
+# Staging is not notarized unless a dispatch sets `notarize`, which adds a `Notarize: true` line;
+# per-push candidates run many times a day and stay off Apple's notary service.
+# Production `desktop@*` tags always package both.
+#
+# One automatic candidate is in flight at a time and the newest green commit wins
+# (operator decision 2026-11-08, Brain research/ci-throughput-review.md). While a
+# `desktop-staging@*` release build is still running, a green CI run creates no new
+# candidate. When that release build ends, this workflow wakes again and releases the
+# newest `main` commit with green CI, if the desktop changed since the last candidate.
+# The commits in between never get a candidate of their own: on 2026-11-07 every push
+# packaged one and desktop staging took a quarter of the macOS runner time. A dispatch
+# always creates its own, from the commit it names or the newest green one.
+name: Release desktop to staging
+run-name: Release desktop to staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit on main with green CI to release; defaults to the newest one'
+        type: string
+        required: false
+        default: ''
+      intel:
+        description: 'Also package and qualify the Intel (x64) archive'
+        type: boolean
+        default: true
+      notarize:
+        description: 'Notarize and staple the macOS archives (production does; staging does not by default)'
+        type: boolean
+        default: false
+  # `Release build` runs on tag pushes, whose `head_branch` is the tag; the job's `if`
+  # takes only `desktop-staging@*` ones.
+  workflow_run:
+    workflows: [CI, Release build]
+    types: [completed]
+    branches: [main, 'desktop-staging@*']
+
+permissions: {}
+
+# Automatic runs share one group, so the newest pending one replaces an older pending one. A dispatch has a
+# group of its own: it goes ahead regardless of the candidate in flight, and an automatic run started
+# while it waits (a candidate cut now holds the group through both gates) must not cancel it.
+concurrency:
+  group: release-desktop-staging${{ github.event_name == 'workflow_dispatch' && format('-dispatch-{0}', github.run_id) || '' }}
+  cancel-in-progress: false
+
+jobs:
+  prerelease:
+    name: Select the staging desktop candidate
+    if: ${{ github.repository == 'taucad/tau' && (github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' ||  (github.event.workflow_run.path == '.github/workflows/ci.yml' &&   github.event.workflow_run.conclusion == 'success' &&   github.event.workflow_run.event == 'push' &&   github.event.workflow_run.head_branch == 'main' &&   github.event.workflow_run.head_repository.full_name == github.repository) ||  (github.event.workflow_run.path == '.github/workflows/release-build.yml' &&   github.event.workflow_run.event == 'push' &&   startsWith(github.event.workflow_run.head_branch, 'desktop-staging@')))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+      release: ${{ steps.selected.outputs.release }}
+      intel: ${{ steps.selected.outputs.intel }}
+      notarize: ${{ steps.selected.outputs.notarize }}
+    steps:
+      # Automatic candidates only: a dispatch goes ahead regardless.
+      - name: Wait for the candidate in flight
+        id: inflight
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          busy=$(gh api "repos/${GH_REPO}/actions/workflows/release-build.yml/runs?event=push&per_page=50" \
+            --jq '[.workflow_runs[] | select(.status != "completed" and (.head_branch | startswith("desktop-staging@"))) | .head_branch] | join(" ")')
+          if [ -n "$busy" ]; then
+            echo "::notice::Desktop staging candidate in flight ($busy); the newest green commit is released when it ends."
+            echo "busy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "busy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find the newest main commit with green CI
+        id: target
+        if: steps.inflight.outputs.busy != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # A finished release build hands over to the newest green commit, not its own.
+          TRIGGER_SHA: ${{ github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.head_sha || '' }}
+          # A dispatch may name its commit (the promotion gate asks for a full candidate of the one it promotes).
+          DISPATCH_SHA: ${{ inputs.sha || '' }}
+          STAGING_SUPPORT_SHA: ef81d9124c75b29e7115da226b3c616e0df2d43a
+        run: |
+          set -euo pipefail
+          # Run listings come back in an unreliable order (a re-run keeps its
+          # old creation time), so walk main's history newest first and ask
+          # each commit whether its CI push run succeeded.
+          sha=$TRIGGER_SHA
+          if [ -n "$DISPATCH_SHA" ]; then
+            if ! [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::The dispatched commit must be a full 40-character sha, not $DISPATCH_SHA."
+              exit 1
+            fi
+            green=$(gh api "repos/${GH_REPO}/actions/workflows/ci.yml/runs?head_sha=${DISPATCH_SHA}&branch=main&event=push" --jq 'any(.workflow_runs[]; .conclusion == "success")')
+            if [ "$green" != true ]; then
+              echo "::error::$DISPATCH_SHA has no successful ci.yml push run on main."
+              exit 1
+            fi
+            sha=$DISPATCH_SHA
+          fi
+          if [ -z "$sha" ]; then
+          for candidate in $(gh api "repos/${GH_REPO}/commits?sha=main&per_page=50" --jq '.[].sha'); do
+            green=$(gh api "repos/${GH_REPO}/actions/workflows/ci.yml/runs?head_sha=${candidate}&branch=main&event=push" --jq 'any(.workflow_runs[]; .conclusion == "success")')
+            if [ "$green" = true ]; then
+              sha=$candidate
+              break
+            fi
+          done
+          fi
+          if [ -z "$sha" ]; then
+            echo "::error::No ci.yml push run on main has succeeded yet."
+            exit 1
+          fi
+          # Release build runs from the tag's own commit. Require #697, which
+          # builds draft candidates from tag pushes and supplies release-assets.
+          status=$(gh api "repos/${GH_REPO}/compare/${STAGING_SUPPORT_SHA}...${sha}" --jq .status)
+          if [ "$status" != ahead ] && [ "$status" != identical ]; then
+            echo "::error::The newest main commit with green CI, $sha, predates staging release support ($STAGING_SUPPORT_SHA). Run this again once main CI is green on a newer commit."
+            exit 1
+          fi
+          echo "Releasing $sha, the newest main commit with green CI."
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.inflight.outputs.busy != 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Require OTA-capable source
+        if: steps.inflight.outputs.busy != 'true'
+        run: test -f apps/desktop/src/main/ota-probe.ts && test -f apps/desktop/scripts/publish-desktop.mts
+
+      - name: Setup Nx Environment
+        if: steps.inflight.outputs.busy != 'true'
+        uses: ./.github/actions/setup-nx
+
+      - name: Skip duplicate, obsolete or unaffected automatic candidates
+        id: selected
+        if: steps.inflight.outputs.busy != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ steps.target.outputs.sha }}
+          EVENT: ${{ github.event_name }}
+          DISPATCH_INTEL: ${{ inputs.intel }}
+          DISPATCH_NOTARIZE: ${{ inputs.notarize }}
+        run: |
+          set -euo pipefail
+          # Intel only when a dispatch asks for it (D-DS3): automatic candidates are Apple silicon only.
+          intel=false
+          if [ "$EVENT" = workflow_dispatch ] && [ "$DISPATCH_INTEL" = true ]; then intel=true; fi
+          echo "intel=$intel" >> "$GITHUB_OUTPUT"
+          notarize=false
+          if [ "$EVENT" = workflow_dispatch ] && [ "$DISPATCH_NOTARIZE" = true ]; then notarize=true; fi
+          echo "notarize=$notarize" >> "$GITHUB_OUTPUT"
+          releases=$(gh release list --limit 100 --json tagName --jq '.[] | select(.tagName | startswith("desktop-staging@")) | .tagName')
+          previous=$(head -n 1 <<< "$releases")
+          if [ "$EVENT" != workflow_dispatch ] && [ -n "$previous" ]; then
+            base=$(git rev-parse "$previous^{commit}")
+            if [ "$base" = "$TARGET" ] || ! git merge-base --is-ancestor "$base" "$TARGET"; then
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # Nx may log before its final JSON line. Invalid output must fail,
+            # not silently count as an unaffected desktop.
+            pnpm nx show projects --affected --base="$base" --head="$TARGET" --json | tail -1 > "$RUNNER_TEMP/affected.json"
+            jq -e 'type == "array" and all(.[]; type == "string")' "$RUNNER_TEMP/affected.json" > /dev/null
+            # The candidate ships the renderer too: `desktop` consumes `ui:build:desktop` as a build
+            # artifact, not as a project-graph dependency, so a renderer-only change is a desktop change.
+            if ! jq -e 'index("desktop") or index("ui")' "$RUNNER_TEMP/affected.json" > /dev/null; then
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+  # Operator decision D3 (2026-11-08, Brain research/ci-throughput-review.md): the five shell
+  # conformance rows pass on the candidate's own commit before its tag exists, so release-build.yml,
+  # the installer candidates and route qualification only ever see a commit with green rows. A red
+  # row means no candidate this time; the next green commit or a dispatch tries again.
+  shell:
+    name: Shell gate
+    needs: [prerelease]
+    if: ${{ github.repository == 'taucad/tau' && (needs.prerelease.outputs.release == 'true') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/shell-conformance.yml
+    with:
+      ref: ${{ needs.prerelease.outputs.sha }}
+
+  # CI throughput review Q-2: the `benchmark-native` gates (charter D23) pass on the candidate's own commit
+  # before its tag exists, as the shell rows do; they moved here from `native-darwin.yml`'s 15:41 nightly.
+  # They run beside the shell gate and the packaged suite on a macOS runner of their own (about 20 min, under
+  # the packaged suite's wall), so they add no wall time. A red gate means no candidate this time.
+  benchmarks:
+    name: Native benchmark gate
+    needs: [prerelease]
+    if: ${{ github.repository == 'taucad/tau' && (needs.prerelease.outputs.release == 'true') }}
+    permissions: # The called workflow's plan job declares these
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: ./.github/workflows/native-darwin.yml
+    with:
+      ref: ${{ needs.prerelease.outputs.sha }}
+      projects: ''
+      benchmarks: true
+    secrets:
+      NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ secrets.NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN }}
+
+  # INTEL-1 (operator approval 2026-11-18, ping 2, as MAC-X left the queue in tau #2505): the darwin-x64 native
+  # rows (`native-hosts.yml`, `macos-26-intel`: the Build123d suites, `tau prepare build123d` with the built CLI and
+  # PicoGK's typed refusals) left the merge queue, where they were its slowest jobs, and pass here on the candidate's
+  # own commit before its tag exists. Every Nx task runs fresh (`NX_SKIP_NX_CACHE`) and no cache token is passed.
+  # They run beside the shell gate on a runner of their own, so they add no wall time before the packaged suite ends.
+  # A red row means no candidate this time.
+  intel-native:
+    name: Intel native gate
+    needs: [prerelease]
+    if: ${{ github.repository == 'taucad/tau' && (needs.prerelease.outputs.release == 'true') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/native-hosts.yml
+    with:
+      hosts: intel
+      ref: ${{ needs.prerelease.outputs.sha }}
+
+  # Operator decision D-DS1 (b) (desktop split blueprint DS-3): the packaged desktop suite passes on the
+  # candidate's own commit after the shell gate and before the tag exists, so a packaged regression is
+  # found hours after it merged, never on the merge queue's path. A red suite means no candidate this
+  # time, as a red shell row does. It runs only after a green shell gate, so a red row spends no hour
+  # of macOS packaging.
+  packaged:
+    name: Packaged desktop gate
+    needs: [prerelease, shell]
+    if: ${{ github.repository == 'taucad/tau' && (needs.prerelease.outputs.release == 'true' && needs.shell.result == 'success') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-packaged.yml
+    with:
+      ref: ${{ needs.prerelease.outputs.sha }}
+    secrets:
+      NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ secrets.NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN }}
+
+  # T-REH.2 (desktop resilient startup blueprint, I2): the operator rehearsal with its profile produced by the newest
+  # published staging release's unpackaged build and opened by this candidate, on the candidate's own commit before its
+  # tag exists, after the shell gate and beside the packaged suite (an Ubuntu runner, so it adds no macOS time). A red
+  # rehearsal means no candidate this time, as a red packaged suite does.
+  rehearsal:
+    name: Rehearsal gate
+    needs: [prerelease, shell]
+    if: ${{ github.repository == 'taucad/tau' && (needs.prerelease.outputs.release == 'true' && needs.shell.result == 'success') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-rehearsal-gate.yml
+    with:
+      ref: ${{ needs.prerelease.outputs.sha }}
+    secrets:
+      NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ secrets.NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN }}
+
+  tag:
+    name: Tag the staging desktop candidate
+    needs: [prerelease, shell, packaged, benchmarks, intel-native, rehearsal]
+    if: ${{ github.repository == 'taucad/tau' && (needs.prerelease.outputs.release == 'true' && needs.shell.result == 'success' && needs.packaged.result == 'success' && needs.benchmarks.result == 'success' && needs.intel-native.result == 'success' && needs.rehearsal.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    environment:
+      name: release-pr
+      deployment: false
+    steps:
+      - name: Mint tau-release-bot token
+        id: bot
+        uses: actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254 # v2.0.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.prerelease.outputs.sha }}
+          persist-credentials: false
+
+      - name: Create the tag and prerelease
+        id: release
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ needs.prerelease.outputs.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ID: ${{ github.run_id }}
+          INTEL: ${{ needs.prerelease.outputs.intel }}
+          NOTARIZE: ${{ needs.prerelease.outputs.notarize }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version apps/desktop/package.json)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::apps/desktop/package.json version $version is not MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          tag="desktop-staging@${version}-staging.${RUN_NUMBER}"
+          signing='Developer ID signed without notarization'
+          if [ "$NOTARIZE" = true ]; then signing='Developer ID signed, notarized and stapled'; fi
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          Staging build of the Tau desktop app from \`${TARGET}\` on \`main\`.
+
+          It signs in to and works against https://taucad.dev, never production, and follows its isolated staging update feed. macOS is ${signing}. The channel feed advances only after a native OTA acceptance test.
+
+          Shell conformance gate: run ${RUN_ID}
+          Packaged desktop gate: run ${RUN_ID}
+          Intel native gate: run ${RUN_ID}
+          Rehearsal gate (T-REH.2): run ${RUN_ID}
+          NOTES
+          sed -i 's/^          //' "$RUNNER_TEMP/notes.md"
+          # A draft, because a published release is immutable (go-live DEL-20):
+          # release-build.yml attaches the archives and publishes it. The tag's
+          # push, not the draft, starts release-build.yml.
+          gh release create "$tag" --draft --target "$TARGET" --title "Tau desktop staging ${version} (build ${RUN_NUMBER})" \
+            --notes-file "$RUNNER_TEMP/notes.md" --prerelease --latest=false
+          # release-build.yml reads the architectures and notarization from the tag: it is annotated
+          # with the lines it looks for, and a plain arm64-only candidate's tag is lightweight.
+          lines=()
+          if [ "$INTEL" = true ]; then lines+=('Mac architectures: arm64 x64'); fi
+          if [ "$NOTARIZE" = true ]; then lines+=('Notarize: true'); fi
+          ref_sha=$TARGET
+          if [ "${#lines[@]}" -gt 0 ]; then
+            ref_sha=$(gh api "repos/$GH_REPO/git/tags" -f tag="$tag" -f object="$TARGET" -f type=commit \
+              -f message="$(printf '%s\n' "${lines[@]}")" --jq .sha)
+          fi
+          gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$tag" -f sha="$ref_sha" --silent
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          ARCHES: ${{ needs.prerelease.outputs.intel == 'true' && 'Apple silicon and Intel' || 'Apple silicon only' }}
+          SIGNING: ${{ needs.prerelease.outputs.notarize == 'true' && ', notarized' || '' }}
+        run: |
+          {
+            echo "Created the draft prerelease $TAG and its tag ($ARCHES$SIGNING)."
+            echo "**Release build** packages it, attaches the archives and publishes it once main CI is green on this commit."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,239 @@
+# Roll back or redeploy one application's release in production.
+#
+# A release deploys itself: merging its release pull request creates the tag,
+# and `release-build.yml` builds it and deploys it to production in that same
+# run. This workflow is for everything after that, per application
+# (docs/research/monorepo-app-release-practice.md, R3): moving production back
+# to an earlier `ui@x.y.z` or `api@x.y.z` release, or deploying a release again
+# (for example one whose release run's deploy failed).
+#
+#   - `api@x.y.z`: `deploy.yml` at the tag deploys the API to Fly (`tau-api`).
+#   - `ui@x.y.z`: `deploy-ui.yml` at the tag publishes tau.new to Netlify with
+#     the GeoSpec artifact of the tag commit's main CI run, and `deploy-docs.yml`
+#     at the tag publishes docs.tau.new.
+#
+# A person dispatches it from `main` (GitHub's Actions tab, `gh workflow run`,
+# or the Command Center). It checks the release and dispatches the deploy at the
+# tag, which runs in the `production` environment exactly as a release's own
+# deploy does. The other application stays where it is.
+#
+# Before deploying, the release must be a published GitHub Release whose commit
+# is on `main`, and its `release-build.yml` run must have verified it. Deploying
+# an older version than the application's last production deploy is a rollback
+# and needs `rollback: true`.
+#
+# A forward deploy (a release newer than production's, or the application's
+# first) also needs a green release gate verdict on the release's commit
+# (`release-gate.yml`, CI throughput review RG-1: the uncached sweep, the formal
+# matrix and the cross-root read lint). UI and API tags start no gate of their
+# own, so a forward deploy usually finds none: it then dispatches the gate for
+# the commit and stops naming it, and the operator dispatches this again once
+# it passes. Nothing here waits on it. A rollback or a redeploy never reads it: both return production
+# to a release it already ran or was already built for, and an incident must not
+# wait on a gate.
+#
+# The API image is built from the tag commit with the registry cache, and the UI
+# is built with the production site's variables: both bundles embed their
+# environment, so the release build's output is the verification, not the
+# deployed bytes.
+#
+# Command Center contract: POST /repos/taucad/tau/actions/workflows/deploy-production.yml/dispatches
+# with {"ref": "main", "inputs": {"release": "<tag>", "rollback": "true"}}; the
+# dispatched deploy runs (`deploy.yml`, or `deploy-ui.yml` and
+# `deploy-docs.yml`) report on the `production` environment.
+name: Deploy release to production
+run-name: Deploy ${{ inputs.release }} to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release tag to deploy, e.g. ui@0.3.0 or api@0.2.1'
+        required: true
+        type: string
+      rollback:
+        description: 'Allow deploying an older release than production runs'
+        required: false
+        type: boolean
+        default: false
+      skip_asset_retention:
+        description: 'UI only: ship without keeping the previous deploys assets (only while the live origin is down)'
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: deploy-production-${{ inputs.release && startsWith(inputs.release, 'api@') && 'api' || 'ui' }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: ${{ github.repository == 'taucad/tau' }}
+    name: Promote ${{ inputs.release }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60 # an API release waits for its deploy before mirror and maintenance
+    permissions:
+      contents: read
+      actions: write # dispatch the deploy workflows at the release tag
+      deployments: read # the application's last production deploy
+    steps:
+      - name: Require a dispatch from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Dispatch this workflow from main; the release to deploy is the input."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: main
+          persist-credentials: false
+
+      - name: Check the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE: ${{ inputs.release }}
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE" =~ ^(ui|api)@([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::$RELEASE is not a UI or API release tag (desktop releases ship through their update feed)."
+            exit 1
+          fi
+          app=${BASH_REMATCH[1]}
+          version=${BASH_REMATCH[2]}
+          draft=$(gh release view "$RELEASE" --json isDraft --jq .isDraft) \
+            || { echo "::error::$RELEASE has no GitHub Release"; exit 1; }
+          test "$draft" = false || { echo "::error::$RELEASE is still a draft"; exit 1; }
+
+          git fetch --quiet origin "refs/tags/$RELEASE:refs/tags/$RELEASE"
+          commit=$(git rev-list -n 1 "refs/tags/$RELEASE")
+          git merge-base --is-ancestor "$commit" origin/main \
+            || { echo "::error::$RELEASE ($commit) is not on main"; exit 1; }
+
+          # This release must have been verified. A release run's title is its
+          # tag; its newest run decides, including a dispatched rebuild (which
+          # verifies the tag's checkout but records main's commit). Only the
+          # verify job counts: the run's own production deploy may have failed,
+          # which is what a redeploy is for.
+          run_id=$(gh run list --workflow release-build.yml --limit 200 \
+            --json databaseId,displayTitle \
+            | jq -r --arg tag "$RELEASE" '[.[] | select(.displayTitle == $tag)][0].databaseId // empty')
+          verified=""
+          if [ -n "$run_id" ]; then
+            verified=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs?per_page=100" \
+              | jq -r --arg name "Verify $RELEASE" '[.jobs[] | select(.name == $name)][0].conclusion // empty')
+          fi
+          test "$verified" = success \
+            || { echo "::error::release-build.yml has not verified $RELEASE (${verified:-no verify job})"; exit 1; }
+
+          # The application's newest successful production deploy, recorded by
+          # the `production` environment with the tag it ran at.
+          current=""
+          for row in $(gh api "repos/$GH_REPO/deployments?environment=production&per_page=100" \
+            | jq -r --arg app "$app" '.[] | select(.ref | startswith($app + "@")) | "\(.id):\(.ref)"'); do
+            state=$(gh api "repos/$GH_REPO/deployments/${row%%:*}/statuses?per_page=1" --jq '.[0].state // empty')
+            if [ "$state" = success ]; then
+              current=${row#*:}
+              break
+            fi
+          done
+
+          action=forward
+          if [ -z "$current" ]; then
+            echo "::notice::No earlier production deploy of $app is recorded; deploying $RELEASE."
+          elif [ "$current" = "$RELEASE" ]; then
+            echo "::notice::Production already runs $RELEASE; deploying it again."
+            action=redeploy
+          elif [ "$(printf '%s\n%s\n' "${current#*@}" "$version" | sort -V | tail -1)" = "${current#*@}" ]; then
+            if [ "$ROLLBACK" != true ]; then
+              echo "::error::$RELEASE is older than production's $current. Re-run with rollback: true to move production back."
+              exit 1
+            fi
+            action=rollback
+          fi
+          {
+            echo "app=$app"
+            echo "commit=$commit"
+            echo "previous=${current:-none}"
+            echo "action=$action"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Require a green release gate on the release's commit
+        if: steps.release.outputs.action == 'forward'
+        uses: ./.github/actions/release-gate-verdict
+        with:
+          sha: ${{ steps.release.outputs.commit }}
+          github-token: ${{ github.token }}
+          require: 'true'
+          dispatch: 'true'
+
+      - name: Deploy the release at its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE: ${{ inputs.release }}
+          APP: ${{ steps.release.outputs.app }}
+          SKIP_ASSET_RETENTION: ${{ inputs.skip_asset_retention }}
+        run: |
+          set -euo pipefail
+          DISPATCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # A GITHUB_TOKEN may start workflow_dispatch runs. Each runs the tag's
+          # own workflow file in the `production` environment, which admits only
+          # `ui@*` and `api@*` tags (tau-cloud stacks/repo/tau).
+          if [ "$APP" = api ]; then
+            # tau-mirror and tau-maintenance run the API image and ship with it.
+            # The API's release command migrates first; the two private apps
+            # start after it, so their deploys wait for the API's to succeed.
+            gh workflow run deploy.yml --ref "$RELEASE" -f environment=production -f app=api
+            api_run=""
+            for _ in $(seq 1 30); do
+              sleep 10
+              api_run=$(gh run list --workflow deploy.yml --branch "$RELEASE" --event workflow_dispatch --limit 1 \
+                --json databaseId,createdAt | jq -r --arg since "$DISPATCHED_AT" '.[] | select(.createdAt >= $since) | .databaseId')
+              [ -n "$api_run" ] && break
+            done
+            [ -n "$api_run" ] || { echo "::error::The API deploy run for $RELEASE did not start"; exit 1; }
+            gh run watch "$api_run" --exit-status --interval 30
+            for app in mirror maintenance; do
+              gh workflow run deploy.yml --ref "$RELEASE" -f environment=production -f app="$app"
+            done
+          else
+            # Passed only when asked: an older tag's deploy-ui.yml may not know the input.
+            if [ "$SKIP_ASSET_RETENTION" = true ]; then
+              gh workflow run deploy-ui.yml --ref "$RELEASE" -f environment=production -f skip_asset_retention=true
+            else
+              gh workflow run deploy-ui.yml --ref "$RELEASE" -f environment=production
+            fi
+            gh workflow run deploy-docs.yml --ref "$RELEASE" -f environment=production
+            # The marketing pages; a tag from before the `alias` input has no prod publish.
+            if git show "refs/tags/$RELEASE:.github/workflows/deploy-www-review.yml" | grep -q 'options: \[staging, prod\]'; then
+              gh workflow run deploy-www-review.yml --ref "$RELEASE" -f alias=prod
+            fi
+          fi
+
+      - name: Summarise
+        env:
+          RELEASE: ${{ inputs.release }}
+          REPOSITORY: ${{ github.repository }}
+          APP: ${{ steps.release.outputs.app }}
+          ACTION: ${{ steps.release.outputs.action }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+          PREVIOUS: ${{ steps.release.outputs.previous }}
+        run: |
+          {
+            echo "### Production: $RELEASE"
+            echo
+            echo "- Action: $ACTION (production ran \`$PREVIOUS\`)"
+            echo "- Commit: \`$COMMIT\`"
+            if [ "$APP" = api ]; then
+              echo "- Deployed the API, then started **Deploy to Fly.io** for mirror and maintenance at \`$RELEASE\`; follow them under [Actions](https://github.com/$REPOSITORY/actions/workflows/deploy.yml)."
+            else
+              echo "- Started **Deploy UI to Netlify** and **Deploy docs to Netlify** at \`$RELEASE\`; follow them under [Actions](https://github.com/$REPOSITORY/actions/workflows/deploy-ui.yml)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

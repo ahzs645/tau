@@ -1,0 +1,696 @@
+/**
+ * `publish.machine` — one project's publication, over the synced graph (S32, A21, D11).
+ *
+ * Publishing is four facts in order, not an upload: the graph up to the
+ * revision is on the Tau Hosted Remote, the revision has a name, the
+ * publication row points at that name, and the server materializes the named
+ * tree into the blob store the viewer already reads. Nothing this machine does
+ * moves a file's bytes: the bytes travelled with the push (LFS included), which
+ * is why the multipart upload path is deleted rather than kept beside it (A31,
+ * I15).
+ *
+ * The order here is `choosingVersion → tagging → pushing → publishing`, which
+ * inverts the two middle states of the architecture's row. The row cannot be
+ * taken literally: a name the person just chose does not exist until `tagging`
+ * runs, so a `pushing` state placed before it has no tag to offer and the named
+ * version never reaches the remote — and the queue's final amendment says
+ * `pushing` pushes "`main` + the new tag" with the last-observed heads, which
+ * is only true in this order.
+ *
+ * `pushing` waits for a **correlated** `pushSettled`, not for its own actor's
+ * completion, because `sync.machine` owns the push: the injected `push` actor
+ * resolves with the `pushId` and this machine then asks the root for
+ * `syncNow { pushId }`, whose settlement comes back through the same root.
+ * Sync answers every `syncNow` it carries, under its own push deadline (RM-S5,
+ * A12), so this machine holds no bound of its own (RM-R3). A dialog with no
+ * root has nobody to push for it, and says so at once.
+ *
+ * `publish` names its request, and `published` or `toast.error` echoes it
+ * (RM-R1); a `publish` that arrives while another runs is refused
+ * `REVISIONS_BUSY` (RM-R11).
+ */
+
+import { createAsyncLogic, setup, types } from 'xstate';
+import type { AnyActorRef, EnqueueObject, SnapshotFrom } from 'xstate';
+
+import { eventSchemas } from '#machine-schemas.js';
+import type { MachineActors } from '#machine-schemas.js';
+
+import type { RevisionTag } from '#revision-port.js';
+import type { SyncPushOutcome, VersionRenumbering } from '#sync.types.js';
+import type {
+  PublishPublicationActorInput,
+  PublishPublicationActorOutput,
+  PublishDraft,
+  PublishFacet,
+  PublishVisibility,
+} from '#publish.types.js';
+
+/** Input accepted when creating the publishMachine actor. @public */
+export type PublishMachineInput = Readonly<{
+  projectId: string;
+  /** The branch whose head is published. Defaults to `main`. */
+  branch?: string;
+  /**
+   * The `project-revisions` root, which routes `syncNow` to the scheduler.
+   *
+   * Siblings speak through the parent (A38), so the dialog asks the root for
+   * the push and hears the answer back through it as `pushSettled` (P39).
+   */
+  parentRef?: AnyActorRef;
+}>;
+
+/** What a settled push reports, in `sync.machine`'s own words (P39). @public */
+export type PublishPushSettledOutcome = SyncPushOutcome;
+
+/** Serializable state owned by publishMachine. @public */
+export type PublishMachineContext = Readonly<{
+  projectId: string;
+  branch: string;
+  /** Names this project already has, for the dialog's picker. */
+  tags: readonly RevisionTag[];
+  /**
+   * The revision being published: the one the dialog was opened on (a History
+   * row's *Publish*), or the branch head when it was opened without one.
+   */
+  revisionId: string | undefined;
+  /** What the remote last advertised for the branch, which is the push lease. */
+  expected: string | undefined;
+  /** What the remote last advertised for each name it holds (P38). */
+  remoteTags: Readonly<Record<string, string>>;
+  /** Pre-filled name, when a caller opened the dialog on one. */
+  tag: string | undefined;
+  /** The version `tagging` made or renamed, whose tag `pushing` and `publishing` name (B6). */
+  version: number | undefined;
+  /** That version's name, as `tagging` left it. */
+  versionName: string | undefined;
+  /** The id the running `publish` was asked under; its answer echoes it (RM-R1). */
+  requestId: string | undefined;
+  draft: PublishDraft | undefined;
+  /** The push this state is waiting for the settlement of. */
+  pushId: string | undefined;
+  publicationId: string | undefined;
+  shareUrl: string | undefined;
+  error: string | undefined;
+  /** The root this dialog asks for its push (P39). */
+  parentRef: AnyActorRef | undefined;
+}>;
+
+/** Events accepted by publishMachine. @public */
+export type PublishMachineEvent =
+  | Readonly<{
+      type: 'publish';
+      requestId: string;
+      tag?: string;
+      /** An older revision to name and publish; the branch head when absent. */
+      revisionId?: string;
+    }>
+  | Readonly<{ type: 'confirm'; draft: PublishDraft }>
+  | Readonly<{ type: 'cancel' }>
+  | Readonly<{ type: 'pushSettled'; pushId: string; outcome: SyncPushOutcome }>
+  /* The push moved versions that were not backed up to new numbers (B6). */
+  | Readonly<{ type: 'versionsRenumbered'; renumbered: readonly VersionRenumbering[] }>
+  | Readonly<{ type: 'reset' }>;
+
+/** Facts publishMachine emits for a host that holds only the root. @public */
+export type PublishMachineEmitted =
+  /* `tag` is the published version's tag, `v<number>` (B6); `name` its name; `visibility` the link's setting. */
+  | Readonly<{
+      type: 'published';
+      requestId: string;
+      publicationId: string;
+      url: string;
+      tag: string;
+      name: string;
+      visibility: PublishVisibility;
+    }>
+  | Readonly<{ type: 'toast.info'; message: string }>
+  /* `code` names a refusal the page phrases; the other refusals are still sentences (a Rule 1 gap the guide records). */
+  | Readonly<{ type: 'toast.error'; requestId: string; message: string; code?: 'REVISIONS_BUSY' }>;
+
+/** What `listVersions` answers: the names, and the revision being published. @public */
+export type PublishVersionsActorOutput = Readonly<{
+  tags: readonly RevisionTag[];
+  /** The branch head. `undefined` in a project with no revisions yet. */
+  revisionId: string | undefined;
+  /** The remote's last-advertised branch head, used as the push lease (P18). */
+  expected: string | undefined;
+  /**
+   * What the remote last advertised for each version tag it holds, by tag
+   * name (`v<number>`, P38).
+   *
+   * A version this project publishes again is offered with its own lease, so
+   * a tag somebody else changed is rejected as `leaseLost` rather than forced.
+   * A tag the remote does not hold is absent, which is the "must not exist"
+   * lease a first publish needs.
+   */
+  remoteTags: Readonly<Record<string, string>>;
+}>;
+
+/**
+ * What `createTag` is asked to name: a new version, or with `number` the
+ * existing version on this revision, renamed to `name` (B6). @public
+ */
+export type PublishTagActorInput = Readonly<{
+  /**
+   * The new version's name. Absent with {@link PublishTagActorInput.number}: the version keeps the name it has where
+   * the tag is written, so a rename that landed after the names were read is never undone.
+   */
+  name?: string;
+  revisionId: string;
+  note?: string;
+  /** The number of the version being published as it is; absent for a new version. */
+  number?: number;
+}>;
+
+/** What `push` is asked to offer: the history set, tag included. @public */
+export type PublishPushActorInput = Readonly<{
+  branch: string;
+  /** The version's tag name, `v<number>`. */
+  tag: string;
+  /** The lease on the branch (P18); `undefined` means the ref must not exist. */
+  expected: string | undefined;
+  /**
+   * The lease on `refs/tags/<tag>` (P18, P38).
+   *
+   * The object the remote last advertised for this tag, or `undefined` for a
+   * tag it does not hold. Never a force: a name moved under this publish is a
+   * refusal the person is told about, and `atomic` takes the branch down with
+   * it so the remote never holds half of what was offered.
+   */
+  expectedTag: string | undefined;
+}>;
+
+/** What `push` answers: the id the settlement will name and the remote that accepted it. @public */
+export type PublishPushActorOutput = Readonly<{ pushId: string; remote: string }>;
+
+const defaultBranch = 'main';
+
+const unsupported = async (): Promise<never> => {
+  await Promise.resolve();
+  throw new Error('This host provided no publish actors; `publishMachine.provide` supplies them.');
+};
+
+const reason = (error: unknown): string =>
+  error instanceof Error ? error.message : 'Couldn’t publish this version. Try again.';
+
+type PublishEnqueue = EnqueueObject<PublishMachineEvent, PublishMachineEmitted>;
+
+/* Every entry into the dialog starts from nothing: a draft left over from
+ * the last publish would be applied to this one's read (row 11). */
+const startPublish = (event: Extract<PublishMachineEvent, { type: 'publish' }>): Partial<PublishMachineContext> => ({
+  tag: event.tag,
+  version: undefined,
+  versionName: undefined,
+  requestId: event.requestId,
+  revisionId: event.revisionId,
+  draft: undefined,
+  pushId: undefined,
+  publicationId: undefined,
+  shareUrl: undefined,
+  error: undefined,
+});
+
+/* A refusal is remembered for the dialog and said once as a toast. */
+const failWith = (
+  context: PublishMachineContext,
+  enq: PublishEnqueue,
+  error: string,
+): Partial<PublishMachineContext> => {
+  enq.emit({ type: 'toast.error', requestId: context.requestId ?? '', message: error });
+  return { error };
+};
+
+/*
+ * The version a draft publishes as it is: the one it names by number, or else
+ * one with its name, on the revision being published. An auto-named draft takes
+ * any version that entry already has, newest first as the port lists them
+ * (rule 14). A version never moves to another revision (Q13), so a name on
+ * another revision makes a new one.
+ */
+const existingVersion = (context: PublishMachineContext): RevisionTag | undefined => {
+  const { draft } = context;
+  return context.tags.find((tag) => {
+    if (tag.revisionId !== context.revisionId) {
+      return false;
+    }
+    if (draft?.version !== undefined) {
+      return tag.number === draft.version;
+    }
+    return draft?.isAutoNamed === true || tag.name === draft?.tag;
+  });
+};
+
+/*
+ * The version a republish names by number (B6): it publishes that version's
+ * own entry under its stored name, whatever the branch head or the
+ * publication's title is now, so a republish never renames a version.
+ */
+const republished = (draft: PublishDraft | undefined, tags: readonly RevisionTag[]): RevisionTag | undefined =>
+  draft?.version === undefined ? undefined : tags.find((tag) => tag.number === draft.version);
+
+const notOnThisDevice = 'That version isn’t on this device yet. Get the latest changes, then publish it again.';
+
+/*
+ * An entry carries at most one version (rule 14). A name the person typed that
+ * the entry's version does not have is refused: publishing it would make a
+ * second version on the entry, and renaming is not what a publish does.
+ */
+const alreadyVersioned = (
+  draft: PublishDraft,
+  tags: readonly RevisionTag[],
+  revisionId: string | undefined,
+): string | undefined => {
+  if (draft.version !== undefined || draft.isAutoNamed === true) {
+    return undefined;
+  }
+  const onEntry = tags.filter((tag) => tag.revisionId === revisionId);
+  const [version] = onEntry;
+  if (version === undefined || onEntry.some((tag) => tag.name === draft.tag)) {
+    return undefined;
+  }
+  return `This entry is already V${String(version.number)} “${version.name}”. Publish it as is, or save a new entry first.`;
+};
+
+/* The tag `pushing` and `publishing` name once `tagging` has made it: `v<number>`,
+ * as `versionTagName` spells it (a machine imports no value from the port). */
+const versionTagOf = (context: PublishMachineContext): string =>
+  context.version === undefined ? '' : `v${context.version}`;
+
+const noRevisionsYet = 'This project has no history yet, so there is nothing to publish.';
+
+const publishMachineDefinition = setup({
+  schemas: {
+    context: types<PublishMachineContext>(),
+    events: eventSchemas<PublishMachineEvent>(),
+    emitted: eventSchemas<PublishMachineEmitted>(),
+    input: types<PublishMachineInput>(),
+    /* MC-R28: `busy` from the read to the row; `asking` never, the dialog's choice is `choosingVersion.ready`. */
+    tags: types<'busy'>(),
+  },
+  actors: {
+    listVersions: createAsyncLogic<PublishVersionsActorOutput, Readonly<{ projectId: string; branch: string }>>({
+      run: unsupported,
+    }),
+    createTag: createAsyncLogic<RevisionTag, PublishTagActorInput>({ run: unsupported }),
+    push: createAsyncLogic<PublishPushActorOutput, PublishPushActorInput>({ run: unsupported }),
+    createPublication: createAsyncLogic<PublishPublicationActorOutput, PublishPublicationActorInput>({
+      run: unsupported,
+    }),
+  },
+}).createMachine({
+  id: 'publish',
+  context: ({ input }) => ({
+    projectId: input.projectId,
+    branch: input.branch ?? defaultBranch,
+    tags: [],
+    revisionId: undefined,
+    expected: undefined,
+    remoteTags: {},
+    tag: undefined,
+    version: undefined,
+    versionName: undefined,
+    requestId: undefined,
+    draft: undefined,
+    pushId: undefined,
+    publicationId: undefined,
+    shareUrl: undefined,
+    error: undefined,
+    parentRef: input.parentRef,
+  }),
+  initial: 'idle',
+  on: {
+    /* RM-R11: every state that cannot start a publish answers it; `idle`, `success` and `error` start one. */
+    publish: ({ event }, enq) => {
+      enq.emit({
+        type: 'toast.error',
+        requestId: event.requestId,
+        message: 'Another publish is still running.',
+        code: 'REVISIONS_BUSY',
+      });
+      return {};
+    },
+    /* A stale continuation or settlement is answered by doing nothing (MC-R18). */
+    confirm: () => ({}),
+    cancel: () => ({}),
+    reset: () => ({}),
+    pushSettled: () => ({}),
+    versionsRenumbered: () => ({}),
+  },
+  states: {
+    idle: {
+      on: {
+        publish: { target: 'choosingVersion', context: ({ event }) => startPublish(event) },
+      },
+    },
+
+    /**
+     * The names this project already has, and the revision about to get one.
+     *
+     * Read from the graph rather than remembered: a name created from History
+     * since the dialog was last open is a name the picker has to offer, and the
+     * head moves under a dialog left open (D29 — records, not snapshots).
+     *
+     * Two children, because *Publish* is one gesture: a surface that opens the
+     * dialog and confirms in the same breath — the panel's button, `tau publish
+     * <name>` — must not race the read. A `confirm` that arrives while the read
+     * is in flight is held and applied when it lands, instead of being answered
+     * "this project has no revisions yet".
+     */
+    choosingVersion: {
+      tags: ['busy'],
+      initial: 'reading',
+      states: {
+        reading: {
+          invoke: {
+            src: 'listVersions',
+            input: ({ context }) => ({ projectId: context.projectId, branch: context.branch }),
+            onDone: ({ context, event }, enq) => {
+              if (event.output.revisionId === undefined) {
+                return {
+                  target: '#publish.error',
+                  context: { tags: event.output.tags, ...failWith(context, enq, noRevisionsYet) },
+                };
+              }
+              const version = republished(context.draft, event.output.tags);
+              const read = {
+                tags: event.output.tags,
+                revisionId: version?.revisionId ?? context.revisionId ?? event.output.revisionId,
+                expected: event.output.expected,
+                remoteTags: event.output.remoteTags,
+              };
+              if (context.draft?.version !== undefined && version === undefined) {
+                return { target: '#publish.error', context: { ...read, ...failWith(context, enq, notOnThisDevice) } };
+              }
+              const versioned =
+                context.draft === undefined ? undefined : alreadyVersioned(context.draft, read.tags, read.revisionId);
+              if (versioned !== undefined) {
+                return { target: '#publish.error', context: { ...read, ...failWith(context, enq, versioned) } };
+              }
+              /* A name was confirmed while the read was in flight. */
+              return context.draft === undefined
+                ? { target: 'ready', context: read }
+                : { target: '#publish.tagging', context: read };
+            },
+            onError: ({ context, event }, enq) => ({
+              target: '#publish.error',
+              context: failWith(context, enq, reason(event.error)),
+            }),
+          },
+          on: {
+            /* Held, not refused: the read decides where it goes next. */
+            confirm: { context: ({ event }) => ({ draft: event.draft }) },
+          },
+        },
+        ready: {
+          on: {
+            confirm: ({ context, event }, enq) => {
+              if (context.revisionId === undefined) {
+                return { target: '#publish.error', context: failWith(context, enq, noRevisionsYet) };
+              }
+              const version = republished(event.draft, context.tags);
+              if (event.draft.version !== undefined && version === undefined) {
+                return { target: '#publish.error', context: failWith(context, enq, notOnThisDevice) };
+              }
+              const versioned = alreadyVersioned(event.draft, context.tags, context.revisionId);
+              if (versioned !== undefined) {
+                return { target: '#publish.error', context: failWith(context, enq, versioned) };
+              }
+              return {
+                target: '#publish.tagging',
+                context: { draft: event.draft, revisionId: version?.revisionId ?? context.revisionId },
+              };
+            },
+          },
+        },
+      },
+      on: {
+        cancel: { target: 'idle' },
+      },
+    },
+
+    /**
+     * The name, on the revision that already exists (W6's port members).
+     *
+     * Never a cut: the root declines a trigger-only cut while a turn or a lease
+     * is live, and a publication names the revision the person is looking at,
+     * not a new one made behind them (W6-a2).
+     */
+    tagging: {
+      tags: ['busy'],
+      invoke: {
+        src: 'createTag',
+        input: ({ context }) => {
+          const existing = existingVersion(context);
+          return {
+            /* Only a new version is named here. A version published as it is keeps the name it has where the tag
+             * is written, not the one read when the dialog opened: a publish never renames a version. */
+            ...(existing === undefined ? { name: context.draft?.tag ?? '' } : { number: existing.number }),
+            revisionId: context.revisionId ?? '',
+            ...(context.draft?.note === undefined ? {} : { note: context.draft.note }),
+          };
+        },
+        onDone: ({ event }) => ({
+          target: 'pushing',
+          context: { version: event.output.number, versionName: event.output.name },
+        }),
+        onError: ({ context, event }, enq) => ({
+          target: 'error',
+          context: failWith(context, enq, reason(event.error)),
+        }),
+      },
+      on: { cancel: { target: 'idle' } },
+    },
+
+    /**
+     * The history set — the branch and the new name — under the branch's lease.
+     *
+     * `leaseLost` on the branch is an error with A22's words rather than a
+     * retry: something else moved the line this publication would name, and
+     * republishing over it silently would publish a tree nobody chose.
+     */
+    pushing: {
+      tags: ['busy'],
+      invoke: {
+        src: 'push',
+        input: ({ context }) => ({
+          branch: context.branch,
+          tag: versionTagOf(context),
+          expected: context.expected,
+          /* Absent for a tag the remote does not hold, which is the lease that
+             says "this ref must not exist" (P18, P38). */
+          expectedTag: context.remoteTags[versionTagOf(context)],
+        }),
+        /*
+         * Not a transition: the push is settled when the settlement that names
+         * it arrives (P39).
+         *
+         * The ask goes to the scheduler, which is the only thing that pushes —
+         * through the root, because siblings speak through the parent (A38).
+         * It used to `raise` its own `pushSettled { backedUp }` here, which
+         * declared success the moment the *request* resolved: `queued`,
+         * `failed` and `superseded` were then unreachable outside a restored
+         * snapshot, so a publication could name a ref the remote never received
+         * (W22 DEF-W22-2). A dialog with no parent has nobody to push for
+         * it, so it fails at once rather than waiting on a settlement nobody
+         * sends (RM-R3).
+         */
+        onDone: ({ context, event }, enq) => {
+          if (context.parentRef === undefined) {
+            return {
+              target: 'error',
+              context: failWith(context, enq, 'Back this project up to the cloud before publishing.'),
+            };
+          }
+          enq.sendTo(context.parentRef, {
+            type: 'syncNow',
+            pushId: event.output.pushId,
+            remote: event.output.remote,
+          });
+          return { context: { pushId: event.output.pushId } };
+        },
+        onError: ({ context, event }, enq) => ({
+          target: 'error',
+          context: failWith(context, enq, reason(event.error)),
+        }),
+      },
+      on: {
+        pushSettled: ({ context, event }, enq) => {
+          if (context.pushId !== event.pushId) {
+            return {};
+          }
+          if (event.outcome === 'backedUp') {
+            return { target: 'publishing' };
+          }
+          /* `queued`, `conflicted` and `failed` all mean the remote does not
+             have this name yet, and a row that points at a name the remote
+             does not hold is a publication whose viewer opens nothing (P39). */
+          return {
+            target: 'error',
+            context: failWith(
+              context,
+              enq,
+              event.outcome === 'conflicted'
+                ? 'This project changed here and somewhere else. Choose what to keep, then publish again.'
+                : 'This project isn’t backed up to the cloud yet. Publish again when you’re back online.',
+            ),
+          };
+        },
+        /* The version this publish made moved before its first backup: the
+           row and the `published` event name the number it was backed up at. */
+        versionsRenumbered: ({ context, event }) => ({
+          context: {
+            version: event.renumbered.find((step) => step.from === context.version)?.to ?? context.version,
+          },
+        }),
+        cancel: { target: 'idle' },
+      },
+    },
+
+    /**
+     * The row: `{ projectId, tag, revisionId }`, the project's name and
+     * description, and who can open the link when the person chose. The server
+     * materializes the named tree from the pack it just received, so nothing
+     * is uploaded twice (A21), and points the project's one cloud link at it.
+     */
+    publishing: {
+      tags: ['busy'],
+      invoke: {
+        src: 'createPublication',
+        input: ({ context }) => {
+          /* The draft is set before `tagging` is entered and `publishing` is
+           * only reachable through it; the fallback keeps the type honest. */
+          const draft = context.draft ?? ({ tag: '', projectName: '', entryPath: '' } satisfies PublishDraft);
+          return {
+            projectId: context.projectId,
+            projectName: draft.projectName,
+            tag: versionTagOf(context),
+            revisionId: context.revisionId ?? '',
+            entryPath: draft.entryPath,
+            ...(draft.description === undefined ? {} : { description: draft.description }),
+            ...(draft.visibility === undefined ? {} : { visibility: draft.visibility }),
+            ...(draft.defaultVisibility === undefined ? {} : { defaultVisibility: draft.defaultVisibility }),
+          };
+        },
+        onDone: ({ context, event }, enq) => {
+          enq.emit({
+            type: 'published',
+            requestId: context.requestId ?? '',
+            publicationId: event.output.publicationId,
+            url: event.output.url,
+            tag: versionTagOf(context),
+            name: context.versionName ?? context.draft?.tag ?? '',
+            visibility: event.output.visibility,
+          });
+          return {
+            target: 'success',
+            context: { publicationId: event.output.publicationId, shareUrl: event.output.url, error: undefined },
+          };
+        },
+        onError: ({ context, event }, enq) => ({
+          target: 'error',
+          context: failWith(context, enq, reason(event.error)),
+        }),
+      },
+    },
+
+    success: {
+      on: {
+        reset: { target: 'idle' },
+        publish: { target: 'choosingVersion', context: ({ event }) => startPublish(event) },
+      },
+    },
+
+    error: {
+      on: {
+        reset: { target: 'idle', context: { error: undefined } },
+        publish: { target: 'choosingVersion', context: ({ event }) => startPublish(event) },
+      },
+    },
+  },
+});
+
+type PublishMachineDefinition = typeof publishMachineDefinition;
+
+/**
+ * The type of {@link publishMachine}, named so declarations reference it rather than inline it.
+ *
+ * @public
+ */
+// oxlint-disable-next-line typescript/no-empty-interface, typescript/no-empty-object-type, typescript/consistent-type-definitions -- an interface, not a type alias: declarations reference an interface by name and would expand an alias (K-17)
+export interface PublishMachine extends PublishMachineDefinition {}
+
+/**
+ * Headless publication of one project's named version.
+ *
+ * @public
+ * @example <caption>Publish the head of `main` as a new version named Ready for print, to a link anyone can open</caption>
+ * ```typescript
+ * import { createActor } from 'xstate';
+ * import { publishMachine } from '@taucad/revisions/publish-machine';
+ * import type { PublishActors } from '@taucad/revisions/publish-machine';
+ *
+ * declare const hostActors: PublishActors;
+ * const actor = createActor(publishMachine.provide({ actors: hostActors }), { input: { projectId: 'p1' } });
+ * actor.start();
+ * actor.send({ type: 'publish', requestId: 'publish-1' });
+ * actor.send({
+ *   type: 'confirm',
+ *   draft: { tag: 'Ready for print', projectName: 'Bracket', entryPath: 'main.ts', visibility: 'public' },
+ * });
+ * ```
+ */
+export const publishMachine: PublishMachine = publishMachineDefinition;
+
+/** The actor set `publishMachine.provide` needs. @public */
+export type PublishActors = MachineActors<typeof publishMachine>;
+
+/**
+ * The name a publish gives a version nobody named: `Shared Nov 19`, in the
+ * person's locale (`Shared 19 Nov`, `Shared 19. Nov.`). The host makes it,
+ * because only the host has a locale; the machine never formats a date.
+ *
+ * @param date - When the version is published.
+ * @param locales - The person's locale; the runtime's default when absent.
+ * @returns The version's name, sent with `isAutoNamed: true`.
+ * @public
+ * @example <caption>Name a version for a publish nobody named</caption>
+ * ```typescript
+ * import { autoVersionName } from '@taucad/revisions/publish-machine';
+ *
+ * autoVersionName(new Date('2026-11-19T12:00:00Z'), 'en-US'); // 'Shared Nov 19'
+ * ```
+ */
+export const autoVersionName = (date: Date, locales?: Intl.LocalesArgument): string =>
+  `Shared ${date.toLocaleDateString(locales, { month: 'short', day: 'numeric' })}`;
+
+const phaseOf = (value: unknown): PublishFacet['phase'] => {
+  /* `choosingVersion` has children, so the snapshot value is an object there. */
+  const name = typeof value === 'string' ? value : Object.keys(value as Record<string, unknown>)[0];
+  switch (name) {
+    case 'idle':
+    case 'choosingVersion':
+    case 'success':
+    case 'error': {
+      return name;
+    }
+    default: {
+      return 'working';
+    }
+  }
+};
+
+/**
+ * The Publish dialog's whole input, read where it lives.
+ *
+ * @param snapshot - Current publish snapshot.
+ * @returns The facet the dialog and the projection carry.
+ * @public
+ */
+export const selectPublishFacet = (snapshot: SnapshotFrom<typeof publishMachine>): PublishFacet => ({
+  phase: phaseOf(snapshot.value),
+  tags: snapshot.context.tags,
+  publicationId: snapshot.context.publicationId,
+  shareUrl: snapshot.context.shareUrl,
+  error: snapshot.context.error,
+});

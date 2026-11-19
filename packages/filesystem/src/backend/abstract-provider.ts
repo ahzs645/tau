@@ -6,6 +6,9 @@
  */
 
 import type { FileSystemProvider, FileStat, ProviderCapabilities } from '#types.js';
+import type { BatchEntry, BatchOptions, BatchReceipt } from '#changeset.js';
+import { applyBatchWithPrimitives } from '#backend/batch.js';
+import { assertRootedPath } from '@taucad/utils/path';
 
 /**
  * Base class for native {@link FileSystemProvider} implementations.
@@ -19,6 +22,7 @@ import type { FileSystemProvider, FileStat, ProviderCapabilities } from '#types.
 export abstract class AbstractFileSystemProvider implements FileSystemProvider {
   public abstract readonly id: string;
   public abstract readonly capabilities: ProviderCapabilities;
+  private readonly _appendTails = new Map<string, Promise<void>>();
 
   // -- Public instance methods (readFile, mkdir, exists, lstat, dispose) -------
 
@@ -48,8 +52,52 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
    * @returns Either the raw bytes or, when `encoding` is supplied, the decoded string.
    */
   public async readFile(path: string, encoding?: 'utf8'): Promise<Uint8Array<ArrayBuffer> | string> {
+    this._assertRootedPath(path);
     const raw = await this.readFileRaw(path);
     return encoding === 'utf8' ? new TextDecoder().decode(raw) : raw;
+  }
+
+  /**
+   * Write `path` from a stream. This fallback gathers the stream and writes it
+   * once, so the path never holds part of it; a provider that can stage chunks
+   * outside memory overrides it.
+   *
+   * @param path - Absolute file path to write.
+   * @param source - The file's bytes, in order.
+   */
+  public async writeFileStream(path: string, source: ReadableStream<Uint8Array<ArrayBuffer>>): Promise<void> {
+    try {
+      this._assertRootedPath(path);
+    } catch (error) {
+      await source.cancel(error).catch(() => undefined);
+      throw error;
+    }
+    const chunks: Array<Uint8Array<ArrayBuffer>> = [];
+    let size = 0;
+    const reader = source.getReader();
+    // oxlint-disable-next-line no-await-in-loop -- a stream is read one chunk after another.
+    for (let read = await reader.read(); !read.done; read = await reader.read()) {
+      chunks.push(read.value);
+      size += read.value.byteLength;
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    await this.writeFile(path, bytes);
+  }
+
+  /**
+   * Append bytes to `path`, creating the file and its parents when absent.
+   * Concrete providers inherit this read-concat-write fallback unless they
+   * can append more efficiently.
+   */
+  public async appendFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
+    this._assertRootedPath(path);
+    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
+    return this._enqueueAppend(path, async () => this._appendFileByRewrite(path, bytes));
   }
 
   /**
@@ -60,6 +108,7 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
    * @param options - When `recursive` is `true`, ancestors are auto-created.
    */
   public async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
+    this._assertRootedPath(path);
     if (!options?.recursive) {
       await this.mkdirSingle(path);
       return;
@@ -68,13 +117,21 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
     const segments = path.split('/').filter(Boolean);
     let current = '';
     for (const segment of segments) {
-      current += `/${segment}`;
+      current = current === '' ? segment : `${current}/${segment}`;
       try {
         // oxlint-disable-next-line no-await-in-loop -- Sequential mkdir required for recursive creation
         await this.mkdirSingle(current);
       } catch (error) {
         if ((error as { code?: string }).code !== 'EEXIST') {
           throw error;
+        }
+        // `EEXIST` is success only when the existing entry is the directory
+        // this recursive walk needs. A file at the same path must remain an
+        // error instead of becoming a file/directory collision.
+        // oxlint-disable-next-line no-await-in-loop -- The kind check belongs to the sequential ancestor walk.
+        const existing = await this.stat(current);
+        if (existing.type !== 'dir') {
+          throw this._eexist(current);
         }
       }
     }
@@ -84,15 +141,33 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
    * Test whether `path` resolves to any filesystem entry.
    *
    * @param path - Absolute path to probe.
-   * @returns `true` when {@link stat} succeeds for `path`, `false` otherwise.
+   * @returns `true` when {@link stat} succeeds for `path`, `false` for a
+   * recognized absence or non-directory ancestor.
    */
   public async exists(path: string): Promise<boolean> {
+    this._assertRootedPath(path);
     try {
       await this.stat(path);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null ? (error as NodeJS.ErrnoException).code : undefined;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return false;
+      }
+      throw error;
     }
+  }
+
+  /**
+   * Apply one batch through this provider's primitives (charter D2). A
+   * provider with a native batch overrides it.
+   *
+   * @param entries - One phase's entries for this provider, in provider paths.
+   * @param options - The changeset's abort signal.
+   * @returns One receipt per entry, in entry order.
+   */
+  public async applyBatch(entries: readonly BatchEntry[], options?: BatchOptions): Promise<BatchReceipt[]> {
+    return applyBatchWithPrimitives(this, entries, options);
   }
 
   /**
@@ -103,6 +178,7 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
    * @returns Metadata for `path`.
    */
   public async lstat(path: string): Promise<FileStat> {
+    this._assertRootedPath(path);
     return this.stat(path);
   }
 
@@ -118,6 +194,86 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
   public abstract unlink(path: string): Promise<void>;
   public abstract rmdir(path: string): Promise<void>;
   public abstract rename(from: string, to: string): Promise<void>;
+
+  /**
+   * Construct a provider-neutral errno-style error.
+   *
+   * @param code - Stable errno code.
+   * @param description - Human-readable failure description.
+   * @param path - Path associated with the failure.
+   * @returns Error carrying the errno code.
+   */
+  protected _errno(code: string, description: string, path: string): Error {
+    const error = new Error(`${code}: ${description} '${path}'`);
+    (error as NodeJS.ErrnoException).code = code;
+    return error;
+  }
+
+  protected _enoent(path: string): Error {
+    return this._errno('ENOENT', 'no such file or directory', path);
+  }
+
+  protected _eexist(path: string): Error {
+    return this._errno('EEXIST', 'file or directory already exists', path);
+  }
+
+  protected _eisdir(path: string): Error {
+    return this._errno('EISDIR', 'is a directory', path);
+  }
+
+  protected _enotdir(path: string): Error {
+    return this._errno('ENOTDIR', 'not a directory', path);
+  }
+
+  protected _enotempty(path: string): Error {
+    return this._errno('ENOTEMPTY', 'directory not empty', path);
+  }
+
+  protected _einval(path: string): Error {
+    return this._errno('EINVAL', 'invalid argument', path);
+  }
+
+  protected _assertRootedPath(path: string): void {
+    assertRootedPath(path);
+  }
+
+  /** Serialize appends to one path in call order, without poisoning the queue after a failure. */
+  protected async _enqueueAppend(path: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this._appendTails.get(path) ?? Promise.resolve();
+    const current = (async () => {
+      try {
+        await previous;
+      } catch {
+        // A failed append must not poison later appends to the same path.
+      }
+      await operation();
+    })();
+    this._appendTails.set(path, current);
+    try {
+      await current;
+    } finally {
+      if (this._appendTails.get(path) === current) {
+        this._appendTails.delete(path);
+      }
+    }
+  }
+
+  /** Default append used by providers whose native fast path is unavailable. */
+  protected async _appendFileByRewrite(path: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+    let existing: Uint8Array<ArrayBuffer>;
+    try {
+      existing = await this.readFile(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+      existing = new Uint8Array();
+    }
+    const combined = new Uint8Array(existing.byteLength + bytes.byteLength);
+    combined.set(existing);
+    combined.set(bytes, existing.byteLength);
+    await this.writeFile(path, combined);
+  }
 
   // -- Protected abstract methods (internal primitives) -----------------------
 

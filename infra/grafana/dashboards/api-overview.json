@@ -8,19 +8,29 @@
   "templating": {
     "list": [
       {
+        "name": "app",
+        "label": "Application",
+        "type": "constant",
+        "query": ".*",
+        "description": "Local default matches unlabeled series. Hosted provisioning binds this to exactly one application.",
+        "current": { "text": ".*", "value": ".*" },
+        "hide": 2
+      },
+      {
         "name": "service",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(up, service_name)",
+        "label": "Service",
+        "type": "custom",
+        "query": "tau-api",
+        "description": "Tau runs one service. A constant, so panels never lose their filter when the API's own series go stale during an outage.",
         "current": { "text": "tau-api", "value": "tau-api" },
-        "includeAll": false,
-        "refresh": 1
+        "options": [{ "text": "tau-api", "value": "tau-api", "selected": true }],
+        "includeAll": false
       },
       {
         "name": "instance",
         "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(up{service_name=\"$service\"}, instance)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(process_uptime{app=~\"$app\",service_name=\"$service\"}, instance)",
         "current": { "text": "All", "value": "$__all" },
         "includeAll": true,
         "allValue": ".*",
@@ -35,10 +45,11 @@
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m])) by (http_route)",
+          "expr": "sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\"}[5m])) by (http_route)",
           "legendFormat": "{{http_route}}"
         }
-      ]
+      ],
+      "id": 1
     },
     {
       "title": "Error Rate (%)",
@@ -46,7 +57,7 @@
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
       "targets": [
         {
-          "expr": "sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[5m])) / sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m])) * 100"
+          "expr": "(sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\",http_response_status_code=~\"5..\"}[5m])) or vector(0)) / sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\"}[5m])) * 100"
         }
       ],
       "fieldConfig": {
@@ -60,7 +71,8 @@
             ]
           }
         }
-      }
+      },
+      "id": 2
     },
     {
       "title": "Latency (p50 / p95 / p99)",
@@ -68,19 +80,22 @@
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(http_server_request_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_request_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "p95"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_request_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "p99"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "ms" } }
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "id": 3
     },
     {
       "title": "Request Rate by Route",
@@ -88,10 +103,11 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m])) by (http_route, http_method)",
-          "legendFormat": "{{http_method}} {{http_route}}"
+          "expr": "sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\"}[5m])) by (http_route, http_request_method)",
+          "legendFormat": "{{http_request_method}} {{http_route}}"
         }
-      ]
+      ],
+      "id": 4
     },
     {
       "title": "Latency by Route (p95)",
@@ -99,11 +115,14 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_bucket{service_name=~\"$service\"}[5m])) by (le, http_route))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_request_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le, http_route))",
           "legendFormat": "{{http_route}}"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "ms" } }
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "id": 5
     },
     {
       "title": "Outbound HTTP Latency (p95)",
@@ -111,11 +130,14 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_client_request_duration_bucket{service_name=~\"$service\"}[5m])) by (le, server_address))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_client_request_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le, server_address))",
           "legendFormat": "{{server_address}}"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "id": 6
     },
     {
       "title": "Event Loop Utilization",
@@ -123,18 +145,26 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "targets": [
         {
-          "expr": "nodejs_eventloop_utilization{service_name=~\"$service\"}",
+          "expr": "nodejs_eventloop_utilization{app=~\"$app\",service_name=~\"$service\"}",
           "legendFormat": "utilization"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit" }
+      },
+      "id": 7
     },
     {
       "title": "Error Logs",
       "type": "logs",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+      "targets": [
+        {
+          "expr": "{service_name=~\"$service\"} | detected_level=~\"error|fatal|critical\"",
+          "refId": "A"
+        }
+      ],
       "options": {
         "showTime": true,
         "showLabels": true,
@@ -143,14 +173,336 @@
         "prettifyLogMessage": false,
         "enableLogDetails": true,
         "sortOrder": "Descending"
-      }
+      },
+      "id": 8
     },
     {
       "title": "Recent Traces",
       "type": "traces",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 108 },
       "datasource": { "type": "tempo", "uid": "tempo" },
-      "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+      "targets": [
+        {
+          "query": "{resource.service.name=~\"$service\"}",
+          "refId": "A",
+          "queryType": "traceqlSearch"
+        }
+      ],
+      "id": 9
+    },
+    {
+      "title": "Publications",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 116 },
+      "panels": [],
+      "id": 10
+    },
+    {
+      "title": "Publication Views by Dedupe",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 117 },
+      "targets": [
+        {
+          "expr": "sum by (deduped) (rate(publication_views_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{deduped}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" }
+      },
+      "id": 11
+    },
+    {
+      "title": "View Rejections by Reason",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 117 },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(publication_views_rejections_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" }
+      },
+      "id": 12
+    },
+    {
+      "title": "File Requests by Outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 125 },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(publication_file_requests_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" }
+      },
+      "id": 13
+    },
+    {
+      "title": "Invite Emails by Trigger and Outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 125 },
+      "targets": [
+        {
+          "expr": "sum by (trigger, outcome) (increase(publication_invite_emails_total{app=~\"$app\",service_name=~\"$service\"}[1h]))",
+          "legendFormat": "{{trigger}} {{outcome}}"
+        },
+        {
+          "expr": "sum by (outcome) (increase(project_invite_emails_total{app=~\"$app\",service_name=~\"$service\"}[1h]))",
+          "legendFormat": "collaborator {{outcome}}"
+        }
+      ],
+      "id": 14
+    },
+    {
+      "title": "Database pool",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 133 },
+      "panels": [],
+      "id": 15
+    },
+    {
+      "title": "Pooled client connections by process",
+      "description": "PostgreSQL connections each API process holds open, by Machine (instance), Fly process group and client pool (database connection audit R4). Each process counts only its own sockets, so the stack sums across instances, unlike tau_db_connections. The red dashed series is the session pooler's capacity for the login (tau_db_pooler_capacity, from DATABASE_POOLER_POOL_SIZE). The dashed threshold lines mark the declared budget of 12, 13 (db-pooler-clients-high, warning: over budget) and 14 (db-pooler-clients-near-cap, critical): those rules add 2 to this stack for revisions-maintenance, which holds up to 2 more on the same login and exports no metrics. Pools stay full after a burst, so sitting at the budget is normal.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 134 },
+      "targets": [
+        {
+          "expr": "sum by (instance, tau_process, tau_db_pool) (tau_db_client_connections{app=~\"$app\",service_name=~\"$service\"})",
+          "legendFormat": "{{instance}} {{tau_process}} {{tau_db_pool}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max(tau_db_pooler_capacity{app=~\"$app\",service_name=~\"$service\"})",
+          "legendFormat": "pooler capacity",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": { "stacking": { "mode": "normal", "group": "A" }, "thresholdsStyle": { "mode": "dashed" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 12 },
+              { "color": "orange", "value": 13 },
+              { "color": "red", "value": 14 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "pooler capacity" },
+            "properties": [
+              { "id": "custom.stacking", "value": { "mode": "none", "group": "A" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "id": 16
+    },
+    {
+      "title": "Pool connects and refusals",
+      "description": "Connections each pool opened in the last 5 minutes, by TCP outcome, and queries that failed because the pooler or PostgreSQL refused a connection (Supavisor EMAXCONN, SQLSTATE 53300). Any refusal pages (db-pool-refusals).",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 134 },
+      "targets": [
+        {
+          "expr": "sum by (tau_db_pool, outcome) (increase(tau_db_client_connects_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{tau_db_pool}} connect {{outcome}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (instance, tau_db_pool) (increase(tau_db_client_refusals_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{instance}} {{tau_db_pool}} refused",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "id": 17
+    },
+    {
+      "title": "Email delivery (Resend events)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 142
+      },
+      "panels": [],
+      "id": 18
+    },
+    {
+      "title": "Resend Events by Type",
+      "type": "timeseries",
+      "description": "Verified Resend webhook events by type: sent, delivered, bounced, complained, suppressed, failed and delayed. Sent counts from email.sent, the denominator of the hard-bounce alerts.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 143
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (type) (count_over_time({service_name=~\"$service\"} | event_provider=\"app\" |~ \"Resend event email[.][a-z_]+ kind=\" | regexp `Resend event email[.](?P<type>[a-z_]+)` [$__interval]))",
+          "legendFormat": "{{type}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "id": 19
+    },
+    {
+      "title": "Bounces by Type",
+      "type": "timeseries",
+      "description": "email.bounced events by Resend bounce type. Permanent bounces feed the hard-bounce rate alerts (2% and 4% over 7 days).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 143
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (bounce_type) (count_over_time({service_name=~\"$service\"} | event_provider=\"app\" |= \"Resend event email.bounced kind=\" | regexp `bounce_type=(?P<bounce_type>[A-Za-z]+)` [$__interval]))",
+          "legendFormat": "{{bounce_type}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "id": 20
+    },
+    {
+      "title": "Complaints by Kind",
+      "type": "timeseries",
+      "description": "email.complained events (a recipient marked the mail as spam) by email kind. Any complaint fires api-email-complaint.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 151
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (kind) (count_over_time({service_name=~\"$service\"} | event_provider=\"app\" |= \"Resend event email.complained kind=\" | regexp `Resend event email[.]complained kind=(?P<kind>[a-z-]+)` [$__interval]))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "id": 21
+    },
+    {
+      "title": "Suppressed by Kind",
+      "type": "timeseries",
+      "description": "email.suppressed events (Resend refused to send to an address on its suppression list) by email kind. An identity kind fires api-email-identity-undelivered.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 151
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (kind) (count_over_time({service_name=~\"$service\"} | event_provider=\"app\" |= \"Resend event email.suppressed kind=\" | regexp `Resend event email[.]suppressed kind=(?P<kind>[a-z-]+)` [$__interval]))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "id": 22
     }
   ],
   "schemaVersion": 39

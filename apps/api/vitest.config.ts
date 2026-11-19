@@ -2,7 +2,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config as loadDotenv } from 'dotenv';
 import { defineConfig } from 'vitest/config';
-import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -10,9 +9,11 @@ loadDotenv({ path: path.resolve(__dirname, '.env') });
 
 export default defineConfig({
   root: __dirname,
-  plugins: [nxViteTsPaths()],
   cacheDir: '../../node_modules/.vite/apps/api',
   test: {
+    coverage: {
+      reportsDirectory: '../../out/reports/coverage/apps/api',
+    },
     globals: false,
     environment: 'node',
     setupFiles: ['./vitest.setup.ts'],
@@ -25,7 +26,15 @@ export default defineConfig({
      * env loading auto-injects `.env.test` (mock keys) into workers and the
      * integration tests then hit 401s against the test fixtures.
      */
-    exclude: ['app/testing/**', 'node_modules/**', 'dist/**', 'out-tsc/**'],
+    /* `helper-path.live.test.ts` calls real providers and runs only under `test:live`. */
+    exclude: [
+      'app/api/billing/*.foundation.test.ts',
+      'app/api/llm/helper-path.live.test.ts',
+      'app/testing/**',
+      'node_modules/**',
+      'dist/**',
+      'out-tsc/**',
+    ],
     reporters: ['default'],
     testTimeout: 120_000,
   },

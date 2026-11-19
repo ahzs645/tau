@@ -4,13 +4,419 @@
   "projectType": "application",
   "sourceRoot": "apps/ui-e2e/src",
   "tags": ["scope:ui", "type:e2e"],
-  "implicitDependencies": ["ui"],
+  "implicitDependencies": ["ui", "host", "runtime-e2e"],
   "targets": {
-    "thumbnails": {
+    "formal:logs": {},
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": [{ "projects": ["ui"], "target": "build:serve" }],
+      "metadata": {
+        "description": "Node-only suites: none of them serves apps/ui/build (ui-build-snapshot.test.ts builds a fixture tree in a temp directory), so this target builds no web UI variant and carries no env fixture. serve-ui-build.test.ts reads apps/ui/serve/build, which the ui:build:serve dependency produces and caches. The browser tiers below still build ui themselves."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "vitest run --dir apps/ui-e2e apps/ui-e2e/src/global-setup-preflight.spec.ts apps/ui-e2e/src/support/agent-host-gateway-script.test.ts apps/ui-e2e/src/support/chat-admission-log.test.ts apps/ui-e2e/src/support/headless-capture-performance.test.ts apps/ui-e2e/src/support/ui-build-snapshot.test.ts apps/ui-e2e/src/support/usage-receipt.test.ts apps/ui-e2e/src/support/webgpu-profile.test.ts apps/ui-e2e/src/support/serve-ui-build.test.ts apps/ui-e2e/src/support/github-identity.test.ts apps/ui-e2e/src/filesystem-scenarios/fixture.test.ts apps/ui-e2e/src/filesystem-scenarios/scenarios.test.ts --environment=node"
+      }
+    },
+    "test:e2e:queue": {
+      "executor": "nx:noop",
+      "dependsOn": [
+        "test:e2e:daemon-host",
+        "test:e2e:deploy-skew",
+        "test:e2e:development",
+        "test:e2e:filesystem-scenarios",
+        "test:e2e:non-isolated"
+      ],
+      "metadata": {
+        "description": "The merge-queue e2e ratchet: the suites of this project that passed five consecutive e2e-nightly runs (two before 2026-11-17). ci.yml's e2e-queue lane runs each one as its own job in the merge queue whenever this project is affected, and e2e-nightly.yml leaves every suite listed here out of its matrix. A suite joins by being added to dependsOn (a target of this project) once green on five consecutive nightlies, and never moves back. Running this target runs them all."
+      }
+    },
+    "test:e2e": {
+      "executor": "nx:run-commands",
+      "dependsOn": [{ "projects": ["ui"], "target": "build:serve" }],
+      "metadata": {
+        "description": "external-agent.spec.ts starts a real `tau serve` daemon (startTauServeFixture), which serves apps/ui/serve/build, so this target depends on ui:build:serve as test:e2e:daemon-host does; that variant needs none of the fixture below. Every ui:build consumer here builds it as its first command, under the env fixture below, instead of through dependsOn: a dependency task inherits only the caller's environment, so it could not carry the fixture. The fixture is the non-secret local URLs ci.yml sets workflow-wide plus the self-host TAU_CLOUD_ENABLED, so a clean checkout builds with no untracked apps/ui/.env; the tier's own server sets its runtime origins. ui:build declares each of these as an env input, so the self-host and the cloud (desktop-e2e, test:e2e:live) variants never share a cache entry, and building immediately before the specs means the variant in apps/ui/build is always this target's own (desktop-e2e:test:e2e, which writes the cloud variant there, runs with parallelism false). Arguments reach only the vitest command, so `--shard=<index>/<count>` selects a slice of the suite; `shards` is how many slices e2e-nightly.yml runs as separate jobs, since the whole suite outlasts one job (run 43217741985 reached 23 of its 117 files in 120 min; at 8 slices, run 43436952348 still left slice 6 at the 120 min job timeout while slice 1 took 22 min). FL4: each configuration runs the suite with every target opened in one named flag state (TAU_E2E_FLAG_STATE, src/support/flag-state.ts); it repeats the whole env fixture because a configuration's env replaces the options' env, and the flag state is not a ui:build input because the page seeds it at runtime, so all four share one build.",
+        "shards": 12
+      },
+      "configurations": {
+        "all-off": {
+          "env": {
+            "TAU_CLOUD_ENABLED": "false",
+            "TAU_API_URL": "http://localhost:4000",
+            "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+            "TAU_FRONTEND_URL": "http://localhost:3000",
+            "TAU_E2E_FLAG_STATE": "all-off"
+          }
+        },
+        "viewer-controls": {
+          "env": {
+            "TAU_CLOUD_ENABLED": "false",
+            "TAU_API_URL": "http://localhost:4000",
+            "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+            "TAU_FRONTEND_URL": "http://localhost:3000",
+            "TAU_E2E_FLAG_STATE": "viewer-controls"
+          }
+        },
+        "all-on": {
+          "env": {
+            "TAU_CLOUD_ENABLED": "false",
+            "TAU_API_URL": "http://localhost:4000",
+            "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+            "TAU_FRONTEND_URL": "http://localhost:3000",
+            "TAU_E2E_FLAG_STATE": "all-on"
+          }
+        },
+        "viewer-controls-onboarding": {
+          "env": {
+            "TAU_CLOUD_ENABLED": "false",
+            "TAU_API_URL": "http://localhost:4000",
+            "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+            "TAU_FRONTEND_URL": "http://localhost:3000",
+            "TAU_E2E_FLAG_STATE": "viewer-controls-onboarding"
+          }
+        }
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "parallel": false,
+        "commands": [
+          { "command": "pnpm exec nx run ui:build", "forwardAllArgs": false },
+          "vitest run --config apps/ui-e2e/vitest.config.ts"
+        ],
+        "env": {
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:deploy-skew": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "TAU-UI-6: serves one ui:build as two deploys (src/support/two-deploys.ts, which also serves each deploy's service worker) and checks that a page whose lazy chunks the newer deploy no longer serves reloads into it instead of reaching the error page. Drives Playwright's Chromium from Node; set TAU_E2E_CHROMIUM_EXECUTABLE to use another installed Chromium."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "parallel": false,
+        "commands": [
+          "pnpm exec nx run ui:build",
+          "vitest run --dir apps/ui-e2e apps/ui-e2e/src/stale-deploy-recovery.test.ts --environment=node"
+        ],
+        "env": {
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:service-worker": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "The web app's service worker on a built app (progressive loading PL7). service-worker.test.ts serves one ui:build as one deploy and checks the worker's offline opens of Home and a local project, their cross-origin isolation, that API, auth, data and marketing requests pass through, and its precache list (shell invariants 8 and 9). service-worker-deploy.test.ts serves it as two deploys (src/support/two-deploys.ts) and checks that a tab the worker controls keeps working and opens the new deploy once the update rule fires (ruling OD3), and that one deploy of the kill switch (TAU_SERVICE_WORKER_KILL_SWITCH) retires an installed worker. A new suite: e2e-nightly.yml runs it, and it joins test:e2e:queue only after five consecutive green nightlies (the end-to-end ratchet). Drives Playwright's Chromium from Node; set TAU_E2E_CHROMIUM_EXECUTABLE to use another installed Chromium."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "parallel": false,
+        "commands": [
+          "pnpm exec nx run ui:build",
+          "vitest run --dir apps/ui-e2e apps/ui-e2e/src/service-worker.test.ts apps/ui-e2e/src/service-worker-deploy.test.ts --environment=node"
+        ],
+        "env": {
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:webgpu": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "The WebGPU hardware qualification tier: e2e-nightly.yml's webgpu-hardware job runs it with TAU_E2E_WEBGPU_PROFILE=hardware on a runner with a GPU. A software adapter (SwiftShader, the main suite's profile) cannot present a WebGPU canvas: the browser destroys the device at the first presented frame and every canvas falls back to WebGL (external-target.ts presentedGraphicsBackend). The rows that exist to prove the WebGPU backend itself (WGSL compile, WebGPU readback and presented pixels, WebGPU against WebGL parity) therefore run only where a WebGPU canvas presents, which is this tier; in the main suite the same specs run their WebGL rows and expect the presented backend wherever WebGPU was asked for."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "parallel": false,
+        "env": {
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        },
+        "commands": [
+          "pnpm exec nx run ui:build",
+          "vitest run --config apps/ui-e2e/vitest.config.ts --project chromium src/webgpu-qualification.spec.ts src/graphics-backend.spec.ts src/shader-fixture.spec.ts src/section-view-contour-fill.spec.ts src/section-view-control-restyle.spec.ts src/section-view-overlap-cap-shading.spec.ts src/section-view-overlap-performance-diagnostics.spec.ts src/user-project-thumbnail-generation.spec.ts src/headless-chat-image-capture.spec.ts src/headless-chat-image-capture.performance.spec.ts src/metal-morph-loader.spec.ts src/glass-prism-loader.spec.ts"
+        ]
+      }
+    },
+    "test:e2e:development": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "global-setup starts `react-router dev` itself rather than through ui:dev, so this target carries ui:dev's copy-assets and csharp-language:prepare dependencies: without them a clean checkout serves the SPA fallback for the vendored fonts and esbuild.wasm, and the UI's Vite config refuses to start without the staged C# language server."
+      },
+      "dependsOn": ["^copy-assets", "csharp-language:prepare"],
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "vitest run --config apps/ui-e2e/vitest.config.ts --project chromium src/preview.spec.ts src/geospec-runner.spec.ts src/headless-chat-image-capture.development.spec.ts src/home-hydration.spec.ts src/picovoxel-multi.spec.ts src/project-open-first-paint.spec.ts",
+        "env": {
+          "PORT": "3012",
+          "TAU_E2E_SERVER_MODE": "development"
+        }
+      }
+    },
+    "test:e2e:non-isolated": {
+      "executor": "nx:run-commands",
+      "dependsOn": [{ "projects": ["ui"], "target": "build" }],
+      "metadata": {
+        "description": "The degraded mode of T2.9: the snapshot production server without COOP/COEP, so kernels must fall back to their single-threaded builds, say why, and still export exact bytes. Its own PORT keeps it from reusing an isolated server another e2e target started."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/apps/ui-e2e",
+        "parallel": false,
+        "commands": [
+          "vitest run --config vitest.config.ts --project chromium src/picovoxel-multi.spec.ts",
+          "vitest run --config vitest.config.ts --project firefox src/picovoxel-multi.spec.ts"
+        ],
+        "env": {
+          "PORT": "3015",
+          "TAU_E2E_UI_SNAPSHOT": "true",
+          "TAU_E2E_DISABLE_COI": "true"
+        }
+      }
+    },
+    "test:e2e:browser-host": {
       "executor": "nx:run-commands",
       "options": {
-        "cwd": "apps/ui-e2e",
-        "command": "playwright test --config=playwright.thumbnails.config.ts"
+        "cwd": "{workspaceRoot}/apps/ui-e2e",
+        "commands": [
+          "pnpm --dir ../.. exec nx run ui:build",
+          "vitest run --config vitest.config.ts --project chromium src/browser-agent-host.spec.ts src/chat-isolated-workspace.spec.ts src/chat-questions.spec.ts src/chat-todo-list.spec.ts",
+          "vitest run --config vitest.config.ts --project firefox src/browser-agent-host.spec.ts src/chat-isolated-workspace.spec.ts",
+          "vitest run --config vitest.config.ts --project webkit-smoke src/browser-agent-host.spec.ts src/chat-isolated-workspace.spec.ts"
+        ],
+        "parallel": false,
+        "env": {
+          "TAU_E2E_UI_SNAPSHOT": "true",
+          "TAU_E2E_HOST_TIER": "true",
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:workbench": {
+      "executor": "nx:run-commands",
+      "configurations": {
+        "records": {
+          "commands": [
+            "pnpm --dir ../.. exec nx run ui:build",
+            "vitest run --config vitest.config.ts --project chromium src/workbench-records.spec.ts"
+          ]
+        }
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/apps/ui-e2e",
+        "parallel": false,
+        "commands": [
+          "pnpm --dir ../.. exec nx run ui:build",
+          "vitest run --config vitest.config.ts --project chromium src/workbench-records.spec.ts src/arrange-workbench.spec.ts"
+        ],
+        "env": {
+          "TAU_E2E_UI_SNAPSHOT": "true",
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:daemon-host": {
+      "executor": "nx:run-commands",
+      "dependsOn": [{ "projects": ["ui"], "target": "build:serve" }],
+      "options": {
+        "cwd": "{workspaceRoot}/apps/ui-e2e",
+        "parallel": false,
+        "commands": [
+          "pnpm --dir ../.. exec nx run ui:build",
+          "vitest run --config vitest.config.ts --project chromium src/daemon-agent-host.spec.ts"
+        ],
+        "env": {
+          "TAU_E2E_HOST_TIER": "true",
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:live": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Opt-in live provider tier: the two specs that spend real provider credit and then assert the billing receipts they produced. The UI is built by the first command rather than a dependsOn, because it must be the cloud variant (TAU_CLOUD_ENABLED=true is a build-time input of ui:build) and a dependency task inherits only the caller's environment — a self-host bundle's transport omits fundedOperations entirely, so no receipt could exist to assert. global-setup.ts starts the UI only: the tier needs a cloud API already listening at TAU_E2E_API_URL (default :4000) with TAU_CLOUD_ENABLED=true, the BILLING_* secrets and the placeholder STRIPE_* values apps/api/.env.example names — nothing on the funded path calls Stripe. Also needs `pnpm infra:up` and one `pnpm db:migrate` per database fork."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/apps/ui-e2e",
+        "parallel": false,
+        "commands": [
+          "pnpm --dir ../.. exec nx run ui:build",
+          "vitest run --config vitest.config.ts --project chromium src/gemini-browser-agent-host.live.spec.ts src/provider-switch.live.spec.ts"
+        ],
+        "env": {
+          "TAU_E2E_LIVE_GEMINI": "true",
+          "TAU_CLOUD_ENABLED": "true",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:cloud-load": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Cloud-build load tier (lane A0.11): the loading rows a self-host build cannot show, because it has no billing fence and asks for /v1/projects only for a project on the Tau remote (N1, H7, N2, H6 and the U1 session discriminator). Like test:e2e:live, the first command builds the cloud UI variant (TAU_CLOUD_ENABLED=true is a build-time input of ui:build) and global-setup.ts starts the UI only. No API runs and no secret is needed: src/support/cloud-stand-ins.ts answers get-session, /v1/projects and /v1/agents by interception for a signed-in stand-in owner with one Tau-remote project, and holds an answer when a row forces its defect. TAU_BILLING_ENVIRONMENT gives the billing fence an identity to gate on. TAU_E2E_CLOUD_LOAD=true runs the cloud-only blocks of the two specs, which every other tier skips, and the name pattern (cloud-load-gate.spec.ts's block, home-load-gate.spec.ts's N1 and H7 cases) keeps home-load-gate.spec.ts's self-host cases out of this tier. Its rows pin known defects (cloudDefectRow): each is a plain test that passes while its defect assertion fails, records that failure as a notice annotation naming the defect, and fails if the assertion passes (the defect no longer reproduces: flip expectedFailure) or anything else faults. The verbose and github-actions reporters print each standing defect's notice (locally under the row, and as a workflow annotation in CI). --retry 0: a row runs once, so a sampled pass is never retried into a reading. Arguments reach only the vitest command. Its own PORT keeps it from reusing a self-host server another e2e target started."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/apps/ui-e2e",
+        "parallel": false,
+        "commands": [
+          { "command": "pnpm --dir ../.. exec nx run ui:build", "forwardAllArgs": false },
+          "vitest run --config vitest.config.ts --project chromium --retry 0 --reporter=verbose --reporter=github-actions --testNamePattern \"cloud-build tier|^N1: |^H7: \" src/cloud-load-gate.spec.ts src/home-load-gate.spec.ts"
+        ],
+        "env": {
+          "PORT": "3021",
+          "TAU_E2E_CLOUD_LOAD": "true",
+          "TAU_CLOUD_ENABLED": "true",
+          "TAU_BILLING_ENVIRONMENT": "development",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:live:github": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Opt-in live GitHub tier: the C10 and A4 rows, which sign in to github.com as the two test identities (`src/support/github-identity.ts`). Like test:e2e:live, the first command builds the cloud UI variant and global-setup.ts starts the UI only: the rows need a cloud API at TAU_E2E_API_URL (default :4000) whose TAU_FRONTEND_URL is this target's origin, http://localhost:3018, with the GitHub App and GitHub sign-in configured. The API must listen on localhost:4000, because the development App's and OAuth App's registered callbacks are there. TAU_E2E_LIVE_GITHUB=true is left to the caller that started that API (e2e-nightly.yml's live-github job), so without it, or without an identity's variables, each row skips and names what is missing. --retry 0: a retry repeats a password sign-in to github.com from the same runner, and repeated sign-ins risk GitHub locking the test account."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/apps/ui-e2e",
+        "parallel": false,
+        "commands": [
+          "pnpm --dir ../.. exec nx run ui:build",
+          "vitest run --config vitest.config.ts --project chromium --retry 0 src/github-accounts.live.spec.ts"
+        ],
+        "env": {
+          "PORT": "3018",
+          "TAU_CLOUD_ENABLED": "true",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:safari-host": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "node apps/ui-e2e/scripts/verify-safari-remote-host.mts"
+      }
+    },
+    "test:e2e:picovoxel-naming": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "Qualify hover, selection, list labels and source edits on the serial browser path; the existing picovoxel-multi spec owns browser pthread and cross-origin-isolation qualification."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "parallel": false,
+        "commands": [
+          "pnpm exec nx run ui:build",
+          "vitest run --config apps/ui-e2e/vitest.config.ts --project chromium src/picovoxel-naming.spec.ts"
+        ],
+        "env": {
+          "PORT": "3017",
+          "TAU_E2E_UI_SNAPSHOT": "true",
+          "TAU_E2E_DISABLE_COI": "true",
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:picogk": {
+      "executor": "nx:run-commands",
+      "metadata": {
+        "description": "PicoGK as a clean browser consumer: the built app serving the staged package bundle, opening the shipped C# examples through the ordinary project route. PICOGK_BROWSER_ASSETS_ROOT must name a prepared bundle, which ui:build declares as an input, so this target never reuses a build made against another bundle. Its own PORT keeps it from reusing a server another e2e target started. TAU_E2E_PICOGK_TIER admits the spec, which every other tier excludes (vitest.config.ts) because none of them is given a bundle."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "parallel": false,
+        "commands": [
+          "pnpm exec nx run ui:build",
+          "vitest run --config apps/ui-e2e/vitest.config.ts --project chromium src/picogk-browser.spec.ts"
+        ],
+        "env": {
+          "PORT": "3019",
+          "TAU_E2E_PICOGK_TIER": "true",
+          "TAU_E2E_UI_SNAPSHOT": "true",
+          "TAU_CLOUD_ENABLED": "false",
+          "TAU_API_URL": "http://localhost:4000",
+          "TAU_WEBSOCKET_URL": "ws://localhost:4001",
+          "TAU_FRONTEND_URL": "http://localhost:3000"
+        }
+      }
+    },
+    "test:e2e:filesystem-scenarios": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Filesystem capability charter W0: the S1–S20 scenario harness on real OPFS in Playwright's Chromium, with no UI server. Writes one timing + count row per scenario (fixture, browser, server and network named) to out/test-results/filesystem-scenarios and asserts the count gates against src/filesystem-scenarios/baseline/known-red.json. The default is the small (1/20) fixture (vitest.config.ts's default; an options-level env would override the full configuration's); the full configuration is the STO-25 shape. TAU_FS_SCENARIO_RUNS sets samples per scenario, TAU_FS_SCENARIO_RECORD=true rewrites the committed baseline without loosening a known-red gate (force records the observed values as they are), TAU_FS_SCENARIO_ENGINES adds firefox/webkit where installed, and TAU_E2E_CHROMIUM_EXECUTABLE points at another Chromium."
+      },
+      "configurations": {
+        "full": {
+          "env": {
+            "TAU_FS_SCENARIO_PROFILE": "full"
+          }
+        }
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "parallel": false,
+        "commands": [
+          "vitest run --dir apps/ui-e2e apps/ui-e2e/src/filesystem-scenarios/fixture.test.ts apps/ui-e2e/src/filesystem-scenarios/scenarios.test.ts --environment=node",
+          "vitest run --config apps/ui-e2e/src/filesystem-scenarios/vitest.config.ts"
+        ]
+      }
+    },
+    "test:observability-helpers": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "vitest run --dir apps/ui-e2e apps/ui-e2e/src/support/observability-staging.test.ts --environment=node"
+      }
+    },
+    "test:e2e:observability-staging": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "vitest run --dir apps/ui-e2e apps/ui-e2e/src/observability.staging.test.ts apps/ui-e2e/src/observability-delivery.staging.test.ts apps/ui-e2e/src/observability-ssr.staging.test.ts apps/ui-e2e/src/observability-runtime.staging.test.ts --environment=node --no-file-parallelism"
+      }
+    },
+    "test:e2e:desktop-boot-signals-staging": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "vitest run --dir apps/ui-e2e apps/ui-e2e/src/observability.staging.test.ts --environment=node --testNamePattern=T-R9.3"
       }
     }
   }

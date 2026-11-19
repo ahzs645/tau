@@ -1,0 +1,237 @@
+/**
+ * The resident agent-host worker (W6 RH-S8): one per document. The page drives it over one control channel, which
+ * one raw port transfer opens, and gives it one `MessagePort` per stream. It keeps one project host per project and
+ * serves each port with the agent wire; closing a port only detaches it (D17), so runs continue.
+ */
+import type { ChannelServer } from '@taucad/agent-host';
+import { Topic } from '@taucad/events';
+import { serveAgentWorkerChannel } from '@taucad/agent-host/channel-client';
+import { agentWireVersion } from '@taucad/agent-host/wire';
+import type { AgentHostWorkerProtocol } from '#workers/agent-host.contract.js';
+import {
+  agentHostWorkerBuild,
+  agentHostWorkerProtocolSchemas,
+  createAgentHostCapabilityReport,
+  parseAgentHostWorkerConnect,
+} from '#workers/agent-host.contract.js';
+import type { BrowserProjectHost, ResidentWorkerContext } from '#workers/agent-host.impl.js';
+import { createProjectHosts } from '#workers/agent-host-projects.js';
+import { createImplementationLoader } from '#workers/agent-host-implementation.js';
+import { randomUuid } from '@taucad/utils/id';
+
+type WorkerScope = {
+  addEventListener(type: 'message', listener: (event: MessageEvent<unknown>) => void): void;
+  addEventListener(type: 'error', listener: (event: ErrorEvent) => void): void;
+  addEventListener(type: 'unhandledrejection', listener: (event: PromiseRejectionEvent) => void): void;
+};
+
+const workerScope = globalThis as unknown as WorkerScope;
+
+/** The keepalive this worker sends so the page can tell slow from dead (T9 E3). Milliseconds. */
+const keepaliveInterval = 1000;
+
+type Calls = AgentHostWorkerProtocol['calls'];
+
+const probeCapabilities = async (
+  durability: Calls['capabilities']['args']['durability'],
+): Promise<ReturnType<typeof createAgentHostCapabilityReport>> => {
+  const checks = {
+    worker: true,
+    webLocks: 'locks' in navigator,
+    broadcastChannel: typeof BroadcastChannel !== 'undefined',
+    opfs: 'storage' in navigator && typeof navigator.storage.getDirectory === 'function',
+    syncAccessHandle: false,
+  };
+  if (durability !== 'exclusive-append' || !checks.opfs) {
+    return createAgentHostCapabilityReport(checks, durability);
+  }
+  const name = `.agent-host-capability-${randomUuid()}`;
+  let root: FileSystemDirectoryHandle | undefined;
+  try {
+    root = await navigator.storage.getDirectory();
+    const file = (await root.getFileHandle(name, { create: true })) as FileSystemFileHandle & {
+      createSyncAccessHandle?: () => Promise<{ close(): void }>;
+    };
+    if (typeof file.createSyncAccessHandle === 'function') {
+      const access = await file.createSyncAccessHandle();
+      access.close();
+      checks.syncAccessHandle = true;
+    }
+  } catch {
+    checks.syncAccessHandle = false;
+  } finally {
+    await root?.removeEntry(name).catch(() => undefined);
+  }
+  return createAgentHostCapabilityReport(checks, durability);
+};
+
+/** One probe per durability class for the worker's life; `status` reports the same (RH-S10, LT14). */
+const capabilities = new Map<string, Promise<ReturnType<typeof createAgentHostCapabilityReport>>>();
+const capabilityOf = async (
+  durability: Calls['capabilities']['args']['durability'],
+): Promise<ReturnType<typeof createAgentHostCapabilityReport>> => {
+  const probe = capabilities.get(durability) ?? probeCapabilities(durability);
+  capabilities.set(durability, probe);
+  return probe;
+};
+
+const loadImplementationModule = async () => {
+  try {
+    return await import('./agent-host.impl.js');
+  } catch (error) {
+    throw Object.assign(
+      new Error(`Agent host worker failed to load: ${error instanceof Error ? error.message : String(error)}`),
+      { code: 'WORKER_LOAD_FAILED' },
+    );
+  }
+};
+
+/*
+ * Loaded once (STO-25 SP6-warm). The page probes this worker's capabilities when it opens a project, well before its
+ * first `provide`, which waits on the project's revision root and the session. The load starts once that probe has
+ * answered: the session's readiness waits on the probe, which must not share the thread with this module's evaluation
+ * (a stall there past the page's liveness bound would close the channel and fail the probe for the document). A warm
+ * reopen's chat history then does not wait for this module after the provide's own inputs. A load that failed before
+ * a provide is retried by that provide; a provide waiting on it reports its failure.
+ */
+const implementation = createImplementationLoader(loadImplementationModule);
+
+/* D-092: a fault in one chat or one project host is logged and the worker continues. */
+workerScope.addEventListener('error', (event) => {
+  console.error('[agent-host worker] uncaught error', event.error ?? event.message);
+});
+workerScope.addEventListener('unhandledrejection', (event) => {
+  console.error('[agent-host worker] unhandled rejection', event.reason);
+});
+
+/* The page's visibility, which every project host's chat store reads (RH-R16). */
+let visible = true;
+const visibilityTopic = new Topic<boolean>();
+const visibility: ResidentWorkerContext['visibility'] = {
+  visible: () => visible,
+  subscribe: (listener) => visibilityTopic.subscribe(listener),
+};
+
+let tabId: string | undefined;
+let requestRebridge: ResidentWorkerContext['requestRebridge'];
+let forwardTelemetry: ResidentWorkerContext['forwardTelemetry'];
+let forwardViewFieldsSet: ResidentWorkerContext['viewFieldsSet'];
+
+const requireTab = (): string => {
+  if (tabId === undefined) {
+    throw Object.assign(new Error('The agent host worker has no tab identity yet.'), {
+      code: 'WORKER_NOT_INITIALIZED',
+    });
+  }
+  return tabId;
+};
+
+/** One project host per project; a newer `provide` replaces the incarnation, and `release` closes it (RH-R4). */
+const hosts = createProjectHosts<BrowserProjectHost>(async (args) => {
+  const loaded = await implementation.get();
+  return loaded.openBrowserProjectHost(args, {
+    tabId: requireTab(),
+    visibility,
+    requestRebridge,
+    forwardTelemetry: (entry) => forwardTelemetry?.(entry),
+    viewFieldsSet: (set) => forwardViewFieldsSet?.(set),
+  });
+});
+
+let connected = false;
+workerScope.addEventListener('message', (event) => {
+  if (connected) {
+    return;
+  }
+  const connection = parseAgentHostWorkerConnect(event.data);
+  connected = true;
+  const server: ChannelServer<AgentHostWorkerProtocol> = {
+    // oxlint-disable-next-line eslint/max-params -- @taucad/rpc ChannelServer callback contract.
+    call: async (_context, name, args) => {
+      switch (name) {
+        case 'init': {
+          tabId ??= (args as Calls['init']['args']).tabId;
+          return undefined;
+        }
+        case 'capabilities': {
+          const report = await capabilityOf((args as Calls['capabilities']['args']).durability);
+          /* After the probe has answered, so its reply never waits on the implementation's evaluation. */
+          implementation.warm();
+          return report;
+        }
+        case 'provide': {
+          return hosts.provide(args as Calls['provide']['args']);
+        }
+        case 'rebridge': {
+          return hosts.rebridge(args as Calls['rebridge']['args']);
+        }
+        case 'release': {
+          await hosts.release(args as Calls['release']['args']);
+          return undefined;
+        }
+        case 'connect': {
+          const { projectId, hostId, port } = args as Calls['connect']['args'];
+          /* In the project's order: a connect the page sent right behind its provide reaches the host it opened. */
+          const host = await hosts.connectable({ projectId, hostId });
+          if (host === undefined) {
+            port.close();
+            return { status: 'needs' };
+          }
+          host.connect(port);
+          return { status: 'connected' };
+        }
+        case 'status': {
+          const host = hosts.hostOf((args as Calls['status']['args']).projectId);
+          return {
+            ...(host === undefined ? {} : { hostId: host.hostId, needsRebridge: host.needsRebridge() }),
+            capability: await capabilityOf('exclusive-append'),
+          };
+        }
+        case 'runStoppability': {
+          const { projectId, chatId } = args as Calls['runStoppability']['args'];
+          return hosts.hostOf(projectId)?.stoppability(chatId) ?? 'background-window';
+        }
+        case 'runPresented': {
+          const { projectId, chatId, runId, at } = args as Calls['runPresented']['args'];
+          hosts.hostOf(projectId)?.presented(chatId, runId, at);
+          return undefined;
+        }
+        case 'runRated': {
+          const { projectId, ...rating } = args as Calls['runRated']['args'];
+          hosts.hostOf(projectId)?.rated(rating);
+          return undefined;
+        }
+        case 'visibility': {
+          visible = (args as Calls['visibility']['args']).visible;
+          visibilityTopic.emit(visible);
+          return undefined;
+        }
+        default: {
+          throw Object.assign(new Error(`Unknown agent host worker call: ${String(name)}.`), {
+            code: 'COMMAND_UNREADABLE',
+          });
+        }
+      }
+    },
+    listen: () => {
+      throw Object.assign(new Error('The agent host control channel has no streams.'), { code: 'COMMAND_UNREADABLE' });
+    },
+  };
+  const served = serveAgentWorkerChannel<AgentHostWorkerProtocol>(connection.port, {
+    sessionKey: connection.sessionId,
+    protocolSchemas: agentHostWorkerProtocolSchemas,
+    impl: server,
+    label: 'agent-host-worker',
+    hello: { wire: agentWireVersion, build: agentHostWorkerBuild },
+    keepaliveInterval,
+  });
+  requestRebridge = (projectId, hostId) => {
+    served.notify('rebridgeRequested', { projectId, hostId });
+  };
+  forwardTelemetry = (entry) => {
+    served.notify('telemetry', { entry });
+  };
+  forwardViewFieldsSet = (set) => {
+    served.notify('viewFieldsSet', set);
+  };
+});

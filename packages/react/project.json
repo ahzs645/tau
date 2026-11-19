@@ -3,5 +3,23 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "packages/react",
   "projectType": "library",
-  "tags": ["scope:shared", "type:lib"]
+  "tags": ["scope:shared", "type:package"],
+  "targets": {
+    "build": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "oxlint -c ../../.oxlintrc.json src && eslint src"
+      }
+    },
+    "test": {
+      "inputs": ["default", "^production", "serviceEnvironment", "reactEventLayer"]
+    },
+    "typecheck": {
+      "inputs": ["default", "^production", "reactEventLayer"]
+    }
+  }
 }

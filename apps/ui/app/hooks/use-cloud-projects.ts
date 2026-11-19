@@ -1,0 +1,1031 @@
+/**
+ * The projects this account can reach on Tau Cloud, and how one is opened here.
+ *
+ * `GET /v1/projects` is the only place a client learns two facts D27 introduced:
+ * which projects are *collaborations* rather than the caller's own, and which
+ * role the caller holds on each. Three surfaces read it — the one library
+ * (D20), the Sync region's invite gate, and the invitation accept route — so
+ * the fetch, the query key and the open gesture live here once rather than
+ * three times under three different cache keys.
+ */
+
+import { useEffect, useRef, useSyncExternalStore } from 'react';
+import type { QueryClient, QueryState, UseMutationResult } from '@tanstack/react-query';
+import { notifyManager, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { authQueryKeys } from '@better-auth-ui/core';
+import { z } from 'zod';
+import { Topic } from '@taucad/events';
+import type { RemoteFacet, RevisionStatusProjection } from '@taucad/revisions';
+import { ENV } from '#environment.config.js';
+import type { ProjectCreationLocation } from '@taucad/ui-core/types/project-creation-location.types';
+import { parseProjectCreationLocation } from '@taucad/files-ui/utils/project-creation-location.utils';
+import { useResolvedAuth } from '#hooks/use-resolved-auth.js';
+import { useCommercialFeatures } from '#cloud/commercial-features.js';
+import { getRevisionSessionUser, useRevisionSessionUser } from '@taucad/revisions-ui/lib/revision-actor';
+import { withNamedLock } from '@taucad/ui-core/lib/named-lock';
+import {
+  canOpenCloudProject,
+  deletionStoragePrefix,
+  getCloudDeletionState,
+  readDeletionReceipts,
+  tauCloudIntent,
+} from '#lib/tau-cloud-intent.js';
+import type { DeletionReceipt, TauCloudIntent } from '#lib/tau-cloud-intent.js';
+import { recordApiRequestId } from '@taucad/ui-core/lib/api-request-id';
+import { holdCloudOpen } from '@taucad/ui-core/lib/cloud-open-lock';
+import { peekRevisionClient } from '@taucad/revisions-ui/services/revision-client-registry';
+import type { RevisionClient } from '@taucad/revisions-ui/types/revision-client.types';
+
+/** What this account may do with a project on Tau Cloud (D27). @public */
+export type ProjectRole = 'owner' | 'write' | 'read';
+
+/**
+ * What a client surface knows about this account's access, losing it included.
+ *
+ * `revoked` is a *settled* answer: the listing was read and this project was not
+ * in it. Deletion and removed access both produce this result; it does not
+ * prove that the owner revoked access or that a cloud copy still exists.
+ * `undefined` is "nothing known" — signed out, offline, a failed listing, or a
+ * project with no Tau remote to hold a role at all. The two must never collapse,
+ * because one folds a surface away and the other says access is gone.
+ *
+ * @public
+ */
+export type ProjectAccessRole = ProjectRole | 'revoked';
+
+/**
+ * Whether a surface may still offer a push (F1, N1).
+ *
+ * One fact for the Sync region and the command palette alike: two surfaces
+ * deriving "can this person push" from two expressions is how the palette kept
+ * an enabled *Sync now* for a read collaborator the region had already folded
+ * away.
+ *
+ * @param remote - The project's remote facet, when a projection exists.
+ * @param role - The account's role on the cloud project, when one is known.
+ * @returns `true` when a push would be refused, so nothing may offer one.
+ * @public
+ */
+export const isSyncReadOnly = (remote: RemoteFacet | undefined, role: ProjectAccessRole | undefined): boolean =>
+  remote?.fetchOnly === true || role === 'read' || role === 'revoked';
+
+/**
+ * One row of `GET /v1/projects`, as the client surfaces use it.
+ *
+ * `updatedAt` (epoch milliseconds) is what the one library (D20) sorts a
+ * project this device does not hold by, under *Last Updated*.
+ */
+export type CloudProject = Readonly<{
+  id: string;
+  name: string;
+  role: ProjectRole;
+  updatedAt?: number;
+  /** Only an explicit server capability permits deletion. */
+  canDeleteCloud?: boolean;
+  cloudState?: 'active' | 'deleting';
+  /** A request may have reached the server; status has not answered yet. */
+  isCheckingDeletion?: boolean;
+}>;
+
+const deletionStatusSchema = z.object({
+  projectId: z.string(),
+  state: z.enum(['active', 'deleting', 'deleted']),
+  deletedAt: z.string().optional(),
+});
+const deletionTopic = new Topic<void>({ name: 'cloud-project-deletions' });
+let deletionRevision = 0;
+const notifyDeletion = (): void => {
+  deletionRevision += 1;
+  deletionTopic.emit();
+};
+const saveDeletionReceipt = async (account: string, receipt: DeletionReceipt, shouldRemove = false): Promise<void> => {
+  await withNamedLock(`${deletionStoragePrefix}${account}`, async () => {
+    const existing = readDeletionReceipts(account);
+    const current = existing.find((entry) => entry.id === receipt.id);
+    // Never let a late rejection/status erase an accepted intent or a completed identity.
+    if (
+      current?.state === 'deleted' ||
+      (current?.state === 'deleting' && receipt.state === 'checking') ||
+      (shouldRemove && current?.state !== 'checking')
+    ) {
+      return;
+    }
+    const receipts = existing.filter((entry) => entry.id !== receipt.id);
+    if (!shouldRemove) {
+      receipts.push(receipt.state === 'deleted' ? { id: receipt.id, state: 'deleted' } : receipt);
+    }
+    // The request is never sent unless its recovery record was persisted first.
+    localStorage.setItem(`${deletionStoragePrefix}${account}`, JSON.stringify(receipts));
+  });
+  notifyDeletion();
+};
+
+const overlayDeletionReceipts = (projects: readonly CloudProject[], account: string | undefined): CloudProject[] => {
+  const rows = new Map(projects.map((entry) => [entry.id, entry]));
+  for (const receipt of readDeletionReceipts(account)) {
+    if (receipt.state === 'deleted') {
+      rows.delete(receipt.id);
+    } else {
+      rows.set(receipt.id, {
+        ...rows.get(receipt.id),
+        id: receipt.id,
+        name: receipt.name,
+        role: 'owner',
+        cloudState: 'deleting',
+        canDeleteCloud: false,
+        isCheckingDeletion: receipt.state === 'checking',
+      });
+    }
+  }
+  return [...rows.values()];
+};
+
+class CloudDeletionRequestError extends Error {
+  public readonly status: number;
+
+  public constructor(status: number) {
+    super('Couldn’t delete this project’s cloud copy. Check your connection and try again.');
+    this.name = 'CloudDeletionRequestError';
+    this.status = status;
+  }
+}
+
+const fetchDeletionStatus = async (projectId: string, method: 'GET' | 'DELETE' = 'GET') => {
+  const response = await fetch(
+    `${ENV.TAU_API_URL.replace(/\/$/u, '')}/v1/projects/${encodeURIComponent(projectId)}${method === 'GET' ? '/deletion' : ''}`,
+    {
+      method,
+      credentials: 'include',
+      signal: AbortSignal.timeout(10_000),
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- HTTP header name.
+      headers: { Accept: 'application/json' },
+    },
+  );
+  if (!response.ok) {
+    throw recordApiRequestId(new CloudDeletionRequestError(response.status), response);
+  }
+  const status = deletionStatusSchema.parse(await response.json());
+  if (status.projectId !== projectId || (method === 'DELETE' && status.state === 'active')) {
+    throw new Error('Couldn’t confirm the deletion. Close this and open it again to check before trying again.');
+  }
+  return status;
+};
+
+const recoverCloudDeletion = async (account: string, receipt: DeletionReceipt): Promise<void> => {
+  if (receipt.state === 'deleted' || account !== getRevisionSessionUser()?.id) {
+    return;
+  }
+  try {
+    const status = await fetchDeletionStatus(receipt.id);
+    // An accepted intent is monotonic. An older active response cannot undo it.
+    if (status.state === 'active' && receipt.state !== 'checking') {
+      return;
+    }
+    const current = readDeletionReceipts(account).find((entry) => entry.id === receipt.id);
+    if (current?.state !== receipt.state) {
+      return;
+    }
+    if (status.state === 'active') {
+      await saveDeletionReceipt(account, receipt, true);
+    } else if (status.state !== receipt.state) {
+      await saveDeletionReceipt(account, { ...receipt, state: status.state });
+    }
+    if (status.state === 'deleted' && getRevisionSessionUser()?.id === account) {
+      tauCloudIntent.set(receipt.id, undefined);
+    }
+  } catch {
+    // Unknown is retained and polled again; absence and network failure are never success.
+  }
+};
+
+const recoverCloudDeletions = async (account: string | undefined): Promise<void> => {
+  if (account === undefined) {
+    return;
+  }
+  await Promise.all(
+    readDeletionReceipts(account)
+      .filter((receipt) => receipt.state !== 'deleted')
+      .map(async (receipt) =>
+        withNamedLock(`tau:delete-cloud-project:${receipt.id}`, async () => recoverCloudDeletion(account, receipt)),
+      ),
+  );
+};
+
+/** Owner gesture; the project ID remains the server's idempotency key. */
+export const useDeleteCloudProject = (): UseMutationResult<
+  'active' | 'checking' | 'deleting' | 'deleted',
+  Error,
+  CloudProject
+> => {
+  const queryClient = useQueryClient();
+  const account = useRevisionSessionUser()?.id;
+  return useMutation({
+    mutationFn: async (project: CloudProject) => {
+      if (account === undefined || getRevisionSessionUser()?.id !== account || project.canDeleteCloud !== true) {
+        throw new Error('You can’t delete this project’s cloud copy right now. Refresh the page and try again.');
+      }
+      await queryClient.cancelQueries({ queryKey: cloudProjectsQueryKeyFor(account), exact: true });
+      try {
+        return await withNamedLock(`tau:delete-cloud-project:${project.id}`, async () => {
+          if (getRevisionSessionUser()?.id !== account) {
+            throw new Error('You’re signed in to a different account now. Close this and start again.');
+          }
+          const known = getCloudDeletionState(project.id);
+          if (known !== undefined) {
+            await recoverCloudDeletion(account, { id: project.id, name: project.name, state: known });
+            return getCloudDeletionState(project.id) ?? 'active';
+          }
+          await saveDeletionReceipt(account, { id: project.id, name: project.name, state: 'checking' });
+          queryClient.setQueryData<readonly CloudProject[]>(cloudProjectsQueryKeyFor(account), (rows = []) =>
+            overlayDeletionReceipts(rows, account),
+          );
+          try {
+            if (getRevisionSessionUser()?.id !== account) {
+              await saveDeletionReceipt(account, { id: project.id, name: project.name, state: 'checking' }, true);
+              throw new Error('You’re signed in to a different account now. Close this and start again.');
+            }
+            const status = await fetchDeletionStatus(project.id, 'DELETE');
+            if (status.state !== 'active') {
+              await saveDeletionReceipt(account, { id: project.id, name: project.name, state: status.state });
+            }
+            if (status.state === 'deleted' && getRevisionSessionUser()?.id === account) {
+              tauCloudIntent.set(project.id, undefined);
+            }
+            return status.state;
+          } catch (error) {
+            if (error instanceof CloudDeletionRequestError && [400, 401, 403, 404].includes(error.status)) {
+              await saveDeletionReceipt(account, { id: project.id, name: project.name, state: 'checking' }, true);
+              throw error;
+            }
+            await recoverCloudDeletion(account, { id: project.id, name: project.name, state: 'checking' });
+            const recovered = getCloudDeletionState(project.id);
+            if (recovered !== undefined) {
+              return recovered;
+            }
+            throw error;
+          }
+        });
+      } finally {
+        if (!readDeletionReceipts(account).some((entry) => entry.id === project.id)) {
+          // A rejected request must not leave the locally inserted pending row in a failed query's cache.
+          queryClient.setQueryData<readonly CloudProject[]>(cloudProjectsQueryKeyFor(account), (rows = []) =>
+            rows.map((entry) => (entry.id === project.id ? project : entry)),
+          );
+        }
+        await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKeyFor(account), exact: true });
+      }
+    },
+  });
+};
+
+/** Fresh cloud access refusal, distinct from a temporarily unavailable network. */
+export class CloudProjectUnavailableError extends Error {
+  public override readonly name = 'CloudProjectUnavailableError';
+}
+
+/** Revalidate immediately before and after materialization, including collaborators. */
+export const assertCloudProjectActive = async (projectId: string): Promise<void> => {
+  const account = getRevisionSessionUser()?.id;
+  if (getCloudDeletionState(projectId) !== undefined) {
+    throw new CloudProjectUnavailableError(
+      'This project’s cloud copy is being deleted. Copies on your devices are kept.',
+    );
+  }
+  const projects = await fetchCloudProjects();
+  if (
+    account !== getRevisionSessionUser()?.id ||
+    !projects.some((entry) => entry.id === projectId && entry.cloudState !== 'deleting') ||
+    getCloudDeletionState(projectId) !== undefined
+  ) {
+    throw new CloudProjectUnavailableError('This project is no longer in the cloud. Copies on your devices are kept.');
+  }
+};
+
+/** The prefix every listing key starts with, so one invalidation reaches every account's listing. */
+export const cloudProjectsQueryKey = ['cloud-projects'] as const;
+
+/**
+ * One cache key per account (RV-W11 6): a listing read for one account is never
+ * answered to the next one signed in on this device.
+ *
+ * @param userId - The signed-in account, when there is one.
+ * @returns The listing's key.
+ * @public
+ */
+export const cloudProjectsQueryKeyFor = (userId: string | undefined): readonly unknown[] => [
+  ...cloudProjectsQueryKey,
+  userId ?? null,
+];
+
+const isRole = (value: unknown): value is ProjectRole => value === 'owner' || value === 'write' || value === 'read';
+
+const toCloudProject = (value: unknown): CloudProject | undefined => {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+  const row = value as Readonly<{
+    id?: unknown;
+    name?: unknown;
+    role?: unknown;
+    updatedAt?: unknown;
+    canDeleteCloud?: unknown;
+    cloudState?: unknown;
+  }>;
+  if (typeof row.id !== 'string' || typeof row.name !== 'string') {
+    return undefined;
+  }
+  const updatedAt = typeof row.updatedAt === 'string' ? Date.parse(row.updatedAt) : Number.NaN;
+  /* Before D27 this route answered the caller's own projects and nothing else,
+     so an absent role means "mine". It is a *label*, never an access decision:
+     every collaborator surface it gates is refused again by the API. */
+  return {
+    id: row.id,
+    name: row.name,
+    role: isRole(row.role) ? row.role : 'owner',
+    canDeleteCloud: row.canDeleteCloud === true,
+    cloudState: row.cloudState === 'deleting' ? 'deleting' : 'active',
+    ...(Number.isNaN(updatedAt) ? {} : { updatedAt }),
+  };
+};
+
+/** Tau Cloud answered the listing with an error status. */
+class CloudListingAnswerError extends Error {
+  public readonly status: number;
+
+  public constructor(status: number) {
+    super(`Couldn’t load your cloud projects (${String(status)})`);
+    this.status = status;
+  }
+}
+
+/**
+ * Whether a failed listing is asked again on its own, up to three times as react-query's default: a request that never
+ * reached Tau Cloud, or one it answered with a status that may pass (408, 429, 5xx, such as during a deploy), is; any
+ * other answer is not, because asking again gets the same one.
+ *
+ * @param failureCount - The failures so far.
+ * @param error - The last one.
+ * @returns Whether to ask again.
+ */
+const retryCloudListing = (failureCount: number, error: unknown): boolean =>
+  failureCount < 3 &&
+  (!(error instanceof CloudListingAnswerError) || error.status === 408 || error.status === 429 || error.status >= 500);
+
+/**
+ * The caller's projects on Tau Cloud, or none at all.
+ *
+ * A device that is signed out, offline, or pointed at an API that does not
+ * answer gets an empty list rather than an error: these are additions to the
+ * library and to the Sync region, never preconditions for reading either.
+ *
+ * @returns Every project row the API answered with.
+ */
+export const fetchCloudProjects = async (signal?: AbortSignal): Promise<readonly CloudProject[]> => {
+  const account = getRevisionSessionUser()?.id;
+  await recoverCloudDeletions(account);
+  if (getRevisionSessionUser()?.id !== account) {
+    return [];
+  }
+  /* Normalised like every other caller of this API (review R6): a deployment
+     whose `TAU_API_URL` ends in `/` would otherwise ask for `//v1/projects`. */
+  const response = await fetch(`${ENV.TAU_API_URL.replace(/\/$/u, '')}/v1/projects`, {
+    credentials: 'include',
+    signal,
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- HTTP header names retain TitleCase on the wire.
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    /* Throwing rather than answering `[]` is what lets a caller tell "you have
+       no projects" from "nobody asked" (N1). The library renders no section for
+       either; only the role resolver needs the difference, and a silent empty
+       list would have told a signed-out tab its access had been revoked. */
+    throw recordApiRequestId(new CloudListingAnswerError(response.status), response);
+  }
+  const body: unknown = await response.json();
+  if (getRevisionSessionUser()?.id !== account) {
+    return [];
+  }
+  const projects = Array.isArray(body)
+    ? body.map((entry) => toCloudProject(entry)).filter((entry) => entry !== undefined)
+    : [];
+  for (const project of projects) {
+    if (
+      account !== undefined &&
+      project.cloudState === 'deleting' &&
+      !readDeletionReceipts(account).some((entry) => entry.id === project.id)
+    ) {
+      // Persist server pending rows too, so a failed listing after reload still has a recovery entry.
+      // oxlint-disable-next-line no-await-in-loop -- serialize receipt updates in listing order.
+      await saveDeletionReceipt(account, { id: project.id, name: project.name, state: 'deleting' });
+    }
+  }
+  return overlayDeletionReceipts(projects, account);
+};
+
+/** The session query's state in the cache, read without fetching it. */
+const readSessionState = (queryClient: QueryClient): QueryState | undefined =>
+  queryClient.getQueryState(authQueryKeys.session);
+
+/** The account the session query answered with, once it answered: an id, or no id when signed out. */
+const sessionAnswerOf = (state: QueryState | undefined): Readonly<{ account: string | undefined }> | undefined => {
+  if (state?.status !== 'success') {
+    return undefined;
+  }
+  const data = state.data as { readonly user?: { readonly id?: unknown } } | undefined;
+  return { account: typeof data?.user?.id === 'string' ? data.user.id : undefined };
+};
+
+/**
+ * Whether the listing must wait for the session (N2): its first answer is still on its way, or it has answered and the
+ * published account has not caught up. Asked before then, the listing is keyed by no account, and asked again once
+ * the account is published, so a load of Home requested `/v1/projects` twice. The session query is only read here,
+ * never fetched: a tree with no session query (a test, a page with no auth) never waits.
+ *
+ * @param queryClient - The app's query client.
+ * @param account - The published account.
+ * @returns Whether to hold the listing.
+ */
+const useListingAwaitsSession = (queryClient: QueryClient, account: string | undefined): boolean => {
+  const session = useSyncExternalStore<QueryState | undefined | 'hydrating'>(
+    /* Batched, as `useIsFetching` does: a session query rebuilt in another component's render notifies after it. */
+    (listener) => queryClient.getQueryCache().subscribe(notifyManager.batchCalls(listener)),
+    () => readSessionState(queryClient),
+    () => 'hydrating',
+  );
+  /* A hydration render holds the listing: its observer would otherwise fetch in the hydration commit. */
+  if (session === 'hydrating') {
+    return true;
+  }
+  /*
+   * An unanswered session holds it whether or not its fetch has started: the fence's `useSession` is an ancestor, and
+   * its observer starts the fetch in its effect, after this child's. Only a paused (offline) fetch lets the listing go.
+   */
+  if (session?.status === 'pending' && session.fetchStatus !== 'paused') {
+    return true;
+  }
+  const answer = sessionAnswerOf(session);
+  return answer !== undefined && answer.account !== account;
+};
+
+/**
+ * The Tau Cloud listing as one state (A13, H6's state part): `failed` while react-query reports the listing errored,
+ * `fetching` while a request is otherwise in flight, and `ready` otherwise, including a listing not asked yet. This is
+ * the order Home's cloud line has always drawn: a retry of a listing that never answered reads `fetching`, because
+ * react-query clears its error when that retry starts; a refetch over earlier data that failed keeps `failed`.
+ *
+ * @public
+ */
+export type CloudListingState = 'fetching' | 'ready' | 'failed';
+
+/**
+ * The listing's state from its query.
+ *
+ * @param query - The listing query's error and fetch flags.
+ * @returns The state.
+ * @public
+ */
+export const selectCloudListingState = (
+  query: Readonly<{ isError: boolean; isFetching: boolean }>,
+): CloudListingState => (query.isError ? 'failed' : query.isFetching ? 'fetching' : 'ready');
+
+/**
+ * The shared listing query.
+ *
+ * @param options - `enabled` gates the request; a project with no Tau remote has
+ * no cloud row to read and must not make the library's call on its behalf (N3).
+ * @returns The rows, and whether the listing that produced them actually
+ * answered — `isSettled` is `false` for a request that is disabled, in flight or
+ * failed, and only `true` when the array is the server's own answer. `isFailed`
+ * tells the last of those apart: that listing will not answer at all.
+ * @public
+ */
+export const useCloudProjects = (
+  options?: Readonly<{ enabled?: boolean; staleTime?: number }>,
+): Readonly<{
+  projects: readonly CloudProject[];
+  isSettled: boolean;
+  isFailed: boolean;
+  isFetching: boolean;
+  /** The listing's state, which Home's cloud line reads. */
+  cloud: CloudListingState;
+  /** Ask Tau Cloud once more, as a person's Retry: one request, settled when its answer is in. */
+  retry: () => Promise<void>;
+}> => {
+  const account = useRevisionSessionUser()?.id;
+  const queryClient = useQueryClient();
+  const awaitsSession = useListingAwaitsSession(queryClient, account);
+  useSyncExternalStore(
+    (listener) => deletionTopic.subscribe(listener),
+    () => deletionRevision,
+    () => 0,
+  );
+  useEffect(() => {
+    const onStorage = (event: StorageEvent): void => {
+      if (event.key === null || event.key === `${deletionStoragePrefix}${account}`) {
+        notifyDeletion();
+        void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKeyFor(account), exact: true });
+      }
+    };
+    globalThis.addEventListener('storage', onStorage);
+    return () => {
+      globalThis.removeEventListener('storage', onStorage);
+    };
+  }, [account, queryClient]);
+  /* While a person's Retry is in flight, its request is not retried on its own: its answer is said at once (K-c). */
+  const isPersonRetry = useRef(false);
+  const {
+    data = [],
+    isSuccess,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
+    queryKey: cloudProjectsQueryKeyFor(account),
+    queryFn: async ({ signal }) => fetchCloudProjects(signal),
+    /* A pending deletion is watched every 3 s. A listing that failed with nothing listed is not: polling would turn its
+       failure back into a wait every 3 s, so its notice and Retry stay until the person retries or the window refocuses. */
+    refetchInterval: (query) =>
+      !(query.state.status === 'error' && query.state.data === undefined) &&
+      overlayDeletionReceipts(query.state.data ?? [], account).some((entry) => entry.cloudState === 'deleting')
+        ? 3000
+        : false,
+    enabled: (options?.enabled ?? true) && !awaitsSession,
+    retry: (failureCount, error) => !isPersonRetry.current && retryCloudListing(failureCount, error),
+    /* The set only changes when another device backs something up or an owner
+       shares one, and a window focus is when this device is most likely to have
+       missed either — which is react-query's `refetchOnWindowFocus` default
+       (`true`), left at its default deliberately. The stale window only stops
+       rapid navigations re-asking. */
+    staleTime: options?.staleTime ?? 30_000,
+  });
+  return {
+    projects: overlayDeletionReceipts(data, account),
+    isSettled: isSuccess,
+    isFailed: isError,
+    isFetching,
+    cloud: selectCloudListingState({ isError, isFetching }),
+    /* A person's Retry (K-c) is one new request, even while an earlier one hangs: that one is dropped silently, so
+       the listing reads as fetching throughout, and the new one asks with no retries of its own. */
+    retry: async () => {
+      void queryClient
+        .getQueryCache()
+        .find({ queryKey: cloudProjectsQueryKeyFor(account), exact: true })
+        ?.cancel({ silent: true });
+      isPersonRetry.current = true;
+      try {
+        await refetch();
+      } finally {
+        isPersonRetry.current = false;
+      }
+    },
+  };
+};
+
+/**
+ * This account's access to one cloud project (N1, N3).
+ *
+ * Separate from the hook in `use-revision-status.ts` that wraps it so the rule
+ * can be driven without a revision worker: the caller supplies whether the
+ * project is on a Tau remote, which is the only thing that makes a cloud row
+ * exist for it.
+ *
+ * @param projectId - The project being asked about.
+ * @param isTauRemote - Whether this project is *connected* to the Tau remote.
+ * Connected, not merely chosen: the row is written while connecting, so a
+ * listing asked for any earlier races the registration and loses.
+ * @returns The role held, `revoked` when a successful listing did not name it,
+ * or `undefined` when nothing is known.
+ * @public
+ */
+export const useProjectAccessRole = (projectId: string, isTauRemote: boolean): ProjectAccessRole | undefined => {
+  /* Never from the shared cache's stale window: *Connect Tau Cloud* is what
+     registers the project, so a listing the library read seconds earlier cannot
+     name it, and answering from it told the owner their access was revoked. */
+  const { projects, isSettled, isFetching } = useCloudProjects({ enabled: isTauRemote, staleTime: 0 });
+  if (!isTauRemote) {
+    return undefined;
+  }
+  const listed = projects.find((project) => project.id === projectId);
+  if (listed !== undefined) {
+    return listed.cloudState === 'deleting' ? 'revoked' : listed.role;
+  }
+  /* Settled and absent fences writes after either deletion or removed access.
+     Unsettled and absent is a listing nobody has read yet — or one being re-read right
+     now — which says nothing. */
+  return isSettled && !isFetching ? 'revoked' : undefined;
+};
+
+/**
+ * One project's intent, live.
+ *
+ * @param projectId - The project.
+ * @returns Its intent, or `undefined` when nothing is owed.
+ * @public
+ */
+export const useTauCloudIntent = (projectId: string): TauCloudIntent | undefined =>
+  useSyncExternalStore(
+    tauCloudIntent.subscribe,
+    () => tauCloudIntent.get(projectId),
+    () => undefined,
+  );
+
+/**
+ * Who is asking, as far as backup by default cares (D19). The plan is resolved only when it was read from a pinned
+ * build or confirmed by this page load's answer: data never moves on a remembered or `404` reading (adaptive app
+ * deployment mode D5, consumer C4), and an unresolved plan has no entitlement to read.
+ *
+ * @public
+ */
+export type TauCloudEligibility = Readonly<{
+  /** `useResolvedAuth`'s answer. */
+  auth: 'authed' | 'anonymous' | 'indeterminate';
+}> &
+  (
+    | Readonly<{ isResolved: false }>
+    | Readonly<{
+        isResolved: true;
+        /** W8's entitlement: closed only for a plan that cannot sync (an Enterprise override). */
+        canSyncFiles: boolean;
+      }>
+  );
+
+/** What a project's session does about its intent now. @public */
+export type TauCloudStep = 'announce' | 'connect' | 'forget' | 'wait';
+
+/**
+ * What a project's session does about its intent now.
+ *
+ * `open` connects for a signed-in account and is forgotten only once Tau Cloud
+ * has applied its authored checkout and the manifest observer has reconciled it
+ * (or another remote was chosen); a failed connection keeps recovery available. `default` first exposes the inline backup offer in Revisions, and a
+ * connection is made only from `noticed`, after the first revision, for a
+ * signed-in, entitled account. Signed out waits: the project backs up once its
+ * person signs in. A plan without backup, or a remote chosen by hand, forgets.
+ *
+ * @param intent - The project's intent.
+ * @param eligibility - The account, as far as it is known.
+ * @param status - The project's revision projection, once the root answers.
+ * @returns The step.
+ * @public
+ */
+export const nextTauCloudStep = (
+  intent: TauCloudIntent | undefined,
+  eligibility: TauCloudEligibility,
+  status: RevisionStatusProjection | undefined,
+): TauCloudStep => {
+  if (status === undefined || intent === undefined || intent === 'connected') {
+    return 'wait';
+  }
+  const { remote } = status;
+  if (intent === 'open') {
+    if (remote.kind === 'git') {
+      return 'forget';
+    }
+    return remote.kind === 'none' && remote.phase === 'none' && eligibility.auth === 'authed' ? 'connect' : 'wait';
+  }
+  if (remote.kind !== 'none') {
+    return 'forget';
+  }
+  if (eligibility.auth !== 'authed' || !eligibility.isResolved) {
+    return 'wait';
+  }
+  if (!eligibility.canSyncFiles) {
+    return 'forget';
+  }
+  if (intent === 'default') {
+    return 'announce';
+  }
+  return status.headRevisionId === undefined ? 'wait' : 'connect';
+};
+
+/**
+ * The account, as far as backup by default cares (D19).
+ *
+ * @returns The session's answer and W8's entitlement.
+ * @public
+ */
+export const useTauCloudEligibility = (): TauCloudEligibility => {
+  const auth = useResolvedAuth();
+  const plan = useCommercialFeatures();
+  return plan.isResolved && (plan.basis === 'pinned' || plan.basis === 'confirmed')
+    ? { auth, isResolved: true, canSyncFiles: plan.canSyncFiles }
+    : { auth, isResolved: false };
+};
+
+/*
+ * The Tau Cloud opens this document is running, by project (STO-25 SP6): the client each runs on, and whether it
+ * connected. An open stands for its own client only: one on a client since replaced is no answer for the new one.
+ */
+const cloudOpensInFlight = new Map<
+  string,
+  Readonly<{ client: RevisionClient | undefined; connected: Promise<boolean> }>
+>();
+
+/** What {@link continueCloudOpen} continues. @public */
+export type CloudOpenContinuation = Readonly<{
+  projectId: string;
+  /** The account the open is owed to: it stops being owed when another is signed in. */
+  account: string | undefined;
+  /** Send `connectRemote('tau')` on the project's client. */
+  connect: () => Promise<void>;
+  /** The gesture asserted the project active itself, just before (the *Open* click after creating its stub). */
+  asserted?: boolean;
+  /** Ends the wait for the lock and the open's hold; the open itself is the remote's from then. */
+  signal?: AbortSignal;
+}>;
+
+/* A registered client with no projection is closed, or not opened yet: a frame sent to it waits for its next open. */
+const isOpenOrAbsent = (client: RevisionClient | undefined): boolean =>
+  client === undefined || client.status() !== undefined;
+
+const runCloudOpen = async (input: CloudOpenContinuation): Promise<boolean> => {
+  const { projectId, account, connect, signal } = input;
+  try {
+    if (input.asserted !== true) {
+      await assertCloudProjectActive(projectId);
+    }
+    /*
+     * S20: one cold open per device. A second tab waits here and finds the open done. The client is
+     * looked up as the open goes: a tab with no client yet still takes the lock, one whose client is
+     * replaced lets it go, and one whose client exists but is not open by the time it holds the lock
+     * is refused (`owed`) and lets it go at once.
+     */
+    let opened = peekRevisionClient(projectId);
+    const alive = (): boolean => {
+      const current = peekRevisionClient(projectId);
+      opened ??= current;
+      return current === opened;
+    };
+    const owed = (): boolean =>
+      signal?.aborted !== true &&
+      /* The route's own check, shared by every caller: a gesture's assertion does not outlive a deletion. */
+      getCloudDeletionState(projectId) === undefined &&
+      getRevisionSessionUser()?.id === account &&
+      tauCloudIntent.get(projectId) === 'open' &&
+      canOpenCloudProject(projectId) &&
+      /*
+       * The client this open began on, still open (it has a projection). A client closed while the open waited for
+       * the lock keeps its registry entry, and `connect` would queue `connectRemote` on it for its next open, under
+       * whoever opens it then, while this tab held the lock for nothing. With no client at all, `connect` sends
+       * nothing.
+       */
+      alive() &&
+      isOpenOrAbsent(peekRevisionClient(projectId));
+    return await holdCloudOpen({
+      projectId,
+      owed,
+      connect,
+      source: {
+        status: () => peekRevisionClient(projectId)?.status(),
+        subscribe: (listener) => peekRevisionClient(projectId)?.subscribe(listener) ?? (() => undefined),
+        alive,
+      },
+      ...(signal === undefined ? {} : { signal }),
+    });
+  } catch (error) {
+    if (
+      error instanceof CloudProjectUnavailableError &&
+      getRevisionSessionUser()?.id === account &&
+      tauCloudIntent.get(projectId) === 'open'
+    ) {
+      tauCloudIntent.set(projectId, undefined);
+    }
+    if (signal?.aborted !== true) {
+      console.error('Could not open the cloud project:', error);
+    }
+    return false;
+  }
+};
+
+/** Test-only: forget the opens in flight, which a row's unsettled hold would otherwise leave to the next. @internal */
+export const cloudOpenContinuationTestApi = {
+  reset: (): void => {
+    cloudOpensInFlight.clear();
+  },
+};
+
+/**
+ * Connect a Tau Cloud project whose open is owed (`open` intent) and hold its open lock until it lands (S20).
+ *
+ * One per project in this document (STO-25 SP6): the *Open* gesture starts it before the project route loads, and the
+ * route's {@link useTauCloudIntentConnection} may ask again while it runs. A second call waits for the one running and
+ * connects nothing when that one connected; when it did not (not owed, refused, ended before connecting), the second
+ * runs its own, which asks again whether the open is still owed.
+ *
+ * @param input - The project, its account, the connection, whether the gesture asserted it active, and the end.
+ * @returns Whether this call connected.
+ * @public
+ */
+export const continueCloudOpen = async (input: CloudOpenContinuation): Promise<boolean> => {
+  const { projectId } = input;
+  for (;;) {
+    const running = cloudOpensInFlight.get(projectId);
+    if (running === undefined) {
+      break;
+    }
+    // oxlint-disable-next-line no-await-in-loop -- each newer open in flight is waited for in turn.
+    if ((await running.connected) && peekRevisionClient(projectId) === running.client) {
+      return false;
+    }
+    if (cloudOpensInFlight.get(projectId) === running) {
+      /* Settled but not yet forgotten: it is no answer for this call either way. */
+      break;
+    }
+  }
+  const own = { client: peekRevisionClient(projectId), connected: runCloudOpen(input) };
+  cloudOpensInFlight.set(projectId, own);
+  try {
+    return await own.connected;
+  } finally {
+    if (cloudOpensInFlight.get(projectId) === own) {
+      cloudOpensInFlight.delete(projectId);
+    }
+  }
+};
+
+/**
+ * Act on a project's intent from inside its session: expose the inline backup
+ * offer, connect Tau Cloud through the same verb the
+ * `cloudOpen` path sends, or forget the intent.
+ *
+ * Each step first checks the stored intent is still the one it was drawn for,
+ * so a second tab that already moved it on (or turned it off) is not repeated.
+ *
+ * @param input - The project, its intent, its projection, and the session's connect verb.
+ * @public
+ */
+export const useTauCloudIntentConnection = ({
+  projectId,
+  intent,
+  status,
+  commands,
+}: Readonly<{
+  projectId: string;
+  intent: TauCloudIntent;
+  status: RevisionStatusProjection | undefined;
+  commands: Readonly<{
+    connectRemote: (kind: 'tau') => Promise<void>;
+  }>;
+}>): void => {
+  const eligibility = useTauCloudEligibility();
+  const account = useRevisionSessionUser()?.id;
+  const step =
+    intent === 'open' && !canOpenCloudProject(projectId) ? 'wait' : nextTauCloudStep(intent, eligibility, status);
+  const { connectRemote } = commands;
+  useEffect(() => {
+    if (
+      getCloudDeletionState(projectId) !== undefined ||
+      getRevisionSessionUser()?.id !== account ||
+      tauCloudIntent.get(projectId) !== intent
+    ) {
+      return;
+    }
+    switch (step) {
+      case 'forget': {
+        tauCloudIntent.set(projectId, undefined);
+        return;
+      }
+      case 'announce': {
+        tauCloudIntent.set(projectId, 'noticed');
+        return;
+      }
+      case 'connect': {
+        /* `open` is kept until the connection lands; `noticed` becomes `connected` first, so it connects once. */
+        if (intent === 'noticed') {
+          tauCloudIntent.set(projectId, 'connected');
+        }
+        if (intent === 'open') {
+          void continueCloudOpen({ projectId, account, connect: async () => connectRemote('tau') });
+        } else {
+          void connectRemote('tau');
+        }
+        break;
+      }
+      case 'wait': {
+        break;
+      }
+    }
+  }, [account, connectRemote, intent, projectId, step]);
+};
+
+/**
+ * Whether *Where you are* carries the backup-by-default line, and in which form.
+ *
+ * `pending` is before the default connection, so the opt-out stays visible
+ * before anything leaves the device (DESIGN: first-connect opt-out before
+ * commitment); `on` is after the default connection landed.
+ *
+ * @param intent - The project's intent.
+ * @param eligibility - The account, as far as it is known.
+ * @param remote - The project's remote facet.
+ * @returns The line's form, or `undefined` for no line.
+ * @public
+ */
+export const backupByDefaultNotice = (
+  intent: TauCloudIntent | undefined,
+  eligibility: TauCloudEligibility,
+  remote: RemoteFacet | undefined,
+): 'pending' | 'on' | undefined => {
+  if (intent === 'connected') {
+    return remote?.kind === 'tau' && remote.phase !== 'disconnecting' ? 'on' : undefined;
+  }
+  return (intent === 'default' || intent === 'noticed') &&
+    remote?.kind === 'none' &&
+    eligibility.auth === 'authed' &&
+    eligibility.isResolved &&
+    eligibility.canSyncFiles
+    ? 'pending'
+    : undefined;
+};
+
+const materializeKey = 'tau:materialize-cloud-projects';
+const materializedKey = 'tau:materialized-cloud-projects';
+const materializeTopic = new Topic<void>({ name: 'materialize-cloud-projects' });
+
+const readMaterializeLocation = (): ProjectCreationLocation | undefined => {
+  try {
+    const value = globalThis.localStorage.getItem(materializeKey);
+    return value === null ? undefined : parseProjectCreationLocation(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+};
+
+/* One cached answer, so `useSyncExternalStore` sees a stable snapshot. */
+let materializeLocation = readMaterializeLocation();
+
+/**
+ * Where this device brings the account's Tau Cloud projects on sign-in (D20),
+ * or `undefined` — the default — for nowhere.
+ *
+ * One workspace at most: a project is one directory per device, and two
+ * workspaces bringing the same id would be a `duplicate-id` conflict.
+ *
+ * @public
+ */
+export const materializeOnSignIn = Object.freeze({
+  get: (): ProjectCreationLocation | undefined => materializeLocation,
+  set(location: ProjectCreationLocation | undefined): void {
+    materializeLocation = location;
+    try {
+      if (location === undefined) {
+        globalThis.localStorage.removeItem(materializeKey);
+      } else {
+        globalThis.localStorage.setItem(materializeKey, JSON.stringify(location));
+      }
+    } catch {
+      // The in-memory choice still applies for this document.
+    }
+    materializeTopic.emit();
+  },
+  subscribe: (listener: () => void): (() => void) => materializeTopic.subscribe(listener),
+});
+
+const readMaterialized = (): Set<string> => {
+  try {
+    const value: unknown = JSON.parse(globalThis.localStorage.getItem(materializedKey) ?? '[]');
+    return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+};
+
+/**
+ * The ids this device has already brought from Tau Cloud (RV-W11 5), so a
+ * project deleted here is not brought back on the next library visit.
+ *
+ * @public
+ */
+export const materializedCloudProjects = Object.freeze({
+  has(projectId: string): boolean {
+    return readMaterialized().has(projectId);
+  },
+  add(projectId: string): void {
+    const ids = readMaterialized();
+    ids.add(projectId);
+    try {
+      globalThis.localStorage.setItem(materializedKey, JSON.stringify([...ids]));
+    } catch {
+      // Without storage the next pass asks again; `createProject` refuses a held id.
+    }
+  },
+});
+
+/* Another tab's writes (RV-W11 7): its setting change reaches this one. */
+if (typeof globalThis.addEventListener === 'function') {
+  globalThis.addEventListener('storage', (event: StorageEvent) => {
+    if (event.key === null || event.key === materializeKey) {
+      materializeLocation = readMaterializeLocation();
+      materializeTopic.emit();
+    }
+  });
+}
+
+/**
+ * The materialize-on-sign-in destination, live.
+ *
+ * @returns The workspace, or `undefined` when the setting is off.
+ * @public
+ */
+export const useMaterializeOnSignInLocation = (): ProjectCreationLocation | undefined =>
+  useSyncExternalStore(materializeOnSignIn.subscribe, materializeOnSignIn.get, () => undefined);

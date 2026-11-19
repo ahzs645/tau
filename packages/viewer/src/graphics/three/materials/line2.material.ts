@@ -1,0 +1,660 @@
+/* oxlint-disable typescript-eslint/ban-ts-comment -- verbatim port of three.js Line2NodeMaterial.setup; TS cannot type the TSL graph body */
+// @ts-nocheck -- verbatim port of three r184 Line2NodeMaterial.setup; @types/three collapses TSL generics to never
+
+/* oxlint-disable new-cap -- three/tsl `Fn`/`If`/`ElseIf`/`Else` are shader graph factories */
+/* oxlint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- verbatim three.js Line2NodeMaterial.setup port; three/tsl node graph is loosely typed vs strict Oxlint inference */
+/* oxlint-disable unicorn-js/no-zero-fractions -- numeric literals match upstream Line2NodeMaterial.js */
+/* oxlint-disable unicorn-js/prevent-abbreviations -- identifiers match upstream Line2NodeMaterial.js */
+
+import { squarePixelStripCoverage } from '#graphics/three/materials/line-coverage.js';
+import type { Node, Line2NodeMaterialParameters as ThreeLine2NodeMaterialParameters } from 'three/webgpu';
+import { NoBlending, NormalBlending } from 'three';
+import { Line2NodeMaterial as ThreeLine2NodeMaterial, PropertyNode } from 'three/webgpu';
+import {
+  attribute,
+  cameraNear,
+  cameraProjectionMatrix,
+  dashSize,
+  float,
+  Fn,
+  gapSize,
+  If,
+  materialColor,
+  materialLineDashOffset,
+  materialLineDashSize,
+  materialLineGapSize,
+  materialLineScale,
+  materialLineWidth,
+  materialOpacity,
+  mix,
+  modelViewMatrix,
+  positionGeometry,
+  screenCoordinate,
+  screenUV,
+  smoothstep,
+  sRGBTransferEOTF,
+  sRGBTransferOETF,
+  uniform,
+  uv,
+  vec2,
+  vec3,
+  vec4,
+  varyingProperty,
+  viewport,
+  viewportTexture,
+} from 'three/tsl';
+
+/**
+ * Half-extent, in viewports, of the clip-space band each screen-space segment is cut to before its
+ * quad is extruded (Divergence 5). Larger than one viewport so caps and coverage at the edge keep
+ * their full footprint; small enough that every vertex stays well inside any rasterizer's range.
+ */
+export const lineClipGuardBand = 2;
+
+/**
+ * A named varying that every vertex of a primitive writes with the same value, read unchanged by the
+ * fragment stage. Interpolating such a value is not free of error: a rasterizer derives its plane
+ * equation from the triangle, and a long, thin segment quad turns float noise in that derivation into
+ * a fraction of a pixel (SwiftShader moved the coverage of a 5K axis by about 4% with the quad's
+ * offscreen length). Flat interpolation hands the fragment the provoking vertex's exact value.
+ */
+class FlatVaryingPropertyNode extends PropertyNode {
+  public override generate(builder: any): string {
+    const nodeVarying = builder.getVaryingFromNode(this, this.name);
+    nodeVarying.needsInterpolation = true;
+    nodeVarying.interpolationType = 'flat';
+    nodeVarying.interpolationSampling = 'either';
+    return builder.getPropertyName(nodeVarying);
+  }
+}
+
+const flatVaryingProperty = (type: string, name: string): any => new FlatVaryingPropertyNode(type, name, true);
+
+// Setup outputs are generated from the semantic inputs below. Their fresh node ids must not
+// become inputs to the next program lookup. Keep this out of NodeMaterial's own-property scan.
+const generatedLineNodes = new WeakMap<Line2NodeMaterial, ReadonlyMap<string, Node>>();
+
+/**
+ * Tau-owned non-mip viewport texture singleton for the CB-4 gamma-space blend below
+ * (Divergence 4). Mirrors the structure of three.js's stock
+ * `viewportOpaqueMipTexture` (`node_modules/three/src/nodes/display/ViewportTextureNode.js`
+ * line 242) but swaps the underlying `viewportMipTexture()` (`generateMipmaps: true`) for
+ * `viewportTexture()` (`generateMipmaps: false`).
+ *
+ * The CB-4 blend samples at level 0 (no explicit `level` argument), so the entire mip
+ * pyramid that the upstream singleton regenerates every frame is pure waste — each
+ * `WebGPUBackend.copyFramebufferToTexture` call performs a pass split and a `Load`
+ * restart around the mid-frame `generateMipmaps`, then runs ~10 blit passes at 1080p to
+ * fill levels we never read. A non-mip singleton skips the entire chain for identical
+ * sampled colour at level 0. See `docs/research/webgpu-axes-hover-pipeline-stall.md`
+ * (Performance section) for the measurement.
+ *
+ * The singleton wrapper is essential: every `Line2NodeMaterial` instance — three scene
+ * axes × two halves each (six meshes), plus gizmo cube axes, plus any future fat-line
+ * consumer — shares a single framebuffer copy per render rather than each allocating
+ * its own. Calling `.sample(uv, level)` on the singleton produces a derived sample node
+ * for each call site without duplicating the underlying framebuffer texture.
+ */
+const tauOpaqueViewportTextureSingleton = viewportTexture();
+
+/**
+ * Public sample factory that mirrors the upstream `viewportOpaqueMipTexture(uv, level)`
+ * signature so call sites and tests reference the Tau singleton identically.
+ *
+ * Defaults `uv` to `screenUV` (matching the upstream default) and `level` to `null`
+ * (the only level the CB-4 blend ever samples).
+ */
+export const tauOpaqueViewportTexture = (uv: typeof screenUV = screenUV, level: unknown = null): unknown =>
+  (
+    tauOpaqueViewportTextureSingleton as {
+      sample: (uv: unknown, level: unknown) => unknown;
+    }
+  ).sample(uv, level);
+
+/**
+ * Alpha-composite a linear colour over a sampled copy of the target in sRGB (gamma) space,
+ * as WebGL's premultiplied 8-bit canvas blends, and return the premultiplied result with its
+ * composited alpha. Callers draw it with `NoBlending`: the destination is already inside it.
+ */
+export const compositeOverViewportSrgb = (rgb: unknown, alpha: unknown, viewportColor: unknown): Node => {
+  const blendedSrgb = sRGBTransferOETF(rgb).mul(alpha).add(sRGBTransferOETF(viewportColor.rgb).mul(alpha.oneMinus()));
+  return vec4(sRGBTransferEOTF(blendedSrgb), alpha.add(viewportColor.a.mul(alpha.oneMinus())));
+};
+
+/**
+ * Fat-line node material for overlays on the WebGPU viewport (`reversedDepthBuffer: true`).
+ *
+ * **Divergence 1 — reversed-Z near trim.** three.js `Line2NodeMaterial` estimates the
+ * camera near plane as `projectionMatrix[3][2] * -0.5 / projectionMatrix[2][2]`, which
+ * collapses to `-far/2` under reversed-Z perspective. Long segments with an endpoint behind
+ * the camera then get an invalid trim `alpha` and `mix()` flips the line into the opposite
+ * hemisphere (viewport axes at `size ≈ 50_000`, typical CAD camera distances). This subclass
+ * uses TSL **`cameraNear`** so the near estimate stays **`-camera.near`** in camera space for
+ * both standard and reversed depth buffers.
+ *
+ * **Divergence 5 — guard-band clip and flat segment varyings.** The screen-space quad is extruded
+ * from the segment after it is cut to {@link lineClipGuardBand} viewports in clip space, and the
+ * analytic-coverage segment varyings are flat. Upstream extrudes from the raw endpoints, so a
+ * 50 000-unit axis or a near-trimmed endpoint put vertices hundreds of viewports away, which a
+ * fixed-point rasterizer (SwiftShader) drops, and long thin quads made the interpolated "constant"
+ * varyings drift by a fraction of a pixel. Dash distances follow the cut.
+ *
+ * **Depth follows NodeMaterial.** Reversed and standard depth use the rasterizer's
+ * geometric sample depth. Reconstructing view Z and writing fragment depth here hid
+ * coplanar CAD edges under MSAA and added unnecessary fragment-depth work. The inherited
+ * implementation still encodes logarithmic depth for offscreen renderers, and respects
+ * explicit depth nodes and MRT depth. Surface materials own coplanar separation.
+ *
+ * **Divergence 4 — gamma-space alpha blend for backend parity.** The transparent-branch
+ * `outputNode` below performs an explicit manual composition against the Tau-owned
+ * non-mip viewport singleton {@link tauOpaqueViewportTexture} rather than letting the
+ * standard GPU blender mix on the WebGPU `LinearSRGBColorSpace` `frameBufferTarget`.
+ * Doing that mix on linear-float texels (WebGPU's `rgba16f` `frameBufferTarget`, see
+ * `graphics-backend-policy.md` S6/S7) produces visibly over-saturated overlay colors
+ * compared to WebGL, which blends in gamma space (either on the sRGB-encoded canvas
+ * drawing buffer or via browser CSS composite of the alpha channel). For saturated
+ * overlay tints at `α = 0.6` over a dark CAD background the per-channel divergence is
+ * >40 sRGB units — substantially larger than the ~10-15 unit residual that the policy's
+ * CB-3 entry quotes. We close the seam for line materials by transferring both operands
+ * into sRGB space via `sRGBTransferOETF`, mixing, and converting the result back to
+ * working color space with `sRGBTransferEOTF` before assigning `outputNode.rgb`. The
+ * lean viewport leaves this appearance-reference path disabled.
+ *
+ * The viewport sample uses {@link tauOpaqueViewportTexture} (a non-mip singleton over
+ * `viewportTexture()`) rather than upstream `viewportOpaqueMipTexture` because the
+ * blend samples at level 0 and the mip pyramid is pure waste — see the singleton
+ * definition above and `docs/research/webgpu-axes-hover-pipeline-stall.md` for the
+ * perf measurement.
+ *
+ * @see `docs/policy/webgpu-rendering-pipeline.md`
+ * @see `docs/policy/graphics-backend-policy.md` (CB-3 / S7)
+ * @see `docs/research/webgpu-line2-reversed-z-trim.md`
+ * @see `docs/research/webgpu-fat-line-renderer-aware-depth.md`
+ * @see `docs/research/webgpu-axes-srgb-blend-parity.md`
+ */
+export class Line2NodeMaterial extends ThreeLine2NodeMaterial {
+  /** @inheritdoc */
+  public static override get type(): string {
+    return 'Line2NodeMaterial';
+  }
+
+  /**
+   * Enables deterministic screen-space coverage for CAD presentation edges. The stock
+   * non-alpha-to-coverage path relies on opaque quad MSAA coverage, which makes near-1px
+   * WebGPU GLTF edges vary in apparent thickness by subpixel phase and segment angle.
+   * This path is intentionally opaque/discard-based so coincident or adjacent line
+   * segments cannot compound fractional transparent alpha into grain.
+   */
+  public edgePresentationCoverage = false;
+
+  /** Optional occurrence-transformed prototype endpoints for private edge presentation. */
+  public edgeStartNode?: Node;
+  public edgeEndNode?: Node;
+
+  /** Target visible width, in CSS pixels, used when {@link edgePresentationCoverage} is enabled. */
+  public edgePresentationLineWidth = 1;
+
+  /**
+   * Converts display-referred coverage into a linear-render-target alpha so black CAD
+   * edges keep WebGL-like apparent salience after WebGPU's Linear-sRGB resolve/output pass.
+   */
+  public edgePresentationCoverageGamma = 2.2;
+
+  /**
+   * Explicit appearance-reference opt-in. Ordinary overlays use hardware linear blending
+   * without copying the framebuffer; gamma-space matching is not part of the lean path.
+   */
+  public get useViewportSrgbBlend(): boolean {
+    return this.viewportSrgbBlendEnabled;
+  }
+
+  public set useViewportSrgbBlend(enabled: boolean) {
+    this.viewportSrgbBlendEnabled = enabled;
+    // Reference composition already includes its destination. A cached builder
+    // must receive this state without relying on setup, just like normal blending.
+    this.blending = enabled ? NoBlending : NormalBlending;
+  }
+
+  /** CAD tessellation joins omit overlapping round caps; standalone overlays retain them. */
+  public analyticButtCaps = false;
+
+  private viewportSrgbBlendEnabled = false;
+
+  public constructor(parameters?: ThreeLine2NodeMaterialParameters) {
+    super(parameters);
+    // A node-builder cache hit skips setup on equivalent material instances.
+    // Establish fixed-function state here, before any shader lookup: upstream
+    // Line2NodeMaterial defaults to NoBlending even for transparent materials.
+    this.blending = NormalBlending;
+  }
+
+  /**
+   * Screen-space overlays carry analytic coverage in alpha independently of blend color space.
+   * Hardware alpha-to-coverage would turn that composited alpha into dropped samples, and WebGPU
+   * resolves samples in the linear frame target, which lightens every partly covered pixel of a
+   * thin line (about half the ink of WebGL's sRGB-space resolve for the 1.25 px viewport axes).
+   */
+  public get usesAnalyticCoverage(): boolean {
+    return this.transparent && !this.edgePresentationCoverage && (this as any).worldUnits !== true;
+  }
+
+  /** @inheritdoc */
+  public override get alphaToCoverage(): boolean {
+    return super.alphaToCoverage && !this.usesAnalyticCoverage;
+  }
+
+  public override set alphaToCoverage(value: boolean) {
+    super.alphaToCoverage = value;
+  }
+
+  /** Keep equivalent line graphs reusable while retaining caller nodes and structural variants. */
+  public override customProgramCacheKey(): string {
+    const generated = generatedLineNodes.get(this);
+    const inputs = this._getNodeChildren()
+      .filter(({ property, childNode }) => generated?.get(property) !== childNode)
+      .map(({ property, childNode }) => [property, childNode.getCacheKey()]);
+    return JSON.stringify([
+      this.type,
+      Boolean(this.worldUnits),
+      Boolean(this.dashed),
+      Boolean(this.vertexColors),
+      this.transparent,
+      this.alphaToCoverage,
+      this.edgePresentationCoverage,
+      this.usesAnalyticCoverage,
+      this.analyticButtCaps,
+      this.edgePresentationCoverage ? this.edgePresentationLineWidth : undefined,
+      this.useViewportSrgbBlend,
+      inputs,
+    ]);
+  }
+
+  /** @inheritdoc */
+  public override setup(builder: unknown): void {
+    const self = this as any;
+    const { renderer } = builder as {
+      readonly renderer: { readonly currentSamples: number };
+    };
+
+    const useAlphaToCoverage = self._useAlphaToCoverage as boolean;
+    const vertexColors = self.vertexColors as boolean | undefined;
+    const useDash = self._useDash as boolean;
+    const useWorldUnits = self._useWorldUnits as boolean;
+    const useEdgePresentationCoverage = self.edgePresentationCoverage === true;
+    const useAnalyticCoverage = self.usesAnalyticCoverage === true;
+    // Three r184 ScreenNode(DPR).setup replaces its singleton _output for every
+    // builder. Preparing another graph before rendering leaves earlier uniforms
+    // at their initial DPR=1. Own the scalar in this graph; cached builders share
+    // it safely and update it for the renderer actually executing each draw.
+    const lineDpr = uniform(1).onRenderUpdate(({ renderer }) => renderer.getPixelRatio());
+
+    const trimSegment = Fn(({ start, end }: { readonly start: any; readonly end: any }) => {
+      const nearEstimate = cameraNear.negate();
+      const alpha = nearEstimate.sub(start.z).div(end.z.sub(start.z));
+      return vec4(mix(start.xyz, end.xyz, alpha), end.w);
+    }).setLayout({
+      name: 'trimSegmentCameraNear',
+      type: 'vec4',
+      inputs: [
+        { name: 'start', type: 'vec4' },
+        { name: 'end', type: 'vec4' },
+      ],
+    });
+
+    self.vertexNode = Fn(() => {
+      const instanceStart = self.edgeStartNode ?? attribute('instanceStart');
+      const instanceEnd = self.edgeEndNode ?? attribute('instanceEnd');
+
+      const start = vec4(modelViewMatrix.mul(vec4(instanceStart, 1.0))).toVar('start');
+      const end = vec4(modelViewMatrix.mul(vec4(instanceEnd, 1.0))).toVar('end');
+
+      if (useWorldUnits) {
+        varyingProperty('vec3', 'worldStart').assign(start.xyz);
+        varyingProperty('vec3', 'worldEnd').assign(end.xyz);
+      }
+
+      const aspect = viewport.z.div(viewport.w);
+
+      const perspective = cameraProjectionMatrix.element(2).element(3).equal(-1.0);
+
+      If(perspective, () => {
+        If(start.z.lessThan(0.0).and(end.z.greaterThan(0.0)), () => {
+          end.assign(trimSegment({ start, end }));
+        }).ElseIf(end.z.lessThan(0.0).and(start.z.greaterThanEqual(0.0)), () => {
+          start.assign(trimSegment({ start: end, end: start }));
+        });
+      });
+
+      const clipStart = vec4(cameraProjectionMatrix.mul(start)).toVar('clipStart');
+      const clipEnd = vec4(cameraProjectionMatrix.mul(end)).toVar('clipEnd');
+      // Divergence 5: clip the segment to a guard band in the vertex stage. Upstream extrudes the
+      // quad from the raw endpoints, so a CAD-scale segment (an axis at 50 000 units, or an endpoint
+      // trimmed onto the near plane) puts vertices hundreds of viewports away. Hardware rasterizers
+      // absorb that; fixed-point rasterizers such as SwiftShader lose the stroke (the 5K long-axis
+      // rows of #2280). The guard band is twice the viewport, so caps and coverage at the screen
+      // edge are untouched, and clip space is linear along the segment, so the cut is exact.
+      const segmentEnter = float(0.0).toVar('segmentEnter');
+      const segmentExit = float(1.0).toVar('segmentExit');
+      if (!useWorldUnits) {
+        for (const [axis, sign] of [
+          ['x', 1],
+          ['x', -1],
+          ['y', 1],
+          ['y', -1],
+        ] as const) {
+          // Inside the guard band where guard * w - sign * axis >= 0.
+          const inStart = clipStart.w.mul(lineClipGuardBand).sub(clipStart[axis].mul(sign));
+          const inEnd = clipEnd.w.mul(lineClipGuardBand).sub(clipEnd[axis].mul(sign));
+          If(inStart.lessThan(0.0).and(inEnd.lessThan(0.0)), () => {
+            segmentEnter.assign(1.0);
+            segmentExit.assign(0.0);
+          })
+            .ElseIf(inStart.lessThan(0.0), () => {
+              segmentEnter.assign(segmentEnter.max(inStart.div(inStart.sub(inEnd))));
+            })
+            .ElseIf(inEnd.lessThan(0.0), () => {
+              segmentExit.assign(segmentExit.min(inStart.div(inStart.sub(inEnd))));
+            });
+        }
+        const clippedStart = mix(clipStart, clipEnd, segmentEnter);
+        const clippedEnd = mix(clipStart, clipEnd, segmentExit);
+        clipStart.assign(clippedStart);
+        clipEnd.assign(clippedEnd);
+      }
+      const segmentRejected = segmentEnter.greaterThanEqual(segmentExit);
+
+      if (useDash) {
+        const dashScaleNode = self.dashScaleNode ? float(self.dashScaleNode) : materialLineScale;
+        const offsetNode = self.offsetNode ? float(self.offsetNode) : materialLineDashOffset;
+
+        const instanceDistanceStart = attribute('instanceDistanceStart');
+        const instanceDistanceEnd = attribute('instanceDistanceEnd');
+
+        // Clip space is linear along the segment, so the clipped endpoints carry the
+        // distances at the same parameters and the dash pattern does not move.
+        const clippedDistanceStart = mix(instanceDistanceStart, instanceDistanceEnd, segmentEnter);
+        const clippedDistanceEnd = mix(instanceDistanceStart, instanceDistanceEnd, segmentExit);
+        let lineDistance = positionGeometry.y
+          .lessThan(0.5)
+          .select(dashScaleNode.mul(clippedDistanceStart), dashScaleNode.mul(clippedDistanceEnd));
+        lineDistance = lineDistance.add(offsetNode);
+
+        varyingProperty('float', 'lineDistance').assign(lineDistance);
+      }
+
+      const ndcStart = clipStart.xyz.div(clipStart.w);
+      const ndcEnd = clipEnd.xyz.div(clipEnd.w);
+
+      const dir = ndcEnd.xy.sub(ndcStart.xy).toVar();
+
+      if (useAnalyticCoverage && !useWorldUnits) {
+        // The segment in target pixels (top-left origin, as `screenCoordinate`): the nearer
+        // endpoint, the unit direction, and the extent along it on either side of that anchor.
+        // Every vertex of the segment writes the same values. `viewport.xy` offsets a sub-viewport
+        // draw such as the gizmo cube's; WebGPU viewports share `screenCoordinate`'s origin.
+        const toTargetPx = (ndc: any): any =>
+          vec2(
+            ndc.x.mul(0.5).add(0.5).mul(viewport.z).add(viewport.x),
+            ndc.y.mul(-0.5).add(0.5).mul(viewport.w).add(viewport.y),
+          );
+        const startPx = toTargetPx(ndcStart);
+        const endPx = toTargetPx(ndcEnd);
+        const lengthPx = endPx.sub(startPx).length();
+        const anchorIsStart = ndcStart.xy.length().lessThan(ndcEnd.xy.length());
+        flatVaryingProperty('vec4', 'tauLineScreenPx').assign(
+          vec4(anchorIsStart.select(startPx, endPx), endPx.sub(startPx).div(lengthPx)),
+        );
+        flatVaryingProperty('vec2', 'tauLineExtentPx').assign(
+          anchorIsStart.select(vec2(0.0, lengthPx), vec2(lengthPx.negate(), 0.0)),
+        );
+      }
+
+      dir.x.assign(dir.x.mul(aspect));
+      dir.assign(dir.normalize());
+      // The square pixel projects to |nx| + |ny| along a line's normal. Capture it
+      // before dir.x is changed from device-pixel direction back to clip space.
+      const coverageDiameter =
+        useAnalyticCoverage && self.analyticButtCaps ? dir.x.abs().add(dir.y.abs()).toVar() : float(1.0);
+
+      const clip = vec4().toVar();
+
+      if (useWorldUnits) {
+        const worldDir = end.xyz.sub(start.xyz).normalize();
+        const tmpFwd = mix(start.xyz, end.xyz, 0.5).normalize();
+        const worldUp = worldDir.cross(tmpFwd).normalize();
+        const worldFwd = worldDir.cross(worldUp);
+
+        const worldPos = varyingProperty('vec4', 'worldPos');
+
+        worldPos.assign(positionGeometry.y.lessThan(0.5).select(start, end));
+
+        const hw = materialLineWidth.mul(0.5);
+        worldPos.addAssign(vec4(positionGeometry.x.lessThan(0.0).select(worldUp.mul(hw), worldUp.mul(hw).negate()), 0));
+
+        if (!useDash) {
+          worldPos.addAssign(
+            vec4(positionGeometry.y.lessThan(0.5).select(worldDir.mul(hw).negate(), worldDir.mul(hw)), 0),
+          );
+
+          worldPos.addAssign(vec4(worldFwd.mul(hw), 0));
+
+          If(positionGeometry.y.greaterThan(1.0).or(positionGeometry.y.lessThan(0.0)), () => {
+            worldPos.subAssign(vec4(worldFwd.mul(2.0).mul(hw), 0));
+          });
+        }
+
+        clip.assign(cameraProjectionMatrix.mul(worldPos));
+
+        const clipPose = vec3().toVar();
+
+        clipPose.assign(positionGeometry.y.lessThan(0.5).select(ndcStart, ndcEnd));
+        clip.z.assign(clipPose.z.mul(clip.w));
+      } else {
+        const offset = vec2(dir.y, dir.x.negate()).toVar('offset');
+
+        dir.x.assign(dir.x.div(aspect));
+        offset.x.assign(offset.x.div(aspect));
+
+        offset.assign(positionGeometry.x.lessThan(0.0).select(offset.negate(), offset));
+
+        If(positionGeometry.y.lessThan(0.0), () => {
+          offset.assign(offset.sub(dir));
+        }).ElseIf(positionGeometry.y.greaterThan(1.0), () => {
+          offset.assign(offset.add(dir));
+        });
+
+        // Conservatively cover the square pixel footprint, including diagonal strokes.
+        offset.assign(
+          offset.mul(useAnalyticCoverage ? materialLineWidth.add(coverageDiameter.div(lineDpr)) : materialLineWidth),
+        );
+
+        offset.assign(offset.div(viewport.w.div(lineDpr)));
+
+        clip.assign(positionGeometry.y.lessThan(0.5).select(clipStart, clipEnd));
+
+        offset.assign(offset.mul(clip.w));
+
+        clip.assign(clip.add(vec4(offset, 0, 0)));
+        // A segment wholly outside the guard band collapses every vertex outside the depth range.
+        clip.assign(segmentRejected.select(vec4(0.0, 0.0, 2.0, 1.0), clip));
+      }
+
+      return clip;
+    })();
+
+    const closestLineToLine = Fn(
+      ({ p1, p2, p3, p4 }: { readonly p1: any; readonly p2: any; readonly p3: any; readonly p4: any }) => {
+        const p13 = p1.sub(p3);
+        const p43 = p4.sub(p3);
+
+        const p21 = p2.sub(p1);
+
+        const d1343 = p13.dot(p43);
+        const d4321 = p43.dot(p21);
+        const d1321 = p13.dot(p21);
+        const d4343 = p43.dot(p43);
+        const d2121 = p21.dot(p21);
+
+        const denom = d2121.mul(d4343).sub(d4321.mul(d4321));
+        const numer = d1343.mul(d4321).sub(d1321.mul(d4343));
+
+        const mua = numer.div(denom).clamp();
+        const mub = d1343.add(d4321.mul(mua)).div(d4343).clamp();
+
+        return vec2(mua, mub);
+      },
+    );
+
+    self.colorNode = Fn(() => {
+      const vUv = uv();
+
+      if (useDash) {
+        const dashSizeNode = self.dashSizeNode ? float(self.dashSizeNode) : materialLineDashSize;
+        const gapSizeNode = self.gapSizeNode ? float(self.gapSizeNode) : materialLineGapSize;
+
+        dashSize.assign(dashSizeNode);
+        gapSize.assign(gapSizeNode);
+
+        const vLineDistance = varyingProperty('float', 'lineDistance');
+
+        vUv.y.lessThan(-1.0).or(vUv.y.greaterThan(1.0)).discard();
+
+        vLineDistance.mod(dashSize.add(gapSize)).greaterThan(dashSize).discard();
+      }
+
+      const alpha = float(1).toVar('alpha');
+
+      if (useWorldUnits) {
+        const worldStart = varyingProperty('vec3', 'worldStart');
+        const worldEnd = varyingProperty('vec3', 'worldEnd');
+
+        const rayEnd = varyingProperty('vec4', 'worldPos').xyz.normalize().mul(1e5);
+        const lineDir = worldEnd.sub(worldStart);
+        const params = closestLineToLine({
+          p1: worldStart,
+          p2: worldEnd,
+          p3: vec3(0.0, 0.0, 0.0),
+          p4: rayEnd,
+        });
+
+        const pPoint1 = worldStart.add(lineDir.mul(params.x));
+        const pPoint2 = rayEnd.mul(params.y);
+        const delta = pPoint1.sub(pPoint2);
+        const len = delta.length();
+        const norm = len.div(materialLineWidth);
+
+        if (!useDash) {
+          if (useAlphaToCoverage && renderer.currentSamples > 0) {
+            const dnorm = norm.fwidth();
+            alpha.assign(smoothstep(dnorm.negate().add(0.5), dnorm.add(0.5), norm).oneMinus());
+          } else {
+            norm.greaterThan(0.5).discard();
+          }
+        }
+      } else if (useEdgePresentationCoverage) {
+        vUv.y.abs().greaterThan(1.0).discard();
+
+        const halfPresentationWidth = float(self.edgePresentationLineWidth).mul(0.5);
+        const distance = vUv.x.abs().mul(materialLineWidth.mul(0.5)).toVar('edgeCoverageDistance');
+
+        distance.greaterThan(halfPresentationWidth).discard();
+        alpha.assign(1.0);
+      } else if (useAnalyticCoverage) {
+        // Box-filtered coverage from the fragment's distance to the line core, in device pixels,
+        // so every sample of an edge pixel carries the same premultiplied value. The distance
+        // comes from the fragment position, not the interpolated across-line `uv`: a segment
+        // clipped far off screen has vertices so distant that its interpolants lose precision.
+        // Distance to the segment (round caps included) from the fragment position alone.
+        const halfWidthPx = materialLineWidth.mul(lineDpr).mul(0.5);
+        const screenLine = flatVaryingProperty('vec4', 'tauLineScreenPx');
+        const extent = flatVaryingProperty('vec2', 'tauLineExtentPx');
+        const relative = screenCoordinate.sub(screenLine.xy);
+        const across = relative.x.mul(screenLine.w).sub(relative.y.mul(screenLine.z));
+        const along = relative.dot(screenLine.zw);
+        const beyond = extent.x.sub(along).max(along.sub(extent.y)).max(0.0);
+        const distancePx = self.analyticButtCaps ? across.abs() : vec2(across, beyond).length();
+        if (self.analyticButtCaps) {
+          beyond.greaterThan(0).discard();
+        }
+        if (self.analyticButtCaps) {
+          alpha.assign(squarePixelStripCoverage(screenLine.zw, across, halfWidthPx));
+        } else {
+          alpha.assign(halfWidthPx.add(0.5).sub(distancePx).clamp(0.0, 1.0));
+        }
+        // The optional appearance-reference composite replaces the target (`NoBlending`) from a
+        // viewport copy shared by the lines. An uncovered fragment would paint
+        // that stale copy over any line drawn earlier — it erased most of the x axis.
+        alpha.lessThanEqual(0.0).discard();
+      } else if (useAlphaToCoverage && renderer.currentSamples > 0) {
+        const aUv = vUv.x;
+        const bUv = vUv.y.greaterThan(0.0).select(vUv.y.sub(1.0), vUv.y.add(1.0));
+
+        const len2 = aUv.mul(aUv).add(bUv.mul(bUv));
+
+        const dlen = float(len2.fwidth()).toVar('dlen');
+
+        If(vUv.y.abs().greaterThan(1.0), () => {
+          alpha.assign(smoothstep(dlen.oneMinus(), dlen.add(1), len2).oneMinus());
+        });
+      } else {
+        If(vUv.y.abs().greaterThan(1.0), () => {
+          const rcA = vUv.x;
+          const rcB = vUv.y.greaterThan(0.0).select(vUv.y.sub(1.0), vUv.y.add(1.0));
+          const rcLen2 = rcA.mul(rcA).add(rcB.mul(rcB));
+
+          rcLen2.greaterThan(1.0).discard();
+        });
+      }
+
+      let lineColorNode;
+
+      if (self.lineColorNode) {
+        lineColorNode = self.lineColorNode;
+      } else if (vertexColors) {
+        const instanceColorStart = attribute('instanceColorStart');
+        const instanceColorEnd = attribute('instanceColorEnd');
+
+        const instanceColor = positionGeometry.y.lessThan(0.5).select(instanceColorStart, instanceColorEnd);
+
+        lineColorNode = instanceColor.mul(materialColor);
+      } else {
+        lineColorNode = materialColor;
+      }
+
+      return vec4(lineColorNode, alpha);
+    })();
+
+    if (self.transparent && self.useViewportSrgbBlend !== false) {
+      const opacityNode = (self.opacityNode ? float(self.opacityNode) : materialOpacity).mul(self.colorNode.a);
+      const viewportColor = tauOpaqueViewportTexture();
+
+      // Divergence 4: perform the line-vs-background alpha mix in sRGB (gamma) space
+      // so saturated overlay tints match WebGL's gamma-space framebuffer blend instead
+      // of the raw linear-RGB blend that the WebGPU `frameBufferTarget` (rgba16f,
+      // `LinearSRGBColorSpace`) would otherwise produce. Source for the viewport is the
+      // Tau-owned non-mip singleton (see `tauOpaqueViewportTexture` above) — the mip
+      // chain that upstream `viewportOpaqueMipTexture` generates every frame is never
+      // read by this blend. Both operands are premultiplied, as WebGL's canvas values are.
+      // The composite already contains the destination, so it replaces it with the composited
+      // alpha. Blending it again forced opaque alpha over the transparent canvas, turning the
+      // tint × opacity mix against transparent black into a dark opaque line.
+      self.outputNode = compositeOverViewportSrgb(self.colorNode.rgb, opacityNode, viewportColor);
+    }
+
+    generatedLineNodes.set(
+      this,
+      new Map([
+        ['vertexNode', self.vertexNode],
+        ['colorNode', self.colorNode],
+        ['outputNode', self.outputNode],
+      ]),
+    );
+
+    // Skip `ThreeLine2NodeMaterial.setup` (which would rebuild `vertexNode`/`colorNode`/`outputNode`
+    // with the upstream broken `nearEstimate = b * -0.5 / a` trim — wiping the corrected graph)
+    // and call the grandparent `NodeMaterial.setup` directly to wire the vertex/fragment stages.
+    // Use `ThreeLine2NodeMaterial`'s prototype chain (not a fresh `NodeMaterial` import binding) so a
+    // duplicate `three/webgpu` graph cannot desynchronise `.prototype` identity across modules.
+    Reflect.apply(Object.getPrototypeOf(ThreeLine2NodeMaterial.prototype).setup, this, [builder]);
+  }
+}

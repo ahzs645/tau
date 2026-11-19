@@ -1,14 +1,14 @@
-import { resolveInputType } from '@better-auth-ui/core';
-import type { AdditionalField as AdditionalFieldConfig } from '@better-auth-ui/core';
+import { getAdditionalFieldDefaultValue, resolveInputType, validateAdditionalFieldValue } from '@better-auth-ui/core';
+import type { AdditionalField as AdditionalFieldConfig, AdditionalFieldOption } from '@better-auth-ui/core';
 import { useAuth } from '@better-auth-ui/react';
 import { format } from 'date-fns';
 import { CalendarIcon, Check, ChevronDownIcon, Copy } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { Button } from '#components/ui/button.js';
-import { Calendar } from '#components/ui/calendar.js';
-import { Checkbox } from '#components/ui/checkbox.js';
+import { Button } from '@taucad/ui/components/button';
+import { Calendar } from '@taucad/ui/components/calendar';
+import { Checkbox } from '@taucad/ui/components/checkbox';
 import {
   Combobox,
   ComboboxContent,
@@ -16,17 +16,17 @@ import {
   ComboboxInput,
   ComboboxItem,
   ComboboxList,
-} from '#components/ui/combobox.js';
-import { Field, FieldContent, FieldError, FieldLabel } from '#components/ui/field.js';
-import { Input } from '#components/ui/input.js';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '#components/ui/input-group.js';
-import { Label } from '#components/ui/label.js';
-import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
-import { Slider } from '#components/ui/slider.js';
-import { Switch } from '#components/ui/switch.js';
-import { Textarea } from '#components/ui/textarea.js';
-import { cn } from '#utils/ui.utils.js';
+} from '@taucad/ui-kit/components/combobox';
+import { Field, FieldContent, FieldError, FieldLabel } from '@taucad/ui/components/field';
+import { Input } from '@taucad/ui/components/input';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@taucad/ui/components/input-group';
+import { Label } from '@taucad/ui/components/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@taucad/ui/components/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@taucad/ui/components/select';
+import { Slider } from '@taucad/ui/components/slider';
+import { Switch } from '@taucad/ui/components/switch';
+import { Textarea } from '@taucad/ui/components/textarea';
+import { cn } from '@taucad/ui/utils/cn';
 
 export type AdditionalFieldProps = {
   name: string;
@@ -90,15 +90,69 @@ function CopyButton({ getValue, isDisabled }: { getValue: () => string | undefin
   );
 }
 
+/** Bridge controlled custom renderers to the sign-up form's FormData submission. */
+function CustomAdditionalField({ name, field, isPending }: AdditionalFieldProps) {
+  const [state, setState] = useState<{
+    value: ReturnType<typeof getAdditionalFieldDefaultValue>;
+    error: string | undefined;
+    validation: symbol | undefined;
+  }>(() => ({
+    value: getAdditionalFieldDefaultValue(field),
+    error: undefined,
+    validation: undefined,
+  }));
+  const { value, error } = state;
+  const handleBlur = async () => {
+    // A new blur or value change invalidates every earlier asynchronous result.
+    const validation = Symbol('blur validation');
+    setState((current) => ({ ...current, validation }));
+    const validationError = await validateAdditionalFieldValue(field, value);
+    setState((current) => (current.validation === validation ? { ...current, error: validationError } : current));
+  };
+
+  return (
+    <>
+      <input
+        type='hidden'
+        name={name}
+        disabled={field.readOnly}
+        value={
+          value === null
+            ? ''
+            : value instanceof Date
+              ? Number.isNaN(value.getTime())
+                ? ''
+                : value.toISOString()
+              : String(value)
+        }
+      />
+      {field.render?.({
+        name,
+        field,
+        value,
+        onChange(nextValue) {
+          setState({ value: nextValue, error: undefined, validation: undefined });
+        },
+        onBlur() {
+          void handleBlur();
+        },
+        isInvalid: Boolean(error),
+        errors: error ? [error] : [],
+        isPending,
+      })}
+    </>
+  );
+}
+
 /** Renders a single additional user field via shadcn primitives. */
-export function AdditionalField({ name, field, isPending }: AdditionalFieldProps) {
+export function AdditionalField({ name, field, isPending }: AdditionalFieldProps): React.JSX.Element {
   const inputType = resolveInputType(field);
   // Used by `inputType: "input"` with `copyable: true` so the copy button
   // reads the input's *live* value rather than a stale `defaultValue`.
   const inputRef = useRef<HTMLInputElement>(null);
 
   if (field.render) {
-    return <>{field.render({ name, field, isPending })}</>;
+    return <CustomAdditionalField name={name} field={field} isPending={isPending} />;
   }
 
   if (inputType === 'hidden') {
@@ -256,7 +310,7 @@ export function AdditionalField({ name, field, isPending }: AdditionalFieldProps
             <ComboboxEmpty>No items found.</ComboboxEmpty>
 
             <ComboboxList>
-              {(option) => (
+              {(option: AdditionalFieldOption) => (
                 <ComboboxItem key={option.value} value={option}>
                   {option.label}
                 </ComboboxItem>
@@ -445,9 +499,9 @@ function DateInput({ name, field, isPending }: AdditionalFieldProps) {
           tabIndex={-1}
           aria-hidden='true'
           className='pointer-events-none absolute inset-0 h-full w-full opacity-0'
-          onInvalid={(e) => {
-            e.preventDefault();
-            setError((e.target as HTMLInputElement).validationMessage);
+          onInvalid={(event) => {
+            event.preventDefault();
+            setError((event.target as HTMLInputElement).validationMessage);
           }}
         />
         <Popover open={open} onOpenChange={setOpen}>
@@ -457,6 +511,7 @@ function DateInput({ name, field, isPending }: AdditionalFieldProps) {
               variant='outline'
               id={`${name}-date`}
               data-empty={!date}
+              // oxlint-disable-next-line jsx-a11y/role-supports-aria-props -- drives the Button's invalid border; the field's error text is the announcement
               aria-invalid={Boolean(error)}
               disabled={isPending ?? field.readOnly}
               className={cn('flex-1 justify-between font-normal', 'data-[empty=true]:text-muted-foreground')}
@@ -497,8 +552,8 @@ function DateInput({ name, field, isPending }: AdditionalFieldProps) {
               id={`${name}-time`}
               step='1'
               value={time}
-              onChange={(e) => {
-                setTime(e.target.value);
+              onChange={(event) => {
+                setTime(event.target.value);
               }}
               disabled={isPending ?? field.readOnly}
               className='appearance-none bg-background [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none'

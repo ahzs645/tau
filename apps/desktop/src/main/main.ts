@@ -1,0 +1,3573 @@
+import { desktopNativeKernelChannels } from '@taucad/types/desktop-native-kernels';
+import { desktopUpdateChannels } from '@taucad/types/desktop-updates';
+import type { DesktopUpdateSnapshot } from '@taucad/types/desktop-updates';
+import { isMachinesFeatureEnabled, machinesDisabledMessage } from '@taucad/types/constants';
+import { randomUUID } from 'node:crypto';
+import { createCallbackLogic } from 'xstate';
+import type { EventObject } from 'xstate';
+import { createShutdownActor } from '#main/shutdown.machine.js';
+import type { ShutdownDriverInput, ShutdownMachineEvent } from '#main/shutdown.machine.js';
+import { installBrowserHost } from '#main/browser-host.js';
+/**
+ * Electron main process (work item E2).
+ *
+ * Main brokers and nothing else: the window, `app://` delivery, response and
+ * request headers, one kernel utility per client, one singleton services
+ * utility, the auth service, native dialogs, and the diagnostics sinks. Heavy
+ * work — kernels, disk, the agent host — lives in the utilities.
+ */
+
+import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { homedir, totalmem } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { Worker } from 'node:worker_threads';
+import { setTimeout as sleep } from 'node:timers/promises';
+
+import {
+  app,
+  autoUpdater,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  MessageChannelMain,
+  Menu,
+  MenuItem,
+  net,
+  powerMonitor,
+  powerSaveBlocker,
+  protocol,
+  safeStorage,
+  screen,
+  session,
+  shell,
+  systemPreferences,
+  utilityProcess,
+} from 'electron';
+import type { IpcMainEvent, IpcMainInvokeEvent, MessageBoxOptions, WebContents } from 'electron';
+import { nativeSandboxBwrapVariable } from '@taucad/native-process-core';
+import { installElectronRuntimeHeaders, registerElectronRuntimeMain } from '@taucad/runtime/electron/main';
+import { createZooProxyTokenSource } from '@taucad/zoo/proxy';
+import { connectSqliteComputeStoreWorker } from '@taucad/runtime/node';
+import { machineStartWaitMilliseconds } from '@taucad/runtime/machine';
+import type { ComputeBinding } from '@taucad/runtime/types';
+import {
+  acpLoginLaunch,
+  computeStoreWorkspace,
+  defaultConfigDirectory,
+  defaultDependencyStore,
+  discoverAcpAgents,
+  keepAwakeWhileStreaming,
+  projectCloseMilliseconds,
+  projectReleaseMilliseconds,
+} from '@taucad/host';
+
+import { appOrigin, appSchemePrivileges, registerAppProtocol } from '#main/app-protocol.js';
+import { createAuthService } from '#main/auth-service.js';
+import {
+  createDiagnosticsLog,
+  forwardRendererDiagnostics,
+  pagesThatCanSave,
+  forwardUtilityDiagnostics,
+  kernelUtilityDiagnostics,
+  watchRendererHangs,
+} from '#main/diagnostics.js';
+import type { DiagnosticLevel, DiagnosticsFileLog } from '#main/diagnostics.js';
+import {
+  clientEnvironment,
+  desktopAgentGatewayBaseUrl,
+  desktopAgentSystemPrompt,
+  desktopEnvironment,
+  packagedChannel,
+  packagedOverridesEnabled,
+  stripPackagedOverrides,
+} from '#main/environment.js';
+import { installTauHeaderInjection, originOf } from '#main/header-injection.js';
+import {
+  contentSecurityPolicy,
+  isMicrophonePermissionGranted,
+  isPermissionGranted,
+  isTrustedSender,
+  navigationDecision,
+  navigationLogTarget,
+  postHogConnectOrigins,
+  rendererOrigins,
+} from '#main/navigation-policy.js';
+import type { SenderFrame } from '#main/navigation-policy.js';
+import {
+  createKernelForkResolver,
+  createProjectRootRegistry,
+  kernelForkEnvAllowlist,
+  sanitizeServicesContext,
+} from '@taucad/desktop-services-host/project-roots';
+import { registerPermissionBridge } from '#main/permission-bridge.js';
+import { createServicesBroker, rendererServicesConcerns, ServicesQuiescingError } from '#main/services-broker.js';
+import { registerTerminalRelay } from '#main/terminal-relay.js';
+import { registerAgentSignIn } from '#main/agent-sign-in.js';
+import type { ServicesConcern } from '#main/services-broker.js';
+import { createGeometryBroker } from '#main/geometry-broker.js';
+import {
+  bundledGitEnvironment,
+  bundledStoreGuardEnvironment,
+  windowsShellSandboxEnvironment,
+  compileCacheEnvironment,
+  loginShellEnvironment,
+  packagedEsbuildEnvironment,
+  utilityEnvironment,
+} from '#main/utility-environment.js';
+import { createQuickLookController, removeStaleQuickLookSessions } from '#main/quick-look.js';
+import type { QuickLookController } from '#main/quick-look.js';
+import { deepLinkArgument, parseDeepLink } from '#main/deep-links.js';
+import { isFirstRun } from '#main/first-run.js';
+import { createOpenFileQueue } from '#main/open-files.js';
+import { createImportGrants, importGrantCapacity } from '#main/import-grants.js';
+import type { ImportGrant } from '#main/import-grants.js';
+import { readGeneratedImage } from '#main/generated-image.js';
+import { createBambuStudioService } from '#main/bambu-studio-service.js';
+import { readWindowState, writeWindowState } from '#main/window-state.js';
+import { createRendererTelemetryConsentRelay } from '#main/telemetry-consent.js';
+import { admitOtaProbe } from '#main/ota-probe.js';
+import {
+  bootstrapFailedSignal,
+  bootUnhealthySignal,
+  errnoOf,
+  mainUncaughtSignal,
+  safeModeSignal,
+  optionalStepFailedSignal,
+  probeLeftoverIgnoredSignal,
+  rendererReloadPolicySignal,
+  storeQuarantinedSignal,
+  updateBlockedSignal,
+  updaterFailureSignal,
+} from '#main/desktop-signals.js';
+import { closedPageName, createRendererReloadPolicy } from '#main/renderer-reload-policy.js';
+import type { BootstrapStep, DesktopSignal, OptionalBootstrapStep } from '#main/desktop-signals.js';
+import {
+  addTroubleshootingMenu,
+  bootstrapFailureActions,
+  bootstrapFailureDialog,
+  diagnosticsReport,
+  downloadTauPage,
+} from '#main/troubleshooting-menu.js';
+import {
+  flushDesktopErrorReporting,
+  initializeDesktopErrorReporting,
+  noteRendererGone,
+  rendererErrorReportingEnvironment,
+  reportDesktopSignal,
+  reportRevisionEngineFailure,
+} from '#main/error-reporting.js';
+import { createExternalAgentDiscovery } from '#main/external-agent-discovery.js';
+import { bootHealthFileName, buildIdentity, startBootHealth } from '#main/boot-health.js';
+import type { BootHealth, LaunchMode } from '#main/boot-health.js';
+import { bootDeadlineScaleOf, createBootWatchdog } from '#main/boot-watchdog.js';
+import type { BootWatchdog, RecoveryTrigger } from '#main/boot-watchdog.js';
+import { applyPendingResets, readPendingResets } from '#main/recovery-resets.js';
+import {
+  createRecoveryActionHandler,
+  createRecoveryHooks,
+  createRecoveryWindowController,
+} from '#main/recovery-window.js';
+import type { RecoveryHooks, RecoveryWindowLike } from '#main/recovery-window.js';
+import { admitRouteQualificationProbe, prepareRouteQualificationProbe } from '#main/route-qualification-probe.js';
+import { linuxInstallation } from '#shared/linux-installation.js';
+import { readDesktopHostBuild } from '#shared/desktop-host-build.js';
+import { parseDesktopInstallation } from '#main/update-identity.js';
+import { z } from 'zod';
+import type { DesktopUpdater, DesktopUpdaterOptions } from '#main/updater.js';
+import { startDesktopUpdater } from '#main/updater.js';
+import { createAutoInstall } from '#main/update-auto-install.js';
+import type { AutoInstall } from '#main/update-auto-install.js';
+import { desktopDownloadPage } from '#shared/desktop-release.js';
+import { startUpdateTriggers } from '#main/update-triggers.js';
+import type { MoveToApplicationsHost } from '#main/app-location.js';
+import {
+  assessAppLocation,
+  locationBlocksUpdates,
+  moveToApplications,
+  offerMoveToApplications,
+} from '#main/app-location.js';
+import { preparableNativeDeployments } from '@taucad/desktop-services-host/desktop-native-deployments';
+import { createDesktopKernelPreparer } from '@taucad/desktop-services-host/native-preparation';
+import { desktopNativeKernelIds, startNativeStore } from '@taucad/desktop-services-host/native-store';
+import {
+  appIconThemeChannel,
+  telemetryConsentChannel,
+  openDirectoryChannel,
+  directoryGrantChannels,
+  revealPathChannel,
+  agentHostRatingChannel,
+  agentHostSessionChannels,
+  machinesChannels,
+  externalAgentsChannel,
+  hostHandOffChannel,
+  quitChannels,
+  bootstrapArgumentPrefix,
+  bootChannels,
+  computeControlChannels,
+  recoveryChannels,
+  rendererBootStages,
+  safeModeSwitch,
+  servicesPortRelayTag,
+  slicersChannels,
+  windowFullscreenChannel,
+} from '#shared/desktop-bootstrap.js';
+import type {
+  AppIconTheme,
+  DesktopMachineBindingFailure,
+  RendererBootStage,
+  SafeModeReason,
+} from '#shared/desktop-bootstrap.js';
+import {
+  generatedImageIpcChannel,
+  isQuickLookEnabled,
+  openFilesIpcChannel,
+  quickLookIpcChannels,
+  releaseImportGrantsIpcChannel,
+  selectImportFolderIpcChannel,
+} from '#shared/quick-look.js';
+import type { QuickLookResult } from '#shared/quick-look.js';
+import quickLookManifest from '#macos/quick-look-formats.json' with { type: 'json' };
+
+/**
+ * The deepest existing directory on `path`, walking up from it: where a folder picker should open for a folder that
+ * moved or was deleted (blueprint R4).
+ *
+ * @param path - An absolute path that may no longer exist.
+ * @returns The nearest existing ancestor directory, or `undefined` when none of it exists.
+ */
+const nearestExistingDirectory = async (path: string): Promise<string | undefined> => {
+  let candidate = resolve(path);
+  for (;;) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- Each step up depends on the one below not existing.
+    const found = await stat(candidate).catch(() => undefined);
+    if (found?.isDirectory() === true) {
+      return candidate;
+    }
+    const parent = dirname(candidate);
+    if (parent === candidate) {
+      return undefined;
+    }
+    candidate = parent;
+  }
+};
+/** Whether `inner` is `outer` or inside it, the node host's containment rule (`host.ts` `isContained`). */
+const isPathWithin = (outer: string, inner: string): boolean => {
+  const fromOuter = relative(outer, inner);
+  return fromOuter === '' || (!isAbsolute(fromOuter) && fromOuter !== '..' && !fromOuter.startsWith(`..${sep}`));
+};
+
+/** Resolve symbolic links where the path exists, so a link cannot hide an overlap. */
+const canonicalOrResolved = async (path: string): Promise<string> => {
+  try {
+    return await realpath(path);
+  } catch {
+    return resolve(path);
+  }
+};
+
+/** Whether a picked folder contains, or is inside, `protectedDirectory` (blueprint R6). */
+const overlapsDirectory = async (picked: string, protectedDirectory: string): Promise<boolean> => {
+  const [folder, guarded] = await Promise.all([canonicalOrResolved(picked), canonicalOrResolved(protectedDirectory)]);
+  return isPathWithin(folder, guarded) || isPathWithin(guarded, folder);
+};
+
+/*
+ * Main's own faults, from its first line (B18, D6). Nothing below may end a launch in silence: the handlers are
+ * installed before any module-level step that can throw, and what they and the probe admissions see before the
+ * diagnostics log opens is held here and written to it as soon as it does. Reports wait the same way for crash
+ * reporting to start. A packaged app discards the console, so the log is the record.
+ */
+const earlyLines: Array<readonly [DiagnosticLevel, string, unknown]> = [];
+const mainLog: { current?: DiagnosticsFileLog } = {};
+const logMain = (level: DiagnosticLevel, event: string, detail?: unknown): void => {
+  const diagnosticsLog = mainLog.current;
+  if (diagnosticsLog === undefined) {
+    earlyLines.push([level, event, detail]);
+    console.error(`[desktop] ${event}`, detail);
+    return;
+  }
+  diagnosticsLog.log(level, event, detail);
+};
+const earlySignals: DesktopSignal[] = [];
+let reportingStarted = false;
+const reportMain = (signal: DesktopSignal): void => {
+  if (reportingStarted) {
+    reportDesktopSignal(signal);
+  } else {
+    earlySignals.push(signal);
+  }
+};
+process.on('uncaughtException', (error) => {
+  logMain('error', 'main.uncaught-exception', error);
+  reportMain(mainUncaughtSignal('exception', error));
+});
+process.on('unhandledRejection', (reason) => {
+  logMain('error', 'main.unhandled-rejection', reason);
+  reportMain(mainUncaughtSignal('rejection', reason));
+});
+/* A probe's leftover state is not a probe: an ordinary launch reports it and boots (B23, B29). */
+const ignoreLeftoverProbe = (probe: 'route-qualification' | 'ota', error: unknown): void => {
+  logMain('warn', 'main.probe-leftover-ignored', { probe, message: String(error) });
+  reportMain(probeLeftoverIgnoredSignal(probe, error));
+};
+
+/* A packaged build ignores endpoint, renderer, client-root, executable-path and
+ * `TAU_E2E_*` overrides unless it was packaged to honour them (ad-hoc and
+ * certificate-signed or unsigned development packages; never a release). Scrubbed before anything below
+ * reads `process.env`, so every later read and every child sees the result. */
+const environmentLocked = app.isPackaged && !packagedOverridesEnabled(app.getAppPath());
+if (environmentLocked) {
+  stripPackagedOverrides(process.env);
+}
+/* A staging package (`TAU_DESKTOP_CHANNEL=staging` at packaging time) defaults
+ * to taucad.dev and never follows the production update feed. */
+const desktopChannel = app.isPackaged ? packagedChannel(app.getAppPath()) : 'production';
+app.setName(desktopChannel === 'staging' ? 'Tau Staging' : 'Tau');
+if (desktopChannel === 'staging') {
+  /* Only a locked release owns `Tau Staging`. A build that honours overrides keeps an explicit `--user-data-dir` and
+   * otherwise uses `Tau Staging Dev`, so a development or test run never defaults into the installed app's profile
+   * (desktop resilient startup blueprint, D7). */
+  if (environmentLocked) {
+    app.setPath('userData', join(app.getPath('appData'), 'Tau Staging'));
+  } else if (!app.commandLine.hasSwitch('user-data-dir')) {
+    app.setPath('userData', join(app.getPath('appData'), 'Tau Staging Dev'));
+  }
+  app.setPath('sessionData', app.getPath('userData'));
+}
+const otaProbe = admitOtaProbe(
+  {
+    arguments: process.argv,
+    profile: app.getPath('userData'),
+    appPath: app.getAppPath(),
+    version: app.getVersion(),
+    channel: desktopChannel,
+    packaged: app.isPackaged,
+  },
+  (error) => {
+    ignoreLeftoverProbe('ota', error);
+  },
+);
+/* Main's own reads before admission are inside the same tolerance: a launch without the nonce boots past any of them. */
+const routeQualification = admitRouteQualificationProbe(
+  process.argv,
+  () => {
+    if (
+      !process.argv.some((value) => value.startsWith('--tau-route-qualification=')) &&
+      !existsSync(join(app.getPath('userData'), 'route-qualification.state.json'))
+    ) {
+      return undefined;
+    }
+    if (otaProbe) {
+      throw new Error('Only one installed update probe may run at a time');
+    }
+    const metadata = z
+      .object({ version: z.string(), tauDesktop: z.object({ sourceCommit: z.string() }) })
+      .parse(JSON.parse(readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')));
+    const installation =
+      process.platform === 'darwin'
+        ? undefined
+        : parseDesktopInstallation(
+            JSON.parse(readFileSync(join(process.resourcesPath, 'desktop-installation.json'), 'utf8')),
+            { platform: process.platform, arch: process.arch, channel: desktopChannel, version: app.getVersion() },
+          );
+    if (
+      metadata.version !== app.getVersion() ||
+      (installation && installation.sourceCommit !== metadata.tauDesktop.sourceCommit)
+    ) {
+      throw new Error('Qualification package and installed marker source differ');
+    }
+    const route = installation?.route ?? 'macos-zip';
+    const installedPath =
+      route === 'linux-appimage'
+        ? process.env['APPIMAGE'] ===
+          `${linuxInstallation(desktopChannel, true).root}/releases/${app.getVersion()}/Tau.AppImage`
+          ? linuxInstallation(desktopChannel, true).launcher
+          : process.env['APPIMAGE']
+        : route === 'linux-apt'
+          ? desktopChannel === 'staging'
+            ? '/usr/bin/tau-staging'
+            : '/usr/bin/tau'
+          : process.platform === 'darwin'
+            ? app.getAppPath()
+            : process.execPath;
+    if (!installedPath) {
+      throw new Error('Qualification AppImage outer executable is missing');
+    }
+    return prepareRouteQualificationProbe({
+      arguments: process.argv,
+      profile: app.getPath('userData'),
+      defaultProfile: join(app.getPath('appData'), app.getName()),
+      packaged: app.isPackaged,
+      platform: process.platform,
+      arch: process.arch,
+      channel: desktopChannel,
+      version: app.getVersion(),
+      sourceCommit: metadata.tauDesktop.sourceCommit,
+      route,
+      installedPath,
+      mirrorOrigin: process.env['TAU_DESKTOP_UPDATE_FEED'],
+    });
+  },
+  (error) => {
+    ignoreLeftoverProbe('route-qualification', error);
+  },
+);
+if (routeQualification) {
+  process.env['TAU_DESKTOP_UPDATE_FEED'] = routeQualification.mirrorOrigin;
+  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1');
+  app.commandLine.appendSwitch('remote-debugging-port', '0');
+}
+/* The log opens as soon as the profile may be written: a probe's admission demands an empty profile, so not before
+ * it. It never throws; a profile that cannot hold it moves it under the system's temporary folder. */
+const diagnostics = createDiagnosticsLog({
+  directory: join(app.getPath('userData'), 'logs'),
+  echo: process.env.ELECTRON_RENDERER_URL !== undefined,
+});
+mainLog.current = diagnostics;
+for (const [level, event, detail] of earlyLines.splice(0)) {
+  diagnostics.log(level, event, detail);
+}
+// Crashpad may create profile files, so initialize only after the pristine probe admission above. A qualification
+// run or a package that honours test overrides is a test harness, and reports apart from real use.
+try {
+  initializeDesktopErrorReporting(
+    desktopChannel,
+    routeQualification !== undefined || (app.isPackaged && !environmentLocked),
+  );
+} catch (error) {
+  /* Crash reporting is an observer: a launch without it is still a launch. */
+  diagnostics.log('error', 'main.error-reporting-failed', error);
+}
+reportingStarted = true;
+for (const signal of earlySignals.splice(0)) {
+  reportDesktopSignal(signal);
+}
+/* Sentry first registers its IPC scheme and wraps subsequent registrations.
+ * Register app:// afterward so both schemes retain their privileges, still
+ * before app.whenReady() starts the network service. */
+protocol.registerSchemesAsPrivileged([...appSchemePrivileges]);
+const isDevelopment = process.env.ELECTRON_RENDERER_URL !== undefined;
+const hideTestWindow = process.env['TAU_E2E_HIDE_WINDOW'] === '1';
+/* Packaged executable launches skip Playwright's readiness loader. Hold window
+ * creation until its main-process bridge is attached, so an already-navigating
+ * window cannot lose the initial CDP navigation event during attachment. */
+const playwrightReady =
+  process.env['TAU_E2E_WAIT_FOR_PLAYWRIGHT'] === '1' &&
+  typeof Reflect.get(globalThis, '__playwright_run') !== 'function'
+    ? Promise.withResolvers<void>()
+    : undefined;
+if (playwrightReady) {
+  Object.defineProperty(globalThis, '__playwright_run', { value: playwrightReady.resolve, configurable: true });
+}
+/* The built SPA, relative to `dist/main/`. Packaging (ruling C7) will relocate
+ * this; an env override keeps the e2e lane free to point elsewhere meanwhile. */
+const clientRoot =
+  process.env['TAU_DESKTOP_CLIENT_ROOT'] ??
+  (app.isPackaged
+    ? join(process.resourcesPath, 'ui/client')
+    : join(import.meta.dirname, '../../../ui/desktop/build/client'));
+/* Entries `electron.vite.config.ts` emits beside `index.js`, the bundle this
+ * module lands in. */
+const kernelUtilityEntry = join(import.meta.dirname, 'kernel-host.js');
+const servicesUtilityEntry = join(import.meta.dirname, 'services-host.js');
+const geometryUtilityEntry = join(import.meta.dirname, 'geometry-host.js');
+const computeStoreWorkerEntry = join(import.meta.dirname, 'compute-store.worker.js');
+const applicationResource = (name: string): string =>
+  app.isPackaged ? join(process.resourcesPath, 'branding', name) : join(import.meta.dirname, '../../resources', name);
+const applicationIcon = applicationResource(`icon.${process.platform === 'win32' ? 'ico' : 'png'}`);
+const themedApplicationIcon = (theme: AppIconTheme): string =>
+  applicationResource(`icon${theme === 'dark' ? '-dark' : ''}.png`);
+/* A window's import grants go with it (W7.4): watched once, from its first grant. */
+const watchedImportOwners = new Set<number>();
+const watchImportOwner = (sender: WebContents): void => {
+  if (watchedImportOwners.has(sender.id)) {
+    return;
+  }
+  const { id } = sender;
+  watchedImportOwners.add(id);
+  sender.once('destroyed', () => {
+    watchedImportOwners.delete(id);
+    importGrants.releaseOwner(id);
+  });
+};
+/* The services host is told every grant once it exists, and again on each change (W7.4). */
+let publishImportGrants: (grants: readonly ImportGrant[]) => void = () => undefined;
+const importGrants = createImportGrants({
+  maxGrants: importGrantCapacity(quickLookManifest.limits.maxFiles),
+  publish: (grants) => {
+    publishImportGrants(grants);
+  },
+});
+const openFiles = createOpenFileQueue({
+  extensions: quickLookManifest.formats.flatMap((format) => format.extensions),
+  maxBytes: quickLookManifest.limits.maxSourceBytes,
+  maxFiles: quickLookManifest.limits.maxFiles,
+  /* An opened file is imported by a grant the services host copies from: its bytes stay on this computer. */
+  grant: async (path, owner) => importGrants.mint(path, 'file', owner),
+});
+let showOpenFileImport: (() => void) | undefined;
+const enqueueOpenFiles = (paths: readonly string[]): void => {
+  if (openFiles.enqueue(paths) > 0) {
+    showOpenFileImport?.();
+  }
+};
+
+/* The macOS system may deliver this before `ready`; installing the listener after
+ * `whenReady()` silently loses the launch document. */
+app.on('open-file', (event, path) => {
+  event.preventDefault();
+  enqueueOpenFiles([path]);
+});
+enqueueOpenFiles(process.argv.slice(1));
+
+/* The recovery window is main's own, not an app window: set once bootstrap creates its controller (D0). */
+let isRecoveryWindow = (_window: BrowserWindow): boolean => false;
+/** The app's own windows: every window but the recovery window. */
+const appWindows = (): BrowserWindow[] => BrowserWindow.getAllWindows().filter((window) => !isRecoveryWindow(window));
+
+/** Bring the app forward, whatever asked it to (a second launch, a deep link). */
+const focusMainWindow = (): void => {
+  if (hideTestWindow) {
+    return;
+  }
+  const window = appWindows()[0];
+  if (window?.isMinimized()) {
+    window.restore();
+  }
+  window?.show();
+  window?.focus();
+};
+
+/*
+ * `tau://` deep links (R4, ruling D4).
+ *
+ * The same pre-`ready` problem as `open-file`: on macOS the link that launched
+ * the app arrives before anything could have asked for it, so the listener is
+ * installed here and the link is held until the window exists. One slot rather
+ * than a list — a launch delivers one link, and if a second arrives first the
+ * newer one is the one the person just clicked.
+ */
+let deliverDeepLink: ((value: string) => void) | undefined;
+let queuedDeepLink: string | undefined;
+const receiveDeepLink = (value: string): void => {
+  if (deliverDeepLink === undefined) {
+    queuedDeepLink = value;
+    return;
+  }
+  deliverDeepLink(value);
+};
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  receiveDeepLink(url);
+});
+/* Windows and Linux hand the link to the process as an argument instead. */
+const desktopScheme = process.platform !== 'darwin' && desktopChannel === 'staging' ? 'tau-staging:' : 'tau:';
+const launchDeepLink = deepLinkArgument(process.argv.slice(1), desktopScheme);
+if (launchDeepLink !== undefined) {
+  receiveDeepLink(launchDeepLink);
+}
+
+/** How long a window may stay hidden while its first page loads before it is shown as it is (B17, D0). */
+const windowRevealMilliseconds = 15_000;
+
+/** The smallest content area a window can be resized to (D4.6); the web sweep's smallest viewport is the same. */
+const minimumContentWidth = 400;
+const minimumContentHeight = 300;
+
+/* How far each quit wait outlasts the bound it awaits, so the inner reason lands first (rule 9). */
+const quitMarginMilliseconds = 3000;
+
+/**
+ * How long quit waits for every served project to settle (W19, D31).
+ *
+ * Derived from the host's own worst case for closing one project — its runs
+ * drain, then the live-checkout wait, the close cuts and the sync quiesce — so
+ * rule 9's nesting holds whatever those bounds become: the host's reason
+ * lands before this wait's. Projects close in parallel, so the per-project
+ * bound is the whole bound. The utility's quiesce first waits for machine job
+ * starts already admitted, before any project closes, so that wait adds on.
+ * After it the durable queue is the guarantee (D28).
+ *
+ * @internal
+ */
+export const quitQuiesceMilliseconds = projectCloseMilliseconds + machineStartWaitMilliseconds + quitMarginMilliseconds;
+
+/*
+ * The page's own close steps before its sync flush: `cancelRuns`, then
+ * `flushProducers`, each on the editor bound of `project-live-sessions.tsx`
+ * (`editorFlushTimeoutMilliseconds`, 10 s). ponytail: mirrored, not imported —
+ * desktop has no dependency on the ui app; move the page bound into a package
+ * both read if it ever changes.
+ */
+const rendererCloseStepsMilliseconds = 2 * 10_000;
+
+/**
+ * How long a binding ceremony may take to reach the printer and answer (D10).
+ *
+ * The provider's MQTT hello is seconds on the LAN; the bound only bites a
+ * printer that is asleep or unreachable, which is exactly when the person
+ * should hear "timed out" rather than wait on a spinner.
+ */
+const machineBindingMilliseconds = 60_000;
+
+/**
+ * How long quit waits for the utility to say whether a program is streaming. The utility first quiesces the machine
+ * host, which waits up to {@link machineStartWaitMilliseconds} for job starts already admitted, so this bound sits
+ * above that wait.
+ */
+const machineStreamingMilliseconds = machineStartWaitMilliseconds + 2000;
+
+/**
+ * How often main asks whether a program is streaming, to keep the computer awake while one does: well inside the
+ * shortest idle-sleep timer an operating system offers (one minute).
+ */
+const keepAwakeIntervalMilliseconds = 20_000;
+/* Kernel utility resident ceiling (D-DT-02): the upper bound on half of physical memory. */
+const maxKernelResidentBytes = 8 * 1024 * 1024 * 1024;
+const kernelResidentPollMilliseconds = 5000;
+/* D-DT-09: an unadopted spare retires after the geometry slot's idle time; the next fork warms another. */
+const kernelSpareIdleMilliseconds = 120_000;
+/* One metrics read serves every sampler for this long. */
+const residentMetricsReuseMilliseconds = 500;
+
+/**
+ * How long quit waits for the renderer's sessions registry (D31, P49).
+ *
+ * The page runs every live project's `closing` — cancel, producer flush, sync
+ * flush, lease release — and answers `quiesced`. A desktop project's sync
+ * flush is the host's close, so the wait is the page's own steps plus
+ * {@link projectReleaseMilliseconds} plus a margin (rule 9, RV-W2b #1). The
+ * person can cut it short with *Quit anyway*. The bound reports failure to
+ * main; it never turns an incomplete close into permission to quit.
+ *
+ * @internal
+ */
+export const quitRendererMilliseconds =
+  rendererCloseStepsMilliseconds + projectReleaseMilliseconds + quitMarginMilliseconds;
+
+/* Set while a recovery restart runs in a launch whose page never mounted: the quit owner then asks no page (D0). */
+let restartWithoutPage = false;
+/* Web contents whose hung renderer main ended (B24): the quit owner does not wait on them. */
+const endedHungPages = new Set<number>();
+
+/**
+ * Ask every window's sessions registry to close its projects, and wait.
+ *
+ * Resolves on the first completion or explicit *Quit anyway*, at the bound,
+ * or at once when there is no window to ask.
+ *
+ * @param boundMilliseconds - How long to wait before proceeding regardless.
+ * @returns What ended the wait.
+ */
+const askRendererToQuiesce = async (
+  boundMilliseconds: number,
+  attemptId: string,
+): Promise<'quiesced' | 'forced' | 'timeout' | 'no-window'> => {
+  const windows = pagesThatCanSave(
+    appWindows().filter((window) => !window.isDestroyed()),
+    endedHungPages,
+  );
+  /* A recovery restart in a launch that never reached `shell-mounted` has no page with anything to save, and a hung
+   * page (B24) would hold it for the whole bound (D0). */
+  if (windows.length === 0 || restartWithoutPage) {
+    return 'no-window';
+  }
+  return new Promise<'quiesced' | 'forced' | 'timeout' | 'no-window'>((resolve) => {
+    const settle = (outcome: 'quiesced' | 'forced' | 'timeout'): void => {
+      clearTimeout(timer);
+      ipcMain.off(quitChannels.quiesced, onQuiesced);
+      resolve(outcome);
+    };
+    const pending = new Set(windows.map((window) => window.webContents.id));
+    let anyForced = false;
+    const onQuiesced = (event: IpcMainEvent, replyAttempt: unknown, forced: unknown): void => {
+      if (
+        replyAttempt !== attemptId ||
+        typeof forced !== 'boolean' ||
+        !pending.has(event.sender.id) ||
+        event.senderFrame !== event.sender.mainFrame
+      ) {
+        return;
+      }
+      pending.delete(event.sender.id);
+      anyForced ||= forced;
+      if (pending.size === 0) {
+        settle(anyForced ? 'forced' : 'quiesced');
+      }
+    };
+    const timer = setTimeout(() => {
+      settle('timeout');
+    }, boundMilliseconds);
+    ipcMain.on(quitChannels.quiesced, onQuiesced);
+    for (const window of windows) {
+      window.webContents.send(quitChannels.ask, attemptId);
+    }
+  });
+};
+
+/** The largest `.tau/workspace.json` main reads for the renderer; a marker is a few hundred bytes. */
+const workspaceMarkerByteLimit = 64 * 1024;
+
+/* Set by bootstrap once it can make the main window: a second launch then reopens one when none exists (B19). */
+let ensureMainWindow: (() => void) | undefined;
+const ownsSingleInstanceLock = app.requestSingleInstanceLock();
+
+/*
+ * Boot health and safe mode (D0, R12). Only a launch that holds the single-instance lock touches the ledger, so a
+ * second launch that is about to quit can neither read nor overwrite the first one's record; probe launches are not
+ * recorded. Safe mode is decided here, before `whenReady`, because hardware acceleration can only be turned off
+ * before `ready`; it is a property of this launch and is never stored as a setting.
+ */
+const recordsBootHealth = ownsSingleInstanceLock && otaProbe === undefined && routeQualification === undefined;
+if (recordsBootHealth) {
+  /* Resets the recovery window asked for are applied now, before anything opens the files they move. */
+  applyPendingResets({
+    userData: app.getPath('userData'),
+    sessionData: app.getPath('sessionData'),
+    stamp: new Date().toISOString().replaceAll(':', '-'),
+    appOrigins: ['app_tau_0', ...(isDevelopment ? ['http_localhost_3001'] : [])],
+    report: reportMain,
+    log: logMain,
+  });
+}
+/* LW8: the commit packaging recorded beside the bundles (`dist/host-build.json`); empty when none was (ST-9). */
+const desktopHostBuild = readDesktopHostBuild(join(import.meta.dirname, '..'));
+const bootHealth: BootHealth | undefined = recordsBootHealth
+  ? startBootHealth({
+      path: join(app.getPath('userData'), bootHealthFileName),
+      build: buildIdentity({
+        version: app.getVersion(),
+        sourceCommit: desktopHostBuild,
+        packaged: app.isPackaged,
+      }),
+      version: app.getVersion(),
+      safeModeRequested: process.argv.includes(safeModeSwitch),
+      launchId: randomUUID(),
+    })
+  : undefined;
+const launchMode: LaunchMode = bootHealth?.mode ?? 'normal';
+const safeModeReason: SafeModeReason | undefined =
+  launchMode === 'safe-auto' ? 'unhealthy-launches' : launchMode === 'safe-requested' ? 'requested' : undefined;
+const safeMode = safeModeReason !== undefined;
+if (bootHealth?.previousOutcome === 'unhealthy' && bootHealth.previous !== undefined) {
+  logMain('warn', 'main.boot-unhealthy', { previous: bootHealth.previous, count: bootHealth.unhealthyCount });
+  reportMain(bootUnhealthySignal(bootHealth.previous, bootHealth.unhealthyCount));
+}
+if (safeModeReason !== undefined) {
+  /* Safe mode starts without the GPU: a GPU process that cannot start (B26) is one of the faults it works around. */
+  app.disableHardwareAcceleration();
+  logMain('warn', 'main.safe-mode', { reason: safeModeReason, count: bootHealth?.unhealthyCount });
+  reportMain(safeModeSignal(safeModeReason, bootHealth?.unhealthyCount ?? 0));
+}
+/* The recovery window and the restarts behind it, once bootstrap can make them. The watchdog and the renderer reload
+ * policy (WP8) act through these two hooks. */
+let recoveryHooks: RecoveryHooks | undefined;
+let recoveryTrigger: RecoveryTrigger | undefined;
+const bootWatchdog: BootWatchdog | undefined =
+  bootHealth === undefined
+    ? undefined
+    : createBootWatchdog({
+        setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
+        clearTimeout: (handle) => {
+          clearTimeout(handle as ReturnType<typeof setTimeout>);
+        },
+        openRecovery: (trigger) => {
+          logMain('warn', 'main.recovery-opened', { trigger });
+          recoveryHooks?.openRecovery(trigger);
+        },
+        offerRecovery: (trigger) => {
+          /* Beside the app: the window that is still loading is neither closed nor reloaded. */
+          logMain('warn', 'main.recovery-offered', { trigger });
+          recoveryHooks?.openRecovery(trigger);
+        },
+        markDeadlinePassed: () => {
+          logMain('warn', 'main.boot-deadline-passed', { stage: bootHealth.stage() });
+          bootHealth.markDeadlinePassed();
+        },
+        endUserClosed: () => {
+          bootHealth.end('user-closed-window');
+        },
+        noteGpuProcessGone: () => {
+          bootHealth.noteGpuProcessGone();
+        },
+        report: reportMain,
+        safeMode: () => safeMode,
+        scale: bootDeadlineScaleOf(process.env['TAU_E2E_BOOT_DEADLINE_SCALE']),
+      });
+bootWatchdog?.start();
+app.on('child-process-gone', (_event, details) => {
+  if (details.type === 'GPU') {
+    logMain('error', 'main.gpu-process-gone', { reason: details.reason, exitCode: details.exitCode });
+  }
+  bootWatchdog?.childProcessGone(details);
+});
+
+/* A second launch that asks for safe mode reaches this one, which cannot change mode in place: ask once (D0). */
+let safeModePromptShowing = false;
+const offerSafeModeRestart = async (): Promise<void> => {
+  if (safeModePromptShowing || safeMode) {
+    return;
+  }
+  safeModePromptShowing = true;
+  try {
+    const { response } = await dialog.showMessageBox({
+      type: 'question',
+      title: 'Tau',
+      message: 'Restart Tau in safe mode?',
+      detail: 'Tau is already running. Safe mode starts it again with only Home and fewer features, for one launch.',
+      buttons: ['Restart in Safe Mode', 'Not Now'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) {
+      await recoveryHooks?.restartInSafeMode();
+    }
+  } catch (error) {
+    logMain('error', 'main.safe-mode-prompt-failed', error);
+  } finally {
+    safeModePromptShowing = false;
+  }
+};
+
+app.on('second-instance', (_event, argv) => {
+  if (!safeMode) {
+    enqueueOpenFiles(argv.slice(1));
+  }
+  const link = deepLinkArgument(argv.slice(1), desktopScheme);
+  if (link !== undefined) {
+    receiveDeepLink(link);
+  }
+  /* A first instance with no window, or a hidden one, is what makes a second launch look like nothing happened:
+   * create the window when there is none, then bring it forward, which shows a hidden one. */
+  ensureMainWindow?.();
+  focusMainWindow();
+  /* Past the 45 s rule, the window this launch shows is not starting: offer recovery beside it as well (B19). */
+  if (bootWatchdog?.pastShellDeadline() === true) {
+    recoveryHooks?.openRecovery('second-instance');
+  }
+  if (argv.includes(safeModeSwitch)) {
+    void offerSafeModeRestart();
+  }
+});
+
+process.title = 'Tau';
+/* Unpackaged on Windows and Linux the registration has to name the executable
+ * and the script Electron was started with, or the OS records `electron` itself
+ * as the handler; on macOS `CFBundleURLTypes` in the packaged bundle is what
+ * counts and this call is a no-op for a development run. */
+if (process.defaultApp && process.argv.length >= 2) {
+  app.setAsDefaultProtocolClient(desktopScheme.slice(0, -1), process.execPath, [resolve(process.argv[1]!)]);
+} else {
+  app.setAsDefaultProtocolClient(desktopScheme.slice(0, -1));
+}
+if (process.platform === 'win32') {
+  app.setAppUserModelId(desktopChannel === 'staging' ? 'com.taucad.tau.staging' : 'com.taucad.tau');
+}
+
+/**
+ * Why this process asked to quit, once it has: the shutdown log names it, so a quit is attributable. A quit that
+ * reaches `before-quit` with none was Electron's own: the Quit menu item or Cmd+Q, the Dock, an Apple Event from
+ * another process, or the session ending.
+ */
+let quitReason: string | undefined;
+const quitFor = (reason: string): void => {
+  quitReason ??= reason;
+  app.quit();
+};
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    quitFor('all-windows-closed');
+  }
+});
+
+/** Where bootstrap is, for the report and the dialog when it throws (B18). */
+let bootstrapStep: BootstrapStep = 'startup';
+
+/**
+ * Start this app again with `switches` (`relaunchSelf` in `update-platform.ts`): the AppImage relauncher on an
+ * AppImage, `app.relaunch` otherwise, and never carrying this launch's `--safe-mode` (D0).
+ *
+ * @param switches - Switches the next launch carries, such as `--safe-mode`.
+ */
+const relaunchWith = async (switches: readonly string[]): Promise<void> => {
+  const { relaunchSelf } = await import('#main/update-platform.js');
+  await relaunchSelf(switches);
+};
+
+const bootstrapElectronApp = async (): Promise<void> => {
+  /* Finder hands a packaged app launchd's environment, which finds no vendor
+   * CLI and carries none of the user's `CODEX_HOME`, proxy or CA settings; fix
+   * it once here so discovery, the model probe and every utility fork inherit
+   * the user's own login shell (G-ACP-PKG, decision Q13). The e2e specs that
+   * pin the launcher environment opt out inside the helper.
+   *
+   * Started before `whenReady`, awaited after (D17): spawning `$SHELL -ilc` cost
+   * 0.96-3.17 s on a packaged launch and nothing in Electron's own init needs
+   * its answer, so the two run side by side instead of end to end. */
+  const loginShellApplied = app.isPackaged ? loginShellEnvironment() : undefined;
+  await app.whenReady();
+  if (playwrightReady) {
+    await playwrightReady.promise;
+  }
+  app.dock?.setIcon(applicationIcon);
+  const loginShell = await loginShellApplied;
+  const environment = desktopEnvironment(process.env, { locked: environmentLocked, channel: desktopChannel });
+
+  const log = diagnostics;
+  const logDirectory = dirname(log.filePath);
+  /* The `git` this app records revisions with, when this build ships one (OQ3, C68). */
+  const gitEnvironment = bundledGitEnvironment(
+    app.isPackaged ? process.resourcesPath : join(import.meta.dirname, '../../resources'),
+  );
+  /* The store guard the Linux Terminal writes the project's git store through, when this build ships one (LP5). */
+  const storeGuardEnvironment = bundledStoreGuardEnvironment(
+    app.isPackaged ? process.resourcesPath : join(import.meta.dirname, '../../resources'),
+  );
+  /* The Windows shell sandbox helper this build ships, and its off-by-default switch (Q15, D15). */
+  const windowsSandboxEnvironment = windowsShellSandboxEnvironment(
+    app.isPackaged ? process.resourcesPath : join(import.meta.dirname, '../../resources'),
+    environment,
+  );
+  const esbuildEnvironment = packagedEsbuildEnvironment(app.isPackaged, process.resourcesPath);
+  /* A step the window does not need is logged, reported and skipped when it fails; it never ends the launch (B18). */
+  const skipOptionalStep = (step: OptionalBootstrapStep, error: unknown): void => {
+    log.log('warn', 'main.optional-step-failed', { step, message: String(error) });
+    reportDesktopSignal(optionalStepFailedSignal(step, error));
+  };
+  const optionalStep = <Result>(step: OptionalBootstrapStep, run: () => Result, fallback: Result): Result => {
+    try {
+      return run();
+    } catch (error) {
+      skipOptionalStep(step, error);
+      return fallback;
+    }
+  };
+  log.log('info', 'main.ready', {
+    electron: process.versions.electron,
+    packaged: app.isPackaged,
+    isDevelopment,
+    version: app.getVersion(),
+    channel: desktopChannel,
+    pid: process.pid,
+  });
+  if (loginShell !== undefined) {
+    /* A fallback means the shell timed out or failed: only well-known CLI
+     * directories were added, and nothing from its rc files applied. */
+    log.log(loginShell.fallback ? 'warn' : 'info', 'main.login-shell-path', loginShell);
+  }
+
+  /* On macOS, Squirrel.Mac cannot replace a copy run from Downloads (translocated) or from its disk image, so a
+   * release build offers once to move itself to Applications. Packages that honour test overrides, and the
+   * update and route probes, never ask. */
+  const appLocation = process.platform === 'darwin' && app.isPackaged ? assessAppLocation(process.execPath) : undefined;
+  const moveHost: MoveToApplicationsHost = {
+    ask: (options) => dialog.showMessageBoxSync(options),
+    move: (options) => app.moveToApplicationsFolder(options),
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+  };
+  if (
+    environmentLocked &&
+    otaProbe === undefined &&
+    routeQualification === undefined &&
+    offerMoveToApplications(appLocation, app.getPath('userData'), moveHost)
+  ) {
+    /* Electron relaunches Tau from Applications and quits this copy. */
+    return;
+  }
+
+  /* L2's contract: the home root must exist before the renderer's first mount,
+   * because `NodeFsProvider` realpath-checks its base. */
+  const homeRoot = join(app.getPath('userData'), 'home');
+  bootstrapStep = 'home-directory';
+  mkdirSync(homeRoot, { recursive: true });
+  const authorityDirectory = join(app.getPath('userData'), 'filesystem-authority');
+  bootstrapStep = 'authority-directory';
+  mkdirSync(authorityDirectory, { recursive: true });
+  bootstrapStep = 'services';
+  /* The per-user machine store every Tau host on this computer shares
+   * (`tau serve` opens it too), never under an authored root. The app's old
+   * `userData/machines` is imported from once, and only when it is another
+   * directory: on a case-insensitive volume `…/Tau` and `…/tau` are one. */
+  const tauConfigDirectory =
+    desktopChannel === 'staging' ? join(app.getPath('userData'), 'config') : defaultConfigDirectory();
+  /* Safe mode skips the optional subsystems: machines, the browser host, Quick Look and agent discovery (D0). */
+  const machinesEnabled = !safeMode && isMachinesFeatureEnabled(environment['TAU_MACHINES_ENABLED']);
+  const machinesDirectory = join(tauConfigDirectory, 'machines');
+  if (machinesEnabled) {
+    optionalStep(
+      'machines-directory',
+      () => {
+        mkdirSync(machinesDirectory, { recursive: true, mode: 0o700 });
+      },
+      undefined,
+    );
+  }
+  const legacyMachinesDirectory = join(app.getPath('userData'), 'machines');
+  const noLegacyMachines: Readonly<Record<string, string>> = {};
+  const legacyMachinesEnvironment = optionalStep(
+    'legacy-machines',
+    (): Readonly<Record<string, string>> =>
+      machinesEnabled &&
+      existsSync(legacyMachinesDirectory) &&
+      realpathSync.native(legacyMachinesDirectory) !== realpathSync.native(machinesDirectory)
+        ? // eslint-disable-next-line @typescript-eslint/naming-convention -- environment name
+          { TAU_DESKTOP_LEGACY_MACHINES_DIR: legacyMachinesDirectory }
+        : noLegacyMachines,
+    noLegacyMachines,
+  );
+
+  /* Grants outlive the session: the renderer keeps a picked folder's workspace
+   * record in IndexedDB and offers it again on the next launch, so a grant main
+   * forgot would answer `EACCES` for a folder the user believes is connected. */
+  const roots = createProjectRootRegistry({
+    storePath: join(app.getPath('userData'), 'granted-roots.json'),
+    /* A damaged grant file is kept aside, not overwritten by the admission below (B10). */
+    onQuarantine: (quarantinePath) => {
+      log.log('warn', 'main.store-quarantined', { store: 'granted-roots', quarantinePath });
+      reportDesktopSignal(storeQuarantinedSignal('granted-roots'));
+    },
+  });
+  roots.admit(homeRoot);
+  const windowStatePath = join(app.getPath('userData'), 'window-state.json');
+  /* The first run is decided once at startup, before any window writes the file; only the first window carries it. */
+  let isFirstLaunchWindow = isFirstRun({
+    windowStatePath,
+    hasLaunchLink: queuedDeepLink !== undefined,
+    hasLaunchFiles: openFiles.hasPending(),
+  });
+  const quickLookTemporaryRoot = join(app.getPath('temp'), 'tau-quick-look');
+  if (!safeMode) {
+    optionalStep(
+      'quick-look-cleanup',
+      () => {
+        removeStaleQuickLookSessions(quickLookTemporaryRoot);
+      },
+      undefined,
+    );
+  }
+  const quickLookEnabled = !safeMode && isQuickLookEnabled();
+  const quickLookControllers = new Map<number, QuickLookController>();
+  let quitting = false;
+
+  const auth = createAuthService({
+    callbackScheme: desktopScheme === 'tau-staging:' ? 'tau-staging' : 'tau',
+    apiUrl: environment['TAU_API_URL']!.replace(/\/$/u, ''),
+    frontendUrl: environment['TAU_FRONTEND_URL']!.replace(/\/$/u, ''),
+    userDataPath: app.getPath('userData'),
+    /* Packaged E2E uses memory-only custody because an ad-hoc signature cannot
+     * unlock a prior Keychain item unattended. The switch can only disable
+     * persistence; it cannot seed or expose a credential. */
+    safeStorage:
+      environment['TAU_E2E_DISABLE_CREDENTIAL_PERSISTENCE'] === '1'
+        ? {
+            isEncryptionAvailable: () => false,
+            encryptString: (value) => safeStorage.encryptString(value),
+            decryptString: (value) => safeStorage.decryptString(value),
+          }
+        : safeStorage,
+    openExternal: async (url) => shell.openExternal(url),
+    packaged: app.isPackaged,
+    seededToken: environment['TAU_DESKTOP_TOKEN'],
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+  });
+
+  installElectronRuntimeHeaders();
+
+  /* Deny by default; see `grantedPermissions` for the explicit grants and why. */
+  const origins = rendererOrigins({ appOrigin, devServerUrl: environment.ELECTRON_RENDERER_URL });
+  if (!safeMode) {
+    installBrowserHost({ origins, userDataPath: app.getPath('userData') });
+  }
+  // The macOS consent prompt appears once; later answers come from System Settings without a prompt.
+  session.defaultSession.setPermissionRequestHandler(async (...[contents, permission, callback, details]) => {
+    const microphone = isMicrophonePermissionGranted({
+      permission,
+      frame: contents.mainFrame,
+      requester: details.requestingUrl,
+      mainFrame: details.isMainFrame,
+      mediaTypes: 'mediaTypes' in details ? (details.mediaTypes ?? []) : [],
+      origins,
+    });
+    const granted =
+      isPermissionGranted(permission) ||
+      (microphone && (process.platform !== 'darwin' || (await systemPreferences.askForMediaAccess('microphone'))));
+    log.log(granted ? 'info' : 'warn', granted ? 'permission.granted' : 'permission.denied', { permission });
+    callback(granted);
+  });
+  session.defaultSession.setPermissionCheckHandler(
+    (...[contents, permission, requestingOrigin, details]) =>
+      isPermissionGranted(permission) ||
+      isMicrophonePermissionGranted({
+        permission,
+        frame: contents?.mainFrame,
+        requester: details.requestingUrl ?? details.securityOrigin ?? requestingOrigin,
+        mainFrame: details.isMainFrame,
+        mediaTypes: details.mediaType === undefined ? [] : [details.mediaType],
+        origins,
+      }),
+  );
+
+  /* Injection covers the API origin and, separately, the WebSocket origin —
+   * `ws://localhost:4001` is not `http://localhost:4000`, and the chat RPC and
+   * agent sockets are exactly the traffic a browser cannot decorate itself. */
+  const authenticatedOrigins = [
+    originOf(environment['TAU_API_URL']),
+    originOf(environment['TAU_WEBSOCKET_URL']),
+  ].filter((origin): origin is string => origin !== undefined);
+  /* Settles once the stored credential has been read, or could not be (B32). The window does not wait for it; the
+   * requests and handlers that need its answer do. */
+  const credentialRead = Promise.withResolvers<void>();
+  installTauHeaderInjection(session.defaultSession.webRequest, {
+    allowedOrigins: authenticatedOrigins,
+    token: () => auth.token(),
+    clientHeader: `tau-desktop/${app.getVersion()}`,
+    ready: credentialRead.promise,
+  });
+
+  if (!isDevelopment) {
+    const storageOrigin = originOf(environment['TAU_S3_ENDPOINT']);
+    /* The files service's signed LFS downloads; the bucket origin stays for uploads and rollback. */
+    const filesOrigin = originOf(environment['TAU_FILES_ORIGIN']);
+    /* Product analytics post straight to PostHog and read its remote config from the region's assets host; never an
+     * authenticated origin, so no bearer reaches either. */
+    const analyticsOrigins = environment['POSTHOG_CLIENT_KEY']
+      ? postHogConnectOrigins(environment['POSTHOG_API_HOST'])
+      : [];
+    const connectOrigins = [
+      ...[storageOrigin, filesOrigin].filter((origin): origin is string => origin !== undefined),
+      ...analyticsOrigins,
+    ];
+    bootstrapStep = 'app-protocol';
+    registerAppProtocol({
+      clientRoot,
+      protocol,
+      net,
+      /* OQ-P11: development and staging only. Unpackaged is exactly that here — a packaged app
+       * has no developer to take the profile. */
+      jsProfiling: !app.isPackaged,
+      contentSecurityPolicy: contentSecurityPolicy([...authenticatedOrigins, ...connectOrigins]),
+    });
+    log.log('info', 'main.app-protocol-registered', { clientRoot });
+    bootstrapStep = 'services';
+  }
+
+  let computeWorker: Worker | undefined;
+  /* One connection per store workspace while some utility runs durable compute
+   * on it, counted by holder: a store nobody runs keeps no connection in main.
+   * A project's worktrees and copies share its workspace (`computeStoreWorkspace`). */
+  const computeConnections = new Map<
+    string,
+    { readonly connection: ReturnType<typeof connectSqliteComputeStoreWorker>; holders: number }
+  >();
+  let registeredProjectRootFor = (_executionRoot: string): string | undefined => undefined;
+  const invalidateComputeWorker = (worker: Worker): void => {
+    if (computeWorker !== worker) {
+      return;
+    }
+    for (const stale of computeConnections.values()) {
+      stale.connection.dispose();
+    }
+    computeConnections.clear();
+    computeWorker = undefined;
+  };
+  const holdComputeConnection = (projectRoot: string) => {
+    const workspace = computeStoreWorkspace(projectRoot);
+    let entry = computeConnections.get(workspace);
+    if (!entry) {
+      if (!computeWorker) {
+        const worker = new Worker(computeStoreWorkerEntry, {
+          workerData: { directory: join(app.getPath('userData'), 'compute') },
+        });
+        worker.once('exit', () => {
+          invalidateComputeWorker(worker);
+        });
+        worker.on('error', (error) => {
+          invalidateComputeWorker(worker);
+          log.log('error', 'compute.worker', error);
+        });
+        computeWorker = worker;
+      }
+      entry = {
+        connection: connectSqliteComputeStoreWorker({ worker: computeWorker, workspace }),
+        holders: 0,
+      };
+      computeConnections.set(workspace, entry);
+    }
+    const held = entry;
+    held.holders += 1;
+    let released = false;
+    return {
+      connection: held.connection,
+      release: (): void => {
+        if (released) {
+          return;
+        }
+        released = true;
+        held.holders -= 1;
+        /* A worker restart already disposed and replaced a stale entry. */
+        if (held.holders === 0 && computeConnections.get(workspace) === held) {
+          computeConnections.delete(workspace);
+          held.connection.dispose();
+        }
+      },
+    };
+  };
+  /* A control call holds the root's connection for its own duration only. */
+  const withComputeConnection = async <Result>(
+    projectRoot: string,
+    use: (connection: ReturnType<typeof connectSqliteComputeStoreWorker>) => Promise<Result>,
+  ): Promise<Result> => {
+    const held = holdComputeConnection(projectRoot);
+    try {
+      return await use(held.connection);
+    } finally {
+      held.release();
+    }
+  };
+  /* One `getAppMetrics()` answers every utility sampled in the same moment: the
+   * kernel broker samples each adopted utility on one tick, and the geometry
+   * slot every second. */
+  let appMetrics: { readonly at: number; readonly residentBytes: ReadonlyMap<number, number> } | undefined;
+  const residentBytesOf = (utility: { readonly pid?: number | undefined }): number | undefined => {
+    if (utility.pid === undefined) {
+      return undefined;
+    }
+    const now = Date.now();
+    if (appMetrics === undefined || now - appMetrics.at > residentMetricsReuseMilliseconds) {
+      appMetrics = {
+        at: now,
+        // Electron ProcessMetric workingSetSize is KiB; the broker budgets are bytes.
+        residentBytes: new Map(app.getAppMetrics().map((entry) => [entry.pid, entry.memory.workingSetSize * 1024])),
+      };
+    }
+    return appMetrics.residentBytes.get(utility.pid);
+  };
+  /*
+   * The Tau-owned bubblewrap, when this installation has one. Stock Ubuntu 24.04 and Debian 13 keep
+   * `kernel.apparmor_restrict_unprivileged_userns=1`, which strips capabilities from an unprofiled binary's user
+   * namespace, so the distro `/usr/bin/bwrap` can create the namespace and then fail to bring loopback up
+   * (`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`) and no shell starts. Stock Ubuntu 26.04 also
+   * confines `/usr/bin/bwrap` itself with `bwrap-userns-restrict`, so the sandbox runtime's `apply-seccomp` cannot open
+   * its nested namespace and every native kernel worker exits 1 (`write /proc/self/setgroups (nested userns is
+   * capability-restricted …)`): build123d never prepares and no model renders (qualification 41865985263,
+   * ubuntu2604-apt-x11 and ubuntu2604-appimage-x11). The selector package installs a copy at this stable path and
+   * attaches the one AppArmor profile that grants `userns` to it, so both the shell sandbox and every native worker run
+   * through it. An unpackaged build has no such file, so both variables stay unset and the runtimes keep their default.
+   */
+  const ownedBwrap = ((): string | undefined => {
+    if (process.platform !== 'linux') {
+      return undefined;
+    }
+    const { bwrap } = linuxInstallation(desktopChannel, process.env['APPIMAGE'] !== undefined);
+    return existsSync(bwrap) ? bwrap : undefined;
+  })();
+  const nativeSandboxBwrapEnvironment: Readonly<Record<string, string>> =
+    ownedBwrap === undefined ? {} : { [nativeSandboxBwrapVariable]: ownedBwrap };
+  /* Main seals prepared closures (their bytecode compile) in the native sandbox itself. */
+  Object.assign(process.env, nativeSandboxBwrapEnvironment);
+  const desktopShellBwrapEnvironment = (): Readonly<Record<string, string>> =>
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment name
+    ownedBwrap === undefined ? {} : { TAU_DESKTOP_SHELL_BWRAP: ownedBwrap };
+  const baseForkResolver = createKernelForkResolver({
+    registry: roots,
+    defaultRoot: homeRoot,
+    isTrustedRoot: (executionRoot) => {
+      const projectRoot = registeredProjectRootFor(executionRoot);
+      return projectRoot !== undefined && projectRoot !== executionRoot && roots.isTrusted(projectRoot);
+    },
+  });
+  const runtimeMain = registerElectronRuntimeMain({
+    utilityEntry: kernelUtilityEntry,
+    /* The kernel utility appends its engine-identity record (N5/N6) to the same
+     * rotating log main writes, which is the e2e's only observable for which
+     * engine actually loaded — the version never crosses the runtime wire. */
+    env: utilityEnvironment(environment, {
+      ...esbuildEnvironment,
+      ...compileCacheEnvironment(app.getPath('userData')),
+      TAU_DESKTOP_LOG_DIR: logDirectory, // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+      /* The kernel utility launches every native worker (python, dotnet) in the native sandbox. */
+      ...nativeSandboxBwrapEnvironment,
+    }),
+    forkEnvAllowlist: [...kernelForkEnvAllowlist],
+    /* A fork-loop guard, not a concurrency policy: a live project costs one to
+     * three utilities and the sessions registry admits as many as memory holds,
+     * so this sits an order of magnitude above realistic use. */
+    maxUtilities: 64,
+    /* D-DT-02: WebAssembly memory never shrinks, so a kernel utility stays at
+     * its peak until it dies. Past the ceiling it is killed and its project
+     * reports the exit, rather than the machine swapping. Half of physical
+     * memory, at most 8 GiB, sits well above any single healthy model. */
+    residentLimit: {
+      maxBytes: Math.min(maxKernelResidentBytes, Math.floor(totalmem() / 2)),
+      intervalMilliseconds: kernelResidentPollMilliseconds,
+      sample: residentBytesOf,
+    },
+    spareIdleMilliseconds: kernelSpareIdleMilliseconds,
+    resolveFork: (context) => {
+      const requestedRoot = context['projectRoot'];
+      const registeredProjectRoot =
+        requestedRoot === undefined ? undefined : registeredProjectRootFor(resolve(requestedRoot));
+      const resolved = baseForkResolver(
+        registeredProjectRoot === undefined ? context : { ...context, projectRoot: registeredProjectRoot },
+      );
+      const mode = context['computeMode'] ?? 'memory';
+      if (mode !== 'off' && mode !== 'memory' && mode !== 'durable') {
+        throw new Error('Desktop shell refused unknown compute mode.');
+      }
+      if (context['purpose'] === 'ephemeral' && mode === 'durable') {
+        throw new Error('Desktop shell refused durable compute for an ephemeral runtime.');
+      }
+      const executionRoot =
+        registeredProjectRoot === undefined
+          ? (resolved.env?.['TAU_PROJECT_ROOT'] ?? homeRoot)
+          : resolve(requestedRoot ?? homeRoot);
+      const computeProjectRoot = roots.canonical(registeredProjectRoot ?? executionRoot);
+      if (!computeProjectRoot) {
+        throw new Error('Desktop shell refused unadmitted compute project root.');
+      }
+      /* The execution root reaches the utility rooted on `fileSystemPort`, and
+       * never through the process environment: an environment that varied per
+       * project would give every open its own pool key, so no warm spare could
+       * ever be adopted (W-L03-4). */
+      const forkEnvironment = { ...resolved.env };
+      delete forkEnvironment['TAU_PROJECT_ROOT'];
+      const fileSystem =
+        context['purpose'] === 'ephemeral'
+          ? {}
+          : { fileSystemPort: services.connect('runtimeFileSystem', { workspaceRoot: executionRoot }) };
+      /* Held for exactly the utility's life: the broker calls `release` when it goes. */
+      let held: ReturnType<typeof holdComputeConnection> | undefined;
+      let compute: ComputeBinding;
+      if (mode === 'durable') {
+        held = holdComputeConnection(computeProjectRoot);
+        compute = { mode, store: held.connection.store };
+      } else {
+        compute = { mode };
+      }
+      return {
+        ...resolved,
+        env: forkEnvironment,
+        compute,
+        ...(held === undefined ? {} : { release: held.release }),
+        ...fileSystem,
+      };
+    },
+    serviceName: 'tau-kernel-host',
+    onError(error) {
+      log.log('error', 'kernel.broker', error);
+    },
+    ...kernelUtilityDiagnostics(log),
+  });
+  /* One kernel utility is forked now rather than when the first project asks
+   * for it: the fork and its module graph are ~176 ms the person would
+   * otherwise wait for with a project already on screen (W-L03-4). */
+  runtimeMain.prewarm();
+  /* W6: tell the kernel utilities which sealed closure each prepared native kernel runs from; a utility composes its
+   * runtime once that frame arrives, and reads the store for every other kernel, which main prepares on first use
+   * (`nativeKernels` below). The staging channel keeps its own store beside its own config. Collected at startup (D21). */
+  const nativeStorePath =
+    desktopChannel === 'staging' ? join(tauConfigDirectory, 'dependencies') : defaultDependencyStore();
+  const nativeStoreAbort = new AbortController();
+  const nativeStore = startNativeStore({
+    store: nativeStorePath,
+    hostPath: app.getPath('exe'),
+    environment: process.env,
+    post: (frame) => {
+      runtimeMain.post(frame);
+    },
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+    signal: nativeStoreAbort.signal,
+  });
+  /* First-use download (W6 phase 2): the app ships no kernel closure, so a native kernel refuses with
+   * `KERNEL_NOT_PREPARED` until the viewer, or the agent's `prepare_kernel` in the services utility, asks main to
+   * prepare it here. Every window sees every download's progress. */
+  const nativeKernels = createDesktopKernelPreparer({
+    store: nativeStorePath,
+    hostPath: app.getPath('exe'),
+    environment: process.env,
+    deployments: preparableNativeDeployments({ packaged: app.isPackaged, resourcesPath: process.resourcesPath }),
+    onProgress: (progress) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed() && isTrustedSender(window.webContents.mainFrame, origins)) {
+          window.webContents.send(desktopNativeKernelChannels.progress, progress);
+        }
+      }
+    },
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+  });
+
+  const geometry = createGeometryBroker({
+    utilityEntry: geometryUtilityEntry,
+    env: utilityEnvironment(environment, {
+      ...esbuildEnvironment,
+      ...compileCacheEnvironment(app.getPath('userData')),
+      TAU_DESKTOP_LOG_DIR: logDirectory, // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+    }),
+    fork: (entry, args, forkOptions) => utilityProcess.fork(entry, args, forkOptions),
+    createChannel: () => new MessageChannelMain(),
+    connectRuntime: (context) => runtimeMain.connect({ purpose: 'main-process-client', context }),
+    sampleResidentBytes: residentBytesOf,
+    runtimeConfig: {
+      tauApiUrl: environment['TAU_API_URL']!,
+      tauWebSocketUrl: environment['TAU_WEBSOCKET_URL']!,
+    },
+    onSpawn: (utility) => {
+      forwardUtilityDiagnostics('geometry', utility, log);
+    },
+    log: (event, detail) => {
+      log.log('warn', event, detail);
+    },
+  });
+
+  const trustedComputeRoot = (event: IpcMainInvokeEvent, projectRoot: unknown): string => {
+    if (!trusted(event.senderFrame) || typeof projectRoot !== 'string' || !roots.isTrusted(projectRoot)) {
+      throw new Error('Desktop shell refused compute control.');
+    }
+    const canonicalRoot = roots.canonical(projectRoot)!;
+    return roots.canonical(services.computeProjectRoot(canonicalRoot) ?? canonicalRoot)!;
+  };
+  ipcMain.handle(computeControlChannels.inspect, async (event, projectRoot) =>
+    withComputeConnection(trustedComputeRoot(event, projectRoot), async (connection) => connection.control.inspect({})),
+  );
+  ipcMain.handle(computeControlChannels.clear, async (event, projectRoot) =>
+    withComputeConnection(trustedComputeRoot(event, projectRoot), async (connection) => connection.control.clear({})),
+  );
+  ipcMain.handle(computeControlChannels.collect, async (event, projectRoot, input: unknown) => {
+    const root = trustedComputeRoot(event, projectRoot);
+    const { budget, cursor } = (input ?? {}) as { budget?: unknown; cursor?: unknown };
+    if (!Number.isSafeInteger(budget) || (budget as number) < 1 || (budget as number) > 1000) {
+      throw new Error('Desktop shell refused invalid compute collection budget.');
+    }
+    if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length > 1024)) {
+      throw new Error('Desktop shell refused invalid compute collection cursor.');
+    }
+    return withComputeConnection(root, async (connection) =>
+      connection.control.collect({ budget: budget as number, ...(cursor ? { cursor } : {}) }),
+    );
+  });
+
+  const services = createServicesBroker({
+    utilityEntry: servicesUtilityEntry,
+    env: utilityEnvironment(environment, {
+      ...esbuildEnvironment,
+      ...gitEnvironment,
+      ...compileCacheEnvironment(app.getPath('userData')),
+      TAU_CONFIG_DIR: tauConfigDirectory, // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+      /* T19: the utility's runtime reporter sends to this API, under this release, only under the renderer's consent. */
+      TAU_API_URL: environment['TAU_API_URL']!, // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+      TAU_DESKTOP_RELEASE: app.getVersion(), // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+      /* LW8: the commit packaging recorded beside the bundles, read above. */
+      TAU_DESKTOP_HOST_BUILD: desktopHostBuild, // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+      TAU_DESKTOP_AUTHORITY_DIR: authorityDirectory, // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment name
+      ...(machinesEnabled ? { TAU_DESKTOP_MACHINES_DIR: machinesDirectory } : {}),
+      ...legacyMachinesEnvironment,
+      TAU_DESKTOP_LOG_DIR: logDirectory, // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment name
+      TAU_DESKTOP_PERMISSIONS_DIR: join(app.getPath('userData'), 'permissions'),
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment name
+      TAU_DESKTOP_EVIDENCE_DIR: join(app.getPath('userData'), 'agent-evidence'),
+      /*
+       * The shell's never-grantable app data, and on Linux the Tau-owned bubblewrap it runs (desktop shell W4).
+       * `services-host.ts` is the only reader of either, so they belong on this utility and nowhere else.
+       */
+      TAU_DESKTOP_USER_DATA_DIR: app.getPath('userData'), // eslint-disable-line @typescript-eslint/naming-convention -- environment name
+      ...desktopShellBwrapEnvironment(),
+      ...storeGuardEnvironment,
+      ...windowsSandboxEnvironment,
+    }),
+    fork: (entry, args, forkOptions) => utilityProcess.fork(entry, args, forkOptions),
+    createChannel: () => new MessageChannelMain(),
+    connectRuntime: (context) => runtimeMain.connect({ purpose: 'main-process-client', context }),
+    connectGeometry: (input) => geometry.connectSuite(input),
+    prepareNativeKernel: async (kernel, onProgress) => nativeKernels.prepare(kernel, onProgress),
+    revokeGeometry: () => {
+      geometry.revokeUnauthorized();
+    },
+    onSpawn: (utility) => {
+      forwardUtilityDiagnostics('services', utility, log);
+    },
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+    /* A permission answer (W9), or a revision-engine failure for error reporting, which redacts it. */
+    onUtilityFrame: (frame) => permissionBridge.accept(frame) || reportRevisionEngineFailure(frame),
+  });
+  /* Q-streamed-host: a streamed program needs this computer awake for its whole run. */
+  const stopKeepingAwake = machinesEnabled
+    ? keepAwakeWhileStreaming({
+        streamingMachines: async () => services.peekStreamingMachines(keepAwakeIntervalMilliseconds / 2),
+        blocker: {
+          hold: () => {
+            const id = powerSaveBlocker.start('prevent-app-suspension');
+            return () => {
+              powerSaveBlocker.stop(id);
+            };
+          },
+        },
+        intervalMilliseconds: keepAwakeIntervalMilliseconds,
+        log: (level, event, detail) => {
+          log.log(level, event, detail);
+        },
+      })
+    : () => undefined;
+  const agentHostSessionInput = (
+    event: IpcMainInvokeEvent,
+    payload: unknown,
+  ): Readonly<{ workspaceRoot: string; projectId: string; attachmentId: string }> => {
+    const { workspaceRoot, projectId, attachmentId } = (payload ?? {}) as Record<string, unknown>;
+    if (
+      !trusted(event.senderFrame) ||
+      typeof workspaceRoot !== 'string' ||
+      !roots.isTrusted(workspaceRoot) ||
+      typeof projectId !== 'string' ||
+      projectId === '' ||
+      typeof attachmentId !== 'string' ||
+      attachmentId === '' ||
+      attachmentId.length > 256
+    ) {
+      throw new Error('Desktop shell refused invalid agent-host session ownership.');
+    }
+    return { workspaceRoot, projectId, attachmentId };
+  };
+  /*
+   * D-DT-04: the attachments each document holds, by the web contents that
+   * holds them. A renderer releases its own on the way out, but a deep link,
+   * Open-With, a crash reload or a recovery replaces the document without
+   * that, and the broker keeps a project's host (and its kernel utility) while
+   * any attachment remains. So main releases whatever a document still holds
+   * once it navigates away, its process is gone, or its contents are destroyed.
+   */
+  type AgentHostAttachment = ReturnType<typeof agentHostSessionInput>;
+  const documentAttachments = new Map<number, Map<string, AgentHostAttachment>>();
+  const attachmentKey = (input: AgentHostAttachment): string =>
+    JSON.stringify([input.workspaceRoot, input.attachmentId]);
+  const releaseAgentHostAttachment = async (input: AgentHostAttachment): Promise<void> => {
+    try {
+      await services.releaseAgentHost(input, quitQuiesceMilliseconds);
+    } catch (error) {
+      log.log('warn', 'main.agent-host-release', error);
+    }
+  };
+  const holdDocumentAttachment = (sender: IpcMainInvokeEvent['sender'], input: AgentHostAttachment): void => {
+    let held = documentAttachments.get(sender.id);
+    if (held === undefined) {
+      const attachments = new Map<string, AgentHostAttachment>();
+      held = attachments;
+      documentAttachments.set(sender.id, attachments);
+      const documentGone = (): void => {
+        sender.removeListener('did-navigate', documentGone);
+        sender.removeListener('render-process-gone', documentGone);
+        sender.removeListener('destroyed', documentGone);
+        if (documentAttachments.get(sender.id) === attachments) {
+          documentAttachments.delete(sender.id);
+        }
+        for (const attachment of attachments.values()) {
+          void releaseAgentHostAttachment(attachment);
+        }
+        attachments.clear();
+      };
+      sender.on('did-navigate', documentGone);
+      sender.on('render-process-gone', documentGone);
+      sender.on('destroyed', documentGone);
+    }
+    held.set(attachmentKey(input), input);
+  };
+  const dropDocumentAttachment = (sender: IpcMainInvokeEvent['sender'], input: AgentHostAttachment): void => {
+    documentAttachments.get(sender.id)?.delete(attachmentKey(input));
+  };
+  ipcMain.handle(agentHostSessionChannels.retain, async (event, payload) => {
+    const input = agentHostSessionInput(event, payload);
+    services.retainAgentHost(input);
+    holdDocumentAttachment(event.sender, input);
+  });
+  ipcMain.handle(agentHostSessionChannels.release, async (event, payload) => {
+    const input = agentHostSessionInput(event, payload);
+    dropDocumentAttachment(event.sender, input);
+    await services.releaseAgentHost(input, quitQuiesceMilliseconds);
+  });
+  /* LW8: the account rated a run in this app. Main checks its shape and relays it to the services utility, where the
+   * project host that ran the turn reports it under the feedback grant once the run has ended. */
+  ipcMain.handle(agentHostRatingChannel, async (event, payload) => {
+    const { projectId, chatId, runId, value, at } = (payload ?? {}) as Record<string, unknown>;
+    if (
+      !trusted(event.senderFrame) ||
+      typeof projectId !== 'string' ||
+      projectId === '' ||
+      typeof chatId !== 'string' ||
+      chatId === '' ||
+      typeof runId !== 'string' ||
+      runId === '' ||
+      (value !== 'positive' && value !== 'negative') ||
+      typeof at !== 'number' ||
+      !Number.isFinite(at)
+    ) {
+      throw new Error('Desktop shell refused an invalid agent-host rating.');
+    }
+    try {
+      services.send({ type: 'agent-host-rated', projectId, chatId, runId, value, at });
+    } catch (error) {
+      /* A quiescing utility takes no request: a lost rating is only a missing feedback fact. */
+      log.log('warn', 'main.agent-host-rating', error);
+    }
+  });
+  /* The secret half of the binding ceremony (D10). The renderer never keeps
+   * the access code: it rides this one invoke to the utility, which saves it
+   * only once the printer accepts it. Without one the utility reuses the
+   * printer's saved code while its certificate still matches. A real X1C
+   * answers its MQTT hello in seconds, but a wrong code or a sleeping printer
+   * is only known at the provider's own timeout, hence the bound. */
+  ipcMain.handle(machinesChannels.completeBinding, async (event, payload) => {
+    if (!machinesEnabled) {
+      return {
+        status: 'failed',
+        code: 'MACHINES_DISABLED',
+        message: machinesDisabledMessage,
+      } satisfies DesktopMachineBindingFailure;
+    }
+    const { ceremonyId, address, accessCode } = (payload ?? {}) as Record<string, unknown>;
+    const optionalString = (value: unknown): value is string | undefined =>
+      value === undefined || (typeof value === 'string' && value.length > 0 && value.length <= 256);
+    if (
+      !trusted(event.senderFrame) ||
+      typeof ceremonyId !== 'string' ||
+      ceremonyId === '' ||
+      ceremonyId.length > 256 ||
+      !optionalString(address) ||
+      !optionalString(accessCode)
+    ) {
+      throw new Error('Desktop shell refused invalid machine binding completion.');
+    }
+    try {
+      return await services.completeMachineBinding(
+        {
+          ceremonyId,
+          ...(address === undefined ? {} : { address }),
+          ...(accessCode === undefined ? {} : { accessCode }),
+        },
+        machineBindingMilliseconds,
+      );
+    } catch (error) {
+      /* Resolved, not thrown: an error crossing the context bridge keeps only its message, and the host's typed code
+       * is what the renderer reads. */
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+          ? error.code
+          : undefined;
+      return {
+        status: 'failed',
+        ...(code === undefined ? {} : { code }),
+        message: error instanceof Error ? error.message : String(error),
+      } satisfies DesktopMachineBindingFailure;
+    }
+  });
+  registeredProjectRootFor = (executionRoot) => services.computeProjectRoot(executionRoot);
+  const publishRoots = (): void => {
+    services.post({ type: 'allowRoots', roots: roots.roots() });
+  };
+  /* The import grants the services host resolves (W7.4): the latest frame is replayed to a respawned utility. */
+  publishImportGrants = (grants) => {
+    services.post({ type: 'importGrants', grants });
+  };
+  publishImportGrants(importGrants.list());
+  /*
+   * The session's user id rides with the bearer as the launcher's `principal` (GI-Q6), and with its name as the account
+   * the Terminal's git commits as.
+   */
+  const publishCredential = (): void => {
+    services.post({
+      type: 'authToken',
+      token: auth.token(),
+      principal: auth.principal(),
+      principalName: auth.principalName(),
+    });
+  };
+  /* Kernel utilities run project code, so they get a Zoo-scoped token rather
+   * than the session: it opens Tau's Zoo proxy as this user and nothing else. */
+  const zooProxyToken = createZooProxyTokenSource({
+    apiUrl: environment['TAU_API_URL']!.replace(/\/$/u, ''),
+    proxyUrl: `${environment['TAU_WEBSOCKET_URL']!}/v1/kernels/zoo`,
+    sessionToken: () => auth.token(),
+    publish: (frame) => {
+      runtimeMain.post(frame);
+    },
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+  });
+  const publishZooProxyToken = (): void => {
+    // async-iife: bootstrap -- the source logs its own failures and keeps the last good token.
+    void (async (): Promise<void> => {
+      try {
+        await zooProxyToken.update();
+      } catch (error) {
+        log.log('warn', 'zoo-token.update-failed', { message: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+  };
+  /* `get-session` names the user; a restored or fresh sign-in asks once rather than waiting for the hourly probe. */
+  const identify = (): void => {
+    if (auth.token() === undefined || auth.principal() !== undefined) {
+      return;
+    }
+    // async-iife: bootstrap -- a failed probe leaves the principal unknown until the next refresh, as before.
+    void (async (): Promise<void> => {
+      try {
+        await auth.refresh();
+      } catch (error) {
+        log.log('warn', 'auth.identify-failed', error);
+      }
+    })();
+  };
+
+  publishRoots();
+  /* B32: reading the credential can wait on the system keychain and its unlock prompt, so bootstrap no longer awaits
+   * it. Sign-in, sign-out, a sign-in callback and every authenticated request wait for `credentialRead` instead. */
+  // async-iife: bootstrap -- the restore reports its own failure and starts signed out.
+  void (async (): Promise<void> => {
+    try {
+      await auth.restore();
+    } catch (error) {
+      log.log('warn', 'auth.restore-failed', error);
+    }
+    publishCredential();
+    publishZooProxyToken();
+    identify();
+    auth.onChange(() => {
+      publishCredential();
+      publishZooProxyToken();
+      identify();
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send('tau:auth-changed');
+      }
+    });
+    credentialRead.resolve();
+    /* A window that loaded while the credential was unread may have drawn itself signed out. */
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send('tau:auth-changed');
+    }
+  })();
+
+  /* E7's daemon-capability half: launcher 2 runs in the services utility with a
+   * bearer transport (E11's option exists for exactly this host — nothing else
+   * constructs it). Configured here rather than left to a renderer request
+   * because main owns the gateway URL and the credential; the *workspace root*
+   * is not here, because it is per-connection and arrives with the port. */
+  /* W4-ACP: which external agents *this machine* can actually start — the
+   * pinned adapters that resolve beside this app, minus any whose CLI does not
+   * answer `--version`. Main resolves them because both halves need the same
+   * answer: the utility builds launcher 2's port from the adapters, and the
+   * renderer draws one selector row per id from `externalAgentsChannel`. A
+   * machine with no CLI advertises nothing; it is never a refusal.
+   *
+   * The library probe budgets apply (blueprint D8): 10 s for `--version`, and
+   * the model probe beside it on its own 15 s clock (V5 / EQ1 A), which can
+   * take over 5 s through a cold packaged app.asar adapter. A shorter CLI budget
+   * reported a slow `codex --version` as not installed (F2) and bought nothing,
+   * because the window does not wait on discovery.
+   *
+   * A refusal is not kept for the life of the process (blueprint D9): the next
+   * listing at least 30 s after it re-probes only the refused profiles and
+   * re-posts the adapters, so a CLI the user installs or repairs appears
+   * without a restart. Each refusal is logged with its message, which holds
+   * local paths: this log is the local file and console only. */
+  const agentHostBaseConfig = {
+    gatewayBaseUrl: desktopAgentGatewayBaseUrl(environment),
+    systemPrompt: desktopAgentSystemPrompt,
+    tauApiUrl: environment['TAU_API_URL']!,
+    tauWebSocketUrl: environment['TAU_WEBSOCKET_URL']!,
+  };
+  const externalAgents = createExternalAgentDiscovery({
+    resolveFrom: import.meta.url,
+    discover: discoverAcpAgents,
+    configure(agents) {
+      // Optional CLI discovery cannot leave the project's history and gateway unconfigured.
+      services.post({
+        type: 'agentHost',
+        config: agents === undefined ? agentHostBaseConfig : { ...agentHostBaseConfig, externalAgents: agents },
+      });
+    },
+    log,
+    now: Date.now,
+  });
+  /* Started here and not awaited (D17): the window used to be unable to exist
+   * until this settled, because the descriptors were frozen into its
+   * `additionalArguments`. They are served over `externalAgentsChannel`
+   * instead, so a hanging CLI or a slow model probe delays no pixel. */
+  if (safeMode) {
+    /* No discovery in safe mode: the agent host runs Tau's own agent only. */
+    services.post({ type: 'agentHost', config: agentHostBaseConfig });
+  } else {
+    // async-iife: bootstrap -- discovery is optional; the agent host is configured without it.
+    void (async (): Promise<void> => {
+      try {
+        await externalAgents.list();
+      } catch (error) {
+        skipOptionalStep('agent-discovery', error);
+      }
+    })();
+  }
+
+  /* Every IPC entry point is pinned to the app's own top-level document. The
+   * preload re-runs on whatever the window navigates to, so without this a
+   * foreign origin that got loaded in-window would inherit the whole bridge —
+   * a filesystem port over every granted root included. The navigation guards
+   * below make that hard; these checks make it not worth trying. */
+  /* Takes the frame rather than the event because Electron reports it as
+   * nullable and the workspace bans `null` in a type position. */
+  const trusted = (frame: unknown): boolean => {
+    const senderFrame = (frame ?? undefined) as SenderFrame | undefined;
+    if (isTrustedSender(senderFrame, origins)) {
+      return true;
+    }
+    log.log('error', 'ipc.untrusted-sender', { url: senderFrame?.url });
+    return false;
+  };
+
+  const updaterReady = Promise.withResolvers<DesktopUpdater>();
+  /* The updater's last snapshot, for the recovery window (D0, D8). */
+  let latestUpdate: ReturnType<DesktopUpdater['snapshot']> | undefined;
+  let publishRecoveryState = (): void => undefined;
+  /* What this launch's renderer has reported (D0). Check for Updates… before the shell mounts opens the recovery
+   * window instead of a renderer window, and the updater's health is `home-ready` in a normal launch (D8). */
+  let shellMountedThisLaunch = false;
+  let homeReadyThisLaunch = false;
+  /* A CI probe observes its renderer and starts the updater itself; it records no ledger and installs nothing alone. */
+  const probing = otaProbe !== undefined || routeQualification !== undefined;
+  /* Open the recovery window, and whether it is open, once bootstrap has made it. */
+  let openRecoveryFor = (_trigger: RecoveryTrigger): void => undefined;
+  let isRecoveryOpen = (): boolean => false;
+  /*
+   * Decision N1: a launch that never reached `home-ready`, in automatic safe mode or with the recovery window showing,
+   * installs a downloaded, verified update by itself after a 10 s countdown with Cancel, once for each target version.
+   */
+  const autoInstall: AutoInstall | undefined =
+    bootHealth === undefined
+      ? undefined
+      : createAutoInstall({
+          mode: launchMode,
+          blockedTarget: bootHealth.blockedAutoInstallTarget,
+          recoveryShowing: () => isRecoveryOpen(),
+          showCountdown: () => {
+            openRecoveryFor('auto-install');
+          },
+          noteAutoInstall: (targetVersion) => {
+            bootHealth.noteAutoInstall(targetVersion);
+          },
+          install: async () => {
+            const updater = await updaterReady.promise;
+            await updater.install();
+          },
+          publish: () => {
+            publishRecoveryState();
+          },
+          report: reportDesktopSignal,
+          log: (level, event, detail) => {
+            log.log(level, event, detail);
+          },
+        });
+  /* D0: the renderer's two boot stages, from the app's own top-level document only. */
+  ipcMain.on(bootChannels.stage, (event, stage: unknown) => {
+    if (
+      !rendererBootStages.includes(stage as RendererBootStage) ||
+      !trusted(event.senderFrame) ||
+      event.senderFrame !== event.sender.mainFrame
+    ) {
+      return;
+    }
+    const reached = stage as RendererBootStage;
+    if (bootHealth !== undefined && bootHealth.stage() !== 'home-ready') {
+      log.log('info', 'main.boot-stage', { stage: reached });
+    }
+    bootHealth?.advance(reached);
+    bootWatchdog?.stage(reached);
+    shellMountedThisLaunch = true;
+    if (reached === 'home-ready' && !homeReadyThisLaunch) {
+      homeReadyThisLaunch = true;
+      autoInstall?.homeReady();
+      /* The launch is healthy now: one check acknowledges it without waiting for the next periodic check (D8). */
+      if (!probing) {
+        // async-iife: bootstrap -- a failed check is published by the updater as its own state.
+        void (async (): Promise<void> => {
+          const updater = await updaterReady.promise;
+          await updater.check();
+        })();
+      }
+    }
+  });
+  /* D0: sleep is not a hang. Every pending deadline stops on suspend and starts again from zero on resume. */
+  powerMonitor.on('suspend', () => {
+    bootWatchdog?.suspend();
+  });
+  powerMonitor.on('resume', () => {
+    bootWatchdog?.resume();
+  });
+
+  /* W9: the permission selector's store lives in the services host; main validates and forwards. */
+  const permissionBridge = registerPermissionBridge({
+    handle: (channel, listener) => {
+      ipcMain.handle(channel, listener);
+    },
+    trusted,
+    roots,
+    send: (frame) => {
+      services.send(frame);
+    },
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+  });
+
+  ipcMain.handle(desktopUpdateChannels.snapshot, async (event) => {
+    if (!trusted(event.senderFrame)) {
+      throw new Error('Untrusted update request');
+    }
+    const updater = await updaterReady.promise;
+    return updater.snapshot();
+  });
+  ipcMain.handle(desktopUpdateChannels.check, async (event) => {
+    if (!trusted(event.senderFrame)) {
+      throw new Error('Untrusted update request');
+    }
+    const updater = await updaterReady.promise;
+    await updater.check();
+  });
+  ipcMain.handle(desktopUpdateChannels.install, async (event) => {
+    if (!trusted(event.senderFrame)) {
+      throw new Error('Untrusted update request');
+    }
+    const updater = await updaterReady.promise;
+    await updater.install();
+  });
+  ipcMain.handle(desktopUpdateChannels.download, async (event) => {
+    if (!trusted(event.senderFrame)) {
+      throw new Error('Untrusted update request');
+    }
+    const updater = await updaterReady.promise;
+    await updater.download();
+  });
+
+  ipcMain.handle(desktopNativeKernelChannels.prepare, async (event, kernel: unknown) => {
+    if (!trusted(event.senderFrame) || typeof kernel !== 'string') {
+      throw new Error('Untrusted kernel preparation request');
+    }
+    return nativeKernels.prepare(kernel);
+  });
+  ipcMain.handle(desktopNativeKernelChannels.cancel, async (event, kernel: unknown) => {
+    if (!trusted(event.senderFrame) || typeof kernel !== 'string') {
+      throw new Error('Untrusted kernel preparation request');
+    }
+    nativeKernels.cancel(kernel);
+  });
+
+  ipcMain.handle(externalAgentsChannel, async (event) =>
+    trusted(event.senderFrame) && !safeMode ? externalAgents.list() : [],
+  );
+  /* Blueprint D12: the Print pane's Bambu Studio presets and settings. The
+   * service parses every input; this guard keeps other senders out. */
+  const bambuStudio = machinesEnabled
+    ? createBambuStudioService({ env: environment, pathOverride: !environmentLocked })
+    : undefined;
+  for (const [channel, call] of [
+    [slicersChannels.bambuStudio.status, 'status'],
+    [slicersChannels.bambuStudio.catalog, 'catalog'],
+    [slicersChannels.bambuStudio.resolveSelection, 'resolveSelection'],
+    [slicersChannels.bambuStudio.settings, 'settings'],
+  ] as const) {
+    ipcMain.handle(channel, async (event, input: unknown) => {
+      if (!trusted(event.senderFrame)) {
+        throw new Error('Desktop shell refused Bambu Studio request.');
+      }
+      if (bambuStudio === undefined) {
+        throw new Error(machinesDisabledMessage);
+      }
+      return bambuStudio[call](input);
+    });
+  }
+  ipcMain.handle('tau:auth:sign-in', async (event) => {
+    if (trusted(event.senderFrame)) {
+      await credentialRead.promise;
+      await auth.signIn();
+    }
+  });
+  ipcMain.handle('tau:auth:sign-out', async (event) => {
+    if (trusted(event.senderFrame)) {
+      await credentialRead.promise;
+      await auth.signOut();
+    }
+  });
+  /* AR-W4-03c: main follows the renderer's resolved consent, persisted for the next launch, and relays it to the
+   * services host, whose desktop project hosts report sync attempts only under `granted` (AR-W6-02). */
+  const telemetryConsent = createRendererTelemetryConsentRelay({
+    path: join(app.getPath('userData'), 'telemetry-consent.json'),
+    publish: (frame) => {
+      services.post(frame);
+    },
+    warn: (event, detail) => {
+      log.log('warn', event, detail);
+    },
+  });
+  ipcMain.on(telemetryConsentChannel, (event, consent: unknown) => {
+    if (trusted(event.senderFrame)) {
+      telemetryConsent.accept(consent);
+    }
+  });
+  ipcMain.on(appIconThemeChannel, (event, theme: unknown) => {
+    if (!trusted(event.senderFrame) || (theme !== 'light' && theme !== 'dark')) {
+      return;
+    }
+    const icon = themedApplicationIcon(theme);
+    app.dock?.setIcon(icon);
+    BrowserWindow.fromWebContents(event.sender)?.setIcon(icon);
+  });
+
+  const handleQuickLook = (
+    event: IpcMainInvokeEvent,
+    action: (controller: QuickLookController) => void,
+  ): QuickLookResult => {
+    if (!trusted(event.senderFrame) || process.platform !== 'darwin') {
+      return { success: false, error: 'Quick Look is available only from the trusted macOS desktop renderer.' };
+    }
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const controller = window === null ? undefined : quickLookControllers.get(window.id);
+    if (!controller) {
+      return { success: false, error: 'The Quick Look window is no longer available.' };
+    }
+    try {
+      action(controller);
+      return { success: true };
+    } catch (error) {
+      log.log('error', 'quick-look.failed', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Quick Look failed.' };
+    }
+  };
+
+  if (quickLookEnabled) {
+    ipcMain.handle(quickLookIpcChannels.previewPath, (event, payload: unknown) =>
+      handleQuickLook(event, (controller) => {
+        controller.previewPath(payload);
+      }),
+    );
+    ipcMain.handle(quickLookIpcChannels.previewUsdz, (event, payload: unknown) =>
+      handleQuickLook(event, (controller) => {
+        controller.previewUsdz(payload);
+      }),
+    );
+    ipcMain.on(quickLookIpcChannels.close, (event) => {
+      if (!trusted(event.senderFrame)) {
+        return;
+      }
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (window !== null) {
+        quickLookControllers.get(window.id)?.close();
+      }
+    });
+  }
+  ipcMain.handle(openFilesIpcChannel, async (event) => {
+    if (!trusted(event.senderFrame)) {
+      return [];
+    }
+    try {
+      watchImportOwner(event.sender);
+      return await openFiles.consume(event.sender.id);
+    } catch (error) {
+      log.log('error', 'open-files.failed', error);
+      throw error;
+    }
+  });
+  ipcMain.handle(generatedImageIpcChannel, async (event, path: unknown) => {
+    if (!trusted(event.senderFrame)) {
+      throw new Error('Untrusted generated image request.');
+    }
+    return readGeneratedImage(path, app.getPath('home'));
+  });
+
+  /* Test-only, and only in a development build — the same gate `TAU_DESKTOP_TOKEN`
+   * rides. A modal native dialog cannot be driven from an automated run, and the
+   * renderer only ever sees an absolute path, so this one function is the whole
+   * seam the smoke lane needs. */
+  const seededPick = app.isPackaged ? undefined : environment['TAU_E2E_PICK_DIRECTORY'];
+
+  /* `showDirectoryPicker({ id })` reopens at whatever the user last chose under
+   * that id; Electron's dialog has no such memory, so main keeps it. Same
+   * observable behaviour, which is what the shared picker seam promises. */
+  const lastDirectoryById = new Map<string, string>();
+
+  ipcMain.handle(openDirectoryChannel, async (event, path: unknown) => {
+    if (!trusted(event.senderFrame) || typeof path !== 'string' || path.includes('\0')) {
+      throw new Error('Desktop shell refused the directory request.');
+    }
+    const directory = roots.canonical(path);
+    if (directory === undefined) {
+      throw new Error('Reopen this folder from Tau before opening it in the file manager.');
+    }
+    const info = await stat(directory);
+    if (!info.isDirectory()) {
+      throw new Error('The project directory is no longer a folder.');
+    }
+    const error = await shell.openPath(directory);
+    if (error) {
+      throw new Error(error);
+    }
+  });
+
+  /* A file opens in its default app under `openPath`, so a file or folder the
+   * person names inside a project is selected in its parent instead. */
+  ipcMain.handle(revealPathChannel, async (event, path: unknown) => {
+    if (!trusted(event.senderFrame) || typeof path !== 'string' || path.includes('\0')) {
+      throw new Error('Desktop shell refused the reveal request.');
+    }
+    const target = roots.canonical(path);
+    if (target === undefined) {
+      throw new Error('Reopen this folder from Tau before revealing it in the file manager.');
+    }
+    await stat(target);
+    shell.showItemInFolder(target);
+  });
+
+  ipcMain.handle(directoryGrantChannels.list, (event) => {
+    if (!trusted(event.senderFrame)) {
+      throw new Error('Desktop shell refused an untrusted directory request.');
+    }
+    return roots.roots().filter((root) => root !== homeRoot);
+  });
+  ipcMain.handle(directoryGrantChannels.disconnect, (event, path: unknown) => {
+    if (!trusted(event.senderFrame) || typeof path !== 'string' || !isAbsolute(path)) {
+      throw new Error('Desktop shell refused an invalid directory disconnect.');
+    }
+    if (resolve(path) === resolve(homeRoot)) {
+      throw new Error('Home cannot be disconnected.');
+    }
+    if (!roots.roots().includes(resolve(path))) {
+      return undefined;
+    }
+    if (services.hasActiveDirectory(path)) {
+      return 'Close projects in this folder and wait for their work to finish before disconnecting.';
+    }
+    roots.revoke(path);
+    publishRoots();
+    geometry.revokeUnauthorized();
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(directoryGrantChannels.changed);
+    }
+    return undefined;
+  });
+
+  /* R7, T-B5.8: a reset database adopts each granted folder under the id its marker names. Only a granted folder is
+   * read, only its marker, and an oversized or unreadable one answers nothing. */
+  ipcMain.handle(directoryGrantChannels.marker, async (event, path: unknown) => {
+    if (!trusted(event.senderFrame) || typeof path !== 'string' || !isAbsolute(path)) {
+      throw new Error('Desktop shell refused an invalid directory marker read.');
+    }
+    if (!roots.roots().includes(resolve(path))) {
+      return undefined;
+    }
+    const marker = join(resolve(path), '.tau', 'workspace.json');
+    try {
+      const { size } = await stat(marker);
+      if (size > workspaceMarkerByteLimit) {
+        return undefined;
+      }
+      return await readFile(marker, 'utf8');
+    } catch {
+      return undefined;
+    }
+  });
+
+  ipcMain.handle('tau:select-directory', async (event, options: unknown) => {
+    if (!trusted(event.senderFrame)) {
+      return undefined;
+    }
+    const pickerId = (options as { id?: unknown } | undefined)?.id;
+    const requestedStart = (options as { defaultPath?: unknown } | undefined)?.defaultPath;
+    const rememberedFor = typeof pickerId === 'string' ? pickerId : undefined;
+    const directory = await (async () => {
+      if (seededPick !== undefined) {
+        return seededPick;
+      }
+      const window = BrowserWindow.fromWebContents(event.sender);
+      /* Locate asks to start at a folder's old place (R4); the nearest part of it that still exists is where it opens. */
+      const start =
+        typeof requestedStart === 'string' && isAbsolute(requestedStart) && !requestedStart.includes('\0')
+          ? await nearestExistingDirectory(requestedStart)
+          : undefined;
+      const remembered = rememberedFor === undefined ? undefined : lastDirectoryById.get(rememberedFor);
+      const defaultPath = start ?? remembered;
+      const request = {
+        properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
+        ...(defaultPath === undefined ? {} : { defaultPath }),
+      };
+      const result = await (window ? dialog.showOpenDialog(window, request) : dialog.showOpenDialog(request));
+      return result.canceled ? undefined : result.filePaths[0];
+    })();
+    if (rememberedFor !== undefined && directory !== undefined) {
+      lastDirectoryById.set(rememberedFor, directory);
+    }
+    if (directory === undefined) {
+      return undefined;
+    }
+    /* R6: a folder around or inside Tau's own data cannot be a root, because the node host refuses to admit it
+     * (`AUTHORITY_ROOT_OVERLAP`). Refuse it here, with the reason, before it reaches the grant file. */
+    if (await overlapsDirectory(directory, authorityDirectory)) {
+      log.log('warn', 'dialog.directory-refused', { reason: 'authority-overlap' });
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const refusal: MessageBoxOptions = {
+        type: 'warning',
+        message: 'Tau can’t use this folder',
+        detail:
+          "This folder contains Tau's own data, or is inside it. Choose a folder that holds only your projects, such as a folder inside Documents.",
+        buttons: ['OK'],
+      };
+      await (window ? dialog.showMessageBox(window, refusal) : dialog.showMessageBox(refusal));
+      return undefined;
+    }
+    /* The picker *is* the admission event: a root becomes nameable by the
+     * renderer only because a human chose it here, and the grant is persisted
+     * so the folder is still reachable on the next launch. */
+    roots.admit(directory);
+    publishRoots();
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(directoryGrantChannels.changed);
+    }
+    log.log('info', 'dialog.directory-admitted', { directory, seeded: seededPick !== undefined });
+    return directory;
+  });
+
+  /* The import picker (W7.4): the chosen folder is copied by the services host, so it is granted, not admitted. */
+  ipcMain.handle(selectImportFolderIpcChannel, async (event) => {
+    if (!trusted(event.senderFrame)) {
+      return undefined;
+    }
+    const directory = await (async () => {
+      if (seededPick !== undefined) {
+        return seededPick;
+      }
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const request = { properties: ['openDirectory'] as Array<'openDirectory'> };
+      const result = await (window ? dialog.showOpenDialog(window, request) : dialog.showOpenDialog(request));
+      return result.canceled ? undefined : result.filePaths[0];
+    })();
+    if (directory === undefined) {
+      return undefined;
+    }
+    watchImportOwner(event.sender);
+    const granted = await importGrants.mint(directory, 'directory', event.sender.id);
+    log.log('info', 'dialog.import-folder-granted', { seeded: seededPick !== undefined });
+    return granted;
+  });
+
+  ipcMain.handle(releaseImportGrantsIpcChannel, (event, grants: unknown) => {
+    if (!trusted(event.senderFrame) || !Array.isArray(grants)) {
+      return;
+    }
+    importGrants.release(
+      grants.filter((grant): grant is string => typeof grant === 'string'),
+      event.sender.id,
+    );
+  });
+
+  ipcMain.on(servicesPortRelayTag, (event, payload: unknown) => {
+    if (!trusted(event.senderFrame)) {
+      return;
+    }
+    const { requestId, concern, context } = (payload ?? {}) as {
+      requestId?: unknown;
+      concern?: unknown;
+      context?: unknown;
+    };
+    if (typeof requestId !== 'string') {
+      return;
+    }
+    /* A refusal is an answer. The renderer awaits this relay for its request
+     * id, so returning in silence left `nodeFs` and the agent host waiting on a
+     * port main had already decided never to send. The frame can be gone by the
+     * time a refusal is written — at quit, where the broker refuses by design. */
+    const refuse = (reason: string): void => {
+      try {
+        event.senderFrame?.postMessage(servicesPortRelayTag, { requestId, error: reason });
+      } catch {
+        /* The renderer that asked is gone; there is nobody left to tell. */
+      }
+    };
+    /* The renderer names the concern; main validates it against the served set
+     * rather than ignoring it, so a future second concern cannot be reached by
+     * a stale caller and today's only one cannot be mistyped into silence. */
+    if (!rendererServicesConcerns.includes(concern as ServicesConcern)) {
+      log.log('error', 'services.unknown-concern', { concern });
+      refuse('services.unknown-concern');
+      return;
+    }
+    if (concern === 'machines' && !machinesEnabled) {
+      refuse(machinesDisabledMessage);
+      return;
+    }
+    try {
+      const resolved = sanitizeServicesContext(context);
+      /* Launcher 2 is scoped to one workspace root, and the renderer names it —
+       * so it passes the same registry the kernel fork resolver uses. Refusing
+       * outright rather than substituting Home: an agent host working over the
+       * wrong directory is worse than no agent host. Machines need no root:
+       * printers belong to the per-user store, and a job names its own
+       * project. */
+      if (concern === 'agentHost' && !roots.isTrusted(resolved['workspaceRoot'] ?? '')) {
+        log.log('error', 'services.untrusted-root', { concern, workspaceRoot: resolved['workspaceRoot'] });
+        refuse('services.untrusted-root');
+        return;
+      }
+      if (
+        concern === 'agentHost' &&
+        resolved['computeMode'] !== 'off' &&
+        resolved['computeMode'] !== 'memory' &&
+        resolved['computeMode'] !== 'durable'
+      ) {
+        log.log('error', 'services.invalid-compute-mode');
+        refuse('services.invalid-compute-mode');
+        return;
+      }
+      /* A filesystem connection resolves only the import grants minted for the window that asked for it (W7.4):
+       * main names that window here, over anything the renderer sent. */
+      const scoped = concern === 'nodeFs' ? { ...resolved, importOwner: String(event.sender.id) } : resolved;
+      const port =
+        concern === 'exactMeasurement'
+          ? geometry.connectMeasurement()
+          : services.connect(concern as ServicesConcern, scoped);
+      event.senderFrame?.postMessage(servicesPortRelayTag, { requestId }, [port]);
+    } catch (error) {
+      /* Quit and reload refuse new concerns by design: an expected answer the
+       * requester settles, not a connection failure or a capture defect. */
+      if (error instanceof ServicesQuiescingError) {
+        log.log('info', 'services.connect-refused-quiescing', { concern });
+        refuse('services.quiescing');
+        return;
+      }
+      log.log('error', 'services.connect-failed', error);
+      refuse('services.connect-failed');
+    }
+  });
+
+  registerTerminalRelay({
+    ipcMain,
+    trusted,
+    isTrustedRoot: (root) => roots.isTrusted(root),
+    windowIdOf: (sender) => BrowserWindow.fromWebContents(sender)?.id,
+    connect: (context) => services.connect('terminal', context),
+    isQuiescing: (error) => error instanceof ServicesQuiescingError,
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+  });
+
+  /* An external agent's own sign-in, the one process outside the Terminal's sandbox (D19/D20 amendment,
+   * 2026-11-16): the discovered CLI with its profile's login arguments and its adapter's environment, never a
+   * shell, started on the person's Enter. Main's environment is the base the adapter's own is built from. */
+  const agentSignIn = registerAgentSignIn({
+    ipcMain,
+    trusted,
+    launchOf: (agentId) => {
+      const adapter = externalAgents.adapterOf(agentId);
+      return adapter === undefined ? undefined : acpLoginLaunch(adapter);
+    },
+    loadPty: async () => {
+      // eslint-disable-next-line import-x/no-extraneous-dependencies -- optional on purpose: without node-pty the sign-in tab answers pty-unavailable, as the Terminal does.
+      const nodePty = await import('node-pty');
+      /* A CommonJS module: Node's ESM loader puts node-pty's exports on `default`, a bundled build on the namespace. */
+      const { spawn } = 'default' in nodePty ? nodePty.default : nodePty;
+      return { spawn: (file, args, options) => spawn(file, [...args], options) };
+    },
+    createChannel: () => new MessageChannelMain(),
+    home: homedir(),
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+  });
+  app.on('will-quit', () => {
+    agentSignIn.closeAll();
+  });
+
+  /**
+   * One in-app route, as an absolute URL for whichever renderer is serving.
+   *
+   * @param path - Route path, already validated by whoever produced it.
+   * @returns The URL to load.
+   */
+  const rendererUrl = (path: string): string =>
+    new URL(path, isDevelopment ? environment.ELECTRON_RENDERER_URL! : `${appOrigin}/`).href;
+
+  let bootWindowCreated = false;
+  const createMainWindow = async (): Promise<BrowserWindow> => {
+    /* Reopen where the user left the window; the first launch fills the work
+     * area (display minus menu bar and dock) of the display the user launched
+     * from. */
+    const saved = readWindowState(
+      windowStatePath,
+      screen.getAllDisplays().map((display) => display.workArea),
+    );
+    const window = new BrowserWindow({
+      ...(saved?.bounds ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea),
+      show: false,
+      icon: applicationIcon,
+      title: 'Tau',
+      titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+      webPreferences: {
+        focusOnNavigation: !hideTestWindow,
+        /* No DevTools in a packaged build: they run script in the `app://tau`
+         * main world, which holds the whole preload bridge. */
+        devTools: !app.isPackaged,
+        contextIsolation: true,
+        nodeIntegration: false,
+        // The self-contained CommonJS preload runs within Electron's renderer sandbox.
+        sandbox: true,
+        preload: join(import.meta.dirname, '../preload/preload.cjs'),
+        additionalArguments: [
+          `${bootstrapArgumentPrefix}${JSON.stringify({
+            env: { ...clientEnvironment(environment), ...rendererErrorReportingEnvironment() },
+            homeRoot,
+            runtimeKernelIds: desktopNativeKernelIds(),
+            firstRun: isFirstLaunchWindow,
+            ...(safeModeReason === undefined ? {} : { safeMode: { reason: safeModeReason } }),
+          })}`,
+        ],
+      },
+    });
+    isFirstLaunchWindow = false;
+    if (quickLookEnabled) {
+      quickLookControllers.set(
+        window.id,
+        createQuickLookController({
+          maxOutputBytes: quickLookManifest.limits.maxOutputBytes,
+          registry: roots,
+          temporaryRoot: quickLookTemporaryRoot,
+          window,
+        }),
+      );
+    }
+    const publishFullscreen = (): void => {
+      window.webContents.send(windowFullscreenChannel, window.isFullScreen());
+    };
+    /* D4.6: the floor is a 400 × 300 content area on every platform. Electron's minimum applies to the frame, so the
+     * frame's own size (title bar, menu bar, borders) is measured and added, after creation and whenever full screen
+     * changes the chrome. */
+    const holdContentFloor = (): void => {
+      const [frameWidth = 0, frameHeight = 0] = window.getSize();
+      const [contentWidth = 0, contentHeight = 0] = window.getContentSize();
+      window.setMinimumSize(
+        minimumContentWidth + Math.max(0, frameWidth - contentWidth),
+        minimumContentHeight + Math.max(0, frameHeight - contentHeight),
+      );
+    };
+    holdContentFloor();
+    window.on('enter-full-screen', () => {
+      publishFullscreen();
+      holdContentFloor();
+    });
+    window.on('leave-full-screen', () => {
+      publishFullscreen();
+      holdContentFloor();
+    });
+    window.webContents.on('did-finish-load', publishFullscreen);
+    /* Closing or reloading a window never asks: a page that holds its unload is let through, and a running Terminal
+     * session ends with the page. */
+    window.webContents.on('will-prevent-unload', (event) => {
+      event.preventDefault();
+    });
+    window.once('close', () => {
+      try {
+        writeWindowState(windowStatePath, {
+          bounds: window.getNormalBounds(),
+          maximized: window.isMaximized(),
+          fullScreen: window.isFullScreen(),
+        });
+      } catch (error) {
+        log.log('warn', 'window-state.write-failed', { message: String(error) });
+      }
+      quickLookControllers.get(window.id)?.dispose();
+      quickLookControllers.delete(window.id);
+    });
+    /* B11: reload once, send a second death within 60 s Home with a notice, and hand a third within 5 minutes to the
+     * recovery window (D0). A hung page the hang rule ended is not a death. */
+    const reloadPolicy = createRendererReloadPolicy({ now: () => performance.now() });
+    let pageTitle: string | undefined;
+    window.webContents.on('page-title-updated', (_event, title) => {
+      pageTitle = title;
+    });
+    let endingHungPage = false;
+    const contentsId = window.webContents.id;
+    window.webContents.on('did-finish-load', () => {
+      endedHungPages.delete(contentsId);
+    });
+    window.once('closed', () => {
+      endedHungPages.delete(contentsId);
+    });
+    const openHomeAfterDeaths = async (closed: string): Promise<void> => {
+      try {
+        await window.loadURL(rendererUrl('/'));
+      } catch (error) {
+        log.log('error', 'main.renderer-home-failed', error);
+      }
+      if (window.isDestroyed()) {
+        return;
+      }
+      try {
+        await dialog.showMessageBox(window, {
+          type: 'warning',
+          title: 'Tau',
+          message: `${closed} was closed`,
+          detail: 'The page stopped working twice within a minute, so Tau opened Home instead.',
+          buttons: ['OK'],
+          noLink: true,
+        });
+      } catch (error) {
+        log.log('error', 'main.renderer-home-notice-failed', error);
+      }
+    };
+    forwardRendererDiagnostics(window.webContents, log, {
+      recover: (reason) => {
+        noteRendererGone();
+        if (endingHungPage) {
+          endingHungPage = false;
+          return;
+        }
+        if (quitting || window.isDestroyed() || window.webContents.isDestroyed()) {
+          return;
+        }
+        const decision = reloadPolicy.gone(reason);
+        if (decision === undefined) {
+          return;
+        }
+        const { step, count } = decision;
+        log.log('warn', 'main.renderer-reload', { step, reason, count });
+        reportDesktopSignal(rendererReloadPolicySignal(step, reason, count));
+        if (step === 'reload') {
+          window.webContents.reload();
+          return;
+        }
+        if (step === 'stop') {
+          recoveryHooks?.openRecovery('renderer-deaths');
+          return;
+        }
+        void openHomeAfterDeaths(closedPageName(window.webContents.getURL(), pageTitle));
+      },
+      report: reportDesktopSignal,
+    });
+    watchRendererHangs(window, log, {
+      report: reportDesktopSignal,
+      /* B24: at 30 s, report the hang and offer Wait, Reload or Restart in Safe Mode (D0). */
+      hangRule: {
+        setTimeout: (offerHangChoice, milliseconds) => setTimeout(offerHangChoice, milliseconds),
+        clearTimeout: (handle) => {
+          clearTimeout(handle as ReturnType<typeof setTimeout>);
+        },
+        showMessageBox: async (options) => dialog.showMessageBox(window, options),
+        endHungPage: () => {
+          if (window.isDestroyed() || window.webContents.isDestroyed()) {
+            return;
+          }
+          /* A hung renderer can neither reload itself nor answer the quit owner: end it. Its exit is no death. */
+          endingHungPage = true;
+          endedHungPages.add(window.webContents.id);
+          window.webContents.forcefullyCrashRenderer();
+        },
+        reload: () => {
+          if (quitting || window.isDestroyed() || window.webContents.isDestroyed()) {
+            return;
+          }
+          window.webContents.reload();
+        },
+        restartInSafeMode: () => {
+          void recoveryHooks?.restartInSafeMode();
+        },
+      },
+    });
+
+    /* Deny every new window and every in-window navigation away from the app,
+     * sending real links to the user's browser instead. `will-redirect` is
+     * listed beside `will-navigate` because a server-side redirect never fires
+     * the latter. */
+    window.webContents.setWindowOpenHandler(({ url }) => {
+      if (navigationDecision(url, origins) === 'open-externally') {
+        void shell.openExternal(url);
+      }
+      log.log('info', 'navigation.window-open-denied', { target: navigationLogTarget(url) });
+      return { action: 'deny' };
+    });
+    const guardNavigation =
+      (event: 'will-navigate' | 'will-redirect') =>
+      (navigation: { preventDefault: () => void }, url: string): void => {
+        const decision = navigationDecision(url, origins);
+        if (quitting) {
+          navigation.preventDefault();
+          return;
+        }
+        if (decision === 'allow') {
+          return;
+        }
+        navigation.preventDefault();
+        if (decision === 'open-externally') {
+          void shell.openExternal(url);
+        }
+        log.log('warn', 'navigation.blocked', { event, target: navigationLogTarget(url), decision });
+      };
+    window.webContents.on('will-navigate', guardNavigation('will-navigate'));
+    window.webContents.on('will-redirect', guardNavigation('will-redirect'));
+
+    /* B17: the window appears at its first paint, or at the deadline with whatever it has, never only once the load
+     * finishes. A load that never finishes is still a window the person can see, with the menu above it. */
+    let revealed = false;
+    const reveal = (): void => {
+      if (revealed || hideTestWindow || window.isDestroyed()) {
+        return;
+      }
+      revealed = true;
+      if (saved?.maximized) {
+        window.maximize();
+      }
+      window.show();
+      if (saved?.fullScreen) {
+        window.setFullScreen(true);
+      }
+    };
+    const revealDeadline = setTimeout(reveal, windowRevealMilliseconds);
+    window.once('ready-to-show', () => {
+      clearTimeout(revealDeadline);
+      reveal();
+    });
+    window.once('closed', () => {
+      clearTimeout(revealDeadline);
+    });
+    /* D0: the launch's first window is the one the watchdog follows. */
+    const bootWindow = !bootWindowCreated;
+    bootWindowCreated = true;
+    if (bootWindow && bootWatchdog !== undefined) {
+      const watchdog = bootWatchdog;
+      bootWatchdog.windowCreated();
+      window.webContents.on('did-finish-load', () => {
+        bootHealth?.advance('window-loaded');
+        watchdog.windowLoaded();
+      });
+      window.webContents.on('did-fail-load', (...details) => {
+        watchdog.loadFailed({ isMainFrame: details[4], errorCode: details[1] });
+      });
+      window.webContents.on('render-process-gone', () => {
+        watchdog.rendererGone();
+      });
+      window.once('closed', () => {
+        /* Closed by the person, not by a quit: not a hang, and the record ends inconclusive. */
+        if (!quitting) {
+          watchdog.windowClosed();
+        }
+      });
+    }
+    /* Safe mode opens Home and nothing else: no file or link routing (D0). */
+    const firstRoute = !safeMode && openFiles.hasPending() ? '/import?desktop-open=1' : '/';
+    try {
+      await window.loadURL(rendererUrl(firstRoute));
+    } catch (error) {
+      if (!bootWindow || bootWatchdog === undefined) {
+        throw error;
+      }
+      /* A first load that fails outright opens the recovery window; a slow one is left alone (D0). */
+      const errno = typeof error === 'object' && error !== null && 'errno' in error ? error.errno : undefined;
+      log.log('error', 'main.first-load-failed', { errno });
+      bootWatchdog.loadRejected(typeof errno === 'number' ? errno : undefined);
+    }
+    clearTimeout(revealDeadline);
+    reveal();
+    return window;
+  };
+
+  const resumeQueuedNavigation = (): void => {
+    if (queuedDeepLink !== undefined) {
+      const queued = queuedDeepLink;
+      queuedDeepLink = undefined;
+      deliverDeepLink?.(queued);
+    } else if (openFiles.hasPending()) {
+      showOpenFileImport?.();
+    }
+  };
+
+  let shutdownComplete = false;
+  let installFailed = false;
+  let installBeforeExit: (() => void | Promise<void>) | undefined;
+  const shutdownDriver = createCallbackLogic<EventObject, ShutdownDriverInput>(({ input, sendBack }) => {
+    let active = true;
+    const { context, stage } = input;
+    const done = (
+      result: Extract<ShutdownMachineEvent, { type: 'done' }>['result'],
+      extra: Partial<Extract<ShutdownMachineEvent, { type: 'done' }>> = {},
+    ): void => {
+      if (active) {
+        sendBack({ type: 'done', attemptId: context.attemptId, result, ...extra });
+      }
+    };
+    // async-iife: bootstrap -- the invoked actor owns cancellation of the completion.
+    void (async () => {
+      try {
+        switch (stage) {
+          case 'assessing': {
+            /* Running Terminals are counted by the utility that serves them, alongside the machine question. The count
+             * also holds new Terminal starts until the quit is called off or quiesce stops them. Terminals never make
+             * quit ask: only streaming machines do, and quitting stops every Terminal session. */
+            const [terminalCount, machineAnswer] = await Promise.allSettled([
+              services.terminalSessions(machineStreamingMilliseconds, context.attemptId),
+              services.streamingMachines(machineStreamingMilliseconds, context.attemptId),
+            ]);
+            const terminals = terminalCount.status === 'fulfilled' ? terminalCount.value : undefined;
+            const counted = terminals === undefined ? {} : { terminals };
+            if (machineAnswer.status === 'fulfilled') {
+              const machines = machineAnswer.value;
+              done(machines.length === 0 ? 'clear' : 'review', { machines, ...counted });
+            } else {
+              done('review', { error: String(machineAnswer.reason), ...counted });
+            }
+            break;
+          }
+          case 'reviewing': {
+            const names = context.machines?.map(({ name }) => name);
+            const { response } = await dialog.showMessageBox({
+              type: 'warning',
+              buttons: ['View machines', 'Keep Tau open', 'Quit anyway'],
+              defaultId: 0,
+              cancelId: 1,
+              message: names?.length
+                ? `Tau is streaming a program to ${new Intl.ListFormat('en', { type: 'conjunction' }).format(names)}.`
+                : 'Tau could not check whether a machine needs this connection.',
+              detail:
+                'Open Machines to review the run and use its stop control. Keep Tau open while it finishes, or explicitly quit and interrupt the connection. Quitting is not an emergency stop; buffered motion may continue.',
+            });
+            done(response === 0 ? 'view' : response === 2 ? 'force' : 'cancel');
+            break;
+          }
+          case 'confirming': {
+            const { response } = await dialog.showMessageBox({
+              type: 'warning',
+              buttons: ['Go back', 'Quit anyway'],
+              defaultId: 0,
+              cancelId: 0,
+              message: 'Quit and interrupt machine connections?',
+              detail:
+                'A streamed program may be left incomplete. The machine may continue buffered motion after Tau exits. Use the physical emergency stop if needed. Unsaved project changes may also be lost. Tau will not automatically resend a program on restart.',
+            });
+            done(response === 1 ? 'confirmed' : 'cancel');
+            break;
+          }
+          case 'renderer': {
+            const outcome = await askRendererToQuiesce(quitRendererMilliseconds, context.attemptId);
+            log.log('info', 'main.renderer-quiesce', { outcome });
+            done(outcome === 'timeout' ? 'failed' : 'settled', {
+              error: outcome === 'timeout' ? 'An open window has not finished saving its projects.' : undefined,
+            });
+            break;
+          }
+          case 'utility': {
+            const outcome = await services.quiesce(quitQuiesceMilliseconds, {
+              attemptId: context.attemptId,
+              forceMachines: context.forceMachines,
+            });
+            log.log(
+              outcome.status === 'quiesced' || outcome.status === 'no-utility' ? 'info' : 'error',
+              'main.quiesce',
+              { outcome },
+            );
+            done(outcome.status === 'quiesced' || outcome.status === 'no-utility' ? 'settled' : 'failed', {
+              error: `Project settlement: ${outcome.status}.`,
+              retryable:
+                outcome.status === 'timeout' ||
+                outcome.status === 'streaming' ||
+                outcome.status === 'streaming-unknown',
+            });
+            break;
+          }
+          case 'settlementReview': {
+            const { response } = await dialog.showMessageBox({
+              type: 'warning',
+              buttons: context.retryable
+                ? ['Try saving again', 'Keep Tau open', 'Quit anyway']
+                : ['Restore workspace', 'Quit anyway'],
+              defaultId: 0,
+              cancelId: context.retryable ? 1 : 0,
+              message: 'Tau has not finished saving every project.',
+              detail: `${context.error ?? ''} Try saving again, or restore the app after pending saves finish. Quitting anyway may lose changes.${context.terminals === 0 ? '' : ' Restoring reloads each window, which also stops any running Terminal session.'}`,
+            });
+            done(
+              context.retryable
+                ? response === 0
+                  ? 'retry'
+                  : response === 2
+                    ? 'force'
+                    : 'recover'
+                : response === 1
+                  ? 'force'
+                  : 'recover',
+            );
+            break;
+          }
+          case 'recovering': {
+            const outcome = await askRendererToQuiesce(quitRendererMilliseconds, context.attemptId);
+            if (outcome === 'timeout') {
+              throw new Error('Pending edits have not finished saving. Retry recovery to preserve them.');
+            }
+            if (outcome === 'forced') {
+              const { response } = await dialog.showMessageBox({
+                type: 'warning',
+                buttons: ['Review again', 'Restore and discard unsaved changes'],
+                defaultId: 0,
+                cancelId: 0,
+                message: 'Some renderer edits were not saved.',
+                detail:
+                  'An earlier Quit anyway skipped these saves. Restoring reloads the workspace from its last saved state and may discard those edits.',
+              });
+              if (response !== 1) {
+                throw new Error('Restoring needs your decision about unsaved renderer edits.');
+              }
+            }
+            await services.recover(context.attemptId, quitQuiesceMilliseconds);
+            quitting = false;
+            try {
+              for (const window of appWindows().filter((open) => !open.isDestroyed())) {
+                window.reload();
+              }
+              resumeQueuedNavigation();
+              /* Restoring after the last window closed (Windows and Linux quit then) keeps a window, not a bare
+               * process. */
+              if (process.platform !== 'darwin' && appWindows().length === 0) {
+                await createMainWindow();
+              }
+            } finally {
+              /* The quit is over whatever the window work did: a later quit must not wait on this one. */
+              done('settled');
+              settleShutdown?.(false);
+              shutdownPending = undefined;
+              settleShutdown = undefined;
+            }
+            break;
+          }
+          case 'recoveryReview': {
+            const { response } = await dialog.showMessageBox({
+              type: 'warning',
+              buttons: installFailed ? ['Try recovery again'] : ['Try recovery again', 'Quit anyway'],
+              defaultId: 0,
+              cancelId: 0,
+              message: 'Tau is waiting to restore your workspace.',
+              detail: context.error ?? 'Pending saves must settle before the workspace can reopen.',
+            });
+            done(response === 1 && !installFailed ? 'force' : 'retry');
+            break;
+          }
+          case 'cancelling':
+          case 'viewing': {
+            services.resumeMachineStarts(context.attemptId);
+            quitting = false;
+            resumeQueuedNavigation();
+            try {
+              /* Keep Tau open after the last window closed (Windows and Linux quit then) keeps a window, not a bare
+               * process. */
+              if (stage === 'cancelling' && process.platform !== 'darwin' && appWindows().length === 0) {
+                await createMainWindow();
+              }
+              if (stage === 'viewing') {
+                const machine = context.machines?.length === 1 ? context.machines[0] : undefined;
+                const route = machine
+                  ? `/machines/${encodeURIComponent(machine.hostId)}/${encodeURIComponent(machine.machineId)}`
+                  : '/machines';
+                const window = appWindows()[0] ?? (await createMainWindow());
+                window.webContents.send(quitChannels.navigate, route);
+                focusMainWindow();
+              }
+            } finally {
+              /* The quit is called off whatever the window work did: a later quit must not wait on this one. */
+              done('settled');
+              settleShutdown?.(false);
+              shutdownPending = undefined;
+              settleShutdown = undefined;
+            }
+            break;
+          }
+          case 'exiting': {
+            const install = installBeforeExit;
+            installBeforeExit = undefined;
+            try {
+              await install?.();
+            } catch (error) {
+              installFailed = true;
+              throw error;
+            }
+            try {
+              showOpenFileImport = undefined;
+              for (const controller of quickLookControllers.values()) {
+                controller.dispose();
+              }
+              quickLookControllers.clear();
+              auth.dispose();
+            } catch (error) {
+              log.log('error', 'main.shutdown', error);
+            }
+            stopKeepingAwake();
+            try {
+              await services.dispose();
+            } catch (error) {
+              log.log('error', 'main.shutdown', error);
+            }
+            try {
+              await geometry.dispose();
+            } catch (error) {
+              log.log('error', 'main.shutdown', error);
+            }
+            zooProxyToken.dispose();
+            nativeStoreAbort.abort();
+            await nativeStore;
+            await nativeKernels.dispose();
+            try {
+              runtimeMain.dispose();
+            } catch (error) {
+              log.log('error', 'main.shutdown', error);
+            }
+            try {
+              for (const { connection } of computeConnections.values()) {
+                connection.dispose();
+              }
+              computeConnections.clear();
+              await computeWorker?.terminate();
+              computeWorker = undefined;
+            } catch (error) {
+              log.log('error', 'main.shutdown', error);
+            }
+            shutdownComplete = true;
+            /* D0: a quit or restart through the quit owner is a clean end; the ledger keeps the first ending. */
+            bootHealth?.end('clean');
+            bootWatchdog?.dispose();
+            done('settled');
+            settleShutdown?.(true);
+            break;
+          }
+        }
+      } catch (error) {
+        done('failed', { error: String(error) });
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  });
+  const shutdown = createShutdownActor({ identity: randomUUID() }, { actors: { shutdownDriver } }).start();
+  let shutdownPending: Promise<boolean> | undefined;
+  let settleShutdown: ((settled: boolean) => void) | undefined;
+  const prepareToQuit = async (purpose: 'quit' | 'restart', reason: string): Promise<boolean> => {
+    if (shutdownComplete) {
+      return true;
+    }
+    if (shutdownPending) {
+      return shutdown.getSnapshot().context.purpose === purpose ? shutdownPending : false;
+    }
+    log.log('info', 'main.quit-requested', { purpose, reason });
+    quitting = true;
+    shutdownPending = new Promise<boolean>((resolve) => {
+      settleShutdown = resolve;
+    });
+    shutdown.send({ type: 'quit', purpose });
+    return shutdownPending;
+  };
+  let pendingQuit: Promise<void> | undefined;
+  const quitWhenReady = async (reason: string): Promise<void> => {
+    try {
+      if (await prepareToQuit('quit', reason)) {
+        app.quit();
+      }
+    } finally {
+      pendingQuit = undefined;
+    }
+  };
+  /* The session is ending (logout, restart or shutdown): the quit that follows is the system's, not the person's. */
+  powerMonitor.on('shutdown', () => {
+    quitReason ??= 'system-shutdown';
+  });
+  app.on('before-quit', (event) => {
+    if (shutdownComplete) {
+      return;
+    }
+    event.preventDefault();
+    pendingQuit ??= quitWhenReady(quitReason ?? 'external');
+  });
+  /*
+   * A restart in a launch whose shell never mounted asks no page to save (D0): such a page has nothing to save and
+   * cannot answer, so waiting on it would end in the saving review. The recovery window's restarts and an update's
+   * install, including N1's automatic one, both come through here (T-B22.4).
+   *
+   * The boundary is `shell-mounted`, not `home-ready`. A project session builds its file manager once `rootFiles`
+   * holds the shared worker, which it does before it is `ready` and keeps when it fails, and a link or an opened
+   * file can import into a project before Home is ready. A mounted page may therefore hold edits, so it is still asked
+   * to save, and a page that does not answer still ends in the saving review rather than losing them.
+   */
+  const prepareToRestart = async (reason: string): Promise<boolean> => {
+    restartWithoutPage = bootWatchdog !== undefined && !bootWatchdog.shellMounted();
+    if (restartWithoutPage) {
+      log.log('info', 'main.restart-without-page', { reason });
+    }
+    try {
+      return await prepareToQuit('restart', reason);
+    } finally {
+      restartWithoutPage = false;
+    }
+  };
+  /* Start only once the shared shutdown owner and normal application startup are ready. */
+  const prepareToInstall = async (commit: () => void | Promise<void>): Promise<boolean> => {
+    if (shutdownComplete || shutdownPending !== undefined || installBeforeExit !== undefined) {
+      return false;
+    }
+    let committed = false;
+    installFailed = false;
+    installBeforeExit = async () => {
+      await commit();
+      committed = true;
+    };
+    try {
+      return (await prepareToRestart('update-install')) && committed;
+    } finally {
+      installBeforeExit = undefined;
+      installFailed = false;
+    }
+  };
+  /** Report a blocked update path once for each reason in a launch (B25, B27). */
+  const reportedBlocks = new Set<string>();
+  const noteUpdateBlocked = (reason: DesktopUpdateSnapshot['blockedReason']): void => {
+    if (reason === undefined || reportedBlocks.has(reason)) {
+      return;
+    }
+    reportedBlocks.add(reason);
+    log.log('warn', 'updater.blocked', { reason });
+    reportDesktopSignal(updateBlockedSignal(reason, process.platform));
+  };
+  /* Started before the first window, so an update can repair a launch whose page never renders (B17, D8). A CI
+   * probe is the exception: it decides whether to install only after observing its renderer, so it starts after. */
+  const startUpdater = async (installForProbe: boolean): Promise<void> => {
+    const updaterOptions: DesktopUpdaterOptions = {
+      prepareToInstall,
+      platform: process.platform,
+      arch: process.arch,
+      currentVersion: app.getVersion(),
+      packaged: app.isPackaged,
+      channel: desktopChannel,
+      environment,
+      autoUpdater,
+      prepareToRestart: async () => prepareToRestart('update-install'),
+      ...(otaProbe ? { candidateTag: otaProbe.candidateTag } : {}),
+      ...(routeQualification?.candidateTag ? { candidateTag: routeQualification.candidateTag } : {}),
+      ...(routeQualification?.expectedUpdate ? { expectedUpdate: routeQualification.expectedUpdate } : {}),
+      fetchJson: async (url) => {
+        /* Bounded: one check runs at a time, so a request that never settles would stop every later check. */
+        const response = await net.fetch(url, { signal: AbortSignal.timeout(30_000) });
+        if (!response.ok) {
+          throw new Error(`update feed answered ${response.status}`);
+        }
+        return response.json() as Promise<unknown>;
+      },
+      installForProbe,
+      onState: (snapshot) => {
+        for (const window of appWindows()) {
+          if (!window.isDestroyed() && trusted(window.webContents.mainFrame)) {
+            window.webContents.send(desktopUpdateChannels.changed, snapshot);
+          }
+        }
+        /* The recovery window shows the updater's live status (D0, D8). */
+        latestUpdate = snapshot;
+        noteUpdateBlocked(snapshot.blockedReason);
+        publishRecoveryState();
+        autoInstall?.updateChanged(snapshot);
+      },
+      openExternal: async (url) => shell.openExternal(url),
+      log: (level, event, detail) => {
+        log.log(level, event, detail);
+        reportDesktopSignal(
+          updaterFailureSignal(event, detail, { channel: desktopChannel, version: app.getVersion() }),
+        );
+      },
+      ...(appLocation === undefined
+        ? {}
+        : {
+            appLocation: {
+              blocksUpdates: locationBlocksUpdates(appLocation),
+              move: () => moveToApplications(moveHost),
+            },
+          }),
+    };
+    let platformUpdater;
+    if (process.platform !== 'darwin' && app.isPackaged) {
+      const { startPlatformUpdater } = await import('#main/update-platform.js');
+      try {
+        platformUpdater = await startPlatformUpdater({
+          ...updaterOptions,
+          prepareToInstall,
+          /*
+           * One health signal (D0, D8): a launch is healthy for the updater when it is a normal launch that reached
+           * `home-ready`. It answers at once; `home-ready` runs one check of its own. A CI probe starts the updater only
+           * after it has observed its renderer's save handler, which was this answer before `home-ready` existed.
+           */
+          confirmHealthy: async () => probing || (launchMode === 'normal' && homeReadyThisLaunch),
+        });
+      } catch (error) {
+        /* A damaged installation marker (B27): this copy cannot update itself, so the updater says so, with Download
+         * Tau, instead of failing every check with the same error. */
+        log.log('error', 'updater.installed-route-invalid', { message: String(error) });
+        const { startPlatformUpdateController } = await import('#main/update-controller.js');
+        platformUpdater = startPlatformUpdateController(
+          { ...updaterOptions, prepareToInstall },
+          {
+            systemManaged: false,
+            blockedReason: 'installation-marker',
+            check: async () => {
+              throw error;
+            },
+            download: async () => undefined,
+            prepare: async () => {
+              throw error;
+            },
+            finish: () => undefined,
+          },
+        );
+      }
+    }
+    const updater = platformUpdater ?? startDesktopUpdater(updaterOptions);
+
+    updaterReady.resolve(updater);
+    latestUpdate = updater.snapshot();
+    bootHealth?.advance('updater-started');
+    /* A CI probe runs one bounded check of its own; an unpackaged build has no updater to ask. */
+    if (app.isPackaged && otaProbe === undefined && routeQualification === undefined) {
+      startUpdateTriggers({
+        powerMonitor,
+        isOnline: () => net.isOnline(),
+        check: () => {
+          void updater.check();
+        },
+        phase: () => updater.snapshot().phase,
+        log: (level, event, detail) => {
+          log.log(level, event, detail);
+        },
+      });
+    }
+  };
+  const checkForUpdates = async (): Promise<void> => {
+    /* No window has mounted this launch: the recovery window shows the check and its result, and needs nothing the
+     * renderer needs (D8, B22). */
+    if (shellMountedThisLaunch) {
+      if (appWindows().length === 0) {
+        await createMainWindow();
+      }
+      focusMainWindow();
+    } else {
+      openRecoveryFor('check-for-updates');
+    }
+    const updater = await updaterReady.promise;
+    await updater.check(true);
+  };
+  /*
+   * The recovery window (D0, R12): main's own static page, opened by the watchdog, the menu, the safe-mode bar and a
+   * classified error panel, with a native dialog under it. Its hooks are what the watchdog and the renderer reload
+   * policy (WP8) act through.
+   */
+  const recoveryController = createRecoveryWindowController({
+    createWindow: (options) =>
+      new BrowserWindow({ ...options, icon: applicationIcon }) as unknown as RecoveryWindowLike,
+    /* A test-only override names a missing page to reach the native fallback; a locked build strips it. */
+    page: process.env['TAU_E2E_RECOVERY_PAGE'] ?? join(import.meta.dirname, 'recovery/index.html'),
+    preload: join(import.meta.dirname, '../preload/recovery-preload.cjs'),
+    showMessageBox: async (options) => dialog.showMessageBox(options),
+    fallback: {
+      restartInSafeMode: async () => hooks.restartInSafeMode(),
+      downloadTau: async () => shell.openExternal(desktopDownloadPage(desktopChannel, latestUpdate)),
+      showLogs: () => {
+        shell.showItemInFolder(log.filePath);
+      },
+      quit: () => {
+        quitFor('recovery-quit');
+      },
+    },
+    report: reportDesktopSignal,
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+    devTools: !app.isPackaged,
+    hidden: hideTestWindow,
+  });
+  isRecoveryWindow = (window) => recoveryController.isRecoveryContents(window.webContents);
+  const hooks = createRecoveryHooks({
+    controller: {
+      open: (trigger) => {
+        recoveryTrigger = trigger;
+        recoveryController.open(trigger);
+        /* With the recovery window showing, a ready update may install by itself (N1). */
+        autoInstall?.reevaluate();
+      },
+    },
+    prepareToQuit: async (_purpose, reason) => prepareToRestart(reason),
+    relaunch: relaunchWith,
+    quit: () => {
+      app.quit();
+    },
+    log: (level, event, detail) => {
+      log.log(level, event, detail);
+    },
+  });
+  recoveryHooks = hooks;
+  openRecoveryFor = (trigger) => {
+    hooks.openRecovery(trigger);
+  };
+  isRecoveryOpen = () => recoveryController.isOpen();
+  /** What the recovery window shows: why it opened, the ledger, the updater and the resets waiting for a start. */
+  const recoveryState = () => ({
+    mode: launchMode,
+    ...(recoveryTrigger === undefined ? {} : { trigger: recoveryTrigger }),
+    unhealthyCount: bootHealth?.unhealthyCount ?? 0,
+    stage: bootHealth?.stage(),
+    ...(bootHealth?.previousOutcome === undefined ? {} : { previousOutcome: bootHealth.previousOutcome }),
+    ...(latestUpdate === undefined ? {} : { update: latestUpdate }),
+    ...(autoInstall?.state() === undefined ? {} : { autoInstall: autoInstall.state() }),
+    downloadPage: desktopDownloadPage(desktopChannel, latestUpdate),
+    pendingResets: readPendingResets(app.getPath('userData')),
+  });
+  publishRecoveryState = () => {
+    recoveryController.send(recoveryChannels.changed, recoveryState());
+  };
+  ipcMain.handle(recoveryChannels.state, (event) => {
+    if (!recoveryController.isRecoveryContents(event.sender) && !trusted(event.senderFrame)) {
+      throw new Error('Desktop shell refused the recovery state request.');
+    }
+    return recoveryState();
+  });
+  const handleRecoveryAction = createRecoveryActionHandler({
+    userData: app.getPath('userData'),
+    senderOf: (value) => {
+      const event = value as IpcMainInvokeEvent;
+      if (recoveryController.isRecoveryContents(event.sender)) {
+        return event.senderFrame === event.sender.mainFrame ? 'recovery' : undefined;
+      }
+      return trusted(event.senderFrame) && event.senderFrame === event.sender.mainFrame ? 'app' : undefined;
+    },
+    actions: {
+      restart: async (mode) => {
+        await (mode === 'safe' ? hooks.restartInSafeMode() : hooks.restartNormally());
+      },
+      showLogs: () => {
+        shell.showItemInFolder(log.filePath);
+      },
+      copyDiagnostics: async () => copyDiagnostics(),
+      openRecoveryWindow: () => {
+        hooks.openRecovery('requested');
+      },
+      checkForUpdates: async () => {
+        const updater = await updaterReady.promise;
+        await updater.check(true);
+      },
+      installUpdate: async () => {
+        const updater = await updaterReady.promise;
+        await updater.install();
+      },
+      cancelAutoInstall: () => {
+        autoInstall?.cancel();
+      },
+      downloadTau: async () => shell.openExternal(desktopDownloadPage(desktopChannel, latestUpdate)),
+      resetsChanged: () => {
+        publishRecoveryState();
+      },
+    },
+  });
+  ipcMain.handle(recoveryChannels.action, async (event, payload: unknown) => handleRecoveryAction(payload, event));
+  /* Help → Troubleshooting (U5, D6): reachable with no working page, and installed with Check for Updates… before
+   * the first window. */
+  const restartInSafeMode = async (): Promise<void> => {
+    await hooks.restartInSafeMode();
+  };
+  const copyDiagnostics = async (): Promise<void> => {
+    await log.flush();
+    clipboard.writeText(
+      diagnosticsReport(
+        {
+          version: app.getVersion(),
+          channel: desktopChannel,
+          platform: process.platform,
+          arch: process.arch,
+          packaged: app.isPackaged,
+          electron: process.versions.electron,
+          grantedFolders: roots.roots().filter((root) => root !== homeRoot).length,
+          ...(bootHealth === undefined
+            ? {}
+            : {
+                bootHealth: {
+                  mode: launchMode,
+                  unhealthyCount: bootHealth.unhealthyCount,
+                  stage: bootHealth.stage(),
+                  ...(bootHealth.previous === undefined || bootHealth.previousOutcome === undefined
+                    ? {}
+                    : {
+                        previous: {
+                          outcome: bootHealth.previousOutcome,
+                          stage: bootHealth.previous.stage,
+                          ended: bootHealth.previous.ended,
+                        },
+                      }),
+                },
+              }),
+        },
+        log.filePath,
+        homedir(),
+      ),
+    );
+  };
+  bootstrapStep = 'menu';
+  const applicationMenu = Menu.getApplicationMenu();
+  const appSubmenu = applicationMenu?.items[0]?.submenu;
+  if (applicationMenu && appSubmenu) {
+    appSubmenu.insert(
+      1,
+      new MenuItem({
+        label: 'Check for Updates…',
+        click: () => {
+          void checkForUpdates();
+        },
+      }),
+    );
+  }
+  const troubleshootingInstalled = addTroubleshootingMenu(
+    applicationMenu ?? undefined,
+    (options) => new MenuItem(options),
+    {
+      restartInSafeMode: () => {
+        void restartInSafeMode();
+      },
+      showLogs: () => {
+        shell.showItemInFolder(log.filePath);
+      },
+      copyDiagnostics: () => {
+        void copyDiagnostics();
+      },
+      checkForUpdates: () => {
+        void checkForUpdates();
+      },
+    },
+  );
+  if (applicationMenu && (appSubmenu !== undefined || troubleshootingInstalled)) {
+    // Native menus must be reinstalled after adding items.
+    Menu.setApplicationMenu(applicationMenu);
+  }
+  if (!probing) {
+    bootstrapStep = 'updater';
+    await startUpdater(false);
+  }
+  bootstrapStep = 'window';
+  ensureMainWindow = () => {
+    if (!quitting && appWindows().length === 0) {
+      // async-iife: bootstrap -- a failed window is logged; the second launch that asked for it has already quit.
+      void (async (): Promise<void> => {
+        try {
+          await createMainWindow();
+        } catch (error) {
+          log.log('error', 'main.window-failed', error);
+        }
+      })();
+    }
+  };
+  await createMainWindow();
+  showOpenFileImport = () => {
+    /* Safe mode does no file routing: the files wait for a normal launch to be opened again (D0). */
+    if (quitting || safeMode) {
+      return;
+    }
+    const window = appWindows()[0];
+    if (!window || window.webContents.getURL().includes('/import?desktop-open=1')) {
+      return;
+    }
+    const navigate = async (): Promise<void> => {
+      await window.loadURL(rendererUrl('/import?desktop-open=1'));
+      if (!hideTestWindow) {
+        window.show();
+        window.focus();
+      }
+    };
+    // async-iife: bootstrap -- Electron event callbacks do not consume promises.
+    void navigate();
+  };
+  if (openFiles.hasPending()) {
+    showOpenFileImport();
+  }
+
+  /*
+   * Opening a deep link is a window navigation, not a channel of its own.
+   *
+   * Every content link resolves to an in-app route the renderer already serves,
+   * loaded exactly the way an Open With file loads `/import?desktop-open=1`;
+   * the route owns what a signed-out person sees, so main holds nothing back.
+   * The sign-in callback is the exception: it carries a credential, is redeemed
+   * here, and never reaches the renderer.
+   */
+  const openDeepLink = async (value: string): Promise<void> => {
+    /* A sign-in callback must not race the stored credential's read, and an opened route should not draw signed out. */
+    await credentialRead.promise;
+    if (quitting) {
+      queuedDeepLink = value;
+      focusMainWindow();
+      return;
+    }
+    try {
+      const link = parseDeepLink(value, desktopScheme);
+      if (link === undefined) {
+        /* A custom scheme has no ownership proof, so a link that is not one of
+         * the links the app publishes is another application's, or an attempt. */
+        /* Only the shape: a malformed sign-in callback still carries a live
+         * one-time token in its query, a refused invitation carries its token in
+         * the path, and a share fragment is the payload. */
+        log.log('warn', 'deep-link.refused', {
+          target: /^tau:\/\/([\w-]{1,32})/iu.exec(value)?.[1],
+          length: value.length,
+        });
+      } else if (link.kind === 'auth-callback') {
+        await auth.handleCallback(link);
+      } else if (safeMode) {
+        /* Safe mode does no link routing (D0); the sign-in callback above is not a route. */
+        log.log('info', 'deep-link.ignored-in-safe-mode', { kind: link.kind });
+      } else {
+        log.log('info', 'deep-link.opened', { kind: link.kind });
+        /* On macOS the app stays alive with every window closed. */
+        const window = appWindows()[0] ?? (await createMainWindow());
+        if (link.kind === 'machine') {
+          window.webContents.send(quitChannels.navigate, link.route);
+        } else if (link.kind === 'host') {
+          /* The page redeems the single-use code at the loopback daemon the link named (X54); it is not a route. */
+          window.webContents.send(hostHandOffChannel, { origin: link.origin, code: link.code });
+        } else {
+          await window.loadURL(rendererUrl(link.route));
+        }
+      }
+    } catch (error) {
+      log.log('error', 'deep-link.failed', error);
+    }
+    /* Whatever the outcome, the person clicked something: come forward and say
+     * so, rather than leaving the app behind the browser doing nothing. */
+    focusMainWindow();
+  };
+  deliverDeepLink = (value) => {
+    // async-iife: bootstrap -- Electron event callbacks do not consume promises.
+    void openDeepLink(value);
+  };
+  if (queuedDeepLink !== undefined) {
+    const queued = queuedDeepLink;
+    queuedDeepLink = undefined;
+    deliverDeepLink(queued);
+  }
+
+  app.on('activate', () => {
+    if (!quitting && appWindows().length === 0) {
+      void createMainWindow();
+    }
+  });
+
+  if (probing) {
+    bootstrapStep = 'probe';
+    let qualificationInstall = false;
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window) {
+      throw new Error('OTA probe has no renderer window');
+    }
+    const deadline = Date.now() + 120_000;
+    let ready = false;
+    /* oxlint-disable no-await-in-loop -- Observe one renderer's real quit registration before updater admission. */
+    while (Date.now() < deadline) {
+      const observed: unknown = await window.webContents.executeJavaScript(
+        'location.protocol === "app:" && location.host === "tau" && document.querySelector("main") !== null && globalThis.tau?.quit?.isReady() === true',
+      );
+      if (observed === true) {
+        ready = true;
+        break;
+      }
+      await sleep(250);
+    }
+    /* oxlint-enable no-await-in-loop */
+    if (!ready) {
+      throw new Error('OTA renderer did not become ready with its save handler');
+    }
+    otaProbe?.complete();
+    if (routeQualification) {
+      const command = await routeQualification.complete(() => ({
+        rendererPid: window.webContents.getOSProcessId(),
+        children: app.getAppMetrics().map((metric) => ({ pid: metric.pid, type: metric.type })),
+      }));
+      qualificationInstall = command.installForProbe;
+    }
+    bootstrapStep = 'updater';
+    await startUpdater(otaProbe !== undefined || qualificationInstall);
+  }
+};
+
+/**
+ * A bootstrap that threw (B18): write the log, report and flush, then say what happened in a native dialog, which
+ * needs no renderer and no GPU process, with the same exits as the recovery surface. The launch ends only when the
+ * person chooses to restart or quit.
+ *
+ * @param bootstrapError - What bootstrap threw.
+ */
+const failBootstrap = async (bootstrapError: unknown): Promise<void> => {
+  const step = bootstrapStep;
+  try {
+    diagnostics.log('error', 'main.bootstrap-failed', {
+      step,
+      errno: errnoOf(bootstrapError),
+      error:
+        bootstrapError instanceof Error ? (bootstrapError.stack ?? bootstrapError.message) : String(bootstrapError),
+    });
+    reportDesktopSignal(bootstrapFailedSignal(step, bootstrapError));
+    await flushDesktopErrorReporting();
+    await app.whenReady();
+    const options = bootstrapFailureDialog(bootstrapError, step);
+    /* Show Logs and Download Tau leave the dialog up; Restart in Safe Mode and Quit end this launch. */
+    for (let shown = 0; shown < 64; shown += 1) {
+      // oxlint-disable-next-line no-await-in-loop -- one modal dialog at a time, re-shown after each non-final choice.
+      const { response } = await dialog.showMessageBox(options);
+      const action = bootstrapFailureActions[response] ?? 'quit';
+      switch (action) {
+        case 'show-logs': {
+          shell.showItemInFolder(diagnostics.filePath);
+          continue;
+        }
+        case 'download-tau': {
+          // oxlint-disable-next-line no-await-in-loop -- the browser opens before the dialog returns.
+          await shell.openExternal(downloadTauPage(desktopChannel));
+          continue;
+        }
+        case 'restart-safe-mode': {
+          // oxlint-disable-next-line no-await-in-loop -- the relaunch is armed before this process exits.
+          await relaunchWith(['--safe-mode']);
+          app.exit(0);
+          return;
+        }
+        case 'quit': {
+          break;
+        }
+      }
+      break;
+    }
+  } catch (error) {
+    diagnostics.log('error', 'main.bootstrap-dialog-failed', error);
+  }
+  app.exit(1);
+};
+
+/* Electron fires `ready` only after the main ESM module finishes evaluating, so
+ * a top-level `await app.whenReady()` deadlocks the app silently (observed live
+ * in the L0 probe). Detach the bootstrap instead. */
+/* oxlint-disable promise/prefer-await-to-then, unicorn/prefer-top-level-await -- see comment above */
+if (ownsSingleInstanceLock) {
+  bootstrapElectronApp().catch(failBootstrap);
+} else {
+  /* Another process holds this profile's single-instance lock, and has been handed this launch's arguments. */
+  quitFor('instance-lock-held');
+}
+/* oxlint-enable promise/prefer-await-to-then, unicorn/prefer-top-level-await */

@@ -1,0 +1,165 @@
+// @vitest-environment node
+/**
+ * Hostile PicoGK project against the real operating-system sandbox.
+ *
+ * Both the program's top-level statements and the `Library.Go` callback try to escape,
+ * because compiling and loading a project executes its top level before any model code
+ * runs. Every probe reports the .NET outcome; the test asserts the operating system denied
+ * each escape, that the private artifact root stayed writable, and that nothing outside
+ * the sandbox was created.
+ */
+import { randomUUID } from 'node:crypto';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { createTestRuntimeClient } from '@taucad/runtime-testing';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { installFetchTripwire } from '@taucad/runtime-testing/preparation';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+import { picogk } from '#index.js';
+import { nativeEngineAvailable, nativeKernelOptions } from '#picogk-native.fixture.js';
+
+// The kernels run from a closure already on disk: no request may leave this file (charter D27 tripwire).
+beforeAll(() => installFetchTripwire());
+
+const runtime = defineRuntime({
+  plugins: [
+    picogk({
+      kernels: {
+        default: {
+          closure: nativeKernelOptions,
+          requestTimeout: 120_000,
+        },
+      },
+    }),
+  ],
+});
+
+type Outcomes = Record<
+  'home_read' | 'temp_read' | 'outside_write' | 'home_write' | 'socket' | 'dns' | 'subprocess' | 'artifact_write',
+  string
+>;
+const denied = ['UnauthorizedAccessException', 'IOException'];
+// On Linux the sandbox hides each read-denied root (user homes, /tmp) behind an empty tmpfs, so a
+// hidden file reads as missing rather than forbidden. A write there lands in that throwaway tmpfs,
+// and a write to the read-only root fails with an IOException. Neither reaches the host, which the
+// existsSync checks below prove. macOS denies all of these with UnauthorizedAccessException.
+const hiddenRead =
+  process.platform === 'linux' ? [...denied, 'FileNotFoundException', 'DirectoryNotFoundException'] : denied;
+const containedWrite =
+  process.platform === 'linux' ? [...denied, 'FileNotFoundException', 'DirectoryNotFoundException', 'allowed'] : denied;
+
+const literal = (value: string): string => JSON.stringify(value);
+
+const hostileSource = (paths: {
+  readonly homeCanary: string;
+  readonly tempCanary: string;
+  readonly outsideEscape: string;
+  readonly homeEscape: string;
+}): string => `using System;
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using PicoGK;
+
+var imported = Sandbox.Outcomes();
+Library.Go(1f, () => throw new InvalidOperationException(
+    "TAU_SANDBOX_PROBE {\\"import\\":" + imported + ",\\"main\\":" + Sandbox.Outcomes() + "}"));
+
+public static class Sandbox
+{
+    private static string Probe(Action action)
+    {
+        try { action(); return "allowed"; }
+        catch (Exception error) { return error.GetType().Name; }
+    }
+
+    private static string CatExit()
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("/bin/cat", ${literal(paths.homeCanary)})
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            process.WaitForExit();
+            return "exit:" + process.ExitCode;
+        }
+        catch (Exception error) { return error.GetType().Name; }
+    }
+
+    private static string Field(string name, string value) => "\\"" + name + "\\":\\"" + value + "\\"";
+
+    public static string Outcomes() => "{" + string.Join(",", new[]
+    {
+        Field("home_read", Probe(() => File.ReadAllText(${literal(paths.homeCanary)}))),
+        Field("temp_read", Probe(() => File.ReadAllText(${literal(paths.tempCanary)}))),
+        Field("outside_write", Probe(() => File.WriteAllText(${literal(paths.outsideEscape)}, "escaped"))),
+        Field("home_write", Probe(() => File.WriteAllText(${literal(paths.homeEscape)}, "escaped"))),
+        Field("socket", Probe(() => { using var client = new TcpClient(); client.Connect("1.1.1.1", 53); })),
+        Field("dns", Probe(() => Dns.GetHostEntry("example.com"))),
+        Field("subprocess", CatExit()),
+        Field("artifact_write", Probe(() => File.WriteAllText(Path.Combine(Path.GetTempPath(), "probe.txt"), "ok"))),
+    }) + "}";
+}
+`;
+
+describe.runIf(nativeEngineAvailable)('PicoGK native sandbox', () => {
+  it('should deny host reads, writes, network, and subprocess escapes from top-level code and Library.Go', async () => {
+    const id = randomUUID();
+    const paths = {
+      homeCanary: join(homedir(), `.tau-sandbox-canary-${id}`),
+      tempCanary: join(tmpdir(), `tau-sandbox-canary-${id}`),
+      outsideEscape: `/tmp/tau-sandbox-escape-${id}`,
+      homeEscape: join(homedir(), `tau-sandbox-escape-${id}`),
+    };
+    writeFileSync(paths.homeCanary, 'secret');
+    writeFileSync(paths.tempCanary, 'secret');
+    const client = createTestRuntimeClient({
+      runtime,
+      files: { 'main.cs': hostileSource(paths) },
+    });
+    const document = client.open({ source: { path: 'main.cs' }, watch: false });
+    try {
+      const rendered = await document.evaluation();
+      expect(rendered.superseded).toBe(false);
+      if (rendered.superseded) {
+        throw new Error('Hostile PicoGK render was unexpectedly superseded.');
+      }
+      expect(rendered.evaluation.success).toBe(false);
+      if (rendered.evaluation.success) {
+        throw new Error('Hostile PicoGK project produced geometry.');
+      }
+      const report = rendered.evaluation.issues.map(({ message }) => message).join('\n');
+      const probe = /TAU_SANDBOX_PROBE (?<json>\{.*\})/u.exec(report)?.groups?.['json'];
+      expect(probe, report).toBeDefined();
+      const outcomes = JSON.parse(probe!) as {
+        readonly import: Outcomes;
+        readonly main: Outcomes;
+      };
+      for (const phase of ['import', 'main'] as const) {
+        const outcome = outcomes[phase];
+        expect(hiddenRead, `${phase} home_read ${outcome.home_read}`).toContain(outcome.home_read);
+        expect(hiddenRead, `${phase} temp_read ${outcome.temp_read}`).toContain(outcome.temp_read);
+        expect(containedWrite, `${phase} outside_write ${outcome.outside_write}`).toContain(outcome.outside_write);
+        expect(containedWrite, `${phase} home_write ${outcome.home_write}`).toContain(outcome.home_write);
+        expect(outcome.socket, `${phase} socket`).not.toBe('allowed');
+        expect(outcome.dns, `${phase} dns`).not.toBe('allowed');
+        expect(outcome.subprocess, `${phase} subprocess`).not.toBe('exit:0');
+        expect(outcome.artifact_write, `${phase} artifact_write`).toBe('allowed');
+      }
+      expect(existsSync(paths.outsideEscape)).toBe(false);
+      expect(existsSync(paths.homeEscape)).toBe(false);
+    } finally {
+      document.close();
+      await client.shutdown();
+      for (const path of Object.values(paths)) {
+        rmSync(path, { force: true });
+      }
+    }
+  }, 180_000);
+});

@@ -1,118 +1,134 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import type { CaptureViewScreenshotOptions } from '#components/chat/capture-view-screenshot.utils.js';
+import type { CadAgentExecution } from '@taucad/chat';
+import type { captureCadImages as captureCadImagesType } from '#services/headless-capture.js';
+import { toast } from '@taucad/ui/components/sonner';
 
-const mockAddDraftImage = vi.fn();
+const mockAddDraftAttachment = vi.fn();
+const selectedModel = {
+  name: 'Vision Model',
+  model: { support: { modalities: { input: ['text', 'image'], output: ['text'] } } },
+};
+let mockSelectedModel: { name: string; model?: typeof selectedModel.model } = selectedModel;
+let mockCanCapture = true;
+let mockExecution: CadAgentExecution = { kind: 'tau', model: 'vision' };
 const mockTrigger = vi.fn();
 const mockGraphicsRef = { send: vi.fn(), id: 'graphics-actor' };
+const mockCadRef = {
+  send: vi.fn(),
+  id: 'cad-actor',
+  getSnapshot: () => ({ context: { entryPath: 'main.ts' } }),
+};
+const mockProjectSend = vi.fn();
+const mockImageService = { export: vi.fn() };
+const mockCaptureCadImages = vi.fn<typeof captureCadImagesType>();
 
-const captureCalls: CaptureViewScreenshotOptions[] = [];
-const mockCaptureViewScreenshot = vi.fn((options: CaptureViewScreenshotOptions) => {
-  captureCalls.push(options);
-});
-
-vi.mock('#components/chat/capture-view-screenshot.utils.js', () => ({
-  captureViewScreenshot: (options: CaptureViewScreenshotOptions) => {
-    mockCaptureViewScreenshot(options);
-  },
+vi.mock('#services/headless-capture.js', () => ({
+  captureCadImages: mockCaptureCadImages,
+  captureFilesToDataUrls: () => ['data:image/webp;base64,AQID'],
+  omittedSectionCutsNotice: 'Section cutaways narrower than 180° are not shown in captures.',
 }));
-
-vi.mock('#hooks/use-graphics.js', () => ({
+vi.mock('@taucad/viewer/hooks/use-graphics', () => ({
   useGraphics: () => mockGraphicsRef,
+  useGraphicsSelector: () => mockCanCapture,
 }));
-
-vi.mock('#hooks/use-chat.js', () => ({
-  useChatActions: () => ({ addDraftImage: mockAddDraftImage }),
+vi.mock('#hooks/use-cad.js', () => ({ useCad: () => mockCadRef }));
+vi.mock('#hooks/use-project.js', () => ({ useProject: () => ({ projectRef: { send: mockProjectSend } }) }));
+vi.mock('#hooks/use-chat.js', () => ({ useChatActions: () => ({ addDraftAttachment: mockAddDraftAttachment }) }));
+vi.mock('#hooks/active-chat-provider.js', () => ({
+  useChatComposer: () => ({ model: { model: mockSelectedModel }, execution: { execution: mockExecution } }),
 }));
-
-vi.mock('#hooks/use-image-quality.js', () => ({
-  useImageQuality: () => ({ quality: 0.42, setQuality: vi.fn() }),
-}));
-
-vi.mock('#hooks/use-tick-animation.js', () => ({
+vi.mock('@taucad/ui/hooks/use-tick-animation', () => ({
   useTickAnimation: () => ({ ticked: false, trigger: mockTrigger }),
 }));
-
-vi.mock('#components/ui/sonner.js', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+vi.mock('#providers/headless-image-provider.js', () => ({
+  useHeadlessImageService: () => mockImageService,
 }));
-
-// Tooltip + DropdownMenuItem render their children directly so we can
-// interact with the underlying button via testing-library.
-vi.mock('#components/ui/tooltip.js', () => ({
+vi.mock('@taucad/ui/components/sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+vi.mock('@taucad/ui/components/tooltip', () => ({
   Tooltip: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
   TooltipTrigger: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
   TooltipContent: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
 }));
-
-vi.mock('#components/ui/button.js', () => ({
+vi.mock('@taucad/ui/components/button', () => ({
   Button: ({ children, onClick }: { readonly children: React.ReactNode; readonly onClick?: () => void }) => (
     <button type='button' onClick={onClick} data-testid='capture-button'>
       {children}
     </button>
   ),
 }));
-
-vi.mock('#components/ui/dropdown-menu.js', () => ({
-  DropdownMenuItem: ({
-    children,
-    onSelect,
-  }: {
-    readonly children: React.ReactNode;
-    readonly onSelect?: () => void;
-  }) => (
-    <button type='button' onClick={onSelect} data-testid='capture-overflow-button'>
-      {children}
-    </button>
-  ),
-}));
-
-const { CaptureViewControl, CaptureViewOverflowControl } =
-  await import('#components/geometry/cad/capture-view-control.js');
+const { CaptureViewControl } = await import('#components/geometry/cad/capture-view-control.js');
 
 describe('CaptureViewControl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    captureCalls.length = 0;
+    mockCanCapture = true;
+    mockSelectedModel = selectedModel;
+    mockExecution = { kind: 'tau', model: 'vision' };
+    mockCaptureCadImages.mockResolvedValue({
+      files: [{ name: 'capture.webp', mimeType: 'image/webp', bytes: new Uint8Array([1, 2, 3]) }],
+      omittedSectionCutIds: [],
+    });
   });
 
-  it('invokes captureViewScreenshot with the per-view graphicsRef + cookie quality on click', async () => {
+  it('should capture the local CAD unit losslessly through the headless service', async () => {
     const user = userEvent.setup();
     render(<CaptureViewControl />);
-
     await user.click(screen.getByTestId('capture-button'));
 
-    expect(mockCaptureViewScreenshot).toHaveBeenCalledOnce();
-    const call = captureCalls[0]!;
-    expect(call.graphicsRef).toBe(mockGraphicsRef);
-    expect(call.quality).toBe(0.42);
-    expect(call.activeActors).toBeInstanceOf(Set);
-  });
-
-  it('forwards the raw screenshot data URL to addDraftImage (machine resizes downstream)', async () => {
-    const user = userEvent.setup();
-    render(<CaptureViewControl />);
-
-    await user.click(screen.getByTestId('capture-button'));
-
-    const oversizedRaw = `data:image/webp;base64,${'A'.repeat(2_000_000)}`;
-    captureCalls[0]!.onImage(oversizedRaw);
-
-    expect(mockAddDraftImage).toHaveBeenCalledExactlyOnceWith(oversizedRaw);
+    await waitFor(() => {
+      expect(mockCaptureCadImages).toHaveBeenCalledOnce();
+    });
+    expect(mockCaptureCadImages).toHaveBeenCalledWith({
+      cadRef: mockCadRef,
+      graphicsRef: mockGraphicsRef,
+      imageService: mockImageService,
+      recipe: { purpose: 'chat', mode: 'current' },
+    });
+    expect(mockAddDraftAttachment).toHaveBeenCalledWith('data:image/webp;base64,AQID', {
+      preserveOriginal: true,
+      model: { name: 'Vision Model', support: selectedModel.model.support },
+    });
     expect(mockTrigger).toHaveBeenCalledOnce();
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
-  it('overflow variant forwards the raw screenshot data URL to addDraftImage', async () => {
+  it('should say when the capture leaves a cut out', async () => {
+    mockCaptureCadImages.mockResolvedValue({
+      files: [{ name: 'capture.webp', mimeType: 'image/webp', bytes: new Uint8Array([1, 2, 3]) }],
+      omittedSectionCutIds: ['cutaway'],
+    });
     const user = userEvent.setup();
-    render(<CaptureViewOverflowControl />);
+    render(<CaptureViewControl />);
+    await user.click(screen.getByTestId('capture-button'));
 
-    await user.click(screen.getByTestId('capture-overflow-button'));
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith('Section cutaways narrower than 180° are not shown in captures.');
+    });
+    expect(mockAddDraftAttachment).toHaveBeenCalledOnce();
+  });
 
-    expect(mockCaptureViewScreenshot).toHaveBeenCalledOnce();
-    const oversizedRaw = `data:image/webp;base64,${'B'.repeat(2_000_000)}`;
-    captureCalls[0]!.onImage(oversizedRaw);
-    expect(mockAddDraftImage).toHaveBeenCalledExactlyOnceWith(oversizedRaw);
+  it('should admit a viewer capture for a local ACP agent without a Tau model row', async () => {
+    mockSelectedModel = { name: 'Stale Tau' };
+    mockExecution = { kind: 'acp', hostId: 'desktop', agentId: 'codex' };
+    const user = userEvent.setup();
+    render(<CaptureViewControl />);
+    await user.click(screen.getByTestId('capture-button'));
+
+    await waitFor(() => {
+      expect(mockAddDraftAttachment).toHaveBeenCalledWith('data:image/webp;base64,AQID', {
+        preserveOriginal: true,
+        model: { name: 'codex', support: { modalities: { input: ['text', 'image', 'pdf'], output: ['text'] } } },
+      });
+    });
+  });
+  it('should explain why an empty model cannot be captured', async () => {
+    mockCanCapture = false;
+    render(<CaptureViewControl />);
+    await userEvent.click(screen.getByTestId('capture-button'));
+    expect(mockCaptureCadImages).not.toHaveBeenCalled();
+    expect(screen.getByText('Available when a model is displayed')).toBeInTheDocument();
   });
 });

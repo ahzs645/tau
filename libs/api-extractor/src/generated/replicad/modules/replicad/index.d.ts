@@ -4,10 +4,11 @@
 import { Adaptor3d_Surface } from 'replicad-opencascadejs';
 import { Bnd_Box } from 'replicad-opencascadejs';
 import { Bnd_Box2d } from 'replicad-opencascadejs';
-import type { Box } from 'manifold-3d';
+import { Box } from 'manifold-3d';
 import { BRepAdaptor_CompCurve } from 'replicad-opencascadejs';
 import { BRepAdaptor_Curve } from 'replicad-opencascadejs';
-import type { BRepExtrema_DistShapeShape } from 'replicad-opencascadejs';
+import { BRepExtrema_DistShapeShape } from 'replicad-opencascadejs';
+import { default as default_2 } from 'opentype.js';
 import { Geom2d_Curve } from 'replicad-opencascadejs';
 import { Geom2dAdaptor_Curve } from 'replicad-opencascadejs';
 import { Geom_Surface } from 'replicad-opencascadejs';
@@ -21,14 +22,13 @@ import { gp_Pnt } from 'replicad-opencascadejs';
 import { gp_Trsf } from 'replicad-opencascadejs';
 import { gp_Vec } from 'replicad-opencascadejs';
 import { gp_XYZ } from 'replicad-opencascadejs';
-import type { GProp_GProps } from 'replicad-opencascadejs';
+import { GProp_GProps } from 'replicad-opencascadejs';
 import { Law_Function } from 'replicad-opencascadejs';
-import type { Manifold } from 'manifold-3d';
-import type { ManifoldToplevel } from 'manifold-3d';
-import type { Mesh } from 'manifold-3d';
+import { Manifold } from 'manifold-3d';
+import { ManifoldToplevel } from 'manifold-3d';
+import { Mesh } from 'manifold-3d';
 import { OpenCascadeInstance } from 'replicad-opencascadejs';
-import { default as opentype_2 } from 'opentype.js';
-import type { TDocStd_Document } from 'replicad-opencascadejs';
+import { TDocStd_Document } from 'replicad-opencascadejs';
 import { TopAbs_ShapeEnum } from 'replicad-opencascadejs';
 import { TopoDS_Compound } from 'replicad-opencascadejs';
 import { TopoDS_CompSolid } from 'replicad-opencascadejs';
@@ -39,12 +39,14 @@ import { TopoDS_Shell } from 'replicad-opencascadejs';
 import { TopoDS_Solid } from 'replicad-opencascadejs';
 import { TopoDS_Vertex } from 'replicad-opencascadejs';
 import { TopoDS_Wire } from 'replicad-opencascadejs';
-import type { Vec3 } from 'manifold-3d';
+import { Vec3 } from 'manifold-3d';
 
 export declare abstract class _1DShape<Type extends TopoDS_Shape> extends Shape<Type> {
     protected abstract _geomAdaptor(): CurveLike;
     get repr(): string;
     get curve(): Curve;
+    /** Runs `read` on a temporary curve adaptor, deleted afterwards. */
+    private _readCurve;
     get startPoint(): Vector;
     get endPoint(): Vector;
     tangentAt(position?: number): Vector;
@@ -54,7 +56,7 @@ export declare abstract class _1DShape<Type extends TopoDS_Shape> extends Shape<
     get period(): number;
     get geomType(): CurveType;
     get length(): number;
-    get orientation(): 'forward' | 'backward';
+    get orientation(): "forward" | "backward";
     flipOrientation(): Type;
 }
 
@@ -67,23 +69,47 @@ export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> imp
      *
      * @category Shape Modifications
      */
-    fuse(other: Shape3D, { optimisation }?: {
-        optimisation?: 'none' | 'commonFace' | 'sameFace';
-    }): Shape3D;
+    fuse(other: Shape3D, options?: BooleanOperationOptions): Shape3D;
+    /**
+     * Builds a new shape by fusing this shape with all provided shapes in one
+     * OCCT boolean operation.
+     *
+     * @category Shape Modifications
+     */
+    fuseAll(others: readonly Shape3D[], options?: BooleanOperationOptions): Shape3D;
     /**
      * Builds a new shape by removing the tool tape from this shape
      *
      * @category Shape Modifications
      */
-    cut(tool: Shape3D, { optimisation }?: {
-        optimisation?: 'none' | 'commonFace' | 'sameFace';
-    }): Shape3D;
+    cut(tool: Shape3D, options?: BooleanOperationOptions): Shape3D;
+    /**
+     * Builds a new shape by removing all provided tool shapes in one OCCT
+     * boolean operation.
+     *
+     * @category Shape Modifications
+     */
+    cutAll(tools: readonly Shape3D[], options?: BooleanOperationOptions): Shape3D;
     /**
      * Builds a new shape by intersecting this shape and another
      *
      * @category Shape Modifications
      */
-    intersect(tool: AnyShape): Shape3D;
+    intersect(tool: AnyShape, options?: BooleanOperationOptions): Shape3D;
+    /**
+     * Builds a new shape by intersecting this shape with all provided shapes in
+     * one OCCT boolean operation.
+     *
+     * @category Shape Modifications
+     */
+    intersectAll(tools: readonly AnyShape[], options?: BooleanOperationOptions): Shape3D;
+    /**
+     * Cuts this shape with a plane and retains one of its half-spaces.
+     * Positive is the direction of the plane normal and is kept by default.
+     *
+     * @category Shape Modifications
+     */
+    cutPlane(plane?: Plane | PlaneName, offset?: number, keep?: PlaneSide): Solid | Compound | null;
     meshShape(options?: {
         tolerance?: number;
         angularTolerance?: number;
@@ -98,8 +124,8 @@ export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> imp
         filter: FaceFinder;
         thickness: number;
     }, tolerance?: number): Shape3D;
-    shell(thickness: number, finderFcn: (f: FaceFinder) => FaceFinder, tolerance?: number): Shape3D;
-    protected _builderIter<R = number>(radiusConfigInput: RadiusConfig<R>, builderAdd: (r: R, edge: TopoDS_Edge) => void, isRadius: (r: unknown) => r is R): number;
+    shell(thickness: number, finderFcn: FinderFunction<FaceFinder, AnyShape>, tolerance?: number): Shape3D;
+    private _shell;
     /**
      * Creates a new shapes with some edges filletted, as specified in the
      * radius config.
@@ -116,7 +142,7 @@ export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> imp
      *
      * @category Shape Modifications
      */
-    fillet(radiusConfig: RadiusConfig<FilletRadius>, filter?: (e: EdgeFinder) => EdgeFinder): Shape3D;
+    fillet(radiusConfig: RadiusConfig<FilletRadius>, filter?: FinderFunction<EdgeFinder, AnyShape>): Shape3D;
     /**
      * Creates a new shapes with some edges chamfered, as specified in the
      * radius config.
@@ -133,7 +159,8 @@ export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> imp
      *
      * @category Shape Modifications
      */
-    chamfer(radiusConfig: RadiusConfig<ChamferRadius>, filter?: (e: EdgeFinder) => EdgeFinder): Shape3D;
+    chamfer(radiusConfig: RadiusConfig<ChamferRadius>, filter?: FinderFunction<EdgeFinder, AnyShape>): Shape3D;
+    private _chamfer;
     /**
      * Applies a draft angle to selected faces of the shape.
      *
@@ -150,10 +177,28 @@ export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> imp
      *
      * @category Shape Modifications
      */
-    draft(angle: number, faceFinder: (e: FaceFinder) => FaceFinder, neutralPlane?: Plane | PlaneName): AnyShape;
+    draft(angle: number, faceFinder: FinderFunction<FaceFinder, AnyShape>, neutralPlane?: Plane | PlaneName): Shape3D;
+    private _draft;
 }
 
-export declare const addHolesInFace: (face: Face, holes: Wire[]) => Face;
+export declare const addHolesInFace: typeof shapeHelpers.addHolesInFace;
+
+declare const addHolesInFace_2: (face: Face, holes: Wire[]) => Face;
+
+declare namespace addThickness {
+    export {
+        basicFaceExtrusion_2 as basicFaceExtrusion,
+        revolution_2 as revolution,
+        GenericSweepConfig,
+        genericSweep_2 as genericSweep,
+        ExtrusionProfile,
+        supportExtrude_2 as supportExtrude,
+        complexExtrude_2 as complexExtrude,
+        twistExtrude_2 as twistExtrude,
+        LoftConfig,
+        loft_2 as loft
+    }
+}
 
 export declare type AnyShape = Vertex | Edge | Wire | Face | Shell | Solid | CompSolid | Compound;
 
@@ -163,16 +208,64 @@ declare interface ApproximationOptions {
     maxSegments?: number;
 }
 
-export declare function asDir(coords: Point): gp_Dir;
+export declare function asDir(direction: Direction): gp_Dir;
 
 export declare function asPnt(coords: Point): gp_Pnt;
 
-export declare const assembleWire: (listOfEdges: (Edge | Wire)[]) => Wire;
+export declare const assembleWire: typeof shapeHelpers.assembleWire;
+
+declare const assembleWire_2: (listOfEdges: (Edge | Wire)[]) => Wire;
 
 export declare class AssemblyExporter extends WrappingObj<TDocStd_Document> {
 }
 
+/**
+ * Creates a predicate for a finder's `when` method that selects elements
+ * touching an axis-aligned bounding-box extreme of a shape.
+ *
+ * An element is selected when its bounding-box minimum or maximum is within
+ * `tolerance` of the corresponding bound of `shape`. This means that a side
+ * face touching the top of a shape is considered top-most too. Combine this
+ * predicate with an orientation filter when only horizontal or vertical
+ * elements should be selected.
+ *
+ * The shape bounds are calculated once when the predicate is created. Element
+ * bounds are calculated whenever the predicate is evaluated.
+ *
+ * @param shape - Shape whose bounds define the extremum.
+ * @param axis - Cartesian axis along which to compare bounds.
+ * @param extremum - Whether to compare the minimum or maximum bound.
+ * @param tolerance - Maximum difference between bounds. Defaults to `1e-6`.
+ * @returns A predicate that can be passed to `EdgeFinder.when` or
+ * `FaceFinder.when`.
+ *
+ * @example
+ * const topEdges = new EdgeFinder()
+ *   .when(atShapeExtremum(shape, "Z", "max"))
+ *   .parallelTo("XY")
+ *   .find(shape);
+ *
+ * @category Finders
+ */
+export declare const atShapeExtremum: (shape: AnyShape, axis: CartesianAxis, extremum: "min" | "max", tolerance?: number) => ShapeExtremumFilter;
+
 export declare const axis2d: (point: Point2D, direction: Point2D) => gp_Ax2d;
+
+export declare const AXIS_NAMES: readonly ["X", "Y", "Z", "-X", "-Y", "-Z"];
+
+export declare type AxisName = (typeof AXIS_NAMES)[number];
+
+/**
+ * Creates a predicate selecting elements touching the shape's minimum Y bound.
+ *
+ * "Back" is defined as the negative Y direction.
+ *
+ * @example
+ * finder.when(backMost(shape));
+ *
+ * @category Finders
+ */
+export declare const backMost: (shape: AnyShape, tolerance?: number) => ShapeExtremumFilter;
 
 export declare class BaseSketcher2d {
     protected pointer: Point2D;
@@ -244,7 +337,9 @@ export declare class BaseSketcher2d {
     protected _closeWithMirror(): void;
 }
 
-export declare const basicFaceExtrusion: (face: Face, extrusionVec: Vector) => Solid;
+export declare const basicFaceExtrusion: typeof addThickness.basicFaceExtrusion;
+
+declare const basicFaceExtrusion_2: (face: Face, extrusionVec: Vector) => Solid;
 
 /**
  * A Blueprint is an abstract Sketch, a 2D set of curves that can then be
@@ -259,6 +354,7 @@ export declare class Blueprint implements DrawingInterface {
     private _guessedOrientation;
     constructor(curves: Curve2D[]);
     delete(): void;
+    /** A copy with its own curves: deleting one leaves the other intact. */
     clone(): Blueprint;
     get repr(): string;
     get boundingBox(): BoundingBox2d;
@@ -294,7 +390,9 @@ export declare class Blueprints implements DrawingInterface {
     protected _boundingBox: BoundingBox2d | null;
     constructor(blueprints: Array<Blueprint | CompoundBlueprint>);
     get repr(): string;
+    /** A copy with its own curves: deleting one leaves the other intact. */
     clone(): Blueprints;
+    delete(): void;
     get boundingBox(): BoundingBox2d;
     stretch(ratio: number, direction: Point2D, origin: Point2D): Blueprints;
     rotate(angle: number, center?: Point2D): Blueprints;
@@ -326,6 +424,37 @@ export declare class BlueprintSketcher extends BaseSketcher2d implements Generic
      */
     closeWithCustomCorner(radius: number, mode?: "fillet" | "chamfer" | "dogbone"): Blueprint;
 }
+
+declare namespace boolean2D {
+    export {
+        intersect2D_2 as intersect2D,
+        Shape2D,
+        fuse2D_2 as fuse2D,
+        cut2D_2 as cut2D
+    }
+}
+
+export declare interface BooleanOperationOptions {
+    optimisation?: "none" | "commonFace" | "sameFace";
+}
+
+declare namespace booleanOperations {
+    export {
+        fuseBlueprints_2 as fuseBlueprints,
+        cutBlueprints_2 as cutBlueprints,
+        intersectBlueprints_2 as intersectBlueprints
+    }
+}
+
+/**
+ * Creates a predicate selecting elements touching the shape's minimum Z bound.
+ *
+ * @example
+ * finder.when(bottomMost(shape));
+ *
+ * @category Finders
+ */
+export declare const bottomMost: (shape: AnyShape, tolerance?: number) => ShapeExtremumFilter;
 
 export declare class BoundingBox extends WrappingObj<Bnd_Box> {
     constructor(wrapped?: Bnd_Box);
@@ -360,7 +489,38 @@ export declare interface BSplineApproximationConfig {
     smoothing?: null | [number, number, number];
 }
 
-export declare function cast(shape: TopoDS_Shape): AnyShape;
+/**
+ * Runs `fn` as library-internal work: the routed API it calls passes straight
+ * through to the implementation. A cache uses it for its own calls into
+ * Replicad (cloning a kept result, reading a value).
+ */
+export declare function bypassOperationCache<T>(fn: () => T): T;
+
+declare namespace cannedBlueprints {
+    export {
+        polysidesBlueprint_2 as polysidesBlueprint,
+        roundedRectangleBlueprint_2 as roundedRectangleBlueprint
+    }
+}
+
+declare namespace cannedSketches {
+    export {
+        PlaneConfig,
+        sketchCircle_2 as sketchCircle,
+        sketchEllipse_2 as sketchEllipse,
+        sketchRectangle_2 as sketchRectangle,
+        sketchRoundedRectangle_2 as sketchRoundedRectangle,
+        sketchPolysides_2 as sketchPolysides,
+        polysideInnerRadius,
+        sketchFaceOffset_2 as sketchFaceOffset,
+        sketchParametricFunction_2 as sketchParametricFunction,
+        sketchHelix_2 as sketchHelix
+    }
+}
+
+declare type CartesianAxis = "X" | "Y" | "Z";
+
+export declare const cast: (shape: TopoDS_Shape) => AnyShape;
 
 /**
  * We can defined a chamfer with only a number - in that case it will be
@@ -379,11 +539,11 @@ export declare function cast(shape: TopoDS_Shape): AnyShape;
  */
 export declare type ChamferRadius = number | {
     distances: [number, number];
-    selectedFace: (f: FaceFinder) => FaceFinder;
+    selectedFace: FinderFunction<FaceFinder, AnyShape>;
 } | {
     distance: number;
     angle: number;
-    selectedFace: (f: FaceFinder) => FaceFinder;
+    selectedFace: FinderFunction<FaceFinder, AnyShape>;
 };
 
 /**
@@ -400,9 +560,11 @@ export declare const combineFinderFilters: <Type, T, R = number>(filters: {
     radius: R;
 }[]) => [(v: Type) => R | null, () => void];
 
-export declare function complexExtrude(wire: Wire, center: Point, normal: Point, profileShape: ExtrusionProfile | undefined, shellMode: true): [Shape3D, Wire, Wire];
+export declare const complexExtrude: typeof addThickness.complexExtrude;
 
-export declare function complexExtrude(wire: Wire, center: Point, normal: Point, profileShape?: ExtrusionProfile, shellMode?: false): Shape3D;
+declare function complexExtrude_2(wire: Wire, center: Point, normal: Point, profileShape: ExtrusionProfile | undefined, shellMode: true): [Shape3D, Wire, Wire];
+
+declare function complexExtrude_2(wire: Wire, center: Point, normal: Point, profileShape?: ExtrusionProfile, shellMode?: false): Shape3D;
 
 export declare class Compound extends _3DShape<TopoDS_Compound> {
 }
@@ -411,7 +573,9 @@ export declare class CompoundBlueprint implements DrawingInterface {
     blueprints: Blueprint[];
     protected _boundingBox: BoundingBox2d | null;
     constructor(blueprints: Blueprint[]);
+    /** A copy with its own curves: deleting one leaves the other intact. */
     clone(): CompoundBlueprint;
+    delete(): void;
     get boundingBox(): BoundingBox2d;
     get repr(): string;
     stretch(ratio: number, direction: Point2D, origin: Point2D): CompoundBlueprint;
@@ -433,7 +597,9 @@ export declare class CompoundBlueprint implements DrawingInterface {
     toSVG(margin?: number): string;
 }
 
-export declare const compoundShapes: (shapeArray: AnyShape[]) => AnyShape;
+export declare const compoundShapes: typeof shapeHelpers.compoundShapes;
+
+declare const compoundShapes_2: (shapeArray: AnyShape[]) => AnyShape;
 
 /**
  * A group of sketches that should correspond to a unique face (i.e. an outer
@@ -473,8 +639,8 @@ export declare class CompSolid extends _3DShape<TopoDS_CompSolid> {
 
 declare type CoordSystem = "reference" | {
     origin: Point;
-    zDir: Point;
-    xDir: Point;
+    zDir: Direction;
+    xDir: Direction;
 };
 
 export declare type Corner = {
@@ -531,7 +697,6 @@ export declare class Curve extends WrappingObj<CurveLike> {
     get curveType(): CurveType;
     get startPoint(): Vector;
     get endPoint(): Vector;
-    protected _mapParameter(position: number): number;
     pointAt(position?: number): Vector;
     tangentAt(position?: number): Vector;
     get isClosed(): boolean;
@@ -542,6 +707,7 @@ export declare class Curve extends WrappingObj<CurveLike> {
 export declare class Curve2D extends WrappingObj<Geom2d_Curve> {
     _boundingBox: null | BoundingBox2d;
     constructor(handle: Geom2d_Curve);
+    delete(): void;
     get boundingBox(): BoundingBox2d;
     get repr(): string;
     get innerCurve(): Geom2d_Curve;
@@ -578,9 +744,13 @@ export declare interface CurveLike {
 
 export declare type CurveType = "LINE" | "CIRCLE" | "ELLIPSE" | "HYPERBOLA" | "PARABOLA" | "BEZIER_CURVE" | "BSPLINE_CURVE" | "OFFSET_CURVE" | "OTHER_CURVE";
 
-export declare const cut2D: (first: Shape2D, second: Shape2D) => Blueprint | Blueprints | CompoundBlueprint | null;
+export declare const cut2D: typeof boolean2D.cut2D;
 
-export declare const cutBlueprints: (first: Blueprint, second: Blueprint) => null | Blueprint | Blueprints;
+declare const cut2D_2: (first: Shape2D, second: Shape2D) => Blueprint | Blueprints | CompoundBlueprint | null;
+
+export declare const cutBlueprints: typeof booleanOperations.cutBlueprints;
+
+declare const cutBlueprints_2: (first: Blueprint, second: Blueprint) => null | Blueprint | Blueprints;
 
 export declare const DEG2RAD: number;
 
@@ -592,13 +762,18 @@ export declare interface Deletable {
  * Deserializes a drawing from a string. String is expected to be in the format
  * generated by `Drawing.serialize()`.
  */
-export declare function deserializeDrawing(data: string): Drawing;
+export declare const deserializeDrawing: typeof drawModule.deserializeDrawing;
+
+/**
+ * Deserializes a drawing from a string. String is expected to be in the format
+ * generated by `Drawing.serialize()`.
+ */
+declare function deserializeDrawing_2(data: string): Drawing;
 
 export declare function deserializeShape(data: string): AnyShape;
 
-declare type Direction = Point | "X" | "Y" | "Z";
-
-declare type Direction_2 = "X" | "Y" | "Z";
+/** A vector-like point or a named principal axis. */
+export declare type Direction = Point | AxisName;
 
 export declare class DistanceQuery extends WrappingObj<BRepExtrema_DistShapeShape> {
     constructor(shape: AnyShape);
@@ -617,7 +792,14 @@ export declare function downcast(shape: TopoDS_Shape): GenericTopo;
  *
  * @category Drawing
  */
-export declare function draw(initialPoint?: Point2D): DrawingPen;
+export declare const draw: typeof drawModule.draw;
+
+/**
+ * Creates a drawing pen to programatically draw in 2D.
+ *
+ * @category Drawing
+ */
+declare function draw_2(initialPoint?: Point2D): DrawingPen;
 
 /**
  * Creates the `Drawing` of a circle.
@@ -626,7 +808,16 @@ export declare function draw(initialPoint?: Point2D): DrawingPen;
  *
  * @category Drawing
  */
-export declare function drawCircle(radius: number): Drawing;
+export declare const drawCircle: typeof drawModule.drawCircle;
+
+/**
+ * Creates the `Drawing` of a circle.
+ *
+ * The circle is centered on [0, 0]
+ *
+ * @category Drawing
+ */
+declare function drawCircle_2(radius: number): Drawing;
 
 /**
  * Creates the `Drawing` of an ellipse.
@@ -635,25 +826,37 @@ export declare function drawCircle(radius: number): Drawing;
  *
  * @category Drawing
  */
-export declare function drawEllipse(majorRadius: number, minorRadius: number): Drawing;
+export declare const drawEllipse: typeof drawModule.drawEllipse;
+
+/**
+ * Creates the `Drawing` of an ellipse.
+ *
+ * The ellipse is centered on [0, 0], with axes aligned with the coordinates.
+ *
+ * @category Drawing
+ */
+declare function drawEllipse_2(majorRadius: number, minorRadius: number): Drawing;
 
 /**
  * Creates the `Drawing` out of a face
  *
  * @category Drawing
  */
-export declare function drawFaceOutline(face: Face): Drawing;
+export declare const drawFaceOutline: typeof drawModule.drawFaceOutline;
 
 /**
- * @categoryDescription Drawing
+ * Creates the `Drawing` out of a face
  *
- * Drawing are shapes in the 2D space. You can either use a "builder pen" to
- * draw a shape, or use some of the canned shapes like circles or rectangles.
+ * @category Drawing
  */
+declare function drawFaceOutline_2(face: Face): Drawing;
+
 export declare class Drawing implements DrawingInterface {
     private innerShape;
     constructor(innerShape?: Shape2D);
     clone(): Drawing;
+    /** Deletes the curves the drawing owns. */
+    delete(): void;
     serialize(): string;
     get boundingBox(): BoundingBox2d;
     stretch(ratio: number, direction: Point2D, origin: Point2D): Drawing;
@@ -687,14 +890,14 @@ export declare class Drawing implements DrawingInterface {
      *
      * @category Drawing Modifications
      */
-    fillet(radius: number, filter?: (c: CornerFinder) => CornerFinder): Drawing;
+    fillet(radius: number, filter?: FinderFunction<CornerFinder, Shape2D>): Drawing;
     /**
      * Creates a new drawing with some corners filletted, as specified by the
      * radius and the corner finder function
      *
      * @category Drawing Modifications
      */
-    chamfer(radius: number, filter?: (c: CornerFinder) => CornerFinder): Drawing;
+    chamfer(radius: number, filter?: FinderFunction<CornerFinder, Shape2D>): Drawing;
     sketchOnPlane(inputPlane: Plane): SketchInterface | Sketches;
     sketchOnPlane(inputPlane?: PlaneName, origin?: Point | number): SketchInterface | Sketches;
     sketchOnFace(face: Face, scaleMode: ScaleMode): SketchInterface | Sketches;
@@ -713,6 +916,7 @@ export declare class Drawing implements DrawingInterface {
 
 export declare interface DrawingInterface {
     clone(): DrawingInterface;
+    delete(): void;
     boundingBox: BoundingBox2d;
     stretch(ratio: number, direction: Point2D, origin: Point2D): DrawingInterface;
     rotate(angle: number, center: Point2D): DrawingInterface;
@@ -777,6 +981,27 @@ export declare class DrawingPen extends BaseSketcher2d implements GenericSketche
     closeWithCustomCorner(radius: number, mode?: "fillet" | "chamfer"): Drawing;
 }
 
+declare namespace drawModule {
+    export {
+        deserializeDrawing_2 as deserializeDrawing,
+        draw_2 as draw,
+        drawRoundedRectangle_2 as drawRoundedRectangle,
+        drawSingleCircle_2 as drawSingleCircle,
+        drawSingleEllipse_2 as drawSingleEllipse,
+        drawCircle_2 as drawCircle,
+        drawEllipse_2 as drawEllipse,
+        drawPolysides_2 as drawPolysides,
+        drawText_2 as drawText,
+        drawProjection_2 as drawProjection,
+        drawFaceOutline_2 as drawFaceOutline,
+        Drawing,
+        DrawingPen,
+        drawRectangle_2 as drawRectangle,
+        drawPointsInterpolation_2 as drawPointsInterpolation,
+        drawParametricFunction_2 as drawParametricFunction
+    }
+}
+
 /**
  * Creates the `Drawing` of parametric function
  *
@@ -785,7 +1010,17 @@ export declare class DrawingPen extends BaseSketcher2d implements GenericSketche
  *
  * @category Drawing
  */
-export declare const drawParametricFunction: (func: (t: number) => Point2D, { pointsCount, start, stop, closeShape }?: {
+export declare const drawParametricFunction: typeof drawModule.drawParametricFunction;
+
+/**
+ * Creates the `Drawing` of parametric function
+ *
+ * The drawing will be a spline approximating the function. Note that the
+ * degree should be at maximum 3 if you need to export the drawing as an SVG.
+ *
+ * @category Drawing
+ */
+declare const drawParametricFunction_2: (func: (t: number) => Point2D, { pointsCount, start, stop, closeShape }?: {
     pointsCount?: number | undefined;
     start?: number | undefined;
     stop?: number | undefined;
@@ -800,7 +1035,17 @@ export declare const drawParametricFunction: (func: (t: number) => Point2D, { po
  *
  * @category Drawing
  */
-export declare const drawPointsInterpolation: (points: Point2D[], approximationConfig?: BSplineApproximationConfig, options?: {
+export declare const drawPointsInterpolation: typeof drawModule.drawPointsInterpolation;
+
+/**
+ * Creates the `Drawing` by interpolating points as a curve
+ *
+ * The drawing will be a spline approximating the points. Note that the
+ * degree should be at maximum 3 if you need to export the drawing as an SVG.
+ *
+ * @category Drawing
+ */
+declare const drawPointsInterpolation_2: (points: Point2D[], approximationConfig?: BSplineApproximationConfig, options?: {
     closeShape?: boolean;
 }) => Drawing;
 
@@ -812,7 +1057,17 @@ export declare const drawPointsInterpolation: (points: Point2D[], approximationC
  *
  * @category Drawing
  */
-export declare function drawPolysides(radius: number, sidesCount: number, sagitta?: number): Drawing;
+export declare const drawPolysides: typeof drawModule.drawPolysides;
+
+/**
+ * Creates the `Drawing` of an polygon in a defined plane
+ *
+ * The sides of the polygon can be arcs of circle with a defined sagitta.
+ * The radius defines the out radius of the polygon without sagitta
+ *
+ * @category Drawing
+ */
+declare function drawPolysides_2(radius: number, sidesCount: number, sagitta?: number): Drawing;
 
 /**
  * Creates the `Drawing` of a projection of a shape on a plane.
@@ -821,12 +1076,23 @@ export declare function drawPolysides(radius: number, sidesCount: number, sagitt
  *
  * @category Drawing
  */
-export declare function drawProjection(shape: AnyShape, projectionCamera?: ProjectionPlane | ProjectionCamera): {
+export declare const drawProjection: typeof drawModule.drawProjection;
+
+/**
+ * Creates the `Drawing` of a projection of a shape on a plane.
+ *
+ * The projection is done by projecting the edges of the shape on the plane.
+ *
+ * @category Drawing
+ */
+declare function drawProjection_2(shape: AnyShape, projectionCamera?: ProjectionPlane | ProjectionCamera): {
     visible: Drawing;
     hidden: Drawing;
 };
 
-export declare const drawRectangle: typeof drawRoundedRectangle;
+export declare const drawRectangle: typeof drawModule.drawRectangle;
+
+declare const drawRectangle_2: typeof drawRoundedRectangle_2;
 
 /**
  * Creates the `Drawing` of a rectangle with (optional) rounded corners.
@@ -835,7 +1101,16 @@ export declare const drawRectangle: typeof drawRoundedRectangle;
  *
  * @category Drawing
  */
-export declare function drawRoundedRectangle(width: number, height: number, r?: number | {
+export declare const drawRoundedRectangle: typeof drawModule.drawRoundedRectangle;
+
+/**
+ * Creates the `Drawing` of a rectangle with (optional) rounded corners.
+ *
+ * The rectangle is centered on [0, 0]
+ *
+ * @category Drawing
+ */
+declare function drawRoundedRectangle_2(width: number, height: number, r?: number | {
     rx?: number;
     ry?: number;
 }): Drawing;
@@ -847,7 +1122,16 @@ export declare function drawRoundedRectangle(width: number, height: number, r?: 
  *
  * @category Drawing
  */
-export declare function drawSingleCircle(radius: number): Drawing;
+export declare const drawSingleCircle: typeof drawModule.drawSingleCircle;
+
+/**
+ * Creates the `Drawing` of a circle as one single curve.
+ *
+ * The circle is centered on [0, 0]
+ *
+ * @category Drawing
+ */
+declare function drawSingleCircle_2(radius: number): Drawing;
 
 /**
  * Creates the `Drawing` of an ellipse as one single curve.
@@ -856,7 +1140,16 @@ export declare function drawSingleCircle(radius: number): Drawing;
  *
  * @category Drawing
  */
-export declare function drawSingleEllipse(majorRadius: number, minorRadius: number): Drawing;
+export declare const drawSingleEllipse: typeof drawModule.drawSingleEllipse;
+
+/**
+ * Creates the `Drawing` of an ellipse as one single curve.
+ *
+ * The ellipse is centered on [0, 0], with axes aligned with the coordinates.
+ *
+ * @category Drawing
+ */
+declare function drawSingleEllipse_2(majorRadius: number, minorRadius: number): Drawing;
 
 /**
  * Creates the `Drawing` of a text, in a defined font size and a font familiy
@@ -864,7 +1157,15 @@ export declare function drawSingleEllipse(majorRadius: number, minorRadius: numb
  *
  * @category Drawing
  */
-export declare function drawText(text: string, { startX, startY, fontSize, fontFamily }?: {
+export declare const drawText: typeof drawModule.drawText;
+
+/**
+ * Creates the `Drawing` of a text, in a defined font size and a font familiy
+ * (which will be the default).
+ *
+ * @category Drawing
+ */
+declare function drawText_2(text: string, { startX, startY, fontSize, fontFamily }?: {
     startX?: number | undefined;
     startY?: number | undefined;
     fontSize?: number | undefined;
@@ -888,7 +1189,7 @@ export declare class EdgeFinder extends Finder3d<Edge> {
      *
      * @category Filter
      */
-    inDirection(direction: Direction_2 | Point): this;
+    inDirection(direction: Direction): this;
     /**
      * Filter to find edges of a certain length
      *
@@ -923,6 +1224,13 @@ export declare class EdgeFinder extends Finder3d<Edge> {
     protected applyFilter(shape: AnyShape): Edge[];
 }
 
+/**
+ * Positions of `elements` in the enumeration of `kind` sub shapes of `owner`
+ * (the order of `iterTopo`, which the `edges` and `faces` getters use), or
+ * `undefined` if one of them is not a sub shape of `owner`.
+ */
+export declare function elementOrdinals(owner: TopoDS_Shape, kind: "edge" | "face" | "wire" | "solid" | "vertex", elements: readonly TopoDS_Shape[]): number[] | undefined;
+
 export declare function exportSTEP(shapes?: ShapeConfig[], { unit, modelUnit }?: {
     unit?: SupportedUnit;
     modelUnit?: SupportedUnit;
@@ -936,15 +1244,10 @@ export declare interface ExtrusionProfile {
 export declare class Face extends Shape<TopoDS_Face> {
     protected _geomAdaptor(): Adaptor3d_Surface;
     get surface(): Surface;
-    get orientation(): 'forward' | 'backward';
+    get orientation(): "forward" | "backward";
     flipOrientation(): Face;
     get geomType(): SurfaceType;
-    get UVBounds(): {
-        uMin: number;
-        uMax: number;
-        vMin: number;
-        vMax: number;
-    };
+    get UVBounds(): FaceUVBounds;
     pointOnSurface(u: number, v: number): Vector;
     uvCoordinates(point: Point): [number, number];
     normalAt(locationVector?: Point): Vector;
@@ -1031,6 +1334,13 @@ export declare interface FaceTriangulation {
     verticesNormals: number[];
 }
 
+export declare interface FaceUVBounds {
+    uMin: number;
+    uMax: number;
+    vMin: number;
+    vMax: number;
+}
+
 export declare type FilletRadius = number | [number, number];
 
 export declare type FilterFcn<Type> = {
@@ -1046,8 +1356,17 @@ declare abstract class Finder<Type, FilterType> {
      * current finder
      */
     abstract shouldKeep(t: Type): boolean;
+    private _resources;
     constructor();
+    /**
+     * Deletes the kernel values the filters use. The finder cannot be used
+     * afterwards.
+     */
     delete(): void;
+    /** @ignore The finder deletes `value` when it is deleted. */
+    protected _own<T extends Deletable>(value: T): T;
+    /** @ignore Makes `clone` share this finder's kernel values. */
+    protected _shareResourcesWith(clone: object): void;
     /**
      * Combine logically a set of filter with an AND operation.
      *
@@ -1117,19 +1436,27 @@ declare abstract class Finder3d<Type extends FaceOrEdge> extends Finder<Type, An
      *
      * @category Filter
      */
-    atAngleWith(direction?: Direction_2 | Point, angle?: number): this;
+    atAngleWith(direction?: Direction, angle?: number): this;
     /**
-     * Filter to find elements that are at a specified distance from a point.
+     * Filter to find elements that are at a specified distance from a point,
+     * within the given tolerance.
      *
      * @category Filter
      */
-    atDistance(distance: number, point?: Point): this;
+    atDistance(distance: number, point?: Point, tolerance?: number): this;
     /**
      * Filter to find elements that contain a certain point
      *
      * @category Filter
      */
     containsPoint(point: Point): this;
+    /**
+     * Filter to find elements that are near a certain point, within the given
+     * tolerance.
+     *
+     * @category Filter
+     */
+    near(point: Point, tolerance?: number): this;
     /**
      * Filter to find elements that are within a certain distance from a point.
      *
@@ -1154,12 +1481,48 @@ declare abstract class Finder3d<Type extends FaceOrEdge> extends Finder<Type, An
     inShape(shape: AnyShape): this;
 }
 
-export declare const fuse2D: (first: Shape2D, second: Shape2D) => Blueprint | Blueprints | CompoundBlueprint | null;
+/**
+ * Finder clauses by how their arguments describe them, for a cache that
+ * records finder callbacks instead of running them opaquely: `value`
+ * clauses take plain values, kernel values or shapes; `combinator` clauses
+ * take finder callbacks; `predicate` clauses take an arbitrary function that
+ * only a selection can describe.
+ */
+export declare const finderClauses: {
+    readonly value: readonly ["inList", "atAngleWith", "atDistance", "containsPoint", "near", "withinDistance", "inBox", "inShape", "inDirection", "ofLength", "ofCurveType", "parallelTo", "inPlane", "ofSurfaceType", "atPoint", "ofAngle"];
+    readonly combinator: readonly ["and", "not", "either"];
+    readonly predicate: readonly ["when"];
+};
 
-export declare const fuseBlueprints: (first: Blueprint, second: Blueprint) => null | Blueprint | Blueprints;
+export declare type FinderFunction<FinderType, ShapeType> = (finder: FinderType, shape: ShapeType) => FinderType;
+
+/**
+ * Creates a predicate selecting elements touching the shape's maximum Y bound.
+ *
+ * "Front" is defined as the positive Y direction.
+ *
+ * @example
+ * finder.when(frontMost(shape));
+ *
+ * @category Finders
+ */
+export declare const frontMost: (shape: AnyShape, tolerance?: number) => ShapeExtremumFilter;
+
+export declare const fuse2D: typeof boolean2D.fuse2D;
+
+declare const fuse2D_2: (first: Shape2D, second: Shape2D) => Blueprint | Blueprints | CompoundBlueprint | null;
+
+export declare const fuseBlueprints: typeof booleanOperations.fuseBlueprints;
+
+declare const fuseBlueprints_2: (first: Blueprint, second: Blueprint) => null | Blueprint | Blueprints;
 
 export declare const GCWithObject: (obj: any) => <Type extends Deletable>(value: Type) => Type;
 
+/**
+ * @deprecated Values registered here are deleted only after the returned
+ * function has been garbage collected, which never happens during a
+ * synchronous model build. Use {@link ocScope}.
+ */
 export declare const GCWithScope: () => <Type extends Deletable>(value: Type) => Type;
 
 /**
@@ -1449,31 +1812,34 @@ export declare interface GenericSketcher<ReturnType> {
     closeWithMirror(): ReturnType;
 }
 
-export declare function genericSweep(wire: Wire, spine: Wire, sweepConfig: GenericSweepConfig, shellMode: true): [Shape3D, Wire, Wire];
+export declare const genericSweep: typeof addThickness.genericSweep;
 
-export declare function genericSweep(wire: Wire, spine: Wire, sweepConfig: GenericSweepConfig, shellMode?: false): Shape3D;
+declare function genericSweep_2(wire: Wire, spine: Wire, sweepConfig: GenericSweepConfig, shellMode: true): [Shape3D, Wire, Wire];
+
+declare function genericSweep_2(wire: Wire, spine: Wire, sweepConfig: GenericSweepConfig, shellMode?: false): Shape3D;
 
 export declare interface GenericSweepConfig {
     frenet?: boolean;
     auxiliarySpine?: Wire | Edge;
-    law?: null | Handle_Law_Function;
+    law?: null | Law_Function;
     transitionMode?: "right" | "transformed" | "round";
     withContact?: boolean;
     support?: TopoDS_Shape;
     forceProfileSpineOthogonality?: boolean;
 }
 
-declare type GenericTopo = TopoDS_Vertex | TopoDS_Face | TopoDS_Shape | TopoDS_Edge | TopoDS_Wire | TopoDS_Shell | TopoDS_Vertex | TopoDS_Solid | TopoDS_Compound | TopoDS_CompSolid;
+declare type GenericTopo = TopologyMap[TopoEntity];
 
-export declare const getFont: (fontFamily?: string) => opentype_2.Font;
+export declare const getFont: (fontFamily?: string) => default_2.Font;
 
 export declare const getManifold: () => ManifoldToplevel;
 
 export declare const getOC: () => OpenCascadeInstance;
 
-export declare function getSingleFace(f: SingleFace, shape: AnyShape): Face;
+/** The installed operation cache, if any. */
+export declare function getOperationCache(): OperationCache | undefined;
 
-declare type Handle_Law_Function = ReturnType<Law_Function["Trim"]>;
+export declare function getSingleFace(f: SingleFace, shape: AnyShape): Face;
 
 export declare const HASH_CODE_MAX = 2147483647;
 
@@ -1482,7 +1848,7 @@ export declare const HASH_CODE_MAX = 2147483647;
  *
  * @category Import
  */
-export declare function importSTEP(STLBlob: Blob): Promise<AnyShape>;
+export declare function importSTEP(STLBlob: Blob): Promise< AnyShape>;
 
 /** Creates a new shapes from a STL file (as a Blob or a File).
  *
@@ -1494,7 +1860,7 @@ export declare function importSTEP(STLBlob: Blob): Promise<AnyShape>;
  *
  * @category Import
  */
-export declare function importSTL(STLBlob: Blob): Promise<AnyShape>;
+export declare function importSTL(STLBlob: Blob): Promise< AnyShape>;
 
 /**
  * Imports an STL file (as a Blob or a File) and creates a MeshShape.
@@ -1509,9 +1875,13 @@ export declare function importSTL(STLBlob: Blob): Promise<AnyShape>;
  */
 export declare function importSTLAsMesh(stlBlob: Blob): Promise<MeshShape>;
 
-export declare function intersect2D(first: Shape2D, second: Shape2D): Blueprint | Blueprints | CompoundBlueprint | null;
+export declare const intersect2D: typeof boolean2D.intersect2D;
 
-export declare const intersectBlueprints: (first: Blueprint, second: Blueprint) => null | Blueprint | Blueprints;
+declare function intersect2D_2(first: Shape2D, second: Shape2D): Blueprint | Blueprints | CompoundBlueprint | null;
+
+export declare const intersectBlueprints: typeof booleanOperations.intersectBlueprints;
+
+declare const intersectBlueprints_2: (first: Blueprint, second: Blueprint) => null | Blueprint | Blueprints;
 
 export declare function isPoint(p: unknown): p is Point;
 
@@ -1521,7 +1891,23 @@ export declare function isShape3D(shape: AnyShape): shape is Shape3D;
 
 export declare function isWire(shape: AnyShape): shape is Wire;
 
-export declare const iterTopo: (shape: TopoDS_Shape, topo: TopoEntity) => IterableIterator<TopoDS_Shape>;
+/**
+ * Yields each distinct sub shape of `topo` kind once, in explorer order. Every
+ * yielded handle is a new one that the consumer owns and must delete (or hand
+ * to a wrapper); the iterator deletes everything else it creates, including
+ * when the consumer stops early.
+ */
+export declare function iterTopo<Entity extends TopoEntity>(shape: TopoDS_Shape, topo: Entity): IterableIterator<TopologyMap[Entity]>;
+
+/**
+ * Creates a predicate selecting elements touching the shape's minimum X bound.
+ *
+ * @example
+ * finder.when(leftMost(shape));
+ *
+ * @category Finders
+ */
+export declare const leftMost: (shape: AnyShape, tolerance?: number) => ShapeExtremumFilter;
 
 export declare class LinearPhysicalProperties extends PhysicalProperties {
     get length(): number;
@@ -1533,11 +1919,17 @@ export declare class LinearPhysicalProperties extends PhysicalProperties {
  *
  * The font should be in TTF
  */
-export declare function loadFont(fontPath: string | ArrayBuffer, fontFamily?: string, force?: boolean): Promise<opentype_2.Font>;
+export declare function loadFont(fontPath: string | ArrayBuffer, fontFamily?: string, force?: boolean): Promise<default_2.Font>;
 
+/**
+ * @deprecated Use {@link ocScope}, which also skips values that were already
+ * deleted and can release a value with `keep`.
+ */
 export declare const localGC: (debug?: boolean) => [<T extends Deletable>(v: T) => T, () => void, Set<Deletable> | undefined];
 
-export declare const loft: (wires: Wire[], { ruled, startPoint, endPoint }?: LoftConfig, returnShell?: boolean) => Shape3D;
+export declare const loft: typeof addThickness.loft;
+
+declare const loft_2: (wires: Wire[], { ruled, startPoint, endPoint }?: LoftConfig, returnShell?: boolean) => Shape3D;
 
 export declare interface LoftConfig {
     ruled?: boolean;
@@ -1547,11 +1939,11 @@ export declare interface LoftConfig {
 
 export declare function lookFromPlane(projectionPlane: ProjectionPlane): ProjectionCamera;
 
-export declare const makeAx1: (center: Point, dir: Point) => gp_Ax1;
+export declare const makeAx1: (center: Point, dir: Direction) => gp_Ax1;
 
-export declare const makeAx2: (center: Point, dir: Point, xDir?: Point) => gp_Ax2;
+export declare const makeAx2: (center: Point, dir: Direction, xDir?: Direction) => gp_Ax2;
 
-export declare const makeAx3: (center: Point, dir: Point, xDir?: Point) => gp_Ax3;
+export declare const makeAx3: (center: Point, dir: Direction, xDir?: Direction) => gp_Ax3;
 
 /**
  * Builds a rectangular box of the given lengths.
@@ -1567,54 +1959,117 @@ export declare const makeAx3: (center: Point, dir: Point, xDir?: Point) => gp_Ax
  *
  * @category Solids
  */
-export declare const makeBaseBox: (xLength: number, yLength: number, zLength: number) => Shape3D;
+export declare const makeBaseBox: typeof shortcuts.makeBaseBox;
 
-export declare const makeBezierCurve: (points: Point[]) => Edge;
+/**
+ * Builds a rectangular box of the given lengths.
+ *
+ * The box is centred on the origin in X and Y (spanning `[-x/2, +x/2]` and
+ * `[-y/2, +y/2]`) and corner-based in Z (spanning `[0, +z]`). Translate by
+ * `[0, 0, -z/2]` to centre the box fully, or use {@link makeBox} when you
+ * want explicit two-corner control.
+ *
+ * @example
+ * const slab = makeBaseBox(30, 50, 10);
+ * // slab spans x: [-15, 15], y: [-25, 25], z: [0, 10]
+ *
+ * @category Solids
+ */
+declare const makeBaseBox_2: (xLength: number, yLength: number, zLength: number) => Shape3D;
+
+export declare const makeBezierCurve: typeof shapeHelpers.makeBezierCurve;
+
+declare const makeBezierCurve_2: (points: Point[]) => Edge;
 
 /**
  * Creates a box with the given corner points.
  *
  * @category Solids
  */
-export declare const makeBox: (corner1: Point, corner2: Point) => Solid;
+export declare const makeBox: typeof shapeHelpers.makeBox;
 
-export declare const makeBSplineApproximation: (points: Point[], { tolerance, smoothing, degMax, degMin, }?: BSplineApproximationConfig) => Edge;
+/**
+ * Creates a box with the given corner points.
+ *
+ * @category Solids
+ */
+declare const makeBox_2: (corner1: Point, corner2: Point) => Solid;
 
-export declare const makeCircle: (radius: number, center?: Point, normal?: Point) => Edge;
+export declare const makeBSplineApproximation: typeof shapeHelpers.makeBSplineApproximation;
 
-export declare const makeCompound: (shapeArray: AnyShape[]) => AnyShape;
+declare const makeBSplineApproximation_2: (points: Point[], { tolerance, smoothing, degMax, degMin, }?: BSplineApproximationConfig) => Edge;
+
+export declare const makeCircle: typeof shapeHelpers.makeCircle;
+
+declare const makeCircle_2: (radius: number, center?: Point, normal?: Direction) => Edge;
+
+export declare const makeCompound: typeof shapeHelpers.makeCompound;
+
+declare const makeCompound_2: (shapeArray: AnyShape[]) => AnyShape;
 
 /**
  * Creates a cylinder with the given radius and height.
  *
  * @category Solids
  */
-export declare const makeCylinder: (radius: number, height: number, location?: Point, direction?: Point) => Solid;
+export declare const makeCylinder: typeof shapeHelpers.makeCylinder;
 
-export declare function makeDirection(p: Direction): Point;
+/**
+ * Creates a cylinder with the given radius and height.
+ *
+ * @category Solids
+ */
+declare const makeCylinder_2: (radius: number, height: number, location?: Point, direction?: Direction) => Solid;
 
-export declare const makeEllipse: (majorRadius: number, minorRadius: number, center?: Point, normal?: Point, xDir?: Point) => Edge;
+export declare const makeDirection: typeof resolveDirection;
 
-export declare const makeEllipseArc: (majorRadius: number, minorRadius: number, startAngle: number, endAngle: number, center?: Point, normal?: Point, xDir?: Point) => Edge;
+export declare function makeDirVector(direction: Direction): Vector;
+
+export declare const makeEllipse: typeof shapeHelpers.makeEllipse;
+
+declare const makeEllipse_2: (majorRadius: number, minorRadius: number, center?: Point, normal?: Direction, xDir?: Direction) => Edge;
+
+export declare const makeEllipseArc: typeof shapeHelpers.makeEllipseArc;
+
+declare const makeEllipseArc_2: (majorRadius: number, minorRadius: number, startAngle: number, endAngle: number, center?: Point, normal?: Direction, xDir?: Direction) => Edge;
 
 /**
  * Creates an ellipsoid with the given lengths of the axes, centred on the origin.
  *
  * @category Solids
  */
-export declare const makeEllipsoid: (aLength: number, bLength: number, cLength: number) => Solid;
+export declare const makeEllipsoid: typeof shapeHelpers.makeEllipsoid;
 
-export declare const makeFace: (wire: Wire, holes?: Wire[]) => Face;
+/**
+ * Creates an ellipsoid with the given lengths of the axes, centred on the origin.
+ *
+ * @category Solids
+ */
+declare const makeEllipsoid_2: (aLength: number, bLength: number, cLength: number) => Solid;
 
-export declare const makeHelix: (pitch: number, height: number, radius: number, center?: Point, dir?: Point, lefthand?: boolean) => Wire;
+export declare const makeFace: typeof shapeHelpers.makeFace;
 
-export declare const makeLine: (v1: Point, v2: Point) => Edge;
+declare const makeFace_2: (wire: Wire, holes?: Wire[]) => Face;
 
-export declare const makeNewFaceWithinFace: (originFace: Face, wire: Wire) => Face;
+export declare const makeHelix: typeof shapeHelpers.makeHelix;
 
-export declare const makeNonPlanarFace: (wire: Wire) => Face;
+declare const makeHelix_2: (pitch: number, height: number, radius: number, center?: Point, dir?: Direction, lefthand?: boolean) => Wire;
 
-export declare const makeOffset: (face: Face, offset: number, tolerance?: number) => Shape3D;
+export declare const makeLine: typeof shapeHelpers.makeLine;
+
+declare const makeLine_2: (v1: Point, v2: Point) => Edge;
+
+export declare const makeNewFaceWithinFace: typeof shapeHelpers.makeNewFaceWithinFace;
+
+declare const makeNewFaceWithinFace_2: (originFace: Face, wire: Wire) => Face;
+
+export declare const makeNonPlanarFace: typeof shapeHelpers.makeNonPlanarFace;
+
+declare const makeNonPlanarFace_2: (wire: Wire) => Face;
+
+export declare const makeOffset: typeof shapeHelpers.makeOffset;
+
+declare const makeOffset_2: (face: Face, offset: number, tolerance?: number) => Shape3D;
 
 export declare function makePlane(plane: Plane): Plane;
 
@@ -1624,13 +2079,17 @@ export declare function makePlane(plane: Plane | PlaneName): Plane;
 
 export declare function makePlane(plane?: PlaneName, origin?: Point | number): Plane;
 
-export declare const makePlaneFromFace: (face: Face, originOnSurface?: Point2D) => Plane;
+export declare const makePlaneFromFace: (face: PlaneFace, originOnSurface?: Point2D) => Plane;
 
-export declare function makePln(origin: Point, dir: Point): gp_Pln;
+export declare function makePln(origin: Point, dir: Direction): gp_Pln;
 
-export declare const makePolygon: (points: Point[]) => Face;
+export declare const makePolygon: typeof shapeHelpers.makePolygon;
 
-export declare function makeProjectedEdges(shape: AnyShape, camera: ProjectionCamera, withHiddenLines?: boolean): {
+declare const makePolygon_2: (points: Point[]) => Face;
+
+export declare const makeProjectedEdges: typeof projection.makeProjectedEdges;
+
+declare function makeProjectedEdges_2(shape: AnyShape, camera: ProjectionCamera, withHiddenLines?: boolean): {
     visible: Edge[];
     hidden: Edge[];
 };
@@ -1642,20 +2101,42 @@ export declare function makeProjectedEdges(shape: AnyShape, camera: ProjectionCa
  *
  * @category Solids
  **/
-export declare function makeSolid(facesOrShells: Array<Face | Shell>): Solid;
+export declare const makeSolid: typeof shapeHelpers.makeSolid;
+
+/** Welds faces and shells into a single shell and then makes a solid.
+ *
+ * @param facesOrShells - An array of faces and shells to be welded.
+ * @returns A solid that contains all the faces and shells.
+ *
+ * @category Solids
+ **/
+declare function makeSolid_2(facesOrShells: Array<Face | Shell>): Solid;
 
 /**
  * Creates a sphere with the given radius, centred on the origin.
  *
  * @category Solids
  */
-export declare const makeSphere: (radius: number) => Solid;
+export declare const makeSphere: typeof shapeHelpers.makeSphere;
 
-export declare const makeTangentArc: (startPoint: Point, startTgt: Point, endPoint: Point) => Edge;
+/**
+ * Creates a sphere with the given radius, centred on the origin.
+ *
+ * @category Solids
+ */
+declare const makeSphere_2: (radius: number) => Solid;
 
-export declare const makeThreePointArc: (v1: Point, v2: Point, v3: Point) => Edge;
+export declare const makeTangentArc: typeof shapeHelpers.makeTangentArc;
 
-export declare const makeVertex: (point: Point) => Vertex;
+declare const makeTangentArc_2: (startPoint: Point, startTgt: Point, endPoint: Point) => Edge;
+
+export declare const makeThreePointArc: typeof shapeHelpers.makeThreePointArc;
+
+declare const makeThreePointArc_2: (v1: Point, v2: Point, v3: Point) => Edge;
+
+export declare const makeVertex: typeof shapeHelpers.makeVertex;
+
+declare const makeVertex_2: (point: Point) => Vertex;
 
 export declare type ManifoldBox = Box;
 
@@ -1699,6 +2180,11 @@ export declare function measureShapeVolumeProperties(shape: Shape3D): VolumePhys
  */
 export declare function measureVolume(shape: Shape3D): number;
 
+export declare interface MeshOptions {
+    tolerance?: number;
+    angularTolerance?: number;
+}
+
 export declare class MeshShape extends WrappingObj<ManifoldInstance> implements Shape3DLike<MeshShape, MeshShapeMesh, MeshShape, number> {
     constructor(manifoldShape: ManifoldInstance);
     clone(): MeshShape;
@@ -1710,7 +2196,7 @@ export declare class MeshShape extends WrappingObj<ManifoldInstance> implements 
     translateX(distance: number): MeshShape;
     translateY(distance: number): MeshShape;
     translateZ(distance: number): MeshShape;
-    rotate(angle: number, position?: Point, direction?: Point): MeshShape;
+    rotate(angle: number, position?: Point, direction?: Direction): MeshShape;
     rotate(vector: Point): MeshShape;
     scale(scale: number, center?: Point): MeshShape;
     mirror(inputPlane?: Plane | PlaneName | Point, origin?: Point): MeshShape;
@@ -1752,8 +2238,149 @@ export declare interface MeshShapeMesh {
 
 export declare function mirror(shape: TopoDS_Shape, inputPlane?: Plane | PlaneName | Point, origin?: Point): TopoDS_Shape;
 
+/**
+ * A deterministic ownership scope for OpenCascade values (and other objects
+ * with a `delete()` method).
+ *
+ * `scope(value)` registers a value the scope owns and returns it;
+ * `scope.keep(value)` takes it back out (the caller now owns it), and
+ * `scope.dispose()` deletes everything still owned, last registered first,
+ * skipping values that were already deleted. Dispose a scope in a `finally`
+ * block, or declare it with `using` where explicit resource management is
+ * available, so that a throw cannot leak what it owns:
+ *
+ * ```ts
+ * const r = ocScope();
+ * try {
+ *   const builder = r(new oc.BRepBuilderAPI_MakeFace(plane));
+ *   return builder.Face();
+ * } finally {
+ *   r.dispose();
+ * }
+ * ```
+ *
+ * Unlike {@link GCWithScope}, nothing waits for the garbage collector, which
+ * never runs during a synchronous model build.
+ */
+export declare interface OcScope {
+    <T extends Deletable | null | undefined>(value: T): T;
+    /** Releases a value from the scope: the caller now owns it. */
+    keep<T extends Deletable | null | undefined>(value: T): T;
+    /** Deletes every value the scope still owns. Safe to call twice. */
+    dispose(): void;
+}
+
+export declare function ocScope(): OcScope;
+
 declare interface Offset2DConfig {
     lineJoinType?: "miter" | "bevel" | "round";
+}
+
+/**
+ * A host cache. Replicad never imports an implementation; see
+ * `setOperationCache`.
+ *
+ * The library calls `operation` only for calls made by user code: calls made
+ * while an operation runs (internal composition) go straight to the
+ * implementation, except inside a user callback that the library invokes
+ * (a sweep factory), where user code is routed again. Calls the cache makes
+ * itself go through the routing too; wrap them in `bypassOperationCache`.
+ */
+export declare interface OperationCache {
+    operation<T>(request: OperationRequest<T>): T;
+    step<T>(request: OperationStep<T>): T;
+    /**
+     * Topological elements that user code took from `owner` (the `edges`,
+     * `faces`, `wires` and `solids` getters, a finder's `find`). `ordinals`
+     * gives each element's position in the owner's enumeration of that kind.
+     */
+    elements(owner: object, kind: string, elements: readonly object[], ordinals: () => readonly number[] | undefined): void;
+}
+
+/**
+ * How an operation treats its receiver.
+ *
+ * - `pure`: the receiver is unchanged; the result may be reused.
+ * - `consumes`: the operation deletes its receiver (and possibly some of its
+ *   arguments). A cache that reuses a result calls `consume` so the caller
+ *   sees the same deletions as when the operation runs.
+ * - `mutates`: the operation changes its receiver (pens, sketchers, finders,
+ *   setters). It always runs; the receiver's identity advances.
+ * - `alias`: the result is a new handle on the receiver's geometry (`clone`).
+ */
+export declare type OperationEffect = "pure" | "consumes" | "mutates" | "alias";
+
+/**
+ * One public operation, described lazily: the library builds no key, copy or
+ * canonical value; the cache reads what it needs.
+ */
+export declare interface OperationRequest<T> {
+    /**
+     * `Class.method`, `set:Class.property` or the exported function name. The
+     * class part names the table entry (`Shape` for every shape class, `Pen`
+     * for every 2D pen).
+     */
+    readonly op: string;
+    readonly effect: OperationEffect;
+    /** `this` of a method; `undefined` for a free function. */
+    readonly receiver: object | undefined;
+    /**
+     * The arguments as passed. Do not mutate them.
+     *
+     * Do not identify a finder instance (`EdgeFinder`, `FaceFinder`,
+     * `CornerFinder`) by its object identity: its clause methods mutate it
+     * without being routed, so the same object can select differently from one
+     * call to the next. Describe it by its clauses, or let the operation's
+     * step key the selection.
+     */
+    readonly args: readonly unknown[];
+    /**
+     * Positions of finder arguments among `args`: a finder callback
+     * (`(finder, shape) => finder`), or for some operations a finder or a face.
+     */
+    readonly finderArgs?: readonly number[];
+    /**
+     * The result is a mutable builder (a pen from `draw()`): its later calls
+     * change it in place, so a cache must never hand back a kept one.
+     */
+    readonly returnsBuilder?: boolean;
+    /**
+     * The operation's errors are a deterministic function of its inputs (it
+     * calls no user code that the inputs do not describe), so a cache may
+     * reuse a failure. Resource, cancellation and native trap errors never are.
+     */
+    readonly deterministicErrors?: boolean;
+    /**
+     * For a builder (pen, sketcher) the cache has not seen: its state while it
+     * is still as its constructor left it, so it can be identified by value.
+     * `undefined` once it has drawn something.
+     */
+    readonly freshState?: () => readonly unknown[] | undefined;
+    /** Runs the operation. */
+    compute(): T;
+    /** Deletes what the operation would have deleted. Call it on a reuse. */
+    consume?(): void;
+}
+
+/**
+ * The part of an operation that depends on a callback the cache could not
+ * describe up front (a sweep factory, a finder predicate): the library calls
+ * it once the callback has run, with the inputs it produced. It always belongs
+ * to the innermost `operation` call that is still running.
+ */
+export declare interface OperationStep<T> {
+    readonly op: string;
+    readonly receiver: object | undefined;
+    /** See {@link OperationRequest.deterministicErrors}. */
+    readonly deterministicErrors?: boolean;
+    /**
+     * The inputs known after the callback ran (selected element ordinals and
+     * radii, the factory's sketch), or `undefined` if they cannot be described
+     * (a selected element is not part of the receiver).
+     */
+    values(): readonly unknown[] | undefined;
+    compute(): T;
+    consume?(): void;
 }
 
 /**
@@ -1777,10 +2404,11 @@ export declare class Plane {
     private _origin;
     private localToGlobal;
     private globalToLocal;
-    constructor(origin: Point, xDirection?: Point | null, normal?: Point);
+    constructor(origin: Point, xDirection?: Direction | null, normal?: Direction);
     delete(): void;
     clone(): Plane;
     get origin(): Vector;
+    /** Takes ownership of `newOrigin`; the previous origin is deleted. */
     set origin(newOrigin: Vector);
     translateTo(point: Point): Plane;
     translate(xDist: number, yDist: number, zDist: number): Plane;
@@ -1796,12 +2424,26 @@ export declare class Plane {
     toWorldCoords(v: Point): Vector;
 }
 
-declare interface PlaneConfig {
+export declare interface PlaneConfig {
     plane?: PlaneName | Plane;
     origin?: Point | number;
 }
 
+export declare interface PlaneFace {
+    pointOnSurface(u: number, v: number): Vector;
+    normalAt(point: Point): Vector;
+}
+
 export declare type PlaneName = "XY" | "YZ" | "ZX" | "XZ" | "YX" | "ZY" | "front" | "back" | "left" | "right" | "top" | "bottom";
+
+export declare type PlaneSide = "positive" | "negative";
+
+/** Pieces grouped by their position relative to an oriented plane. */
+export declare interface PlaneSplitResult<T> {
+    positive: T | null;
+    negative: T | null;
+    on: T | null;
+}
 
 export declare type Point = SimplePoint | Vector | [number, number] | {
     XYZ: () => gp_XYZ;
@@ -1816,18 +2458,26 @@ export declare type Point2D = [number, number];
  */
 export declare const polysideInnerRadius: (outerRadius: number, sidesCount: number, sagitta?: number) => number;
 
-export declare const polysidesBlueprint: (radius: number, sidesCount: number, sagitta?: number) => Blueprint;
+export declare const polysidesBlueprint: typeof cannedBlueprints.polysidesBlueprint;
+
+declare const polysidesBlueprint_2: (radius: number, sidesCount: number, sagitta?: number) => Blueprint;
+
+declare namespace projection {
+    export {
+        makeProjectedEdges_2 as makeProjectedEdges
+    }
+}
 
 export declare class ProjectionCamera extends WrappingObj<gp_Ax2> {
-    constructor(position?: Point, direction?: Point, xAxis?: Point);
+    constructor(position?: Point, direction?: Direction, xAxis?: Direction);
     get position(): Vector;
     get direction(): Vector;
     get xAxis(): Vector;
     get yAxis(): Vector;
     autoAxes(): void;
     setPosition(position: Point): this;
-    setXAxis(xAxis: Point): this;
-    setYAxis(yAxis: Point): this;
+    setXAxis(xAxis: Direction): this;
+    setYAxis(yAxis: Direction): this;
     lookAt(shape: {
         boundingBox: BoundingBox;
     } | Point): this;
@@ -1856,11 +2506,27 @@ export declare type RadiusConfig<R = number> = ((e: Edge) => R | null) | R | {
     keep?: boolean;
 };
 
-export declare const revolution: (face: Face, center?: Point, direction?: Point, angle?: number) => Shape3D;
+export declare function resolveDirection(direction: Direction): Point;
 
-export declare function rotate(shape: TopoDS_Shape, angle: number, position?: Point, direction?: Point): TopoDS_Shape;
+export declare const revolution: typeof addThickness.revolution;
 
-export declare const roundedRectangleBlueprint: (width: number, height: number, r?: number | {
+declare const revolution_2: (face: Face, center?: Point, direction?: Direction, angle?: number) => Shape3D;
+
+/**
+ * Creates a predicate selecting elements touching the shape's maximum X bound.
+ *
+ * @example
+ * finder.when(rightMost(shape));
+ *
+ * @category Finders
+ */
+export declare const rightMost: (shape: AnyShape, tolerance?: number) => ShapeExtremumFilter;
+
+export declare function rotate(shape: TopoDS_Shape, angle: number, position?: Point, direction?: Direction): TopoDS_Shape;
+
+export declare const roundedRectangleBlueprint: typeof cannedBlueprints.roundedRectangleBlueprint;
+
+declare const roundedRectangleBlueprint_2: (width: number, height: number, r?: number | {
     rx?: number;
     ry?: number;
 }) => Blueprint;
@@ -1873,6 +2539,16 @@ export declare const setManifold: (manifold: ManifoldToplevel) => void;
 
 export declare const setOC: (oc: OpenCascadeInstance) => void;
 
+/**
+ * Installs an operation cache, or removes it with `undefined`, and returns the
+ * one installed before.
+ *
+ * Routing is installed on the prototypes of the routed classes when a cache
+ * is installed and removed when it is: with no cache, every member is the
+ * original function. Replacing one cache with another keeps the routing.
+ */
+export declare function setOperationCache(cache: OperationCache | undefined): OperationCache | undefined;
+
 export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> {
     constructor(ocShape: Type);
     clone(): this;
@@ -1881,6 +2557,18 @@ export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> 
     get isNull(): boolean;
     isSame(other: AnyShape): boolean;
     isEqual(other: AnyShape): boolean;
+    /**
+     * Splits the solid parts of this shape with an oriented plane and groups
+     * them by side. Non-solid results are ignored.
+     *
+     * `offset` translates the splitting plane along its normal. Each side is
+     * `null` when empty, the resulting shape when it contains one piece, or a
+     * `Compound` when it contains multiple disconnected pieces. Positive is the
+     * direction of the plane's normal.
+     *
+     * @category Shape Modifications
+     */
+    split(plane?: Plane | PlaneName, offset?: number, tolerance?: number): PlaneSplitResult<Solid | Compound>;
     /**
      * Asserts that this shape is a 3D shape (Shell, Solid, CompSolid, or
      * Compound) and returns it typed as Shape3D. Throws if the shape is not 3D.
@@ -1923,7 +2611,7 @@ export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> 
      *
      * @category Shape Transformations
      */
-    rotate(angle: number, position?: Point, direction?: Point): this;
+    rotate(angle: number, position?: Point, direction?: Direction): this;
     /**
      * Mirrors the shape through a plane
      *
@@ -1936,43 +2624,25 @@ export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> 
      * @category Shape Transformations
      */
     scale(scale: number, center?: Point): this;
-    protected _iterTopo(topo: TopoEntity): IterableIterator<TopoDS_Shape>;
-    protected _listTopo(topo: TopoEntity): TopoDS_Shape[];
     get edges(): Edge[];
     get faces(): Face[];
+    get solids(): Solid[];
     get wires(): Wire[];
     get boundingBox(): BoundingBox;
-    protected _mesh({ tolerance, angularTolerance }?: {
-        tolerance?: number | undefined;
-        angularTolerance?: number | undefined;
-    }): void;
     /**
      * Exports the current shape as a set of triangle. These can be used by threejs
      * for instance to represent the the shape
      *
      * @category Shape Export
      */
-    mesh({ tolerance, angularTolerance }?: {
-        tolerance?: number | undefined;
-        angularTolerance?: number | undefined;
-    }): ShapeMesh;
+    mesh(options?: MeshOptions): ShapeMesh;
     /**
      * Exports the current shape as a set of lines. These can be used by threejs
      * for instance to represent the edges of the shape
      *
      * @category Shape Export
      */
-    meshEdges({ tolerance, angularTolerance }?: {
-        tolerance?: number | undefined;
-        angularTolerance?: number | undefined;
-    }): {
-        lines: number[];
-        edgeGroups: {
-            start: number;
-            count: number;
-            edgeId: number;
-        }[];
-    };
+    meshEdges(options?: MeshOptions): ShapeEdgeMesh;
     /**
      * Exports the current shape as a STEP file as a Blob
      *
@@ -1987,11 +2657,7 @@ export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> 
      *
      * @category Shape Export
      */
-    blobSTL({ tolerance, angularTolerance, binary }?: {
-        tolerance?: number | undefined;
-        angularTolerance?: number | undefined;
-        binary?: boolean | undefined;
-    }): Blob;
+    blobSTL(options?: STLExportOptions): Blob;
 }
 
 export declare type Shape2D = Blueprint | Blueprints | CompoundBlueprint | null;
@@ -2007,7 +2673,7 @@ export declare interface Shape3DLike<ShapeT, MeshT, OtherT = ShapeT, MeshOptions
     translateX(distance: number): ShapeT;
     translateY(distance: number): ShapeT;
     translateZ(distance: number): ShapeT;
-    rotate(angle: number, position?: Point, direction?: Point): ShapeT;
+    rotate(angle: number, position?: Point, direction?: Direction): ShapeT;
     scale(scale: number, center?: Point): ShapeT;
     mirror(inputPlane?: Plane | PlaneName | Point, origin?: Point): ShapeT;
     mesh(options?: MeshOptionsT): MeshT;
@@ -2023,13 +2689,56 @@ export declare type ShapeConfig = {
     metalness?: number;
     /** PBR roughness factor — threaded to GLTF only (not STEP; see note above). */
     roughness?: number;
+    /** Material density in g/cm3, written as the shape's STEP material. */
     density?: number;
 };
 
+export declare interface ShapeEdgeMesh {
+    lines: Float32Array;
+    edgeGroups: {
+        start: number;
+        count: number;
+        edgeId: number;
+    }[];
+}
+
+declare type ShapeExtremumFilter = <Type extends FaceOrEdge>(filter: FilterFcn<Type>) => boolean;
+
+declare namespace shapeHelpers {
+    export {
+        weldShellsAndFaces_2 as weldShellsAndFaces,
+        makeSolid_2 as makeSolid,
+        makeLine_2 as makeLine,
+        makeCircle_2 as makeCircle,
+        makeEllipse_2 as makeEllipse,
+        makeHelix_2 as makeHelix,
+        makeThreePointArc_2 as makeThreePointArc,
+        makeEllipseArc_2 as makeEllipseArc,
+        BSplineApproximationConfig,
+        makeBSplineApproximation_2 as makeBSplineApproximation,
+        makeBezierCurve_2 as makeBezierCurve,
+        makeTangentArc_2 as makeTangentArc,
+        assembleWire_2 as assembleWire,
+        makeFace_2 as makeFace,
+        makeNewFaceWithinFace_2 as makeNewFaceWithinFace,
+        makeNonPlanarFace_2 as makeNonPlanarFace,
+        makeCylinder_2 as makeCylinder,
+        makeSphere_2 as makeSphere,
+        makeEllipsoid_2 as makeEllipsoid,
+        makeBox_2 as makeBox,
+        makeVertex_2 as makeVertex,
+        makeOffset_2 as makeOffset,
+        compoundShapes_2 as compoundShapes,
+        makeCompound_2 as makeCompound,
+        addHolesInFace_2 as addHolesInFace,
+        makePolygon_2 as makePolygon
+    }
+}
+
 export declare interface ShapeMesh {
-    triangles: number[];
-    vertices: number[];
-    normals: number[];
+    triangles: Uint32Array;
+    vertices: Float32Array;
+    normals: Float32Array;
     faceGroups: {
         start: number;
         count: number;
@@ -2042,9 +2751,15 @@ export declare const shapeType: (shape: TopoDS_Shape) => TopAbs_ShapeEnum;
 export declare class Shell extends _3DShape<TopoDS_Shell> {
 }
 
+declare namespace shortcuts {
+    export {
+        makeBaseBox_2 as makeBaseBox
+    }
+}
+
 export declare type SimplePoint = [number, number, number];
 
-export declare type SingleFace = Face | FaceFinder | ((f: FaceFinder) => FaceFinder);
+export declare type SingleFace = Face | FaceFinder | FinderFunction<FaceFinder, AnyShape>;
 
 /**
  * A line drawing to be acted upon. It defines directions to be acted upon by
@@ -2070,12 +2785,15 @@ export declare class Sketch implements SketchInterface {
         defaultDirection?: Point;
     });
     get baseFace(): Face | null | undefined;
+    /** Keeps a copy of `newFace`; the previous base face is deleted. */
     set baseFace(newFace: Face | null | undefined);
     delete(): void;
     clone(): Sketch;
     get defaultOrigin(): Vector;
+    /** Keeps a copy of `newOrigin`; the previous origin is deleted. */
     set defaultOrigin(newOrigin: Point);
     get defaultDirection(): Vector;
+    /** Keeps a copy of `newDirection`; the previous direction is deleted. */
     set defaultDirection(newDirection: Point);
     /**
      * Transforms the lines into a face. The lines should be closed.
@@ -2115,6 +2833,7 @@ export declare class Sketch implements SketchInterface {
      * understandable.
      */
     sweepSketch(sketchOnPlane: (plane: Plane, origin: Point) => this, sweepConfig?: GenericSweepConfig): Shape3D;
+    private _sweepSketch;
     /** Loft between this sketch and another sketch (or an array of them)
      *
      * You can also define a `startPoint` for the loft (that will be placed
@@ -2132,14 +2851,28 @@ export declare class Sketch implements SketchInterface {
  *
  * @category Sketching
  */
-export declare const sketchCircle: (radius: number, planeConfig?: PlaneConfig) => Sketch;
+export declare const sketchCircle: typeof cannedSketches.sketchCircle;
+
+/**
+ * Creates the `Sketch` of a circle in a defined plane
+ *
+ * @category Sketching
+ */
+declare const sketchCircle_2: (radius: number, planeConfig?: PlaneConfig) => Sketch;
 
 /**
  * Creates the `Sketch` of an ellispe in a defined plane
  *
  * @category Sketching
  */
-export declare const sketchEllipse: (xRadius?: number, yRadius?: number, planeConfig?: PlaneConfig) => Sketch;
+export declare const sketchEllipse: typeof cannedSketches.sketchEllipse;
+
+/**
+ * Creates the `Sketch` of an ellispe in a defined plane
+ *
+ * @category Sketching
+ */
+declare const sketchEllipse_2: (xRadius?: number, yRadius?: number, planeConfig?: PlaneConfig) => Sketch;
 
 /**
  * The FaceSketcher allows you to sketch on a plane.
@@ -2159,8 +2892,16 @@ export declare class Sketcher implements GenericSketcher<Sketch> {
      */
     constructor(plane: Plane);
     constructor(plane?: PlaneName, origin?: Point | number);
+    /**
+     * Deletes what the sketcher owns: its plane, its pointer and the edges it
+     * has not turned into a sketch yet. `done()` and `close()` do this once the
+     * sketch is built.
+     */
     delete(): void;
+    /** Takes ownership of `newPointer`; the previous pointer is deleted. */
     protected _updatePointer(newPointer: Vector): void;
+    /** The pointer in the plane's local coordinates. */
+    protected _localPointer(): [number, number];
     movePointerTo([x, y]: Point2D): this;
     lineTo([x, y]: Point2D): this;
     line(xDist: number, yDist: number): this;
@@ -2192,9 +2933,14 @@ export declare class Sketcher implements GenericSketcher<Sketch> {
     cubicBezierCurveTo(end: Point2D, startControlPoint: Point2D, endControlPoint: Point2D): this;
     smoothSplineTo(end: Point2D, config?: SplineConfig): this;
     smoothSpline(xDist: number, yDist: number, splineConfig?: SplineConfig): this;
+    /** Consumes `wire`. */
     protected _mirrorWireOnStartEnd(wire: Wire): Wire;
     protected buildWire(): Wire;
     protected _closeSketch(): void;
+    /**
+     * Builds the sketch. The sketcher is used up: it deletes what it owns, and
+     * cannot draw any more.
+     */
     done(): Sketch;
     close(): Sketch;
     closeWithMirror(): Sketch;
@@ -2220,7 +2966,7 @@ export declare class Sketches {
         extrusionProfile?: ExtrusionProfile;
         twistAngle?: number;
         origin?: Point;
-    }): AnyShape;
+    }): Shape3D;
     /**
      * Revolves the drawing on an axis (defined by its direction and an origin
      * (defaults to the sketch origin)
@@ -2228,7 +2974,7 @@ export declare class Sketches {
     revolve(revolutionAxis?: Point, config?: {
         origin?: Point;
         angle?: number;
-    }): AnyShape;
+    }): Shape3D;
 }
 
 /**
@@ -2237,14 +2983,29 @@ export declare class Sketches {
  *
  * @category Sketching
  */
-export declare const sketchFaceOffset: (face: Face, offset: number) => Sketch;
+export declare const sketchFaceOffset: typeof cannedSketches.sketchFaceOffset;
+
+/**
+ * Creates the `Sketch` of an offset of a certain face. A negative offset will
+ * be within the face, a positive one outside.
+ *
+ * @category Sketching
+ */
+declare const sketchFaceOffset_2: (face: Face, offset: number) => Sketch;
 
 /**
  * Creates the `Sketch` of a helix
  *
  * @category Sketching
  */
-export declare const sketchHelix: (pitch: number, height: number, radius: number, center?: Point, dir?: Point, lefthand?: boolean) => Sketch;
+export declare const sketchHelix: typeof cannedSketches.sketchHelix;
+
+/**
+ * Creates the `Sketch` of a helix
+ *
+ * @category Sketching
+ */
+declare const sketchHelix_2: (pitch: number, height: number, radius: number, center?: Point, dir?: Direction, lefthand?: boolean) => Sketch;
 
 export declare interface SketchInterface {
     /**
@@ -2296,7 +3057,16 @@ export declare interface SketchInterface {
  *
  * @category Sketching
  */
-export declare const sketchParametricFunction: (func: (t: number) => Point2D, planeConfig?: PlaneConfig, { pointsCount, start, stop }?: {
+export declare const sketchParametricFunction: typeof cannedSketches.sketchParametricFunction;
+
+/**
+ * Creates the `Sketch` of parametric function in a specified plane
+ *
+ * The sketch will be a spline approximating the function
+ *
+ * @category Sketching
+ */
+declare const sketchParametricFunction_2: (func: (t: number) => Point2D, planeConfig?: PlaneConfig, { pointsCount, start, stop }?: {
     pointsCount?: number | undefined;
     start?: number | undefined;
     stop?: number | undefined;
@@ -2310,21 +3080,45 @@ export declare const sketchParametricFunction: (func: (t: number) => Point2D, pl
  *
  * @category Sketching
  */
-export declare const sketchPolysides: (radius: number, sidesCount: number, sagitta?: number, planeConfig?: PlaneConfig) => Sketch;
+export declare const sketchPolysides: typeof cannedSketches.sketchPolysides;
+
+/**
+ * Creates the `Sketch` of an polygon in a defined plane
+ *
+ * The sides of the polygon can be arcs of circle with a defined sagitta.
+ * The radius defines the out radius of the polygon without sagitta
+ *
+ * @category Sketching
+ */
+declare const sketchPolysides_2: (radius: number, sidesCount: number, sagitta?: number, planeConfig?: PlaneConfig) => Sketch;
 
 /**
  * Creates the `Sketch` of a rectangle in a defined plane
  *
  * @category Sketching
  */
-export declare const sketchRectangle: (xLength: number, yLength: number, planeConfig?: PlaneConfig) => Sketch;
+export declare const sketchRectangle: typeof cannedSketches.sketchRectangle;
+
+/**
+ * Creates the `Sketch` of a rectangle in a defined plane
+ *
+ * @category Sketching
+ */
+declare const sketchRectangle_2: (xLength: number, yLength: number, planeConfig?: PlaneConfig) => Sketch;
 
 /**
  * Creates the `Sketch` of a rounded rectangle in a defined plane
  *
  * @category Sketching
  */
-export declare const sketchRoundedRectangle: (width: number, height: number, r?: number | {
+export declare const sketchRoundedRectangle: typeof cannedSketches.sketchRoundedRectangle;
+
+/**
+ * Creates the `Sketch` of a rounded rectangle in a defined plane
+ *
+ * @category Sketching
+ */
+declare const sketchRoundedRectangle_2: (width: number, height: number, r?: number | {
     rx?: number;
     ry?: number;
 }, planeConfig?: PlaneConfig) => Sketch;
@@ -2333,7 +3127,13 @@ export declare const sketchRoundedRectangle: (width: number, height: number, r?:
  * Creates the `Sketches` of a text, in a defined font size and a font familiy
  * (which will be the default).
  */
-export declare function sketchText(text: string, textConfig?: {
+export declare const sketchText: typeof textModule.sketchText;
+
+/**
+ * Creates the `Sketches` of a text, in a defined font size and a font familiy
+ * (which will be the default).
+ */
+declare function sketchText_2(text: string, textConfig?: {
     startX?: number;
     startY?: number;
     fontSize?: number;
@@ -2359,9 +3159,15 @@ declare type StandardPlane = "XY" | "XZ" | "YZ";
 
 declare type StartSplineTangent = number | Point2D;
 
-export declare type SupportedUnit = 'M' | 'CM' | 'MM' | 'INCH' | 'FT' | 'm' | 'mm' | 'cm' | 'inch' | 'ft';
+export declare interface STLExportOptions extends MeshOptions {
+    binary?: boolean;
+}
 
-export declare const supportExtrude: (wire: Wire, center: Point, normal: Point, support: TopoDS_Shape) => Shape3D;
+export declare type SupportedUnit = "M" | "CM" | "MM" | "INCH" | "FT" | "m" | "mm" | "cm" | "inch" | "ft";
+
+export declare const supportExtrude: typeof addThickness.supportExtrude;
+
+declare const supportExtrude_2: (wire: Wire, center: Point, normal: Point, support: TopoDS_Shape) => Shape3D;
 
 export declare class Surface extends WrappingObj<Adaptor3d_Surface> {
     get surfaceType(): SurfaceType;
@@ -2371,27 +3177,70 @@ export declare class SurfacePhysicalProperties extends PhysicalProperties {
     get area(): number;
 }
 
-export declare type SurfaceType = 'PLANE' | 'CYLINDRE' | 'CONE' | 'SPHERE' | 'TORUS' | 'BEZIER_SURFACE' | 'BSPLINE_SURFACE' | 'REVOLUTION_SURFACE' | 'EXTRUSION_SURFACE' | 'OFFSET_SURFACE' | 'OTHER_SURFACE';
+export declare type SurfaceType = "PLANE" | "CYLINDRE" | "CONE" | "SPHERE" | "TORUS" | "BEZIER_SURFACE" | "BSPLINE_SURFACE" | "REVOLUTION_SURFACE" | "EXTRUSION_SURFACE" | "OFFSET_SURFACE" | "OTHER_SURFACE";
 
 /**
  * Creates the `Blueprints` of a text, in a defined font size and a font familiy
  * (which will be the default).
  */
-export declare function textBlueprints(text: string, { startX, startY, fontSize, fontFamily }?: {
+export declare const textBlueprints: typeof textModule.textBlueprints;
+
+/**
+ * Creates the `Blueprints` of a text, in a defined font size and a font familiy
+ * (which will be the default).
+ */
+declare function textBlueprints_2(text: string, { startX, startY, fontSize, fontFamily }?: {
     startX?: number | undefined;
     startY?: number | undefined;
     fontSize?: number | undefined;
     fontFamily?: string | undefined;
 }): Blueprints;
 
-declare type TopoEntity = 'vertex' | 'edge' | 'wire' | 'face' | 'shell' | 'solid' | 'solidCompound' | 'compound' | 'shape';
+declare namespace textModule {
+    export {
+        loadFont,
+        textBlueprints_2 as textBlueprints,
+        sketchText_2 as sketchText,
+        getFont
+    }
+}
+
+/**
+ * Creates a predicate selecting elements touching the shape's maximum Z bound.
+ *
+ * @example
+ * shape.fillet(2, (finder, shape) =>
+ *   finder.when(topMost(shape)).parallelTo("XY")
+ * );
+ *
+ * @category Finders
+ */
+export declare const topMost: (shape: AnyShape, tolerance?: number) => ShapeExtremumFilter;
+
+export declare type TopoEntity = TopologyKind | "shape";
+
+declare const TOPOLOGY_KINDS: readonly ["vertex", "edge", "wire", "face", "shell", "solid", "solidCompound", "compound"];
+
+declare type TopologyKind = typeof TOPOLOGY_KINDS[number];
+
+export declare interface TopologyMap {
+    vertex: TopoDS_Vertex;
+    edge: TopoDS_Edge;
+    wire: TopoDS_Wire;
+    face: TopoDS_Face;
+    shell: TopoDS_Shell;
+    solid: TopoDS_Solid;
+    solidCompound: TopoDS_CompSolid;
+    compound: TopoDS_Compound;
+    shape: TopoDS_Shape;
+}
 
 export declare class Transformation extends WrappingObj<gp_Trsf> {
     constructor(transform?: gp_Trsf);
     clone(): Transformation;
     translate(xDist: number, yDist: number, zDist: number): Transformation;
     translate(vector: Point): Transformation;
-    rotate(angle: number, position?: Point, direction?: Point): Transformation;
+    rotate(angle: number, position?: Point, direction?: Direction): Transformation;
     mirror(inputPlane?: Plane | PlaneName | Point, inputOrigin?: Point): this;
     scale(center: Point, scale: number): this;
     inverse(): this;
@@ -2403,9 +3252,11 @@ export declare class Transformation extends WrappingObj<gp_Trsf> {
 
 export declare function translate(shape: TopoDS_Shape, vector: Point): TopoDS_Shape;
 
-export declare function twistExtrude(wire: Wire, angleDegrees: number, center: Point, normal: Point, profileShape?: ExtrusionProfile, shellMode?: false): Shape3D;
+export declare const twistExtrude: typeof addThickness.twistExtrude;
 
-export declare function twistExtrude(wire: Wire, angleDegrees: number, center: Point, normal: Point, profileShape: ExtrusionProfile | undefined, shellMode: true): [Shape3D, Wire, Wire];
+declare function twistExtrude_2(wire: Wire, angleDegrees: number, center: Point, normal: Point, profileShape?: ExtrusionProfile, shellMode?: false): Shape3D;
+
+declare function twistExtrude_2(wire: Wire, angleDegrees: number, center: Point, normal: Point, profileShape: ExtrusionProfile | undefined, shellMode: true): [Shape3D, Wire, Wire];
 
 declare type UVBounds = {
     uMin: number;
@@ -2414,28 +3265,58 @@ declare type UVBounds = {
     vMax: number;
 };
 
+/**
+ * A 3D vector. Its coordinates and arithmetic are plain JavaScript numbers,
+ * computed with the same operations, in the same order, as OpenCascade's
+ * `gp_Vec`, so the results are the same to the bit. Rotations, angles and
+ * comparisons still run in OpenCascade.
+ *
+ * `wrapped` creates a `gp_Vec` the first time OpenCascade code needs one; the
+ * vector owns it and deletes it with itself (or when its coordinates
+ * change). Change a vector through its methods, not through `wrapped`.
+ */
 export declare class Vector extends WrappingObj<gp_Vec> {
+    private _x;
+    private _y;
+    private _z;
+    private _alive;
+    /** A new vector holding a copy of `vector`'s coordinates. */
     constructor(vector?: Point);
+    private _check;
+    /** Forgets the materialized `gp_Vec` after the coordinates changed. */
+    private _changed;
+    private _set;
+    /** A temporary `gp_Vec` for an OpenCascade computation. */
+    private _vec;
+    get wrapped(): gp_Vec;
+    set wrapped(newWrapped: gp_Vec);
+    delete(): void;
     get repr(): string;
     get x(): number;
     get y(): number;
     get z(): number;
+    /** As `gp_Vec::Magnitude`. */
     get Length(): number;
     toTuple(): [number, number, number];
+    /** As `gp_Vec::Crossed`. */
     cross(v: Vector): Vector;
+    /** As `gp_Vec::Dot`. */
     dot(v: Vector): number;
     sub(v: Vector): Vector;
     add(v: Vector): Vector;
     multiply(scale: number): Vector;
+    /** As `gp_Vec::Normalized`: each coordinate divided by the magnitude. */
     normalized(): Vector;
+    /** As `gp_Vec::Normalize`. */
     normalize(): Vector;
+    private _normalizingLength;
     getCenter(): Vector;
     getAngle(v: Vector): number;
     projectToPlane(plane: Plane): Vector;
     equals(other: Vector): boolean;
     toPnt(): gp_Pnt;
     toDir(): gp_Dir;
-    rotate(angle: number, center?: Point, direction?: Point): Vector;
+    rotate(angle: number, center?: Point, direction?: Direction): Vector;
 }
 
 export declare class Vertex extends Shape<TopoDS_Vertex> {
@@ -2453,13 +3334,41 @@ export declare class VolumePhysicalProperties extends PhysicalProperties {
  * a shell.
  * @returns A shell that contains all the faces and shells.
  * */
-export declare function weldShellsAndFaces(facesOrShells: Array<Face | Shell>, ignoreType?: boolean): Shell;
+export declare const weldShellsAndFaces: typeof shapeHelpers.weldShellsAndFaces;
+
+/** Welds faces and shells into a single shell.
+ *
+ * @param facesOrShells - An array of faces and shells to be welded.
+ * @param ignoreType - If true, the function will not check if the result is
+ * a shell.
+ * @returns A shell that contains all the faces and shells.
+ * */
+declare function weldShellsAndFaces_2(facesOrShells: Array<Face | Shell>, ignoreType?: boolean): Shell;
 
 export declare class Wire extends _1DShape<TopoDS_Wire> {
     protected _geomAdaptor(): BRepAdaptor_CompCurve;
-    offset2D(offset: number, kind?: 'arc' | 'intersection' | 'tangent'): Wire;
+    offset2D(offset: number, kind?: "arc" | "intersection" | "tangent"): Wire;
 }
 
+/**
+ * Runs `fn` with a fresh {@link ocScope} and disposes it afterwards, whether
+ * `fn` returns or throws. Keep the result with `scope.keep` if the scope owns
+ * it.
+ */
+export declare function withOcScope<T>(fn: (scope: OcScope) => T): T;
+
+/**
+ * The base of every object that owns an OpenCascade value.
+ *
+ * A wrapper adopts the value it is constructed with: it is now its only owner
+ * and deletes it exactly once, when `delete()` is called or, as a safety net,
+ * after the wrapper has been garbage collected. Code that must keep using a
+ * value after handing it to a wrapper passes a copy instead.
+ *
+ * A wrapper whose value has been deleted (by `delete()`, by an operation that
+ * consumes it, or from outside, as an evaluation sweep does) throws on use
+ * instead of reaching freed memory.
+ */
 export declare class WrappingObj<Type extends Deletable> {
     protected oc: OpenCascadeInstance;
     private _wrapped;
@@ -2467,6 +3376,9 @@ export declare class WrappingObj<Type extends Deletable> {
     get wrapped(): Type;
     set wrapped(newWrapped: Type);
     delete(): void;
+}
+
+export declare interface WrappingObj<Type extends Deletable> extends Disposable {
 }
 
 export { }

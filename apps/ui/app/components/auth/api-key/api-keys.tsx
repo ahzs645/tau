@@ -1,13 +1,16 @@
 'use client';
 
-import { useAuth, useAuthPlugin, useListApiKeys } from '@better-auth-ui/react';
-import type { ApiKeyAuthClient } from '@better-auth-ui/react';
+import { Heading } from '@taucad/ui/components/heading';
+import { useListApiKeys } from '@better-auth-ui/react/plugins/api-key';
+
+import { useAuth, useAuthPlugin } from '@better-auth-ui/react';
+import type { ApiKeyAuthClient } from '@better-auth-ui/core/plugins/api-key';
 import { useState } from 'react';
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent } from '#components/ui/card.js';
-import { Separator } from '#components/ui/separator.js';
-import { apiKeyPlugin } from '#utils/api-key-plugin.js';
-import { cn } from '#utils/ui.utils.js';
+import { Button } from '@taucad/ui/components/button';
+import { Card, CardContent } from '@taucad/ui/components/card';
+import { Separator } from '@taucad/ui/components/separator';
+import { apiKeyPlugin } from '@taucad/ui-core/utils/api-key-plugin';
+import { cn } from '@taucad/ui/utils/cn';
 import { ApiKey } from '#components/auth/api-key/api-key.js';
 import { ApiKeySkeleton } from '#components/auth/api-key/api-key-skeleton.js';
 import { ApiKeysEmpty } from '#components/auth/api-key/api-keys-empty.js';
@@ -17,7 +20,7 @@ export type ApiKeysProps = {
   className?: string;
 };
 
-export function ApiKeys({ className }: ApiKeysProps) {
+export function ApiKeys({ className }: ApiKeysProps): React.JSX.Element {
   const { authClient } = useAuth();
   const { localization: apiKeyLocalization } = useAuthPlugin(apiKeyPlugin);
 
@@ -28,7 +31,9 @@ export function ApiKeys({ className }: ApiKeysProps) {
   return (
     <div className={cn('flex flex-col gap-3', className)}>
       <div className='flex items-end justify-between gap-3'>
-        <h2 className='truncate text-sm font-semibold'>{apiKeyLocalization.apiKeys}</h2>
+        <Heading level={2} variant='label' className='truncate'>
+          {apiKeyLocalization.apiKeys}
+        </Heading>
 
         <Button
           className='shrink-0'

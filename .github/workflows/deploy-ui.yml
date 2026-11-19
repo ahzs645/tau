@@ -1,0 +1,299 @@
+# Reusable workflow that builds the UI in GitHub Actions and deploys it to Netlify.
+#
+# Netlify does not build Tau itself: Actions checks out and installs the
+# workspace (the GeoSpec engine comes from npm as the `geospec-engine` catalog
+# pin), then `netlify deploy` runs the Netlify build itself: it reads
+# `apps/ui/netlify.toml` and the site's environment variables as a Netlify Git
+# build did, and publishes the result.
+#
+#   - staging (taucad.dev): `staging.yml` → `deploy-ui-staging` on a push to `main`
+#     that affects the UI since its last staging deploy. It publishes to the
+#     site's `staging` alias, which costs no Netlify credits, and
+#     `netlify-staging-router` serves taucad.dev from that alias.
+#   - Both builds load the browser PicoGK host by digest from their environment's dependency
+#     mirror (`PICOGK_BROWSER_MIRROR_BASE` below: `dependencies.taucad.dev` for staging,
+#     `dependencies.tau.new` for production; the manifest identity is the committed pin
+#     `packages/plugins/picogk/browser-host.pin.json`). A deploy never builds, downloads or embeds
+#     the host: its producer publishes every blob when the host's inputs change, before the pin lands
+#     (charter picogk-interim-digest-consumer, D9), and the browser verifies each one before use.
+#   - Both builds load each cadmpeg engine (native CAD import) the first time a file of its format is
+#     opened, as one gzip blob from the same dependency host (`CADMPEG_ENGINES_BASE` below, the same
+#     `dependencies_base`; the digests come from the installed `cadmpeg-ts/digests`). No engine is in the
+#     build. The engines of a `cadmpeg-ts` version are mirrored by `dependency-files-publish.yml` with
+#     `cadmpeg-version` before the bump merges (ci.yml proves both hosts serve them), and the browser
+#     verifies and decompresses each one before use (cadmpeg engine delivery charter, D2, D8, D11).
+#   - production (tau.new): `release-build.yml` calls this workflow in a `ui@x.y.z`
+#     release's own run, and `deploy-production.yml` dispatches it at the tag
+#     for a rollback or redeploy. Either way the `ci.yml` push run on `main` for
+#     the tag's commit must have passed.
+#
+# Both Netlify sites run with `deploy_mode = "ci"` in tau-cloud, so Netlify's Git
+# integration no longer builds them. Each environment holds a `NETLIFY_AUTH_TOKEN`
+# secret that tau-cloud's `tau-repo` HCP workspace writes from its
+# `netlify_auth_token_staging` / `netlify_auth_token_production` variables; the
+# site IDs below are not secrets.
+#
+# Manual redeploy of staging: `gh workflow run deploy-ui.yml -f
+# environment=staging` from `main`. Add `-f skip_asset_retention=true` only to
+# ship while the live Netlify origin cannot be read, which otherwise fails the
+# deploy rather than drop the assets retained for pages already open. Production rollbacks and redeploys go
+# through `deploy-production.yml` with the release tag.
+
+name: Deploy UI to Netlify
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: 'staging or production'
+      skip_asset_retention:
+        required: false
+        type: boolean
+        default: false
+        description: 'Ship without keeping the previous deploys assets (only while the live origin is down)'
+  workflow_dispatch:
+    inputs:
+      environment:
+        required: true
+        type: choice
+        description: 'Environment to deploy'
+        options:
+          - staging
+          - production
+      skip_asset_retention:
+        required: false
+        type: boolean
+        default: false
+        description: 'Ship without keeping the previous deploys assets (only while the live origin is down)'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    if: ${{ github.repository == 'taucad/tau' }}
+    name: Deploy UI to ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-ui-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+    steps:
+      # Production deploys run at a release tag: called by release-build.yml in
+      # the release's own run, or dispatched by deploy-production.yml for a
+      # rollback or redeploy. A person dispatching this workflow directly is
+      # refused. (In a called workflow, `github.workflow_ref` names the caller.)
+      - name: Require a production deploy from a release
+        if: inputs.environment == 'production' && contains(github.workflow_ref, '/.github/workflows/deploy-ui.yml@')
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$TRIGGERING_ACTOR" != 'github-actions[bot]' ] || ! [[ "$REF" =~ ^refs/tags/ui@[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Production deploys come from a release: merge its release pull request, or roll back with Deploy release to production (deploy-production.yml)."
+            exit 1
+          fi
+
+      - name: Resolve the Netlify site
+        id: site
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          case "$ENVIRONMENT" in
+            # retain_from: the Netlify origin of the deploy now live, whose recent assets the new one keeps.
+            # Not the public host: tau.new is still served by Fly, and taucad.dev goes through a router.
+            # dependencies_base: the environment's digest mirror (`blobs/sha256/<hex>`), which serves the pinned
+            # PicoGK browser host and the cadmpeg engines to that environment's UI.
+            staging) site_id=a006a282-6254-499d-a38c-d089b47359c7; url=https://taucad.dev; retain_from=https://staging--taucad-staging.netlify.app; dependencies_base=https://dependencies.taucad.dev ;;
+            production) site_id=7077c956-6b41-4056-b589-2b3c837435eb; url=https://tau.new; retain_from=https://taucad-prod-us.netlify.app; dependencies_base=https://dependencies.tau.new ;;
+            *) echo "::error::Unknown environment: $ENVIRONMENT"; exit 1 ;;
+          esac
+          if [ -z "$NETLIFY_AUTH_TOKEN" ]; then
+            echo "::error::NETLIFY_AUTH_TOKEN is not set on the $ENVIRONMENT environment. Set netlify_auth_token_$ENVIRONMENT on tau-cloud's tau-repo HCP workspace and apply it."
+            exit 1
+          fi
+          echo "site_id=$site_id" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "retain_from=$retain_from" >> "$GITHUB_OUTPUT"
+          echo "dependencies_base=$dependencies_base" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      # Production ships only a commit whose main CI run passed.
+      - name: Require this commit's main CI run to have passed
+        if: inputs.environment == 'production'
+        uses: ./.github/actions/main-ci-success
+        with:
+          sha: ${{ github.sha }}
+          github-token: ${{ github.token }}
+
+      # The GitHub environment's Sentry token is the sole source for UI source maps.
+      # A missing token fails before the build; it never falls back.
+      - name: Require the Sentry source-map credential
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "::error::Set Sensitive sentry_auth_token in HCP tau-repo and apply its GitHub environment mappings."
+            exit 1
+          fi
+
+      # The CLI resolves the site base (`apps/ui`) and then joins the workspace
+      # package (`apps/ui`) onto it for everything under `.netlify/`: framework
+      # functions, the functions and edge-function bundles. Its deploy step reads
+      # them from `apps/ui/.netlify/` without the doubling, so a direct build
+      # shipped no server function and no marketing edge function. Linking the
+      # doubled path back makes both sides use the same directory. The deploy's
+      # file walk does not follow links, so the link must be the doubled side.
+      #
+      # Through the link, the CLI also finds the React Router server function as
+      # a framework function, but traces its `build/server/index.js` import under
+      # `apps/ui/apps/ui/` and ships it without the server build. So
+      # `apps/ui/netlify.toml` names `.netlify/v1/functions` as the functions
+      # directory too: the same file bundled from there is a user function, which
+      # outranks the framework copy and carries the server build. The function
+      # (`react-router-server.mjs`, written by `@netlify/vite-plugin-react-router`
+      # 4.x) imports the server build `build/server/index.js` and, at run time,
+      # the adapter's `@netlify/vite-plugin-react-router/serverless` handler, which
+      # resolves from the workspace root's dependencies.
+      - name: Point the Netlify CLI's package path at apps/ui/.netlify
+        working-directory: apps/ui
+        run: mkdir -p apps/ui && ln -sfn ../../.netlify apps/ui/.netlify
+
+      # The CLI comes from the workspace lockfile (`scripts` owns it); its build
+      # runs `apps/ui/netlify.toml`'s production command with the site's variables.
+      # Each push to `main` runs on its own, so an older run can reach this queue
+      # after a newer one has deployed; it must not put its commit back.
+      - name: Skip a staging deploy a newer commit has superseded
+        id: superseded
+        if: inputs.environment == 'staging'
+        uses: ./.github/actions/staging-deploy-superseded
+        with:
+          job-name: Deploy UI to ${{ inputs.environment }}
+          github-token: ${{ github.token }}
+
+      # The runtime bundles (PicoGK about 150 MB, the C# service) that retention keeps for pages already
+      # open, by integrity, so a deploy reads them here rather than downloading them from the live origin
+      # again. Retention leaves the store holding exactly the bundle files the deploy serves, and checks
+      # every byte, so a stale or missing entry only costs a download. Caches from a release tag are not
+      # visible to the next release, so production falls back to downloading.
+      - name: Restore the retained runtime bundles
+        if: steps.superseded.outputs.superseded != 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: out/retained-runtime-store
+          key: ui-retained-runtimes-${{ inputs.environment }}-${{ github.run_id }}
+          restore-keys: ui-retained-runtimes-${{ inputs.environment }}-
+
+      - name: Build and deploy with the Netlify CLI
+        if: steps.superseded.outputs.superseded != 'true'
+        working-directory: apps/ui
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          SITE_ID: ${{ steps.site.outputs.site_id }}
+          MESSAGE: ${{ github.workflow }} ${{ github.sha }}
+          # Both environments require successful uploads before deployment.
+          TAU_SOURCEMAPS_OPTIONAL: 'false'
+          TAU_SOURCEMAPS_ENABLED: 'true'
+          # Netlify site variables outrank process variables. Map these distinct
+          # GitHub-owned inputs only at the upload command, after that merge.
+          TAU_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          # The live deploy whose recent `/assets/*` this one keeps serving, so pages
+          # loaded before it go live keep loading their chunks (`retain-previous-assets.mts`).
+          TAU_RETAIN_ASSETS_FROM: ${{ steps.site.outputs.retain_from }}
+          # Emergency only: a live origin that cannot be read fails the deploy, so a fix
+          # must say on purpose that it ships without retention (logged as a warning).
+          TAU_RETAIN_ASSETS_SKIP: ${{ inputs.skip_asset_retention && '1' || '' }}
+          # Runtime bundle files kept between deploys (the cache restored above).
+          TAU_RETAIN_ASSETS_STORE: ${{ github.workspace }}/out/retained-runtime-store
+          # This environment's digest mirror, which serves the pinned PicoGK browser host
+          # (`dependencies.taucad.dev` or `dependencies.tau.new`; the loader verifies every byte).
+          # `ui:build` keys on it through `picogk-browser-assets-cache-key.ts`, and a base
+          # without a pin fails the build.
+          PICOGK_BROWSER_MIRROR_BASE: ${{ steps.site.outputs.dependencies_base }}
+          # The same host serves the cadmpeg engines by digest (`layout: 'digest'`; the loader verifies the
+          # gzip, decompresses it and verifies the module). `ui:build` keys on it.
+          CADMPEG_ENGINES_BASE: ${{ steps.site.outputs.dependencies_base }}
+        run: |
+          # The CLI reports every refused deploy as a bare `Forbidden`: the token
+          # was revoked or cannot deploy this site, or the Netlify team is out of
+          # credits, which pauses every production deploy (taucad.dev included).
+          # Staging publishes to the `staging` alias, a draft deploy that costs no
+          # Netlify credits; the router step below serves taucad.dev from it.
+          # Production is a production deploy (15 credits).
+          if [ "$ENVIRONMENT" = staging ]; then
+            target=(--alias staging)
+            MESSAGE="$MESSAGE [staging]"
+          else
+            target=(--prod)
+          fi
+          "$GITHUB_WORKSPACE/scripts/node_modules/.bin/netlify" deploy \
+            "${target[@]}" --context production \
+            --site "$SITE_ID" --message "$MESSAGE" || {
+            echo "::error::Netlify refused the deploy. If it said Forbidden: check the TauCAD team's credits (Netlify > Usage & billing; production deploys pause when they run out), then that netlify_auth_token_$ENVIRONMENT on tau-cloud's tau-repo HCP workspace is a live token with access to this site."
+            exit 1
+          }
+
+      # Keyed by the store's contents, so a deploy that kept the same bundles saves nothing new.
+      - name: Keep the retained runtime bundles for the next deploy
+        if: steps.superseded.outputs.superseded != 'true' && hashFiles('out/retained-runtime-store/**') != ''
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: out/retained-runtime-store
+          key: ui-retained-runtimes-${{ inputs.environment }}-${{ hashFiles('out/retained-runtime-store/**') }}
+
+      - name: Serve taucad.dev from the staging alias
+        if: inputs.environment == 'staging' && steps.superseded.outputs.superseded != 'true'
+        uses: ./.github/actions/netlify-staging-router
+        with:
+          site-id: ${{ steps.site.outputs.site_id }}
+          site-name: taucad-staging
+          public-host: taucad.dev
+          # The app's own document, not the marketing page the root serves by default.
+          verify-cookie: tau-entry=app
+
+      # The plan of the next push to `main` diffs the UI against this commit.
+      - name: Record this staging deploy
+        if: inputs.environment == 'staging' && steps.superseded.outputs.superseded != 'true'
+        uses: ./.github/actions/staging-deploy-history
+        with:
+          mode: record
+          app: ui
+
+      # Commits and the deploy marker go to the release this build reports
+      # (`build/sentry-release`, written by the build beside its output).
+      - name: Read this build's Sentry release
+        if: steps.superseded.outputs.superseded != 'true'
+        continue-on-error: true
+        id: sentry-release
+        run: echo "release=$(cat apps/ui/build/sentry-release)" >> "$GITHUB_OUTPUT"
+
+      - name: Attach this deploy's commits to its Sentry release
+        if: steps.superseded.outputs.superseded != 'true' && steps.sentry-release.outcome == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/sentry-release-commits
+        with:
+          release: ${{ steps.sentry-release.outputs.release }}
+          project: tau-ui
+          environment: ${{ inputs.environment }}
+          auth-token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          cli: scripts/node_modules/.bin/sentry-cli
+
+      - name: Check the site answers
+        if: steps.superseded.outputs.superseded != 'true'
+        env:
+          URL: ${{ steps.site.outputs.url }}
+        run: curl --fail --silent --show-error --location --retry 5 --retry-delay 10 --output /dev/null "$URL"

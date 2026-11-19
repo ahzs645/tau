@@ -1,19 +1,29 @@
-/**
- * Conformance test C17 (v6 Appendix B).
- *
- * Sentinel that locks the v6 kernel-API correction in place: `KernelPlugin`
- * does NOT carry a `worker` field (kernels host inside the runtime worker;
- * the worker entry is configured per transport, not per kernel), and
- * `createKernelPlugin` accepts only the documented config keys.
- *
- * Reintroducing a `worker` accessor on the kernel plugin would make
- * documentation drift back into the v5 misconception that each kernel
- * spawns its own worker.
- */
-
+/** Kernel registration metadata keeps implementation and transport details private. */
 import { assertType, describe, it } from 'vitest';
 import type { KernelPlugin } from '#plugins/plugin-types.js';
-import { createKernelPlugin } from '#plugins/plugin-helpers.js';
+import { defineKernelV2 } from '#types/runtime-kernel-v2.types.js';
+import type { DescribeResult } from '#types/runtime-kernel-v2.types.js';
+
+const baseKernelDefinition = {
+  id: 'x',
+  extensions: ['x'],
+  name: 'Kernel',
+  version: '1.0.0',
+  views: {},
+  exports: {},
+  async initialize() {
+    return {};
+  },
+  async resolve() {
+    return { resolved: [], unresolved: [] };
+  },
+  async describe() {
+    return { success: false, issues: [] } satisfies DescribeResult;
+  },
+  async evaluate() {
+    return { handle: {} };
+  },
+};
 
 describe('KernelPlugin API correctness (C17)', () => {
   it('KernelPlugin must not expose a `worker` field', () => {
@@ -21,29 +31,24 @@ describe('KernelPlugin API correctness (C17)', () => {
     assertType<HasWorker>(false);
   });
 
-  it('createKernelPlugin rejects extra unknown config keys at compile time', () => {
-    // Baseline: documented keys compile and the curried factory returns a KernelPlugin.
-    const okFactory = createKernelPlugin({
-      id: 'x',
-      moduleUrl: 'taucad:test',
-      extensions: ['x'],
-    });
+  it('defineKernelV2 rejects runtime and transport config keys', () => {
+    const okFactory = defineKernelV2(baseKernelDefinition);
     assertType<KernelPlugin>(okFactory());
 
-    createKernelPlugin({
-      id: 'x',
-      moduleUrl: 'taucad:test',
-      extensions: ['x'],
-      // @ts-expect-error -- `worker` is not a valid createKernelPlugin config key (C17).
+    defineKernelV2({
+      ...baseKernelDefinition,
+      // @ts-expect-error -- `worker` is not a kernel authoring key.
       worker: () => undefined,
     });
-
-    createKernelPlugin({
-      id: 'x',
-      moduleUrl: 'taucad:test',
-      extensions: ['x'],
-      // @ts-expect-error -- `transport` belongs on createRuntimeClient, not on a kernel.
+    defineKernelV2({
+      ...baseKernelDefinition,
+      // @ts-expect-error -- `transport` belongs on createRuntimeClient.
       transport: undefined,
+    });
+    defineKernelV2({
+      ...baseKernelDefinition,
+      // @ts-expect-error -- implementation loading details are hidden on plugin registrations.
+      implementationHref: 'taucad:test',
     });
   });
 });

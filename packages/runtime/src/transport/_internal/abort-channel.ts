@@ -1,107 +1,54 @@
 /**
  * Cooperative-abort signalling helpers used by every bundled
- * transport. Exposes both the client-side trigger (write to SAB +
- * notify) and the host-side adoption (build an `AbortSignal` driven by
- * SAB Atomics waits or a wire-notify fallback).
+ * transport. The native document operation publishes an exact shared token;
+ * client cancellation can signal only that token.
  *
  * @internal
  */
 
-import type { Channel } from '@taucad/rpc';
-import { signalSlot, abortReason } from '#types/runtime-protocol.types.js';
-import type { AbortReason, AbortReasonCode, RuntimeProtocol } from '#types/runtime-protocol.types.js';
+/* oxlint-disable unicorn/prefer-math-trunc, no-bitwise -- cancellation generations require ECMAScript ToUint32 wrap semantics. */
 
-/**
- * Encode an `AbortReason` to its numeric on-the-wire / on-SAB code.
- */
-const encodeReason = (reason: AbortReason): AbortReasonCode =>
-  reason === 'superseded' ? abortReason.superseded : abortReason.timeout;
+import type { abortReason } from '#types/runtime-wire.types.js';
+import {
+  documentAbortGeneration,
+  documentAbortReason,
+  documentAbortSequence,
+  documentAbortState,
+  documentAbortView,
+} from '#framework/document-abort-state.js';
 
-/**
- * Client-side abort trigger. Writes the reason + bumps the
- * generation slot in the signal SAB (when present), then fires the
- * wire-format `'abort'` notify so SAB-less peers stay coherent.
- */
-export const triggerAbort = (
-  channel: Channel<RuntimeProtocol>,
+/** Abort only the native document operation whose generation is still current. */
+// oxlint-disable-next-line max-params -- the shared buffer and exact operation token, generation and reason form one CAS.
+export const signalDocumentAbort = (
   signalBuffer: SharedArrayBuffer | undefined,
-  reason: AbortReason,
-): void => {
-  const code = encodeReason(reason);
-  if (signalBuffer) {
-    const view = new Int32Array(signalBuffer);
-    Atomics.store(view, signalSlot.abortReason, code);
-    Atomics.add(view, signalSlot.abortGeneration, 1);
-    Atomics.notify(view, signalSlot.abortGeneration);
-  }
-  channel.notify('abort', { reason: code });
-};
-
-/**
- * Host-side abort surface: a controller whose `signal` is exposed
- * inside `HostInitializeBindings.abort.signal` and is aborted from
- * either the SAB-Atomics watch loop or the wire-format `'abort'`
- * notify handler.
- */
-export type HostAbortSurface = {
-  readonly controller: AbortController;
-  readonly strategy: 'sab-atomics' | 'wire-notify';
-  readonly stop: () => void;
-};
-
-/**
- * Build the host-side abort surface from the signal SAB (if any)
- * delivered through the initialise memory handle. When the SAB is
- * present the surface starts an `Atomics.waitAsync` loop watching
- * the `abortGeneration` slot; otherwise the controller is aborted
- * only by the wire-notify handler installed by the dispatcher.
- */
-export const adoptHostAbort = (signalBuffer: SharedArrayBuffer | undefined): HostAbortSurface => {
-  const controller = new AbortController();
+  evaluationId: string,
+  expectedGeneration: number | undefined,
+  reason: (typeof abortReason)['superseded' | 'timeout'],
+): boolean => {
   if (!signalBuffer) {
-    return {
-      controller,
-      strategy: 'wire-notify',
-      stop: () => undefined,
-    };
+    return false;
   }
-
-  const view = new Int32Array(signalBuffer);
-  let stopped = false;
-
-  const watch = async (): Promise<void> => {
-    let lastGen = Atomics.load(view, signalSlot.abortGeneration);
-    while (!stopped) {
-      // `Atomics.waitAsync` may return synchronously when the value already
-      // changed; loop until generation actually advances.
-      const result = Atomics.waitAsync(view, signalSlot.abortGeneration, lastGen);
-      const value: 'ok' | 'not-equal' | 'timed-out' = result.async
-        ? await result.value
-        : (result.value as 'ok' | 'not-equal' | 'timed-out');
-      if (stopped) {
-        return;
-      }
-      const next = Atomics.load(view, signalSlot.abortGeneration);
-      if (next !== lastGen) {
-        lastGen = next;
-        if (!controller.signal.aborted) {
-          controller.abort('cooperative-abort');
-        }
-        return;
-      }
-      if (value === 'timed-out') {
-        return;
-      }
-    }
-  };
-
-  void watch();
-
-  return {
-    controller,
-    strategy: 'sab-atomics',
-    stop: () => {
-      stopped = true;
-    },
-  };
+  const view = documentAbortView(signalBuffer);
+  if (!view) {
+    return false;
+  }
+  const sequence = Number(evaluationId);
+  if (!Number.isSafeInteger(sequence) || sequence <= 0 || sequence > 4_294_967_295) {
+    return false;
+  }
+  const current = Atomics.load(view, 0);
+  const generation = documentAbortGeneration(current);
+  if (expectedGeneration !== undefined && expectedGeneration !== generation) {
+    return false;
+  }
+  if (documentAbortSequence(current) !== sequence) {
+    return false;
+  }
+  if (documentAbortReason(current) !== 0) {
+    return false;
+  }
+  // One 64-bit CAS publishes ownership and reason together. A native check
+  // cannot observe a changed generation with the previous operation's reason.
+  const aborted = documentAbortState(sequence, generation, reason);
+  return Atomics.compareExchange(view, 0, current, aborted) === current;
 };

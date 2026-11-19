@@ -1,0 +1,337 @@
+// @vitest-environment node
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { build } from 'vite';
+import { tauRuntime } from '@taucad/runtime/vite';
+// oxlint-disable-next-line no-restricted-imports -- this test exercises the application-owned Vite plugin directly.
+import { createUiSourceAliasPlugin, uiBuildTarget } from '../vite.config.js';
+
+const roots: string[] = [];
+const require = createRequire(import.meta.url);
+const workspaceRoot = path.resolve(import.meta.dirname, '../../..');
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map(async (root) => rm(root, { recursive: true, force: true })));
+});
+
+describe('desktop module graph', () => {
+  it.each([false, true])('should emit the esbuild fallback only when its module is retained (%s)', async (retained) => {
+    const cacheRoot = path.resolve('node_modules/.cache/tau-ui-module-graph');
+    await mkdir(cacheRoot, { recursive: true });
+    const root = await mkdtemp(path.join(cacheRoot, 'esbuild-'));
+    roots.push(root);
+    const entry = path.join(root, 'entry.js');
+    const assetModule = path.join(workspaceRoot, 'packages/plugins/esbuild/src/vm/esbuild-wasm-url.ts');
+    await writeFile(
+      entry,
+      `import { esbuildWasmUrl } from ${JSON.stringify(assetModule)}; export const value = ${retained ? 'esbuildWasmUrl' : "'desktop'"};`,
+    );
+    await build({
+      configFile: false,
+      root,
+      logLevel: 'silent',
+      plugins: [
+        tauRuntime({ crossOriginIsolation: false }),
+        createUiSourceAliasPlugin({ emitModuleGraph: true, target: 'desktop' }),
+      ],
+      build: { lib: { entry, formats: ['es'] }, assetsInlineLimit: 0 },
+    });
+    const files = await readdir(path.join(root, 'dist'), { recursive: true });
+    const wasmFiles = files.filter((file) => file.endsWith('.wasm'));
+    expect(wasmFiles).toHaveLength(retained ? 1 : 0);
+    const manifestFile = files.find((file) => /tau-module-graph(?:-[\w-]+)?\.json$/u.test(file));
+    const manifest = JSON.parse(await readFile(path.join(root, 'dist', manifestFile ?? ''), 'utf8')) as {
+      assets: Array<{ fileName: string }>;
+    };
+    expect(manifest.assets.filter((asset) => asset.fileName.endsWith('.wasm')).map((asset) => asset.fileName)).toEqual(
+      wasmFiles,
+    );
+  });
+  it('should retain rendered module and asset provenance when output names are hashed', async () => {
+    const cacheRoot = path.resolve('node_modules/.cache/tau-ui-module-graph');
+    await mkdir(cacheRoot, { recursive: true });
+    const root = await mkdtemp(path.join(cacheRoot, 'fixture-'));
+    roots.push(root);
+    await writeFile(
+      path.join(root, 'entry.js'),
+      "import 'virtual:allowed-wasm-assets'; void import('./wrapper.js').then(({ value }) => value);\n",
+    );
+    await writeFile(path.join(root, 'wrapper.js'), "export { value } from './implementation.js';\n");
+    await writeFile(path.join(root, 'implementation.js'), "export const value = 'retained';\n");
+    await writeFile(path.join(root, 'server-entry.js'), "export const server = 'retained';\n");
+    await writeFile(path.join(root, 'index.html'), '<script type="module" src="/entry.js"></script>\n');
+    const sourceAliasPlugin = createUiSourceAliasPlugin({ emitModuleGraph: true });
+
+    await build({
+      configFile: false,
+      root,
+      logLevel: 'silent',
+      plugins: [
+        {
+          name: 'allowed-wasm-assets',
+          resolveId(id) {
+            return id === 'virtual:allowed-wasm-assets' ? `\0${id}` : null;
+          },
+          load(id) {
+            return id === '\0virtual:allowed-wasm-assets'
+              ? "import kcl from '@taucad/kcl-wasm-lib/kcl.wasm?url'; import clipper from 'clipper2-wasm/dist/es/clipper2z.wasm?url'; document.body.dataset.assets = kcl + ',' + clipper;"
+              : null;
+          },
+        },
+        {
+          name: 'late-css-proxy-cleanup-fixture',
+          async writeBundle(outputOptions, bundle) {
+            if (outputOptions.dir === undefined) {
+              throw new Error('Expected directory output');
+            }
+            const chunks = Object.values(bundle).filter((output) => output.type === 'chunk');
+            const wrapper = chunks.find((chunk) => chunk.facadeModuleId?.endsWith('/wrapper.js'));
+            const implementation = chunks.find((chunk) => chunk.name === 'implementation');
+            if (wrapper === undefined || implementation === undefined) {
+              throw new Error('Expected wrapper and implementation chunks');
+            }
+            await writeFile(path.resolve(outputOptions.dir, wrapper.fileName), '/* empty css */\n');
+            await rm(path.resolve(outputOptions.dir, implementation.fileName));
+          },
+        },
+        sourceAliasPlugin,
+      ],
+      build: {
+        assetsInlineLimit: 0,
+        rollupOptions: {
+          output: {
+            assetFileNames: 'assets/[name]-[hash][extname]',
+            manualChunks(id) {
+              return id.endsWith('/implementation.js') ? 'implementation' : undefined;
+            },
+          },
+        },
+      },
+    });
+
+    const files = await readdir(path.join(root, 'dist', 'assets'));
+    const manifestName = files.find((file) => /^tau-module-graph-[\w-]+\.json$/u.test(file));
+    expect(manifestName).toBeDefined();
+    const manifest = JSON.parse(await readFile(path.join(root, 'dist', 'assets', manifestName ?? ''), 'utf8')) as {
+      assets: Array<{ fileName: string; sourcePath: string; sha256: string }>;
+      chunks: Array<{ fileName: string; moduleIds: string[]; imports: string[]; forwardingOnly: boolean }>;
+    };
+    expect(
+      manifest.chunks.some((chunk) =>
+        chunk.moduleIds.some((moduleId) => moduleId.includes('virtual:allowed-wasm-assets')),
+      ),
+    ).toBe(true);
+    expect(manifest.chunks.some((chunk) => chunk.moduleIds.some((moduleId) => moduleId.endsWith('/wrapper.js')))).toBe(
+      true,
+    );
+    expect(manifest.chunks.every((chunk) => chunk.moduleIds.length > 0)).toBe(true);
+    const wrapperChunk = manifest.chunks.find((chunk) =>
+      chunk.moduleIds.some((moduleId) => moduleId.endsWith('/wrapper.js')),
+    );
+    expect(wrapperChunk?.forwardingOnly).toBe(true);
+    expect(wrapperChunk?.imports).toHaveLength(0);
+    expect(manifest.chunks.some((chunk) => chunk.fileName.includes('implementation'))).toBe(false);
+    for (const chunk of manifest.chunks) {
+      expect(files).toContain(path.basename(chunk.fileName));
+    }
+    expect(manifest.assets).toHaveLength(2);
+    const approvedAssets = await Promise.all(
+      ['@taucad/kcl-wasm-lib/kcl.wasm', 'clipper2-wasm/dist/es/clipper2z.wasm'].map(async (specifier) => {
+        const sourcePath = await realpath(require.resolve(specifier));
+        const sourceHash = createHash('sha256')
+          .update(await readFile(sourcePath))
+          .digest('hex');
+        return { sourceHash, sourcePath };
+      }),
+    );
+    const emittedAssets = await Promise.all(
+      manifest.assets.map(async (candidate) => ({
+        candidate,
+        resolvedPath: await realpath(path.resolve(workspaceRoot, candidate.sourcePath)),
+      })),
+    );
+    for (const { sourceHash, sourcePath } of approvedAssets) {
+      const asset = emittedAssets.find((candidate) => candidate.resolvedPath === sourcePath)?.candidate;
+      expect(asset, JSON.stringify(manifest.assets)).toBeDefined();
+      expect(asset?.fileName.endsWith('.wasm')).toBe(true);
+      expect(asset?.sha256).toBe(sourceHash);
+    }
+
+    await build({
+      configFile: false,
+      root,
+      logLevel: 'silent',
+      plugins: [sourceAliasPlugin],
+      build: {
+        outDir: 'server',
+        ssr: path.join(root, 'server-entry.js'),
+      },
+    });
+    const serverFiles = await readdir(path.join(root, 'server'));
+    expect(serverFiles.some((file) => file.startsWith('tau-module-graph-'))).toBe(false);
+  });
+  it('should exclude the AR USDZ Assimp worker from the desktop renderer graph', async () => {
+    // `ui:check-desktop-payload` runs in CI's build lane whenever `ui` is affected; this guard keeps the AR
+    // USDZ Assimp worker and its WebAssembly out of the renderer in the `ui` test suite, before any build.
+    // The payload pattern below is safe only because the entry is the single AR module: the renderer ships
+    // other runtime workers and Assimp legitimately, so widening the entry would make it fire on those.
+    const cacheRoot = path.resolve('node_modules/.cache/tau-ui-module-graph');
+    await mkdir(cacheRoot, { recursive: true });
+    const root = await mkdtemp(path.join(cacheRoot, 'ar-usdz-'));
+    roots.push(root);
+    const entry = path.join(root, 'entry.js');
+    await writeFile(entry, "export { transcodeGlbToUsdz } from '#components/cad/ar-usdz-transcode.js';\n");
+    // Mirrors apps/ui/desktop/vite.config.ts: `tauRuntime` at the root only, and the worker is its own Vite
+    // build, so it emits its own graph and needs fresh plugin instances for each bundling pass.
+    const workerPlugins = () => [createUiSourceAliasPlugin({ emitModuleGraph: true, target: 'desktop' })];
+    await build({
+      configFile: false,
+      root,
+      logLevel: 'silent',
+      plugins: [tauRuntime({ crossOriginIsolation: false }), ...workerPlugins()],
+      worker: { plugins: workerPlugins },
+      build: { lib: { entry, formats: ['es'] }, assetsInlineLimit: 0 },
+    });
+    const files = await readdir(path.join(root, 'dist'), { recursive: true });
+    const manifestFiles = files.filter((file) => /tau-module-graph(?:-[\w-]+)?\.json$/u.test(file));
+    const manifests = await Promise.all(
+      manifestFiles.map(
+        async (file) =>
+          JSON.parse(await readFile(path.join(root, 'dist', file), 'utf8')) as {
+            chunks: Array<{ moduleIds: string[] }>;
+          },
+      ),
+    );
+    const moduleIds = manifests.flatMap((manifest) => manifest.chunks.flatMap((chunk) => chunk.moduleIds));
+    expect(moduleIds.some((moduleId) => moduleId.endsWith('/components/cad/ar-usdz-transcode.desktop.ts'))).toBe(true);
+    expect(
+      moduleIds.filter((moduleId) =>
+        /usdz-runtime\.(?:worker|definition)|libassimp|plugins\/assimp|packages\/runtime\/src\/worker\//u.test(
+          moduleId,
+        ),
+      ),
+    ).toEqual([]);
+    expect(files.filter((file) => file.endsWith('.wasm'))).toEqual([]);
+  }, 60_000);
+});
+
+describe('web module graph', () => {
+  it.each([
+    ['static import', "import { value } from 'virtual:desktop'; document.body.dataset.value = value;"],
+    ['dynamic import', "void import('virtual:desktop').then(({ value }) => { document.body.dataset.value = value; });"],
+    ['re-export', "import { value } from './bridge.js'; document.body.dataset.value = value;"],
+  ])('rejects a desktop implementation reached by %s', async (_kind, source) => {
+    const cacheRoot = path.resolve('node_modules/.cache/tau-ui-module-graph');
+    await mkdir(cacheRoot, { recursive: true });
+    const root = await mkdtemp(path.join(cacheRoot, 'fixture-'));
+    roots.push(root);
+    await writeFile(path.join(root, 'entry.js'), source);
+    await writeFile(path.join(root, 'bridge.js'), "export { value } from 'virtual:desktop';");
+    await writeFile(path.join(root, 'index.html'), '<script type="module" src="/entry.js"></script>');
+    await expect(
+      build({
+        configFile: false,
+        root,
+        logLevel: 'silent',
+        plugins: [
+          {
+            name: 'desktop-import-fixture',
+            resolveId(id) {
+              return id === 'virtual:desktop' ? '\0apps/ui/app/services/browser-agent-worker.desktop.ts' : null;
+            },
+            load(id) {
+              return id === '\0apps/ui/app/services/browser-agent-worker.desktop.ts'
+                ? "export const value = 'desktop';"
+                : null;
+            },
+          },
+          createUiSourceAliasPlugin({ emitModuleGraph: true, target: 'web' }),
+        ],
+      }),
+    ).rejects.toThrow(/Desktop-only implementation in web bundle/u);
+  });
+});
+
+describe('build target seam', () => {
+  const buildTargetFixture = async (target: 'web' | 'desktop'): Promise<string> => {
+    const cacheRoot = path.resolve('node_modules/.cache/tau-ui-module-graph');
+    await mkdir(cacheRoot, { recursive: true });
+    const root = await mkdtemp(path.join(cacheRoot, `build-target-${target}-`));
+    roots.push(root);
+    const entry = path.join(root, 'entry.js');
+    await writeFile(
+      entry,
+      [
+        "import { isDesktopTarget } from '@taucad/ui-core/lib/build-target';",
+        "export const host = isDesktopTarget ? 'desktop-only-branch' : 'web-only-branch';",
+      ].join('\n'),
+    );
+    const { define, resolve } = uiBuildTarget(target);
+    await build({
+      configFile: false,
+      root,
+      logLevel: 'silent',
+      define,
+      resolve,
+      plugins: [createUiSourceAliasPlugin({ emitModuleGraph: true, target })],
+      build: { lib: { entry, formats: ['es'] }, minify: true },
+    });
+    const files = await readdir(path.join(root, 'dist'));
+    const code = await Promise.all(
+      files.filter((file) => file.endsWith('.js')).map(async (file) => readFile(path.join(root, 'dist', file), 'utf8')),
+    );
+    return code.join('\n');
+  };
+
+  it('resolves the web variant and folds the desktop branch away for the web target', async () => {
+    const code = await buildTargetFixture('web');
+    expect(code).toContain('web-only-branch');
+    expect(code).not.toContain('desktop-only-branch');
+  }, 60_000);
+
+  it('resolves the desktop variant through the tau-desktop condition for the desktop target', async () => {
+    const code = await buildTargetFixture('desktop');
+    expect(code).toContain('desktop-only-branch');
+    expect(code).not.toContain('web-only-branch');
+  }, 60_000);
+
+  it('sets the app define and the library condition from the same target', () => {
+    expect(uiBuildTarget('web').define).toStrictEqual({ 'import.meta.env.TAU_TARGET': '"web"' });
+    expect(uiBuildTarget('web').resolve.conditions).not.toContain('tau-desktop');
+    expect(uiBuildTarget('web').ssrResolve.conditions).not.toContain('tau-desktop');
+    expect(uiBuildTarget('desktop').define).toStrictEqual({ 'import.meta.env.TAU_TARGET': '"desktop"' });
+    expect(uiBuildTarget('desktop').resolve.conditions).toContain('tau-desktop');
+    expect(uiBuildTarget('desktop').ssrResolve.conditions).toContain('tau-desktop');
+  });
+
+  it('rejects a library desktop variant reached by the web bundle', async () => {
+    const cacheRoot = path.resolve('node_modules/.cache/tau-ui-module-graph');
+    await mkdir(cacheRoot, { recursive: true });
+    const root = await mkdtemp(path.join(cacheRoot, 'fixture-'));
+    roots.push(root);
+    await writeFile(
+      path.join(root, 'entry.js'),
+      "import { isDesktopTarget } from 'virtual:desktop'; document.body.dataset.value = String(isDesktopTarget);",
+    );
+    await writeFile(path.join(root, 'index.html'), '<script type="module" src="/entry.js"></script>');
+    const libraryVariant = '\0apps/libs/ui-core/src/lib/build-target.desktop.ts';
+    await expect(
+      build({
+        configFile: false,
+        root,
+        logLevel: 'silent',
+        plugins: [
+          {
+            name: 'library-desktop-variant-fixture',
+            resolveId: (id) => (id === 'virtual:desktop' ? libraryVariant : null),
+            load: (id) => (id === libraryVariant ? "export const isDesktopTarget = 'desktop';" : null),
+          },
+          createUiSourceAliasPlugin({ emitModuleGraph: true, target: 'web' }),
+        ],
+      }),
+    ).rejects.toThrow(/Desktop-only implementation in web bundle/u);
+  });
+});

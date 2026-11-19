@@ -1,0 +1,543 @@
+import { useResponsiveSurfaceContainer } from '#hooks/responsive-surface.js';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { formatKeyCombination, setPlatform, getPlatform } from '#utils/keys.js';
+import type { KeyCombination } from '#utils/keys.js';
+import { detectPlatform } from '#utils/platform.js';
+import { usePlatform } from '#hooks/use-platform.js';
+import type { DetectedPlatform } from '#utils/platform.js';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+/**
+ * Global modifier key state, updated by a single set of window-level listeners.
+ * @public
+ */
+export type ModifierState = {
+  shift: boolean;
+  ctrl: boolean;
+  alt: boolean;
+  meta: boolean;
+};
+
+type KeybindingOptions = {
+  /** Call `event.preventDefault()` when matched. Default: `true`. */
+  preventDefault?: boolean;
+  /** Call `event.stopPropagation()` on the DOM event when matched. Default: `true`. */
+  stopPropagation?: boolean;
+  /** Fire on `event.repeat` (held key). Default: `false`. */
+  repeat?: boolean;
+  /**
+   * When `true`, the callback will **not** fire if the event target is an
+   * editable element (input, textarea, contenteditable, etc.).
+   * Default: `false` (shortcuts are suppressed inside editable targets).
+   */
+  ignoreInputs?: boolean;
+  /** Dynamic enable/disable. Default: `true`. */
+  enabled?: boolean | (() => boolean);
+  /** Higher priority fires first. Default: `0`. */
+  priority?: number;
+  /** `'global'` fires everywhere; `'app'` is suppressed inside dialogs. Default: `'app'`. */
+  scope?: 'global' | 'app';
+  /**
+   * Dialogs, named by their `data-shortcut-scope`, where this `'app'` shortcut still fires: an allow-list, so a dialog
+   * that is app chrome (the phone sidebar sheet, `'sidebar'`) keeps its own shortcuts and no others. Default: none.
+   */
+  allowedScopes?: readonly string[];
+  /** When `true`, prevents lower-priority handlers for the same combo from firing. Default: `true`. */
+  consume?: boolean;
+};
+
+type KeybindingRegistration = {
+  id: symbol;
+  callbackRef: React.RefObject<(event: KeyboardEvent) => void>;
+  optionsRef: React.RefObject<Required<KeybindingOptions>>;
+};
+
+type KeyboardContextValue = {
+  modifiers: ModifierState;
+  platform: DetectedPlatform;
+  register: (combo: string, registration: KeybindingRegistration) => void;
+  unregister: (combo: string, id: symbol) => void;
+};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const initialModifiers: ModifierState = {
+  shift: false,
+  ctrl: false,
+  alt: false,
+  meta: false,
+};
+
+const defaultOptions: Required<KeybindingOptions> = {
+  preventDefault: true,
+  stopPropagation: true,
+  repeat: false,
+  ignoreInputs: false,
+  enabled: true,
+  priority: 0,
+  scope: 'app',
+  allowedScopes: [],
+  consume: true,
+};
+
+/**
+ * Non-editable input types that should not suppress shortcuts.
+ */
+const nonEditableInputTypes = new Set(['button', 'submit', 'reset', 'checkbox', 'radio']);
+
+/**
+ * Selector for scoped containers where 'app'-scoped shortcuts are suppressed. A terminal (`data-slot="terminal"`)
+ * owns ordinary keys such as Ctrl+D and Ctrl+I, so app shortcuts must not take them from the shell. Any element named
+ * by `data-shortcut-scope` is one too: an overlay that is not a dialog (a viewer's portalled controls, a blocking hold
+ * screen) takes the attribute so a shortcut cannot open a surface behind it.
+ */
+const scopedContainerSelector =
+  '[role="dialog"], [role="alertdialog"], [data-slot="command-dialog"], [data-slot="terminal"], [data-shortcut-scope]';
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+const KeyboardContext = createContext<KeyboardContextValue | undefined>(undefined);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialize a KeyCombination into a stable registry key.
+ * Resolves `modKey` to the platform-specific modifier.
+ */
+function serializeCombo(combo: KeyCombination): string {
+  const isMac = getPlatform() === 'mac';
+  const parts: string[] = [];
+
+  // Resolve modKey
+  const ctrl = combo.modKey ? !isMac : Boolean(combo.ctrlKey);
+  const meta = combo.modKey ? isMac : Boolean(combo.metaKey);
+
+  if (ctrl) {
+    parts.push('ctrl');
+  }
+
+  if (meta) {
+    parts.push('meta');
+  }
+
+  if (combo.altKey) {
+    parts.push('alt');
+  }
+
+  if (combo.shiftKey) {
+    parts.push('shift');
+  }
+
+  parts.push(combo.key.toLowerCase());
+
+  return parts.join('+');
+}
+
+/**
+ * Serialize a KeyboardEvent into the same format as serializeCombo.
+ */
+function serializeEvent(event: KeyboardEvent): string {
+  const parts: string[] = [];
+
+  if (event.ctrlKey) {
+    parts.push('ctrl');
+  }
+
+  if (event.metaKey) {
+    parts.push('meta');
+  }
+
+  if (event.altKey) {
+    parts.push('alt');
+  }
+
+  if (event.shiftKey) {
+    parts.push('shift');
+  }
+
+  parts.push(event.key.toLowerCase());
+
+  return parts.join('+');
+}
+
+/**
+ * Check if the event target is an editable element.
+ */
+function isEditableTarget(target: EventTarget | undefined): boolean {
+  const Element = (target as { ownerDocument?: Document } | undefined)?.ownerDocument?.defaultView?.HTMLElement;
+  if (!Element || !(target instanceof Element)) {
+    return false;
+  }
+
+  const { tagName } = target;
+
+  if (tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return true;
+  }
+
+  if (tagName === 'INPUT') {
+    const inputType = (target as HTMLInputElement).type.toLowerCase();
+
+    return !nonEditableInputTypes.has(inputType);
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  if (target.closest('[role="textbox"]')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if the event target is inside a scoped container (dialog, etc.) that does not allow the shortcut: the nearest
+ * one decides, by its `data-shortcut-scope`.
+ */
+function isInsideScopedContainer(target: EventTarget | undefined, allowedScopes: readonly string[]): boolean {
+  const Element = (target as { ownerDocument?: Document } | undefined)?.ownerDocument?.defaultView?.HTMLElement;
+  if (!Element || !(target instanceof Element)) {
+    return false;
+  }
+
+  const container = target.closest<HTMLElement>(scopedContainerSelector);
+  if (container === null) {
+    return false;
+  }
+  const scope = container.dataset['shortcutScope'];
+  return scope === undefined || !allowedScopes.includes(scope);
+}
+
+/**
+ * Read modifier state from a keyboard event using getModifierState.
+ */
+function readModifiersFromKeyboardEvent(event: KeyboardEvent): ModifierState {
+  return {
+    shift: event.getModifierState('Shift'),
+    ctrl: event.getModifierState('Control'),
+    alt: event.getModifierState('Alt'),
+    meta: event.getModifierState('Meta'),
+  };
+}
+
+/**
+ * Read modifier state from a pointer/mouse event.
+ */
+function readModifiersFromPointerEvent(event: PointerEvent | MouseEvent): ModifierState {
+  return {
+    shift: event.shiftKey,
+    ctrl: event.ctrlKey,
+    alt: event.altKey,
+    meta: event.metaKey,
+  };
+}
+
+/**
+ * Shallow compare two ModifierState objects.
+ */
+function modifiersEqual(a: ModifierState, b: ModifierState): boolean {
+  return a.shift === b.shift && a.ctrl === b.ctrl && a.alt === b.alt && a.meta === b.meta;
+}
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+/**
+ * Global keyboard service provider.
+ *
+ * Attaches a single set of window-level listeners for modifier state tracking
+ * and keybinding dispatch. Must be placed near the root of the React tree.
+ * @public
+ */
+export function KeyboardProvider({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  const container = useResponsiveSurfaceContainer();
+  const [modifiers, setModifiers] = useState<ModifierState>(initialModifiers);
+  const [detectedPlatform, setDetectedPlatform] = useState(getPlatform);
+  const modifiersRef = useRef<ModifierState>(initialModifiers);
+  const registryRef = useRef(new Map<string, Set<KeybindingRegistration>>());
+
+  // Stable register/unregister functions
+  const register = useCallback((combo: string, registration: KeybindingRegistration): void => {
+    const map = registryRef.current;
+    let set = map.get(combo);
+
+    if (!set) {
+      set = new Set();
+      map.set(combo, set);
+    }
+
+    set.add(registration);
+  }, []);
+
+  const unregister = useCallback((combo: string, id: symbol): void => {
+    const set = registryRef.current.get(combo);
+
+    if (!set) {
+      return;
+    }
+
+    for (const reg of set) {
+      if (reg.id === id) {
+        set.delete(reg);
+        break;
+      }
+    }
+
+    if (set.size === 0) {
+      registryRef.current.delete(combo);
+    }
+  }, []);
+
+  useEffect(() => {
+    const ownerDocument = container?.ownerDocument ?? document;
+    const ownerWindow = ownerDocument.defaultView ?? globalThis;
+    // Detect and set platform on mount
+    const platform = detectPlatform();
+    setPlatform(platform);
+    setDetectedPlatform(platform);
+
+    /**
+     * Update modifier state, only triggering a React re-render when values actually change.
+     */
+    const updateModifiers = (next: ModifierState): void => {
+      if (!modifiersEqual(modifiersRef.current, next)) {
+        modifiersRef.current = next;
+        setModifiers(next);
+      }
+    };
+
+    /**
+     * Handle keydown: update modifiers + dispatch matching keybindings.
+     */
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      const nextModifiers = readModifiersFromKeyboardEvent(event);
+      updateModifiers(nextModifiers);
+
+      // IME guard -- skip all matching during composition
+      if (event.isComposing) {
+        return;
+      }
+
+      // Serialize event and look up registrations
+      const comboKey = serializeEvent(event);
+      const registrations = registryRef.current.get(comboKey);
+
+      if (!registrations || registrations.size === 0) {
+        return;
+      }
+
+      // Sort by priority descending (stable)
+      const sorted = [...registrations].sort((a, b) => b.optionsRef.current.priority - a.optionsRef.current.priority);
+
+      for (const reg of sorted) {
+        const options = reg.optionsRef.current;
+        // Enabled check
+        const isEnabled = typeof options.enabled === 'function' ? options.enabled() : options.enabled;
+
+        if (!isEnabled) {
+          continue;
+        }
+
+        // Repeat guard
+        if (event.repeat && !options.repeat) {
+          continue;
+        }
+
+        // Input guard
+        if (options.ignoreInputs && isEditableTarget(event.target ?? undefined)) {
+          continue;
+        }
+
+        // Scope guard
+        if (options.scope === 'app' && isInsideScopedContainer(event.target ?? undefined, options.allowedScopes)) {
+          continue;
+        }
+
+        // Fire callback
+        reg.callbackRef.current(event);
+
+        // Apply DOM event modifications
+        if (options.preventDefault) {
+          event.preventDefault();
+        }
+
+        if (options.stopPropagation) {
+          event.stopPropagation();
+        }
+
+        // Consume check
+        if (options.consume) {
+          break;
+        }
+      }
+    };
+
+    /**
+     * Handle keyup: update modifiers only.
+     */
+    const handleKeyUp = (event: KeyboardEvent): void => {
+      updateModifiers(readModifiersFromKeyboardEvent(event));
+    };
+
+    /**
+     * Handle blur: reset all modifiers (fixes stuck keys on app/tab switch).
+     */
+    const handleBlur = (): void => {
+      updateModifiers(initialModifiers);
+    };
+
+    /**
+     * Handle visibility change: reset modifiers when tab hidden.
+     */
+    const handleVisibilityChange = (): void => {
+      if (ownerDocument.hidden) {
+        updateModifiers(initialModifiers);
+      }
+    };
+
+    /**
+     * Handle pointer down: sync modifiers from pointer event
+     * (catches drift from missed keyboard events, e.g., modifier pressed in iframe).
+     */
+    const handlePointerDown = (event: PointerEvent): void => {
+      updateModifiers(readModifiersFromPointerEvent(event));
+    };
+
+    // Attach single set of listeners
+    ownerWindow.addEventListener('keydown', handleKeyDown, { capture: true });
+    ownerWindow.addEventListener('keyup', handleKeyUp);
+    ownerWindow.addEventListener('blur', handleBlur);
+    ownerDocument.addEventListener('visibilitychange', handleVisibilityChange);
+    ownerWindow.addEventListener('pointerdown', handlePointerDown);
+
+    return () => {
+      ownerWindow.removeEventListener('keydown', handleKeyDown, { capture: true });
+      ownerWindow.removeEventListener('keyup', handleKeyUp);
+      ownerWindow.removeEventListener('blur', handleBlur);
+      ownerDocument.removeEventListener('visibilitychange', handleVisibilityChange);
+      ownerWindow.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [container]);
+
+  const contextValue = useMemo<KeyboardContextValue>(
+    () => ({ modifiers, platform: detectedPlatform, register, unregister }),
+    [modifiers, detectedPlatform, register, unregister],
+  );
+
+  return <KeyboardContext.Provider value={contextValue}>{children}</KeyboardContext.Provider>;
+}
+
+// ---------------------------------------------------------------------------
+// Hooks
+// ---------------------------------------------------------------------------
+
+/**
+ * Access the keyboard context. Throws if used outside KeyboardProvider.
+ */
+function useKeyboardContext(): KeyboardContextValue {
+  const context = useContext(KeyboardContext);
+
+  if (!context) {
+    throw new Error(
+      'useModifiers/useKeybinding must be used within a KeyboardProvider (import it from @taucad/ui/components/keyboard)',
+    );
+  }
+
+  return context;
+}
+
+/**
+ * Returns the current modifier key state (shift, ctrl, alt, meta).
+ *
+ * State is globally tracked by a single set of window-level listeners,
+ * automatically resets on blur/visibility change, and syncs from pointer events.
+ *
+ * @public
+ *
+ * @example <caption>Label a split action by the held modifier</caption>
+ * ```tsx
+ * import { useModifiers } from '@taucad/ui/components/keyboard';
+ *
+ * export const SplitLabel = (): React.JSX.Element => {
+ *   const { shift } = useModifiers();
+ *   return <span>{shift ? 'Split down' : 'Split right'}</span>;
+ * };
+ * ```
+ */
+export function useModifiers(): ModifierState {
+  return useKeyboardContext().modifiers;
+}
+
+/**
+ * Registers a keybinding and returns the formatted key combination for display.
+ *
+ * The callback is stored via ref -- it never causes re-registration when
+ * the closure changes. Registration is effect-based and StrictMode-safe.
+ *
+ * @public
+ *
+ * @example <caption>Bind a shortcut and show it</caption>
+ * ```tsx
+ * import { useKeybinding } from '@taucad/ui/components/keyboard';
+ *
+ * export const PaletteHint = ({ onOpen }: { readonly onOpen: () => void }): React.JSX.Element => {
+ *   const { formattedKeyCombination } = useKeybinding({ key: 'k', modKey: true }, onOpen);
+ *   return <kbd>{formattedKeyCombination}</kbd>;
+ * };
+ * ```
+ */
+export function useKeybinding(
+  keyCombination: KeyCombination,
+  callback: (event: KeyboardEvent) => void,
+  options?: KeybindingOptions,
+): { formattedKeyCombination: string } {
+  const { register, unregister } = useKeyboardContext();
+
+  // Stable callback ref -- updated every render, read in handler
+  const callbackRef = useRef(callback);
+  const optionsRef = useRef<Required<KeybindingOptions>>({ ...defaultOptions, ...options });
+  useLayoutEffect(() => {
+    callbackRef.current = callback;
+    optionsRef.current = { ...defaultOptions, ...options };
+  }, [callback, options]);
+
+  // Serialize combo for registry key and effect dependency. The registry matches real
+  // events, so it reads the detected platform; the label is rendered and reads the
+  // hydration-stable one.
+  const comboKey = serializeCombo(keyCombination);
+  const platform = usePlatform();
+
+  // Register/unregister via effect
+  useEffect(() => {
+    const id = Symbol('keybinding');
+    const registration: KeybindingRegistration = {
+      id,
+      callbackRef,
+      optionsRef,
+    };
+
+    register(comboKey, registration);
+
+    return () => {
+      unregister(comboKey, id);
+    };
+  }, [comboKey, register, unregister]);
+
+  // Format for display
+  const formattedKeyCombination = formatKeyCombination(keyCombination, platform);
+
+  return { formattedKeyCombination };
+}

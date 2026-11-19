@@ -1,10 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render as renderBare, screen, waitFor } from '@testing-library/react';
+import { TooltipProvider } from '@taucad/ui/components/tooltip';
 import type { FileEntry } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
 import { AtReferenceChip } from '#components/chat/at-reference-chip.js';
-import { AtReferenceProvider } from '#components/chat/at-reference-context.js';
+import { AtReferenceProvider } from '@taucad/chat-ui/components/at-reference-context';
 import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
+
+/** The app mounts one TooltipProvider at its root; file chips carry a path tooltip. */
+const render = (ui: React.ReactElement) => renderBare(ui, { wrapper: TooltipProvider });
+
+type FileFileEntry = Extract<FileEntry, { type: 'file' }>;
+type DirectoryFileEntry = Extract<FileEntry, { type: 'dir' }>;
 
 vi.mock('#components/files/file-link.js', () => ({
   FileLink: ({ children, path }: { children: React.ReactNode; path: string }) => (
@@ -22,14 +29,46 @@ vi.mock('#hooks/use-project.js', () => ({
 }));
 
 function createEntry(path: string, partial: Partial<FileEntry> = {}): FileEntry {
+  const name = partial.name ?? path.split('/').pop()!;
+  const size = partial.size ?? 0;
+  const isLoaded = partial.isLoaded ?? true;
+  const mtimeMs = partial.mtimeMs ?? 0;
+
+  if (partial.type === 'dir') {
+    const directoryPartial = partial as Partial<DirectoryFileEntry>;
+    return {
+      path,
+      name,
+      type: 'dir',
+      size,
+      isLoaded,
+      mtimeMs,
+      isDirectoryResolved: directoryPartial.isDirectoryResolved,
+    };
+  }
+
+  const filePartial = partial as Partial<FileFileEntry>;
+  if (filePartial.contentKind === 'binary') {
+    return {
+      path,
+      name,
+      type: 'file',
+      size,
+      isLoaded,
+      mtimeMs,
+      contentKind: 'binary',
+    };
+  }
+
   return {
     path,
-    name: partial.name ?? path.split('/').pop()!,
-    type: partial.type ?? 'file',
-    size: 0,
-    isLoaded: true,
-    mtimeMs: 0,
-    ...partial,
+    name,
+    type: 'file',
+    size,
+    isLoaded,
+    mtimeMs,
+    contentKind: 'text',
+    lineCount: filePartial.lineCount ?? 1,
   };
 }
 
@@ -86,15 +125,15 @@ describe('AtReferenceChip', () => {
   it('should render chat chip for valid transcript path', () => {
     const chats = createChats([{ id: 'chat-123', name: 'Design Discussion' }]);
 
-    renderChip('.tau/transcripts/chat-123.jsonl', createMockTreeService(), chats);
+    renderChip('.tau/chats/chat-123/events.jsonl', createMockTreeService(), chats);
 
     expect(screen.getByText('Design Discussion')).toBeInTheDocument();
   });
 
   it('should render plain text for unknown transcript path', () => {
-    renderChip('.tau/transcripts/missing-chat.jsonl', createMockTreeService());
+    renderChip('.tau/chats/missing-chat/events.jsonl', createMockTreeService());
 
-    expect(screen.getByText('@.tau/transcripts/missing-chat.jsonl')).toBeInTheDocument();
+    expect(screen.getByText('@.tau/chats/missing-chat/events.jsonl')).toBeInTheDocument();
     expect(screen.queryByTestId('file-link')).not.toBeInTheDocument();
   });
 
@@ -124,15 +163,27 @@ describe('AtReferenceChip', () => {
     expect(screen.getByText('highlighted text')).toBeInTheDocument();
   });
 
-  it('should render skill chip when data-slash-command is set', () => {
+  it('should render a skill chip for a token the chat knows', () => {
     render(
-      <AtReferenceProvider treeService={createMockTreeService()} chats={[]}>
-        <AtReferenceChip data-slash-command='create-policy' />
+      <AtReferenceProvider treeService={createMockTreeService()} chats={[]} knownTokens={new Set(['$imagegen'])}>
+        <AtReferenceChip data-invocation='$imagegen' />
       </AtReferenceProvider>,
     );
 
-    expect(screen.getByText('/create-policy')).toBeInTheDocument();
+    /* A chip carries its type icon beside the label; plain text has none. */
+    expect(screen.getByText('$imagegen').parentElement?.querySelector('svg')).toBeInTheDocument();
     expect(screen.queryByTestId('file-link')).not.toBeInTheDocument();
+  });
+
+  it('should render an unknown token as plain text', () => {
+    const { container } = render(
+      <AtReferenceProvider treeService={createMockTreeService()} chats={[]} knownTokens={new Set(['/create-policy'])}>
+        <AtReferenceChip data-invocation='$5' />
+      </AtReferenceProvider>,
+    );
+
+    expect(container.querySelector('svg')).not.toBeInTheDocument();
+    expect(container).toHaveTextContent('$5');
   });
 
   it('should render fallback mark when neither data attribute is present', () => {

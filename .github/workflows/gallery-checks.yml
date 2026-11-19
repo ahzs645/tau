@@ -1,0 +1,74 @@
+name: Gallery checks
+
+# One gallery job covers the integration contract; the full model matrix is opt-in.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      geometry:
+        description: Render and validate every gallery model variant
+        type: boolean
+        default: false
+      browser:
+        description: Exercise the built gallery in Chromium
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+  NX_DAEMON: 'false'
+  pnpm_config_verify_deps_before_run: error
+
+concurrency:
+  group: gallery-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gallery:
+    if: ${{ github.repository == 'ahzs645/tau' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+      - name: Check gallery types and lint
+        run: pnpm nx run-many -p gallery -t lint,typecheck --parallel=1
+      - name: Test and build gallery
+        id: build
+        if: ${{ !cancelled() }}
+        env:
+          VITE_COMMIT_SHA: ${{ github.sha }}
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: pnpm nx run-many -p gallery -t test,build --parallel=1
+      - name: Verify kernel compatibility
+        if: ${{ !cancelled() }}
+        run: pnpm nx run gallery:verify-runtime
+      - name: Validate model geometry and exports
+        if: ${{ !cancelled() && inputs.geometry }}
+        run: pnpm nx run gallery:verify-models --all-exports --regressions --write-glb
+      - name: Install Chromium
+        id: chromium
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'pull_request' || inputs.browser) }}
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Verify static browser application
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: pnpm nx run gallery:verify-browser
+      - name: Preserve verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gallery-verification
+          path: |
+            out/reports/gallery
+            out/test-results/gallery
+            out/artifacts/gallery
+          if-no-files-found: ignore

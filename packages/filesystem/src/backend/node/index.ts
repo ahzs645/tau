@@ -1,0 +1,37 @@
+/**
+ * `@taucad/filesystem/backend/node` — the host half of the node storage
+ * backend. This entry point pulls in `node:fs`; never re-export it from the
+ * browser barrel (`backend/index.ts`), which the file-manager worker bundles.
+ */
+
+export { drainNodeFsProviderWatchClosures, NodeFsProvider, nodeDiskKeepsFileModes } from '#backend/node/provider.js';
+export type { ImportCopyFacts, ImportCopyReceipt, ImportFileCopy } from '#backend/node/provider.js';
+export { importSourceIdentity, listImportSource, readImportSource } from '#backend/node/import-source.js';
+export type { ImportSourceGrant, ImportSourceIdentity } from '#backend/node/import-source.js';
+export { acquireNodeAuthorityWriter, NodeAuthorityWriterError } from '#backend/node/authority-writer-lock.js';
+export type { AcquireNodeAuthorityWriterInput, NodeAuthorityWriter } from '#backend/node/authority-writer-lock.js';
+export { NodeFsAuthorityHost, serveNodeFsProvider } from '#backend/node/host.js';
+export type {
+  CheckedDirectory,
+  CheckedEntryRename,
+  CheckedEntryRenameResult,
+  EntryIdentity,
+  EntryObservation,
+  EntryPrecondition,
+  LinkObservation,
+  ObserveEntryInput,
+  CheckedEntryConflict,
+  CheckedEntryResult,
+  CheckedRename,
+  NodeFsAuthorityOperationInput,
+  NodeFsHostOptions,
+  NodeFsRootRun,
+  NodeFsRootRunInput,
+  NodeFsRootScope,
+  NodeFsServer,
+} from '#backend/node/host.js';
+export { repositoryLargeObjectStore } from '#backend/node/large-object-store.js';
+export { toNodeFsPort } from '#backend/node/port.js';
+export type { EmitterPort, NodeFsPort } from '#backend/node/port.js';
+export { nodeFsProtocolVersion } from '#backend/node/protocol.js';
+export type { NodeFsHostDescription, NodeFsWatchEvent } from '#backend/node/protocol.js';

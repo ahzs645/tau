@@ -1,0 +1,207 @@
+import { basename, dirname, extname, resolve } from 'node:path';
+import { build123d } from '@taucad/build123d';
+import { esbuild } from '@taucad/esbuild';
+import { image } from '@taucad/image';
+import { jscad } from '@taucad/jscad';
+import { manifold } from '@taucad/manifold';
+import { gltfEdgeDetection, parameterFileResolver, parameterUnits } from '@taucad/middleware';
+import { defaultDependencyStore, inspectNativeKernels, nativeDeploymentsOf } from '@taucad/native-process-core/store';
+import { opencascade } from '@taucad/opencascade';
+import { openrscad } from '@taucad/openrscad';
+import { picogk } from '@taucad/picogk';
+import { picovoxel } from '@taucad/picovoxel';
+import { replicad } from '@taucad/replicad';
+import { smlib } from '@taucad/smlib';
+import { smlibpy } from '@taucad/smlibpy';
+import { tscircuit } from '@taucad/tscircuit';
+import type { RuntimeClient } from '@taucad/runtime/client';
+import { createNodeClient } from '@taucad/runtime/node';
+import { readManagedPreparation } from '@taucad/runtime/preparation/node';
+import type { AnyRuntimeDefinition } from '@taucad/runtime/worker';
+import { defineRuntime, resolveRuntimeDefinition } from '@taucad/runtime/worker';
+import { assertRootedPath } from '@taucad/runtime/kernel';
+import { tauClientExporter } from '@taucad/agent-tools/geospec/exporter';
+import type { TauExporterClient } from '@taucad/agent-tools/geospec/exporter';
+import type { GeoSpecModelExporter } from 'geospec/model';
+
+const exampleMiddleware = () => [parameterFileResolver(), parameterUnits(), gltfEdgeDetection()];
+
+/*
+ * The native kernels are listed like any other: each binds its own sealed closure from this machine's dependency store
+ * when it initialises (`tau prepare <kernel>`) and refuses with `KERNEL_NOT_PREPARED` until then. Per-host omission:
+ * Build123d's and SMLibPy's examples ship no checked-in thumbnails yet, so only the workspace runtime lists them.
+ */
+
+/** Runtime composition used to generate and verify checked-in example thumbnails. @public */
+export const exampleRuntime = defineRuntime({
+  plugins: [
+    replicad(),
+    opencascade(),
+    manifold(),
+    picovoxel(),
+    smlib(),
+    jscad(),
+    openrscad(),
+    esbuild(),
+    image(),
+    picogk(),
+    tscircuit(),
+  ],
+  middleware: exampleMiddleware(),
+});
+
+/** The example kernels plus SMLibPy and Build123d: regenerates thumbnails for user projects. @public */
+export const workspaceRuntime = defineRuntime({
+  plugins: [
+    replicad(),
+    opencascade(),
+    manifold(),
+    picovoxel(),
+    smlib(),
+    jscad(),
+    openrscad(),
+    esbuild(),
+    image(),
+    smlibpy(),
+    build123d(),
+    picogk(),
+    tscircuit(),
+  ],
+  middleware: exampleMiddleware(),
+});
+
+/**
+ * The workspace runtime's resolved kernel rows, in precedence order: what the kernel routing eval binds a written entry
+ * against, read from here so the eval needs no edge to the runtime or the kernels.
+ *
+ * @returns Each kernel's id, extensions and import pattern.
+ * @public
+ */
+export const workspaceKernelRows = async (): Promise<
+  ReadonlyArray<{
+    readonly id: string;
+    readonly extensions: readonly string[];
+    readonly detectImport?: RegExp | Readonly<{ source: string; flags: string }>;
+    readonly builtinModuleNames?: readonly string[];
+  }>
+> => {
+  const resolved = await resolveRuntimeDefinition(workspaceRuntime, undefined);
+  return resolved.kernels;
+};
+
+/**
+ * The kernels a runtime can evaluate on this machine: every kernel it lists, less each native kernel whose closure the
+ * dependency store does not hold sealed. Read from launch indexes only: nothing is downloaded.
+ * @param runtime - The runtime.
+ * @returns The runnable kernel ids, in list order.
+ */
+const unpreparedKernelIds = async (runtime: AnyRuntimeDefinition): Promise<ReadonlySet<string>> => {
+  const resolved = await resolveRuntimeDefinition(runtime, undefined);
+  const inspection = await inspectNativeKernels({
+    deployments: nativeDeploymentsOf(resolved).map(({ deployment }) => deployment),
+    store: defaultDependencyStore(),
+    managed: readManagedPreparation(process.env),
+  });
+  return new Set(inspection.filter(({ answer }) => answer.status !== 'ready').map(({ kernel }) => kernel));
+};
+
+const runnableKernelIds = async (runtime: AnyRuntimeDefinition): Promise<ReadonlySet<string>> => {
+  const resolved = await resolveRuntimeDefinition(runtime, undefined);
+  const unprepared = await unpreparedKernelIds(runtime);
+  return new Set(resolved.kernels.map(({ id }) => id).filter((id) => !unprepared.has(id)));
+};
+
+/** Kernel ids the workspace runtime can evaluate on this machine. @public */
+export const workspaceKernelIds = await runnableKernelIds(workspaceRuntime);
+
+/** Create an isolated Node client rooted at one user project. @public */
+export const createWorkspaceRuntimeClient = async (
+  projectPath: string,
+): Promise<RuntimeClient<typeof workspaceRuntime>> => createNodeClient({ runtime: workspaceRuntime, projectPath });
+
+/** Kernel ids the example-thumbnail runtime can evaluate on this machine. @public */
+export const exampleKernelIds = await runnableKernelIds(exampleRuntime);
+
+/** Native kernel ids the example runtime lists but this machine has not prepared (`tau prepare <kernel>`). @public */
+export const exampleUnpreparedKernelIds = await unpreparedKernelIds(exampleRuntime);
+
+/** Create an isolated Node client for one example-corpus operation. @public */
+export const createExampleRuntimeClient = async (projectPath: string): Promise<RuntimeClient<typeof exampleRuntime>> =>
+  createNodeClient({ runtime: exampleRuntime, projectPath });
+
+/** Isolate C# compilations while preserving shared imports for bundled examples. @public */
+export const createExampleGeoSpecRuntimeClient = async (
+  projectPath: string,
+): Promise<TauExporterClient & { terminate(): void }> => {
+  let client: RuntimeClient<typeof exampleRuntime> | undefined;
+  let activeRoot: string | undefined;
+  return {
+    connect: async () => undefined,
+    terminate: () => client?.terminate(),
+    open(input) {
+      const { source } = input;
+      if (!('path' in source) || typeof source.path !== 'string') {
+        throw new TypeError('The example GeoSpec runtime requires a model file path.');
+      }
+      const path = assertRootedPath(source.path);
+      const isolated = extname(path) === '.cs';
+      const root = resolve(projectPath, 'src', isolated ? dirname(path) : '.');
+      let document: ReturnType<RuntimeClient<typeof exampleRuntime>['open']> | undefined;
+      let closed = false;
+      const requireOpen = (): void => {
+        if (closed) {
+          throw new Error('The example GeoSpec document is closed.');
+        }
+      };
+      return {
+        async export(format, request) {
+          requireOpen();
+          // GLB is mesh evidence; STEP is exact evidence, which a 2D drawing gives as its region faces.
+          const target = format === 'glb' ? 'glb' : format === 'step' ? 'step' : undefined;
+          if (target === undefined) {
+            throw new TypeError('The example GeoSpec runtime exports GLB mesh evidence or STEP exact evidence only.');
+          }
+          if (root !== activeRoot) {
+            client?.terminate();
+            client = await createExampleRuntimeClient(root);
+            await client.connect();
+            activeRoot = root;
+          }
+          if (!client) {
+            throw new Error('Example runtime client was not initialized.');
+          }
+          requireOpen();
+          document ??= client.open({
+            ...input,
+            source: { path: isolated ? basename(path) : path },
+            watch: false,
+          });
+          return document.export(target, request);
+        },
+        close() {
+          closed = true;
+          document?.close();
+        },
+      };
+    },
+  };
+};
+
+const { kernels: exampleKernels } = await resolveRuntimeDefinition(exampleRuntime, undefined);
+/** File extensions the example runtime's kernels claim, without the catch-all. @public */
+export const exampleKernelExtensions: readonly string[] = [
+  ...new Set(exampleKernels.flatMap(({ extensions = [] }) => extensions).filter((extension) => extension !== '*')),
+];
+
+/**
+ * A GeoSpec exporter over the example corpus: each run scope gets its own isolated example client, shut down when the
+ * scope releases.
+ * @param projectPath - The example corpus root.
+ * @returns The exporter.
+ * @public
+ */
+export const createExampleGeoSpecExporter = async (projectPath: string): Promise<GeoSpecModelExporter> =>
+  tauClientExporter({
+    client: async () => createExampleGeoSpecRuntimeClient(projectPath),
+    extensions: exampleKernelExtensions,
+  });

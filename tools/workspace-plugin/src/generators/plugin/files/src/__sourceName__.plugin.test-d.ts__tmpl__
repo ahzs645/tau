@@ -1,0 +1,68 @@
+import { expectTypeOf } from 'vitest';
+import type {
+<% if (capabilities.some(({ role }) => role === 'bundler')) { %>
+  ExpandPluginBundlers,
+<% } %>
+<% if (capabilities.some(({ role }) => role === 'kernel')) { %>
+  ExpandPluginKernels,
+<% } %>
+<% if (capabilities.some(({ role }) => role === 'job')) { %>
+  ExpandPluginJobs,
+<% } %>
+<% if (capabilities.some(({ role }) => role === 'machine')) { %>
+  ExpandPluginMachines,
+<% } %>
+<% if (capabilities.some(({ role }) => role === 'middleware')) { %>
+  ExpandPluginMiddleware,
+<% } %>
+<% if (capabilities.some(({ role }) => role === 'transcoder')) { %>
+  ExpandPluginTranscoders,
+<% } %>
+} from '@taucad/runtime/plugin';
+<% if (capabilities.some(({ role }) => role === 'job' || role === 'machine')) { %>
+import { resolveRuntimePluginDefinition } from '@taucad/runtime/plugin';
+<% } %>
+
+<% if (capabilities.some(({ role }) => role === 'job' || role === 'machine')) { %>
+import { plugin, <%= alias %><% if (nativeLanguage) { %>, <%= alias %>Native<% } %><% capabilities.forEach((capability) => { %>, <%= capability.factoryName %><% }); %> } from '#index.js';
+<% } else { %>
+import { plugin, <%= alias %><% if (nativeLanguage) { %>, <%= alias %>Native<% } %> } from '#index.js';
+import type {<% capabilities.forEach((capability, index) => { %><%= index === 0 ? ' ' : ', ' %><%= capability.factoryName %><% }); %> } from '#index.js';
+<% } %>
+
+<% if (nativeLanguage) { %>
+// A closure holding exactly the launch set, which the deployment maps to the options of an explicit `closure`.
+const closureOptions = <%= alias %>Native.optionsFromClosure({
+  package: '<%= importPath %>',
+  dependency: 'engine',
+  root: '/store/closures/sha256/fixture',
+  closureIntegrity: 'sha256-AAAA',
+  files: <%= alias %>Native.launchSet([]).map((path) => ({ path, byteLength: 1, sha256: '0'.repeat(64), mode: 0o644 })),
+});
+<% } %>
+const selected = plugin(<% if (nativeLanguage) { %>{ kernels: { default: { closure: closureOptions } } }<% } %>);
+<% for (const capability of capabilities) { const projection = capability.role === 'kernel' ? 'ExpandPluginKernels' : capability.role === 'middleware' ? 'ExpandPluginMiddleware' : capability.role === 'bundler' ? 'ExpandPluginBundlers' : capability.role === 'job' ? 'ExpandPluginJobs' : capability.role === 'machine' ? 'ExpandPluginMachines' : 'ExpandPluginTranscoders'; %>
+expectTypeOf<<%= projection %><readonly [typeof selected]>>().toEqualTypeOf<
+  readonly [ReturnType<typeof <%= capability.factoryName %>>]
+>();
+<% } %>
+
+expectTypeOf(<%= alias %>).toEqualTypeOf(plugin);
+<% if (capabilities.some(({ role }) => role === 'job')) { const job = capabilities.find(({ role }) => role === 'job'); %>
+
+const jobDefinition = await resolveRuntimePluginDefinition('job', <%= job.factoryName %>());
+type JobConfiguration = Parameters<typeof jobDefinition.execute>[0]['configuration'];
+expectTypeOf<JobConfiguration>().toEqualTypeOf<{ enabled: boolean }>();
+// @ts-expect-error -- execution receives the admitted Zod output, never an arbitrary value.
+const invalidJobConfiguration: JobConfiguration = { enabled: 'yes' };
+void invalidJobConfiguration;
+<% } %>
+<% if (capabilities.some(({ role }) => role === 'machine')) { const machine = capabilities.find(({ role }) => role === 'machine'); %>
+
+const machineDefinition = await resolveRuntimePluginDefinition('machine', <%= machine.factoryName %>());
+type MachineBinding = Parameters<typeof machineDefinition.connect>[0]['configuration'];
+expectTypeOf<MachineBinding>().toEqualTypeOf<Record<string, never>>();
+// @ts-expect-error -- connection receives the admitted binding-schema output; where the machine is is the endpoint.
+const invalidMachineBinding: MachineBinding = { address: '192.0.2.1' };
+void invalidMachineBinding;
+<% } %>

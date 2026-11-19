@@ -1,0 +1,196 @@
+import * as Cookies from 'es-cookie';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
+import { store, useCookie } from '#hooks/use-cookie.js';
+import { cookieName } from '@taucad/ui-core/constants/cookie.constants';
+
+const names = [
+  'tau-test-write',
+  'tau-test-read',
+  'tau-test-remove',
+  'tau-test-migrate',
+  'tau-test-malformed',
+  'tau-test-unavailable',
+  'tau-test-both',
+  'tau-test-corrupt-local',
+  'tau-test-blocked',
+  'tau-test-unset',
+  'tau-test-other-tab',
+  'tau-test-cleared',
+];
+
+beforeEach(() => {
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string) => values.get(key) ?? null,
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+  });
+});
+
+afterEach(() => {
+  for (const name of names) {
+    store.remove(name);
+    Cookies.remove(name);
+  }
+  vi.unstubAllGlobals();
+});
+
+it('writes ordinary preferences to localStorage without adding a request cookie', () => {
+  store.update('tau-test-write', false);
+
+  expect(globalThis.localStorage.getItem('tau-test-write')).toBe('false');
+  expect(Cookies.get('tau-test-write')).toBeUndefined();
+  expect(store.get('tau-test-write')).toBe(false);
+});
+
+it('reads and removes a local preference', () => {
+  globalThis.localStorage.setItem('tau-test-read', '"tau-replay"');
+  store.update('tau-test-remove', true);
+
+  expect(store.get('tau-test-read')).toBe('tau-replay');
+  store.remove('tau-test-remove');
+  expect(globalThis.localStorage.getItem('tau-test-remove')).toBeNull();
+  expect(store.get('tau-test-remove')).toBeUndefined();
+});
+
+it('migrates a valid legacy preference cookie once', () => {
+  Cookies.set('tau-test-migrate', '"openscad"');
+
+  expect(store.get('tau-test-migrate')).toBe('openscad');
+  expect(globalThis.localStorage.getItem('tau-test-migrate')).toBe('"openscad"');
+  expect(Cookies.get('tau-test-migrate')).toBeUndefined();
+});
+
+it('deletes malformed storage and falls back safely', () => {
+  globalThis.localStorage.setItem('tau-test-malformed', '{broken');
+
+  expect(store.get('tau-test-malformed')).toBeUndefined();
+  expect(globalThis.localStorage.getItem('tau-test-malformed')).toBeNull();
+});
+
+it('does not crash when localStorage is unavailable', () => {
+  vi.stubGlobal('localStorage', {
+    getItem: () => {
+      throw new Error('blocked');
+    },
+    removeItem: () => {
+      throw new Error('blocked');
+    },
+    setItem: () => {
+      throw new Error('blocked');
+    },
+  });
+
+  expect(store.get('tau-test-unavailable')).toBeUndefined();
+  expect(() => {
+    store.update('tau-test-unavailable', true);
+  }).not.toThrow();
+  expect(() => {
+    store.remove('tau-test-unavailable');
+  }).not.toThrow();
+});
+
+it('prefers local storage and removes a legacy cookie that survived alongside it', () => {
+  Cookies.set('tau-test-both', '"old"');
+  globalThis.localStorage.setItem('tau-test-both', '"new"');
+
+  expect(store.get('tau-test-both')).toBe('new');
+  expect(Cookies.get('tau-test-both')).toBeUndefined();
+});
+
+it('recovers a valid legacy cookie when local storage is corrupt', () => {
+  Cookies.set('tau-test-corrupt-local', '"from-cookie"');
+  globalThis.localStorage.setItem('tau-test-corrupt-local', '{broken');
+
+  expect(store.get('tau-test-corrupt-local')).toBe('from-cookie');
+  expect(globalThis.localStorage.getItem('tau-test-corrupt-local')).toBe('"from-cookie"');
+  expect(Cookies.get('tau-test-corrupt-local')).toBeUndefined();
+});
+
+it('keeps the only durable copy when migration cannot write to local storage', () => {
+  Cookies.set('tau-test-blocked', '"old"');
+  vi.stubGlobal('localStorage', {
+    getItem: () => null,
+    removeItem: () => undefined,
+    setItem: () => {
+      throw new Error('blocked');
+    },
+  });
+
+  expect(store.get('tau-test-blocked')).toBe('old');
+  expect(Cookies.get('tau-test-blocked')).toBe('"old"');
+});
+
+it('reads the request cookies once for an unset preference', () => {
+  const cookieGet = vi.spyOn(Document.prototype, 'cookie', 'get');
+
+  expect(store.get('tau-test-unset')).toBeUndefined();
+  expect(store.get('tau-test-unset')).toBeUndefined();
+  expect(cookieGet).toHaveBeenCalledOnce();
+
+  store.update('tau-test-unset', 'set');
+  expect(store.get('tau-test-unset')).toBe('set');
+  cookieGet.mockRestore();
+});
+
+it('reads another tab’s write and tells subscribers', () => {
+  store.update('tau-test-other-tab', 'here');
+  const listener = vi.fn();
+  const unsubscribe = store.subscribe('tau-test-other-tab', listener);
+
+  globalThis.localStorage.setItem('tau-test-other-tab', '"there"');
+  globalThis.dispatchEvent(new StorageEvent('storage', { key: 'tau-test-other-tab' }));
+
+  expect(listener).toHaveBeenCalledOnce();
+  expect(store.get('tau-test-other-tab')).toBe('there');
+  unsubscribe();
+});
+
+it('rereads every preference when another tab clears storage', () => {
+  store.update('tau-test-cleared', 'here');
+  const listener = vi.fn();
+  const unsubscribe = store.subscribe('tau-test-cleared', listener);
+
+  globalThis.localStorage.removeItem('tau-test-cleared');
+  globalThis.dispatchEvent(new StorageEvent('storage', { key: null }));
+
+  expect(listener).toHaveBeenCalledOnce();
+  expect(store.get('tau-test-cleared')).toBeUndefined();
+  unsubscribe();
+});
+
+const formerlyMirroredModel = 'tau-chat-model';
+
+it('keeps every preference out of request cookies, deleting a cookie mirrored before (P2)', () => {
+  Cookies.set(formerlyMirroredModel, '"old"');
+  globalThis.localStorage.setItem(formerlyMirroredModel, '"new"');
+
+  expect(store.get(formerlyMirroredModel)).toBe('new');
+  expect(Cookies.get(formerlyMirroredModel)).toBeUndefined();
+
+  store.update(formerlyMirroredModel, 'anthropic-claude-haiku-5.5');
+  expect(Cookies.get(formerlyMirroredModel)).toBeUndefined();
+  store.remove(formerlyMirroredModel);
+});
+
+// eslint-disable-next-line @typescript-eslint/naming-convention -- a React component, rendered by name.
+function Probe(): React.JSX.Element {
+  const [model] = useCookie<string | undefined>(cookieName.chatModel, undefined);
+  const [kernel] = useCookie(cookieName.cadKernel, 'openscad');
+  return createElement('span', null, `${model ?? 'none'}|${kernel}`);
+}
+
+it('renders every preference as its default on the server, whatever is stored', () => {
+  globalThis.localStorage.setItem(formerlyMirroredModel, '"anthropic-claude-haiku-5.5"');
+
+  const html = renderToString(createElement(Probe));
+
+  expect(html).toContain('none|openscad');
+  store.remove(formerlyMirroredModel);
+});

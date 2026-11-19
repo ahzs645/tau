@@ -1,0 +1,481 @@
+import { expect, test } from 'vitest';
+import { page as selectors } from 'vitest/browser';
+import * as target from '#support/external-target.js';
+import { filesPane, treeItem } from '#support/file-tree.js';
+
+const consentCookieName = 'tau-cookie-consent';
+/** The entry file of a project made at `/projects/new` with its preselected kernel, replicad. */
+const newProjectEntry = 'main.ts';
+const consentStatus = async (): Promise<string | undefined> => {
+  const cookies = await target.cookies();
+  const cookie = cookies.find(({ name }) => name === consentCookieName);
+  return cookie ? (JSON.parse(decodeURIComponent(cookie.value)) as { status?: string }).status : undefined;
+};
+
+const hasCookiePrompt = async (): Promise<boolean> =>
+  target.evaluate(() => document.querySelector('aside[aria-label="Optional analytics"]') !== null);
+
+const posthogState = async (): Promise<{ cookies: string[]; storage: string[]; requests: string[] }> => {
+  const cookies = await target.cookies();
+  return {
+    cookies: cookies.map(({ name }) => name).filter((name) => name.startsWith('ph_')),
+    storage: await target.evaluate(() =>
+      Object.keys(localStorage).filter((name) => name.startsWith('ph_') || name.startsWith('posthog')),
+    ),
+    requests: await target.evaluate(() =>
+      performance
+        .getEntriesByType('resource')
+        .map(({ name }) => name)
+        .filter((name) => /\/api\/ph(?:\/|$)|posthog\.com/iu.test(name)),
+    ),
+  };
+};
+const storedIdentifiers = async (): Promise<number> => {
+  const { cookies, storage } = await posthogState();
+  return cookies.length + storage.length;
+};
+const eventCount = async (name: string): Promise<number> => {
+  const summary = await target.readPostHogSummary([]);
+  return summary.events.filter((event) => event === name).length;
+};
+const hasEvent = async (name: string): Promise<boolean> => (await eventCount(name)) > 0;
+/**
+ * The replay snapshots sent once a person has used the page.
+ *
+ * posthog-js 1.438 holds a new recording's buffer until the user interacts (`holding buffer:
+ * no_interaction_since_recording_started. nothing is uploaded until the user interacts with the page`), and only a
+ * trusted rrweb mouse, scroll, input or touch event releases it. A row that only navigates or clicks from script
+ * never uploads a snapshot, so each read first moves the mouse as a person would: the recording starts when the page
+ * is idle, so an interaction before it starts would not count.
+ */
+let pointerStep = 0;
+const snapshotsAfterInteraction = async (): Promise<number> => {
+  pointerStep += 1;
+  await target.mouseMove(16 + (pointerStep % 32), 16 + (pointerStep % 32));
+  return eventCount('$snapshot');
+};
+const sentinelPresent = async (sentinel: string): Promise<boolean> => {
+  const summary = await target.readPostHogSummary([sentinel]);
+  return summary.present[sentinel] === true;
+};
+const postHogRequestCount = async (): Promise<number> => {
+  const summary = await target.readPostHogSummary([]);
+  return summary.requests.length;
+};
+
+/**
+ * Record a decision as the marketing site does: it owns the consent UI and writes the shared cookie on this
+ * hostname. Focus prompts the app to re-read it, as returning from a website tab would.
+ */
+const decide = async (status: 'accepted' | 'declined'): Promise<void> => {
+  await target.addCookies([
+    {
+      name: consentCookieName,
+      value: encodeURIComponent(JSON.stringify({ status, version: 1 })),
+      url: new URL('/', await target.currentUrl()).toString(),
+    },
+  ]);
+  await target.evaluate(() => {
+    globalThis.dispatchEvent(new Event('focus'));
+  });
+};
+
+test('offers analytics to an undecided visitor and records the choice in the shared cookie', async () => {
+  await target.commands.uiOpenTarget({ consentBanner: true });
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await target.expectVisible(selectors.getByRole('main'), 30_000);
+  await expect.poll(hasCookiePrompt).toBe(true);
+  expect(await posthogState()).toEqual({ cookies: [], storage: [], requests: [] });
+
+  await target.click(selectors.getByRole('button', { name: 'Allow analytics', exact: true }));
+  await expect.poll(consentStatus).toBe('accepted');
+  await expect.poll(hasCookiePrompt).toBe(false);
+  await expect.poll(storedIdentifiers).toBeGreaterThan(0);
+  await expect.poll(async () => hasEvent('$opt_in')).toBe(true);
+});
+
+test('applies a decision recorded by the website without showing the banner again', async () => {
+  await target.commands.uiOpenTarget({ consentBanner: true });
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await target.expectVisible(selectors.getByRole('main'), 30_000);
+
+  await decide('declined');
+  await target.reload();
+  await target.expectVisible(selectors.getByRole('main'), 30_000);
+  expect(await hasCookiePrompt()).toBe(false);
+  expect(await posthogState()).toEqual({ cookies: [], storage: [], requests: [] });
+
+  await decide('accepted');
+  await expect.poll(storedIdentifiers).toBeGreaterThan(0);
+});
+
+test('changes the shared decision from Help → Cookie preferences', async () => {
+  await target.navigate('/');
+  await target.expectVisible(selectors.getByRole('main'), 30_000);
+  await target.click(selectors.getByRole('button', { name: 'Help', exact: true }));
+  await target.click(selectors.getByRole('menuitem', { name: 'Cookie preferences' }));
+  await target.click(selectors.getByRole('checkbox', { name: 'Product analytics' }));
+  await target.click(selectors.getByRole('button', { name: 'Save', exact: true }));
+  await expect.poll(consentStatus).toBe('accepted');
+
+  await target.click(selectors.getByRole('button', { name: 'Help', exact: true }));
+  await target.click(selectors.getByRole('menuitem', { name: 'Cookie preferences' }));
+  await target.click(selectors.getByRole('checkbox', { name: 'Product analytics' }));
+  await target.click(selectors.getByRole('button', { name: 'Save', exact: true }));
+  await expect.poll(consentStatus).toBe('declined');
+});
+
+test('treats Global Privacy Control as a hard analytics decline', async () => {
+  await target.navigate('/');
+  await target.addCookies([
+    {
+      name: consentCookieName,
+      value: encodeURIComponent(JSON.stringify({ status: 'accepted', version: 1 })),
+      url: await target.currentUrl(),
+    },
+  ]);
+  await target.addInitScript(() => {
+    Object.defineProperty(navigator, 'globalPrivacyControl', { configurable: true, value: true });
+  });
+  await target.reload();
+
+  expect(
+    await target.evaluate(() => (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl),
+  ).toBe(true);
+  expect(await hasCookiePrompt()).toBe(false);
+  expect(await posthogState()).toEqual({ cookies: [], storage: [], requests: [] });
+});
+
+test('redacts invitation credentials from decoded replay and autocapture transport', async () => {
+  const token = 'Replay-Bearer-123';
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  expect(
+    await target.evaluate(
+      () => (globalThis as typeof globalThis & { ENV?: { POSTHOG_CLIENT_KEY?: string } }).ENV?.POSTHOG_CLIENT_KEY,
+    ),
+  ).toBe('phc_test_key');
+  await decide('accepted');
+  await expect.poll(consentStatus).toBe('accepted');
+  await target.evaluate((invitationToken: string) => {
+    const publicControl = document.createElement('span');
+    publicControl.textContent = 'Public replay control';
+    document.body.append(publicControl);
+    const invitation = document.createElement('a');
+    invitation.href = `/invitations/${invitationToken}`;
+    invitation.id = 'replay-invitation';
+    invitation.textContent = 'Open invitation';
+    invitation.addEventListener('click', (event) => {
+      event.preventDefault();
+    });
+    document.body.append(invitation);
+    const input = document.createElement('input');
+    input.value = `https://tau.new/invitations/${invitationToken}`;
+    document.body.append(input);
+  }, token);
+  /* Admission initialises autocapture in deferred, time-sliced tasks (`__preview_deferred_init_extensions`), so a
+   * click made the moment consent lands can precede its listener: click until the click is captured. The history
+   * tracker behind `capture_pageview: 'history_change'` is started the same way, so the route changes follow it. */
+  await expect
+    .poll(
+      async () => {
+        await target.evaluate(() => {
+          document.querySelector<HTMLAnchorElement>('#replay-invitation')?.click();
+        });
+        return hasEvent('$autocapture');
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  await target.evaluate((invitationToken: string) => {
+    history.pushState({}, '', `/invitations/${invitationToken}`);
+    history.pushState({}, '', `/auth/sign-in?redirectTo=%2Finvitations%2F${invitationToken}`);
+  }, token);
+  await expect.poll(snapshotsAfterInteraction, { timeout: 30_000 }).toBeGreaterThan(0);
+  const summary = await target.readPostHogSummary([token, 'Public replay control']);
+  expect(summary.events).toContain('$snapshot');
+  expect(summary.events).toContain('$autocapture');
+  expect(summary.events.filter((event) => event === '$pageview').length).toBeGreaterThanOrEqual(2);
+  expect(summary.present[token]).toBe(false);
+  expect(summary.present['Public replay control']).toBe(true);
+});
+
+/** Accept analytics on a first document, then open `path` as a fresh document with consent already recorded. */
+const openAcceptedAt = async (path: string): Promise<void> => {
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await target.addCookies([
+    {
+      name: consentCookieName,
+      value: encodeURIComponent(JSON.stringify({ status: 'accepted', version: 1 })),
+      url: await target.currentUrl(),
+    },
+  ]);
+  await target.navigate(path);
+};
+
+/* #2290: an invitation link never renders at its own address. The server holds the token and redirects to
+ * `/invitations` before any document exists, so the page that records carries no token to copy. */
+test('lands an invitation link on /invitations, so its replay never carries the token', async () => {
+  await openAcceptedAt('/invitations/Replay-Bearer-123');
+  await target.expectUrl(/\/invitations$/u, 30_000);
+  await expect.poll(snapshotsAfterInteraction, { timeout: 30_000 }).toBeGreaterThan(0);
+  const summary = await target.readPostHogSummary(['Replay-Bearer-123']);
+  expect(summary.events).toContain('$snapshot');
+  expect(summary.present['Replay-Bearer-123']).toBe(false);
+});
+
+/* #2290: a replay serialises attributes no event hook reads, and the browser resolves relative hrefs against the
+ * address bar, so replay does not run at an address that holds a credential. Analytics still admit the page. */
+test('does not record a replay at an address that carries a credential', async () => {
+  await openAcceptedAt('/auth/sign-in?redirectTo=%2Finvitations%2FReplay-Bearer-123');
+  await expect.poll(async () => hasEvent('$pageview'), { timeout: 30_000 }).toBe(true);
+  await target.mouseMove(24, 24);
+  expect(
+    await target.evaluate(
+      () =>
+        (
+          globalThis as typeof globalThis & {
+            posthog?: { sessionRecordingStarted: () => boolean };
+          }
+        ).posthog?.sessionRecordingStarted() ?? 'no client',
+    ),
+  ).toBe(false);
+  const summary = await target.readPostHogSummary(['Replay-Bearer-123']);
+  expect(summary.events).not.toContain('$snapshot');
+  expect(summary.present['Replay-Bearer-123']).toBe(false);
+});
+
+test('records editor, chat and file text in replay but never a credential block', async () => {
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await decide('accepted');
+  await target.navigate('/projects/new');
+  await target.fill(selectors.getByCss('input#project-name'), 'Private workspace');
+  await target.click(selectors.getByRole('button', { name: /Create Project/u }));
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+  if (!(await target.isVisible(filesPane()))) {
+    await target.click(selectors.getByRole('button', { name: /Search/u }));
+    const search = selectors.getByPlaceholder('Search projects, chats, and actions…');
+    await target.fill(search, 'Open files');
+    await target.click(selectors.getByText('Open files', { exact: true }));
+  }
+  await target.expectVisible(filesPane(), 60_000);
+  /* A new project opens no file (53b887367b, #1386), and `/projects/new` preselects replicad, whose entry is
+   * `main.ts` (3948936544, #1825): open the entry from Files so the editor surface is mounted. */
+  await target.click(treeItem(newProjectEntry));
+  const sourceTab = selectors.getByRole('tab', { name: newProjectEntry, exact: true }).last();
+  await target.expectVisible(sourceTab, 60_000);
+  await target.click(sourceTab);
+  await target.expectVisible(selectors.getByCss('.cm-editor .cm-content').first(), 60_000);
+  /* The source and file probes go in while the editor is on screen. Below the compact width
+   * (`compactWorkspaceWidth`, `chat-interface-desktop.tsx`) the workspace shows one auxiliary lane, so
+   * opening Chat at this 1280 px viewport hides the Workbench and unmounts its editor, as #2219 found for
+   * the desktop print dry run. A replay accumulates, so each surface is recorded while it is shown. */
+  const surfaces = await target.evaluate(() => {
+    const editor = document.querySelector<HTMLElement>('.editor-container');
+    const files = document.querySelector<HTMLElement>('[role="treeitem"]')?.parentElement ?? null;
+    for (const [host, sentinel] of [
+      [editor, 'Visible source sentinel'],
+      [files, 'Visible filename sentinel'],
+    ] as const) {
+      if (!host) {
+        continue;
+      }
+      const probe = document.createElement('span');
+      probe.textContent = sentinel;
+      host.append(probe);
+    }
+    // A credential surface (new API key, device sign-in code) carries the SDK's block class.
+    const credential = document.createElement('span');
+    credential.className = 'ph-no-capture';
+    credential.textContent = 'Private credential sentinel';
+    document.body.append(credential);
+    const control = document.createElement('span');
+    control.textContent = 'Public project control';
+    document.body.append(control);
+    return { editor: Boolean(editor), files: Boolean(files) };
+  });
+  expect(surfaces).toStrictEqual({ editor: true, files: true });
+  await expect
+    .poll(
+      async () => {
+        await snapshotsAfterInteraction();
+        return sentinelPresent('Visible source sentinel');
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  const chatToggle = selectors.getByRole('button', {
+    name: 'Toggle Chat lane',
+  });
+  if ((await target.getAttribute(chatToggle, 'aria-pressed')) === 'false') {
+    await target.click(chatToggle);
+  }
+  await target.fill(
+    selectors.getByCss('.tiptap[contenteditable="true"], textarea[placeholder="Ask Tau to build anything..."]').last(),
+    'Private composer sentinel',
+  );
+  // A public marker added after the composer is typed into, so the read below covers the composer's recording.
+  await target.evaluate(() => {
+    const control = document.createElement('span');
+    control.textContent = 'Public chat control';
+    document.body.append(control);
+  });
+  await expect
+    .poll(
+      async () => {
+        await snapshotsAfterInteraction();
+        return sentinelPresent('Public chat control');
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  const summary = await target.readPostHogSummary([
+    'Visible source sentinel',
+    'Visible filename sentinel',
+    'Private credential sentinel',
+    'Private composer sentinel',
+    'Public project control',
+    'Public chat control',
+  ]);
+  expect(summary.events).toContain('$snapshot');
+  expect(summary.present['Public project control']).toBe(true);
+  expect(summary.present['Public chat control']).toBe(true);
+  expect(summary.present['Visible source sentinel']).toBe(true);
+  expect(summary.present['Visible filename sentinel']).toBe(true);
+  expect(summary.present['Private credential sentinel']).toBe(false);
+  expect(summary.present['Private composer sentinel']).toBe(false);
+});
+
+test('withdraws an accepted tab when the website announces a decline', async () => {
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await decide('accepted');
+  await expect.poll(storedIdentifiers).toBeGreaterThan(0);
+  await target.addCookies([
+    {
+      name: consentCookieName,
+      value: encodeURIComponent(JSON.stringify({ status: 'declined', version: 1 })),
+      url: new URL('/', await target.currentUrl()).toString(),
+    },
+  ]);
+  // The website posts on this channel after writing the cookie; no focus change is needed.
+  await target.evaluate(() => {
+    const channel = new BroadcastChannel('tau-cookie-consent');
+    channel.postMessage('declined');
+    channel.close();
+  });
+  await expect.poll(storedIdentifiers).toBe(0);
+});
+
+test('uses focus when an external cookie change has no channel message', async () => {
+  await target.addInitScript(() => {
+    Object.defineProperty(globalThis, 'cookieStore', { configurable: true, value: undefined });
+  });
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await decide('accepted');
+  await expect.poll(storedIdentifiers).toBeGreaterThan(0);
+  await target.addCookies([
+    {
+      name: consentCookieName,
+      value: encodeURIComponent(JSON.stringify({ status: 'declined', version: 1 })),
+      url: new URL('/', await target.currentUrl()).toString(),
+    },
+  ]);
+  await expect.poll(consentStatus).toBe('declined');
+  expect(await storedIdentifiers()).toBeGreaterThan(0);
+  await target.evaluate(() => globalThis.dispatchEvent(new Event('focus')));
+  await expect.poll(storedIdentifiers).toBe(0);
+});
+
+test('stops the recorder on foreground consent-cookie removal without focus', async () => {
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await decide('accepted');
+  await expect.poll(storedIdentifiers).toBeGreaterThan(0);
+  const before = await postHogRequestCount();
+  await target.evaluate(async () => {
+    await cookieStore.delete('tau-cookie-consent');
+  });
+  await expect.poll(consentStatus).toBeUndefined();
+  await expect.poll(storedIdentifiers).toBe(0);
+  await target.evaluate(() => {
+    history.pushState({}, '', '/projects');
+  });
+  expect(await postHogRequestCount()).toBe(before);
+});
+
+test('delivers pageleave on an accepted document exit signal', async () => {
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await decide('accepted');
+  await expect.poll(async () => hasEvent('$pageview')).toBe(true);
+  await target.evaluate(() => {
+    globalThis.dispatchEvent(new Event('pagehide'));
+    globalThis.dispatchEvent(new Event('unload'));
+  });
+  await expect.poll(async () => hasEvent('$pageleave')).toBe(true);
+});
+
+/*
+ * Consent changes must not remount the product. The old boundary switched
+ * element type above <html>, so accepting analytics discarded every editor draft.
+ * Withdrawal and re-acceptance arrive as another tab would deliver them: a
+ * cookie write followed by focus.
+ */
+test('keeps the application mounted through acceptance, withdrawal and re-acceptance', async () => {
+  await target.installPostHogFixture('phc_test_key');
+  await target.navigate('/');
+  await target.expectVisible(selectors.getByRole('main'), 30_000);
+  const editor = selectors
+    .getByCss('.tiptap[contenteditable="true"], textarea[placeholder="Ask Tau to build anything..."]')
+    .first();
+  await target.fill(editor, 'unsaved design');
+  await target.evaluate(() => {
+    (globalThis as typeof globalThis & { tauMountedEditor?: Element }).tauMountedEditor =
+      document.querySelector('.tiptap[contenteditable="true"], textarea[placeholder="Ask Tau to build anything..."]') ??
+      undefined;
+  });
+  const stillMounted = async (): Promise<boolean> =>
+    target.evaluate(() => {
+      const mounted = (globalThis as typeof globalThis & { tauMountedEditor?: Element }).tauMountedEditor;
+      if (!mounted) {
+        return false;
+      }
+      const draft = mounted instanceof HTMLTextAreaElement ? mounted.value : mounted.textContent;
+      return (
+        mounted.isConnected &&
+        mounted ===
+          document.querySelector(
+            '.tiptap[contenteditable="true"], textarea[placeholder="Ask Tau to build anything..."]',
+          ) &&
+        draft.includes('unsaved design')
+      );
+    });
+  await decide('accepted');
+  await expect.poll(consentStatus).toBe('accepted');
+  expect(await stillMounted()).toBe(true);
+  await expect.poll(async () => eventCount('$pageview')).toBe(1);
+
+  await decide('declined');
+  await expect.poll(hasCookiePrompt).toBe(false);
+  expect(await stillMounted()).toBe(true);
+
+  await decide('accepted');
+  expect(await stillMounted()).toBe(true);
+  expect(await eventCount('$pageview')).toBe(1);
+  await target.evaluate(() => {
+    history.pushState({}, '', '/projects');
+  });
+  await expect.poll(async () => eventCount('$pageview')).toBe(2);
+  await expect.poll(storedIdentifiers, { timeout: 15_000 }).toBeGreaterThan(0);
+
+  await decide('declined');
+  await expect.poll(consentStatus).toBe('declined');
+  await expect.poll(storedIdentifiers, { timeout: 15_000 }).toBe(0);
+  expect(await stillMounted()).toBe(true);
+});

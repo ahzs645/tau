@@ -1,0 +1,370 @@
+import { cva } from 'class-variance-authority';
+import { popoverSurfaceVariants } from '#components/popover.variants.js';
+
+/**
+ * Shared item styling for all menu-like components (dropdown-menu, context-menu, command, select).
+ * Compact macOS-inspired design with a neutral focus highlight.
+ *
+ * @public
+ *
+ * @example <caption>Style a destructive menu item</caption>
+ * ```typescript
+ * import { menuItemVariants } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuItemVariants({ variant: 'destructive' });
+ * ```
+ */
+export const menuItemVariants = cva(
+  "relative flex items-center gap-2 rounded-sm px-3 py-1 text-[13px] outline-hidden pointer-coarse:min-h-touch-row select-none hover:bg-menu-highlight hover:text-foreground hover:[&_svg:not([class*='text-'])]:text-foreground data-disabled:pointer-events-none data-disabled:text-muted-foreground/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:-translate-y-[0.5px] [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
+  {
+    variants: {
+      variant: {
+        default: '',
+        destructive:
+          'text-menu-destructive-foreground [&_svg]:text-menu-destructive-foreground! data-disabled:[&_svg]:text-muted-foreground/50!',
+      },
+      inset: {
+        true: 'pl-8', // For items with left indicator (checkbox/radio)
+        false: '',
+      },
+      highlight: {
+        // Uses :not([class*='text-']) to match the same SVGs as the base muted rule with higher specificity
+        focus: "focus:bg-menu-highlight focus:text-foreground focus:[&_svg:not([class*='text-'])]:text-foreground",
+        selected:
+          "hover:bg-menu-highlight hover:text-foreground hover:[&_svg:not([class*='text-'])]:text-foreground data-[selected=true]:bg-menu-highlight data-[selected=true]:text-foreground data-[selected=true]:[&_svg:not([class*='text-'])]:text-foreground",
+      },
+    },
+    defaultVariants: {
+      variant: 'default',
+      inset: false,
+      highlight: 'focus',
+    },
+    compoundVariants: [
+      {
+        variant: 'destructive',
+        className:
+          'hover:bg-menu-highlight-destructive hover:text-menu-destructive-foreground hover:[&_svg]:text-menu-destructive-foreground! focus:bg-menu-highlight-destructive focus:text-menu-destructive-foreground focus:[&_svg]:text-menu-destructive-foreground! data-[highlighted]:bg-menu-highlight-destructive data-[highlighted]:text-menu-destructive-foreground data-[highlighted]:[&_svg]:text-menu-destructive-foreground! data-[selected=true]:bg-menu-highlight-destructive data-[selected=true]:text-menu-destructive-foreground data-[selected=true]:[&_svg]:text-menu-destructive-foreground!',
+      },
+    ],
+  },
+);
+
+/**
+ * Content container styling for menu popover/dropdown containers.
+ * Instant open/close (no animation) by default for a snappy feel.
+ *
+ * @public
+ *
+ * @example <caption>Opt into menu animation</caption>
+ * ```typescript
+ * import { menuContentVariants } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuContentVariants({ animated: true });
+ * ```
+ */
+export const menuContentVariants = cva(
+  [popoverSurfaceVariants({ appearance: 'menu' }), 'z-50 flex min-w-32 flex-col gap-0.5 overflow-hidden p-0.75'],
+  {
+    variants: {
+      animated: {
+        true: 'data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+        false: '',
+      },
+    },
+    defaultVariants: {
+      animated: false,
+    },
+  },
+);
+
+/**
+ * Shared open-state styling for sub-menu triggers.
+ *
+ * @public
+ *
+ * @example <caption>Compose a submenu trigger</caption>
+ * ```typescript
+ * import { menuSubTriggerOpenClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = `base ${menuSubTriggerOpenClass}`;
+ * ```
+ */
+export const menuSubTriggerOpenClass =
+  'data-[state=open]:bg-menu-highlight data-[state=open]:text-foreground data-[state=open]:[&_svg]:text-foreground';
+
+/**
+ * Shared shortcut styling for keyboard shortcut hints.
+ *
+ * @public
+ *
+ * @example <caption>Style a shortcut hint</caption>
+ * ```typescript
+ * import { menuShortcutClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuShortcutClass;
+ * ```
+ */
+export const menuShortcutClass = 'ml-auto text-[11px] tracking-normal text-muted-foreground';
+
+/**
+ * Label styling for menu section headers.
+ *
+ * @public
+ *
+ * @example <caption>Inset a menu label</caption>
+ * ```typescript
+ * import { menuLabelVariants } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuLabelVariants({ inset: true });
+ * ```
+ */
+export const menuLabelVariants = cva('px-3 py-1 text-xs font-medium text-muted-foreground', {
+  variants: {
+    inset: {
+      true: 'pl-8',
+      false: '',
+    },
+  },
+  defaultVariants: {
+    inset: false,
+  },
+});
+
+/**
+ * Separator styling for menu dividers.
+ *
+ * @public
+ *
+ * @example <caption>Style a menu divider</caption>
+ * ```typescript
+ * import { menuSeparatorVariants } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuSeparatorVariants();
+ * ```
+ */
+export const menuSeparatorVariants = cva('mx-1.5 my-1 h-px bg-border');
+
+/**
+ * Negative vertical offset for side-positioned menus (left/right) and sub-menus.
+ * Aligns the first item's text with the trigger's text.
+ * Derived from: content padding (p-0.75 = 3px), adjusted to 2.5px to account
+ * for the visual inset of the items' rounded-sm corners.
+ *
+ * @public
+ *
+ * @example <caption>Align a side-positioned menu</caption>
+ * ```typescript
+ * import { menuSideAlignOffset } from '@taucad/ui/components/menu.variants';
+ *
+ * export const alignOffset = menuSideAlignOffset;
+ * ```
+ */
+export const menuSideAlignOffset = -7;
+
+/**
+ * Align nested menu content with its parent item.
+ *
+ * @public
+ *
+ * @example <caption>Align a submenu</caption>
+ * ```typescript
+ * import { subMenuSideAlignOffset } from '@taucad/ui/components/menu.variants';
+ *
+ * export const alignOffset = subMenuSideAlignOffset;
+ * ```
+ */
+export const subMenuSideAlignOffset = -2.5;
+
+/**
+ * Shared icon-and-label flex layout for menu-like controls.
+ *
+ * @public
+ *
+ * @example <caption>Compose menu item content</caption>
+ * ```typescript
+ * import { menuItemLayoutClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuItemLayoutClass;
+ * ```
+ */
+export const menuItemLayoutClass = 'flex items-center gap-2';
+
+/**
+ * SVG icon rules for standalone label containers not inside a menuItemVariants parent.
+ * Extracted from menuItemVariants (minus -translate-y-[0.5px] which is item-level only).
+ *
+ * @public
+ *
+ * @example <caption>Normalize standalone menu icons</caption>
+ * ```typescript
+ * import { menuItemIconClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuItemIconClass;
+ * ```
+ */
+export const menuItemIconClass =
+  "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground";
+
+/**
+ * Group heading styling for picker surfaces (command groups, virtualized list headers,
+ * hand-rolled suggestion menus). Kept tight so a heading sits close to the search field
+ * above it and the items below it.
+ *
+ * Must stay in sync with {@link menuGroupHeadingSelectorClass}, which applies the same
+ * spacing to cmdk-owned heading elements that cannot take a className directly.
+ *
+ * @public
+ *
+ * @example <caption>Render a picker group heading</caption>
+ * ```typescript
+ * import { menuGroupHeadingClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuGroupHeadingClass;
+ * ```
+ */
+export const menuGroupHeadingClass = 'px-2 py-0.5 text-xs font-medium text-muted-foreground pointer-coarse:py-1.5';
+
+/**
+ * {@link menuGroupHeadingClass} expressed as child selectors for `[cmdk-group-heading]`,
+ * whose element is rendered by cmdk and cannot receive a className. Tailwind only emits
+ * utilities it can read statically, so the prefixed form is spelled out rather than derived.
+ *
+ * @public
+ *
+ * @example <caption>Style a cmdk group heading</caption>
+ * ```typescript
+ * import { menuGroupHeadingSelectorClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuGroupHeadingSelectorClass;
+ * ```
+ */
+export const menuGroupHeadingSelectorClass =
+  '[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-0.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground';
+
+/**
+ * Wrapper styling for a picker's search field. Its padding matches the list gutter so the
+ * field lines up with the items and stays close to the first group heading.
+ *
+ * @public
+ *
+ * @example <caption>Wrap a picker search field</caption>
+ * ```typescript
+ * import { menuSearchWrapperClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuSearchWrapperClass;
+ * ```
+ */
+export const menuSearchWrapperClass = 'relative flex items-center p-1';
+
+/**
+ * Layout for a menu row whose trailing control is a switch. `DropdownMenuSwitchItem` and
+ * `SwitchRow` share it, so a switch row reads the same in every menu, popover and picker.
+ * A row with a description grows to two lines. Switch track styling belongs to the base
+ * component, so menu rows and standalone switches keep the same outline.
+ *
+ * @public
+ *
+ * @example <caption>Style a described switch row</caption>
+ * ```typescript
+ * import { menuSwitchRowVariants } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuSwitchRowVariants({ described: true });
+ * ```
+ */
+export const menuSwitchRowVariants = cva('justify-between', {
+  variants: {
+    described: {
+      true: 'min-h-10',
+      false: '',
+    },
+  },
+  defaultVariants: {
+    described: false,
+  },
+});
+
+/**
+ * The description line under a switch row's title.
+ *
+ * @public
+ *
+ * @example <caption>Style a switch row description</caption>
+ * ```typescript
+ * import { menuSwitchRowDescriptionClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuSwitchRowDescriptionClass;
+ * ```
+ */
+export const menuSwitchRowDescriptionClass = 'text-xs font-medium text-muted-foreground/80';
+
+/**
+ * The view-stack Back row: a full-width compact row, its ChevronLeft and "Back" muted.
+ *
+ * @public
+ *
+ * @example <caption>Style a Back row</caption>
+ * ```typescript
+ * import { menuViewBackClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuViewBackClass;
+ * ```
+ */
+export const menuViewBackClass = 'w-full gap-2 text-xs text-muted-foreground data-disabled:text-muted-foreground';
+
+/**
+ * A combobox row that opens a sub-view of further choices ("More kernels"): quieter than the choices around it, small
+ * and muted, so the list reads as its choices first. The `data-disabled:` twin outranks the command item's reset,
+ * which cmdk triggers by setting `data-disabled="false"` on every item.
+ *
+ * @public
+ *
+ * @example <caption>Style a combobox sub-view trigger</caption>
+ * ```typescript
+ * import { comboboxViewTriggerClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = comboboxViewTriggerClass;
+ * ```
+ */
+export const comboboxViewTriggerClass = 'text-xs text-muted-foreground data-disabled:text-muted-foreground';
+
+/**
+ * The trailing ChevronRight of a row that opens a sub-view. A disclosure row's chevron points down instead. It takes
+ * the row's free space (`ml-auto`) unless a value before it already does, so a row's value sits against the chevron
+ * at the row's gap instead of the two splitting the space between them.
+ *
+ * @public
+ *
+ * @example <caption>Style a sub-view trigger's chevron</caption>
+ * ```typescript
+ * import { menuViewTriggerChevronClass } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuViewTriggerChevronClass;
+ * ```
+ */
+export const menuViewTriggerChevronClass = 'ml-auto size-3.5 shrink-0 text-muted-foreground [.ml-auto+&]:ml-0';
+
+/**
+ * The short horizontal slide a view enters with: from the right when it opens, from the left on a step back, none on
+ * the first paint. Motion is skipped when the person prefers reduced motion.
+ *
+ * @public
+ *
+ * @example <caption>Slide a sub-view in</caption>
+ * ```typescript
+ * import { menuViewEnterVariants } from '@taucad/ui/components/menu.variants';
+ *
+ * export const className = menuViewEnterVariants({ direction: 'forward' });
+ * ```
+ */
+export const menuViewEnterVariants = cva('', {
+  variants: {
+    direction: {
+      forward: 'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-right-2',
+      back: 'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-left-2',
+      none: '',
+    },
+  },
+  defaultVariants: {
+    direction: 'none',
+  },
+});

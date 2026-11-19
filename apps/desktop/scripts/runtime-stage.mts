@@ -1,0 +1,644 @@
+/**
+ * Purpose: Resolve and stage the desktop app's runtime-loaded npm packages for one packaged target, and prepare the
+ * native kernel closures the app downloads on first use, for the package's verification.
+ * Why: Every package script (macOS, Linux, Windows) ships the same externalized engines, adapters and
+ * bundled imports; only the native platform packages beside them differ per target.
+ * Environment: Node with filesystem access to the workspace store and the staging directory.
+ * Usage: import { resolveRuntimePackages, stageRuntimePackages } from './runtime-stage.mts'
+ * Exit codes: n/a (library module).
+ */
+
+import { execFileSync } from 'node:child_process';
+import { chmod, cp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { acpAgentProfiles } from '@taucad/host';
+import { preparationPluginsOf } from '@taucad/native-process-core/store';
+import { createPreparationHost, readManagedPreparation } from '@taucad/runtime/preparation/node';
+import type { Integrity } from '@taucad/runtime/preparation/node';
+
+import { desktopHostBuildOf, writeDesktopHostBuild } from '#shared/desktop-host-build.js';
+import { desktopReleaseIdentity } from '#shared/desktop-release.js';
+import {
+  desktopNativeDeployments,
+  nativePackageResources,
+} from '@taucad/desktop-services-host/desktop-native-deployments';
+import type { NativeKernelDeployment } from '@taucad/native-process-core/adopter';
+
+/* oxlint-disable no-restricted-imports -- Operational scripts are outside the app's # source alias. */
+import { copyRuntimeClosure, copyTree } from '@taucad/nx/runtime-closure';
+/* oxlint-enable no-restricted-imports -- End operational script import exception. */
+
+/** A `<platform>-<arch>` the desktop app is packaged for. */
+export type RuntimeTarget = 'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'win32-x64';
+
+/**
+ * Match binary basenames and relative package directories so hidden checkout ancestors cannot defeat ASAR unpacking.
+ * `libheif-*.wasm` is libheif (LGPL-3.0), which the main build emits as its own asset: it stays a separate file
+ * outside the integrity-checked archive, where a user can inspect and replace it (LGPL-3.0 section 4d).
+ */
+export const runtimeAsarOptions = {
+  unpack: '{*.node,*.dll,esbuild,esbuild.exe,libheif-*.wasm}',
+  unpackDir:
+    '**/node_modules/{@agentclientprotocol,@img,node-pty,@anthropic-ai/sandbox-runtime/vendor/{seccomp,java-proxy-agent}}',
+};
+
+/** The optional platform package each runtime engine loads its native payload from. */
+export type RuntimePlatformPackages = Readonly<{
+  openrscadEngine: string;
+  esbuild: string;
+  libassimp: string | undefined;
+  nanoraster: string;
+  cadmpeg: string;
+  /**
+   * Native payloads the bundled imports load through `optionalDependencies`: sharp's libvips (where it
+   * is a separate package) before sharp's addon, so the addon finds it as a sibling, then
+   * `@parcel/watcher`'s addon. Each is staged at the version its consumer installed.
+   */
+  bundledOptionalDependencies: readonly string[];
+  /**
+   * The sandbox runtime's vendored helpers this target never executes, relative to the package root.
+   * The runtime runs `vendor/seccomp/<arch>/apply-seccomp` only under Linux bubblewrap and
+   * `vendor/srt-win/<arch>/srt-win.exe` only on Windows, each for the host's own architecture
+   * (`dist/sandbox/generate-seccomp-filter.js` and `dist/sandbox/windows-sandbox-utils.js`), and
+   * `native-sandbox.ts` reads the seccomp directory on Linux only.
+   */
+  unusedSandboxHelpers: readonly string[];
+  /**
+   * The directory, relative to node-pty's root, that holds the addon its `loadNativeModule` loads on this target:
+   * Linux builds `build/Release/pty.node` from source at install, macOS uses the package's own prebuild (with the
+   * `spawn-helper` its fork path runs from `app.asar.unpacked`). Windows has no shell provider, so it ships node-pty's
+   * JavaScript without an addon and a Terminal answers `sandbox-unavailable`.
+   */
+  nodePtyNative: string | undefined;
+}>;
+
+/** Platform package names, exactly as each engine's `optionalDependencies` declares them. */
+export const runtimePlatformPackages: Readonly<Record<RuntimeTarget, RuntimePlatformPackages>> = {
+  'darwin-arm64': {
+    openrscadEngine: '@taulabs/openrscad-engine-darwin-arm64',
+    esbuild: '@esbuild/darwin-arm64',
+    libassimp: 'libassimp-darwin-arm64',
+    nanoraster: 'nanoraster-darwin-arm64',
+    cadmpeg: 'cadmpeg-ts-darwin-arm64',
+    bundledOptionalDependencies: [
+      '@img/sharp-libvips-darwin-arm64',
+      '@img/sharp-darwin-arm64',
+      '@parcel/watcher-darwin-arm64',
+    ],
+    unusedSandboxHelpers: ['vendor/seccomp', 'vendor/srt-win'],
+    nodePtyNative: 'prebuilds/darwin-arm64',
+  },
+  'darwin-x64': {
+    openrscadEngine: '@taulabs/openrscad-engine-darwin-x64',
+    esbuild: '@esbuild/darwin-x64',
+    // The pinned Assimp release has no Intel Mac addon; this host uses its WASM backend.
+    libassimp: undefined,
+    nanoraster: 'nanoraster-darwin-x64',
+    cadmpeg: 'cadmpeg-ts-darwin-x64',
+    bundledOptionalDependencies: [
+      '@img/sharp-libvips-darwin-x64',
+      '@img/sharp-darwin-x64',
+      '@parcel/watcher-darwin-x64',
+    ],
+    unusedSandboxHelpers: ['vendor/seccomp', 'vendor/srt-win'],
+    nodePtyNative: 'prebuilds/darwin-x64',
+  },
+  'linux-x64': {
+    openrscadEngine: '@taulabs/openrscad-engine-linux-x64-gnu',
+    esbuild: '@esbuild/linux-x64',
+    libassimp: 'libassimp-linux-x64-gnu',
+    nanoraster: 'nanoraster-linux-x64-gnu',
+    cadmpeg: 'cadmpeg-ts-linux-x64-gnu',
+    bundledOptionalDependencies: [
+      '@img/sharp-libvips-linux-x64',
+      '@img/sharp-linux-x64',
+      '@parcel/watcher-linux-x64-glibc',
+    ],
+    unusedSandboxHelpers: ['vendor/seccomp/arm64', 'vendor/srt-win'],
+    nodePtyNative: 'build/Release',
+  },
+  'win32-x64': {
+    openrscadEngine: '@taulabs/openrscad-engine-win32-x64-msvc',
+    esbuild: '@esbuild/win32-x64',
+    libassimp: 'libassimp-win32-x64-msvc',
+    nanoraster: 'nanoraster-win32-x64-msvc',
+    cadmpeg: 'cadmpeg-ts-win32-x64-msvc',
+    /* `@img/sharp-win32-x64` carries libvips itself; there is no separate libvips package. */
+    bundledOptionalDependencies: ['@img/sharp-win32-x64', '@parcel/watcher-win32-x64'],
+    unusedSandboxHelpers: ['vendor/seccomp', 'vendor/srt-win/arm64'],
+    nodePtyNative: undefined,
+  },
+};
+
+type InstalledPackage = Readonly<{ name: string; source: string; version: string }>;
+
+/** Every installed package one target stages, resolved from the workspace before anything is written. */
+export type ResolvedRuntimePackages = Readonly<{
+  platform: RuntimePlatformPackages;
+  openrscadEngine: InstalledPackage;
+  openrscadEnginePlatform: string;
+  esbuild: InstalledPackage;
+  esbuildPlatform: string;
+  libassimp: InstalledPackage;
+  libassimpPlatform: string | undefined;
+  nanoraster: InstalledPackage;
+  nanorasterPlatform: string;
+  cadmpeg: InstalledPackage;
+  cadmpegPlatform: string;
+  sandboxRuntime: InstalledPackage;
+  nodePty: InstalledPackage;
+  bundledImports: readonly InstalledPackage[];
+  acpAdapters: readonly InstalledPackage[];
+}>;
+
+const readJson = async <Value extends NonNullable<unknown>>(path: string): Promise<Value> =>
+  JSON.parse(await readFile(path, 'utf8')) as Value;
+
+/* Bundler and declaration source maps are build diagnostics. Other `.map` files are payload:
+ * replicad's kernel loads its `replicad.js-<hash>.map` asset at run time to map library frames. */
+export const excludesBuildDiagnostics = (path: string): boolean =>
+  !/\.(?:[cm]?[jt]s|css)\.map$|^tau-module-graph.*\.json$/u.test(basename(path));
+
+/** The bundled main/utility imports staged with their runtime dependency closure from the desktop's own install. */
+export const desktopBundledImports = [
+  '@gltf-transform/core',
+  '@gltf-transform/functions',
+  'electron-updater',
+  'fflate',
+  'uint8array-extras',
+  'xstate',
+  '@parcel/watcher',
+] as const;
+
+/**
+ * Resolve every runtime package one target stages, failing before the output is touched.
+ * @param options - The desktop app and workspace roots, and the packaged target.
+ * @returns The installed packages and their versions.
+ * @throws When a platform package for `target` is not installed (pnpm installs only the host's).
+ */
+export const resolveRuntimePackages = async (
+  options: Readonly<{ desktopRoot: string; workspaceRoot: string; target: RuntimeTarget }>,
+): Promise<ResolvedRuntimePackages> => {
+  const { desktopRoot, workspaceRoot, target } = options;
+  const platform = runtimePlatformPackages[target];
+  const pluginModules = (plugin: string): string => resolve(workspaceRoot, 'packages/plugins', plugin, 'node_modules');
+  const installed = async (source: string): Promise<InstalledPackage> => {
+    const { name, version } = await readJson<{ readonly name: string; readonly version: string }>(
+      resolve(source, 'package.json'),
+    );
+    return { name, source, version };
+  };
+  /* A platform package is an optional dependency of its engine, resolved from the engine itself. */
+  const platformPackage = (engine: string, name: string): string =>
+    dirname(createRequire(resolve(engine, 'package.json')).resolve(`${name}/package.json`));
+
+  /* One engine package, two payloads: the addon ships in the platform package its
+   * `node` entry loads, exactly as libassimp does. Staging the engine without it
+   * would still run — through the WebAssembly fallback — which is precisely the
+   * silent downgrade `verify-macos-package.mts` refuses. */
+  const openrscadEngine = await installed(
+    await realpath(resolve(pluginModules('openrscad'), '@taulabs/openrscad-engine')),
+  );
+  const esbuild = await installed(await realpath(resolve(pluginModules('esbuild'), 'esbuild')));
+  const libassimp = await installed(await realpath(resolve(pluginModules('assimp'), 'libassimp')));
+  const nanoraster = await installed(await realpath(resolve(pluginModules('image'), 'nanoraster')));
+  const cadmpeg = await installed(await realpath(resolve(pluginModules('cadmpeg'), 'cadmpeg-ts')));
+  /* The ACP adapters are spawned as `node <modulePath>` from inside the packaged
+   * app, so they are staged with their runtime dependency closure and unpacked
+   * out of the ASAR — a module path inside `app.asar` is not a real file. A native
+   * ACP agent (Grok Build) is the user's installed CLI and has nothing to stage. */
+  const acpAdapters = await Promise.all(
+    acpAgentProfiles
+      .flatMap((profile) => (profile.package === undefined ? [] : [profile.package]))
+      .map(async (name) => ({
+        ...(await installed(await realpath(resolve(desktopRoot, 'node_modules', name)))),
+        name,
+      })),
+  );
+  /* The sandbox runtime resolves its vendored helpers relative to its own module file
+   * and is spawned nowhere: it is staged with its runtime closure so the kernel utility
+   * can import it from a real directory, and stays inside the ASAR. */
+  const sandboxRuntime = await installed(
+    await realpath(resolve(desktopRoot, 'node_modules/@anthropic-ai/sandbox-runtime')),
+  );
+  /* The Terminal's PTY: staged without its sources, build tree or other targets' prebuilds. */
+  const nodePty = await installed(await realpath(resolve(desktopRoot, 'node_modules/node-pty')));
+  if (platform.nodePtyNative !== undefined) {
+    const addon = resolve(nodePty.source, platform.nodePtyNative, 'pty.node');
+    await readFile(addon).catch(() => {
+      throw new Error(`node-pty has no ${target} addon at ${addon}; reinstall with its build toolchain.`);
+    });
+  }
+  const bundledImports = await Promise.all(
+    desktopBundledImports.map(async (name) => ({
+      ...(await installed(await realpath(resolve(desktopRoot, 'node_modules', name)))),
+      name,
+    })),
+  );
+  return {
+    platform,
+    openrscadEngine,
+    openrscadEnginePlatform: platformPackage(openrscadEngine.source, platform.openrscadEngine),
+    esbuild,
+    esbuildPlatform: platformPackage(esbuild.source, platform.esbuild),
+    libassimp,
+    libassimpPlatform: platform.libassimp ? platformPackage(libassimp.source, platform.libassimp) : undefined,
+    nanoraster,
+    nanorasterPlatform: platformPackage(nanoraster.source, platform.nanoraster),
+    cadmpeg,
+    cadmpegPlatform: platformPackage(cadmpeg.source, platform.cadmpeg),
+    sandboxRuntime,
+    nodePty,
+    bundledImports,
+    acpAdapters,
+  };
+};
+
+/** A channel a package is assembled for, as the desktop main process reads it (src/main/environment.ts). */
+export type DesktopPackageChannel = 'production' | 'staging';
+
+/**
+ * Parse `TAU_DESKTOP_CHANNEL`; unset or blank is `production`.
+ * @param value - The variable's value.
+ * @returns The channel to package.
+ */
+export const desktopPackageChannel = (value: string | undefined): DesktopPackageChannel => {
+  const channel = value?.trim() ?? '';
+  if (channel === '' || channel === 'production') {
+    return 'production';
+  }
+  if (channel === 'staging') {
+    return 'staging';
+  }
+  throw new Error(`TAU_DESKTOP_CHANNEL must be production or staging, not ${channel}`);
+};
+
+/** Resolve one version for the manifest and native bundle metadata. */
+export const desktopPackageVersion = (sourceVersion: string): string => {
+  const tag = process.env['TAU_DESKTOP_RELEASE_TAG'];
+  if (!tag) {
+    return sourceVersion;
+  }
+  const identity = desktopReleaseIdentity(tag);
+  if (identity.channel !== desktopPackageChannel(process.env['TAU_DESKTOP_CHANNEL'])) {
+    throw new Error('Desktop release tag and packaged channel disagree');
+  }
+  if (identity.channel === 'production' && identity.version !== sourceVersion) {
+    throw new Error('Production release tag must match the source package version');
+  }
+  return identity.version;
+};
+
+/**
+ * The staged manifest's `tauDesktop` block, which main reads at launch; nothing when it would be empty.
+ * @param options - Whether the package honours environment overrides (ad-hoc and unsigned only) and its channel.
+ * @returns Extra manifest fields for `stageRuntimePackages`.
+ */
+export const desktopManifestFields = (
+  options: Readonly<{ environmentOverrides: boolean; channel: DesktopPackageChannel }>,
+): Readonly<Record<string, unknown>> => {
+  const sourceCommit = process.env['TAU_DESKTOP_SOURCE_SHA'];
+  if (sourceCommit && !/^[a-f\d]{40}$/u.test(sourceCommit)) {
+    throw new TypeError('TAU_DESKTOP_SOURCE_SHA must be a full commit SHA');
+  }
+  const tauDesktop = {
+    ...(process.env['TAU_DESKTOP_RELEASE_TAG'] ? { releaseTag: process.env['TAU_DESKTOP_RELEASE_TAG'] } : {}),
+    ...(sourceCommit ? { sourceCommit } : {}),
+    ...(options.environmentOverrides ? { environmentOverrides: true } : {}),
+    ...(options.channel === 'staging' ? { channel: 'staging' } : {}),
+  };
+  return Object.keys(tauDesktop).length === 0 ? {} : { tauDesktop };
+};
+
+/**
+ * Whether one node-pty path is part of its runtime on a target: the manifest, licence and non-test `lib/` JavaScript,
+ * and the target's own addon directory without debug symbols.
+ * @param relativePath - The path relative to node-pty's root, in either separator.
+ * @param native - The target's addon directory (`RuntimePlatformPackages.nodePtyNative`).
+ * @returns True when the path is staged.
+ */
+export const keepsNodePtyPath = (relativePath: string, native: string | undefined): boolean => {
+  const path = relativePath.split(sep).join('/');
+  if (path === '' || path === 'package.json' || path === 'LICENSE') {
+    return true;
+  }
+  if (path === 'lib' || path.startsWith('lib/')) {
+    return !path.endsWith('.test.js') && excludesBuildDiagnostics(path);
+  }
+  if (native === undefined) {
+    return false;
+  }
+  return native.startsWith(`${path}/`) || path === native || (path.startsWith(`${native}/`) && !path.endsWith('.pdb'));
+};
+
+/**
+ * The `spawn-helper` node-pty's macOS fork path executes, relative to node-pty's root, or nothing on other targets.
+ * node-pty 1.1.0 publishes it mode 0644 and only a source build sets the bit, so staging must make it executable
+ * before signing: without the bit every Terminal launch fails `posix_spawnp` with EACCES.
+ * @param native - The target's addon directory (`RuntimePlatformPackages.nodePtyNative`).
+ * @returns The helper's path, or undefined when the target has no fork helper.
+ */
+export const nodePtySpawnHelper = (native: string | undefined): string | undefined =>
+  native?.startsWith('prebuilds/darwin-') === true ? `${native}/spawn-helper` : undefined;
+
+/**
+ * Make a staged node-pty's macOS `spawn-helper` executable; a no-op on targets without one.
+ * @param nodePtyRoot - The staged node-pty directory.
+ * @param native - The target's addon directory (`RuntimePlatformPackages.nodePtyNative`).
+ */
+export const markNodePtySpawnHelperExecutable = async (
+  nodePtyRoot: string,
+  native: string | undefined,
+): Promise<void> => {
+  const helper = nodePtySpawnHelper(native);
+  if (helper !== undefined) {
+    await chmod(resolve(nodePtyRoot, helper), 0o755);
+  }
+};
+
+/**
+ * Stage the built main/preload bundles, every runtime package and the app manifest into `stageRoot`.
+ * @param options - The desktop root, the staging directory, the resolved packages, any dependencies
+ *   the caller already staged (listed first in the staged manifest) and any extra manifest fields.
+ */
+export const stageRuntimePackages = async (
+  options: Readonly<{
+    desktopRoot: string;
+    stageRoot: string;
+    packages: ResolvedRuntimePackages;
+    stagedDependencies?: Readonly<Record<string, string>>;
+    manifestFields?: Readonly<Record<string, unknown>>;
+  }>,
+): Promise<void> => {
+  const { desktopRoot, stageRoot, packages } = options;
+  const { platform } = packages;
+  /**
+   * Stage one installed package without its sources, nested packages, build diagnostics or `unused` paths.
+   * @param name - Package name, which is also its directory under the staged `node_modules`.
+   * @param source - Installed package root.
+   * @param unused - Paths relative to `source` the packaged app never loads.
+   */
+  const copyRuntimePackage = async (name: string, source: string, unused: readonly string[] = []): Promise<void> => {
+    const excluded = new Set(unused.map((path) => resolve(source, path)));
+    await copyTree(
+      source,
+      resolve(stageRoot, 'node_modules', name),
+      (path) =>
+        !['node_modules', 'src'].includes(basename(path)) && excludesBuildDiagnostics(path) && !excluded.has(path),
+    );
+  };
+  await Promise.all([
+    mkdir(resolve(stageRoot, 'dist'), { recursive: true }),
+    mkdir(resolve(stageRoot, 'node_modules/@taulabs'), { recursive: true }),
+    mkdir(resolve(stageRoot, 'node_modules/@esbuild'), { recursive: true }),
+  ]);
+  const metadata = await readJson<{
+    readonly name: string;
+    readonly productName: string;
+    readonly version: string;
+    readonly main: string;
+    readonly type: string;
+  }>(resolve(desktopRoot, 'package.json'));
+  /*
+   * LW8: the commit this app is packaged from, beside the bundles, where main reads it (`#shared/desktop-host-build`).
+   * The release workflow checks out the release tag, so it is the tag's commit. `desktop:build` compiles no commit in,
+   * so its cache key holds sources and configuration only (ST-9).
+   */
+  writeDesktopHostBuild(
+    resolve(stageRoot, 'dist'),
+    desktopHostBuildOf(() =>
+      execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: desktopRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    ),
+  );
+  await Promise.all([
+    copyTree(resolve(desktopRoot, 'dist/main'), resolve(stageRoot, 'dist/main'), excludesBuildDiagnostics),
+    copyTree(resolve(desktopRoot, 'dist/preload'), resolve(stageRoot, 'dist/preload'), excludesBuildDiagnostics),
+    /* The utilities import the engine through its `node` export (`dist/node.js`: addon, else `pkg/node`);
+     * only the `browser` export and the `./web` subpaths load `pkg/web`. */
+    copyRuntimePackage('@taulabs/openrscad-engine', packages.openrscadEngine.source, ['pkg/web']),
+    copyRuntimePackage(platform.openrscadEngine, packages.openrscadEnginePlatform),
+    /* `bin/esbuild` is install.js's copy of the platform binary for the CLI. The API in `lib/main.js`
+     * runs `ESBUILD_BINARY_PATH`, which the utilities point at the unpacked platform binary. */
+    copyRuntimePackage('esbuild', packages.esbuild.source, ['bin']),
+    copyRuntimePackage(platform.esbuild, packages.esbuildPlatform),
+    copyRuntimePackage('libassimp', packages.libassimp.source),
+    platform.libassimp && packages.libassimpPlatform
+      ? copyRuntimePackage(platform.libassimp, packages.libassimpPlatform)
+      : undefined,
+    copyRuntimePackage('nanoraster', packages.nanoraster.source),
+    copyTree(packages.nodePty.source, resolve(stageRoot, 'node_modules/node-pty'), (path) =>
+      keepsNodePtyPath(relative(packages.nodePty.source, path), platform.nodePtyNative),
+    ).then(async () =>
+      markNodePtySpawnHelperExecutable(resolve(stageRoot, 'node_modules/node-pty'), platform.nodePtyNative),
+    ),
+    copyRuntimePackage(platform.nanoraster, packages.nanorasterPlatform),
+    /* The `node` entry's `auto` backend loads the addon from the platform package and reads
+     * `dist/wasm` only when that addon fails, so the WebAssembly modules stay out of the app. */
+    copyRuntimePackage('cadmpeg-ts', packages.cadmpeg.source, ['dist/wasm']),
+    copyRuntimePackage(platform.cadmpeg, packages.cadmpegPlatform),
+    writeFile(
+      resolve(stageRoot, 'package.json'),
+      `${JSON.stringify(
+        {
+          name: metadata.name,
+          productName: metadata.productName,
+          version: desktopPackageVersion(metadata.version),
+          main: metadata.main,
+          type: metadata.type,
+          ...options.manifestFields,
+          dependencies: {
+            ...options.stagedDependencies,
+            '@taulabs/openrscad-engine': packages.openrscadEngine.version,
+            [platform.openrscadEngine]: packages.openrscadEngine.version,
+            [platform.esbuild]: packages.esbuild.version,
+            esbuild: packages.esbuild.version,
+            libassimp: packages.libassimp.version,
+            ...(platform.libassimp ? { [platform.libassimp]: packages.libassimp.version } : {}),
+            nanoraster: packages.nanoraster.version,
+            [platform.nanoraster]: packages.nanoraster.version,
+            'cadmpeg-ts': packages.cadmpeg.version,
+            [platform.cadmpeg]: packages.cadmpeg.version,
+            '@anthropic-ai/sandbox-runtime': packages.sandboxRuntime.version,
+            'node-pty': packages.nodePty.version,
+            ...Object.fromEntries(packages.bundledImports.map(({ name, version }) => [name, version])),
+            ...Object.fromEntries(packages.acpAdapters.map(({ name, version }) => [name, version])),
+          },
+        },
+        undefined,
+        2,
+      )}\n`,
+    ),
+  ]);
+
+  for (const { name, source } of packages.bundledImports) {
+    // oxlint-disable-next-line no-await-in-loop -- Package-local native versions require serial nested staging.
+    await copyRuntimeClosure({
+      name,
+      source,
+      modulesRoot: resolve(stageRoot, 'node_modules'),
+      filter: excludesBuildDiagnostics,
+      optionalDependencies: platform.bundledOptionalDependencies,
+    });
+  }
+  const unusedSandboxHelpers = new Set(
+    platform.unusedSandboxHelpers.map((path) => resolve(packages.sandboxRuntime.source, path)),
+  );
+  for (const { name, source } of [
+    ...packages.acpAdapters,
+    { name: '@anthropic-ai/sandbox-runtime', source: packages.sandboxRuntime.source },
+  ]) {
+    /* Serial: the closure nests one package inside another, so two adapters
+     * racing on the same staged directories would make the layout undecidable. */
+    // oxlint-disable-next-line no-await-in-loop -- see above.
+    await copyRuntimeClosure({
+      name,
+      source,
+      modulesRoot: resolve(stageRoot, 'node_modules'),
+      filter: (path) => excludesBuildDiagnostics(path) && !unusedSandboxHelpers.has(path),
+    });
+  }
+};
+
+/** The preparation target key (`<os>-<arch>[-<libc>]`) each packaged target's native closures are sealed for. */
+const nativeClosureTargets: Readonly<Record<RuntimeTarget, string | undefined>> = {
+  'darwin-arm64': 'darwin-arm64',
+  'darwin-x64': 'darwin-x64',
+  'linux-x64': 'linux-x64-glibc',
+  /* Native kernels do not run on Windows (no sandbox), so a Windows package ships no closure. */
+  'win32-x64': undefined,
+};
+
+/** One sealed closure the desktop downloads on first use, as a package's verification prepared it. */
+export type PreparedNativeClosure = Readonly<{
+  package: string;
+  dependency: string;
+  root: string;
+  closureIntegrity: Integrity;
+  treeIntegrity: Integrity;
+  fileCount: number;
+}>;
+
+/**
+ * Prepare the desktop's native kernel closures for one target into a scratch store, exactly as the app prepares them
+ * on first use (desktop first-use download blueprint, DS-1) and `tau prepare` does: from each package's
+ * `tau-plugin.json` pins, through the same verify-before-write path and seal steps (build123d's bytecode), honouring
+ * the managed profile (`TAU_DEPENDENCY_DIR`, `TAU_DEPENDENCY_MIRROR`) for where the bytes come from. The app ships none of
+ * them; the package's verification launches what a person would download.
+ * @param options - The packaged target and a scratch directory the caller removes.
+ * @returns The prepared closures; none for a target that runs no native kernel.
+ * @throws When a closure the target declares cannot be prepared.
+ */
+export const prepareNativeClosures = async (
+  options: Readonly<{
+    target: RuntimeTarget;
+    workRoot: string;
+    /** The deployments to prepare; the packaged app's, read from its resources, when verifying a package. */
+    deployments?: readonly NativeKernelDeployment[];
+  }>,
+): Promise<readonly PreparedNativeClosure[]> => {
+  const target = nativeClosureTargets[options.target];
+  if (target === undefined) {
+    return [];
+  }
+  /* Each bundled package with its seal step, launch set and directory, which dependency files shipped inside it resolve from. */
+  const plugins = preparationPluginsOf(options.deployments ?? desktopNativeDeployments);
+  const managed = readManagedPreparation(process.env);
+  const store = join(options.workRoot, 'dependency-store');
+  await rm(options.workRoot, { recursive: true, force: true });
+  await mkdir(store, { recursive: true });
+  const host = createPreparationHost({
+    plugins,
+    store: await realpath(store),
+    hostPath: options.workRoot,
+    selection: { target, emulation: false },
+    ...(managed.mirror === undefined ? {} : { mirror: managed.mirror }),
+    ...(managed.seed === undefined ? {} : { seed: managed.seed }),
+  });
+  const prepared: PreparedNativeClosure[] = [];
+  try {
+    for (const description of await host.describe()) {
+      if (description.state === 'unsupported') {
+        continue;
+      }
+      // oxlint-disable-next-line no-await-in-loop -- one closure at a time; build123d's seal step uses every core
+      const outcome = await host.prepare({
+        package: description.package,
+        dependencies: [description.dependency],
+        offline: managed.offline,
+        signal: AbortSignal.timeout(3_600_000),
+      });
+      if (outcome.status !== 'ready') {
+        throw new Error(
+          `${description.package} ${description.dependency} for ${target} did not prepare: ${outcome.status === 'blocked' ? outcome.message : outcome.status}`,
+        );
+      }
+      const receipt = outcome.receipts[description.dependency];
+      if (receipt === undefined) {
+        throw new Error(`${description.package} prepared no ${description.dependency} closure for ${target}.`);
+      }
+      prepared.push({
+        package: receipt.package,
+        dependency: receipt.dependency,
+        root: receipt.root,
+        closureIntegrity: receipt.closureIntegrity,
+        treeIntegrity: receipt.treeIntegrity,
+        fileCount: receipt.files.length,
+      });
+    }
+  } finally {
+    host.dispose();
+  }
+  return prepared;
+};
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null;
+
+/**
+ * The paths of the dependency files a `tau-plugin.json` ships inside its package (`packagePath` origins), for every target.
+ * @param manifest - The package's unparsed `tau-plugin.json`.
+ * @returns The package-relative paths, each once.
+ */
+export const packagePathDependencyFiles = (manifest: unknown): readonly string[] => {
+  const paths = new Set<string>();
+  const dependencies = isRecord(manifest) ? manifest['dependencies'] : undefined;
+  for (const variants of isRecord(dependencies) ? Object.values(dependencies) : []) {
+    for (const variant of Array.isArray(variants) ? variants : []) {
+      const files: unknown = isRecord(variant) ? variant['files'] : undefined;
+      for (const file of Array.isArray(files) ? files : []) {
+        const origin: unknown = isRecord(file) ? file['origin'] : undefined;
+        if (isRecord(origin) && origin['kind'] === 'packagePath' && typeof origin['path'] === 'string') {
+          paths.add(origin['path']);
+        }
+      }
+    }
+  }
+  return [...paths];
+};
+
+/**
+ * Copy each native package's own dependency files (its worker and support modules) into the app's resources, where main
+ * prepares a kernel from on first use (`preparableNativeDeployments`). They are source files, not executables, so the
+ * app signs and notarizes without them changing.
+ * @param resources - The packaged app's resources directory.
+ */
+export const stageNativePackageFiles = async (resources: string): Promise<void> => {
+  await Promise.all(
+    desktopNativeDeployments.flatMap((deployment) =>
+      packagePathDependencyFiles(deployment.manifest).map(async (path) =>
+        cp(
+          join(fileURLToPath(deployment.packageRoot), path),
+          join(resources, nativePackageResources, deployment.package, path),
+          { recursive: true },
+        ),
+      ),
+    ),
+  );
+};

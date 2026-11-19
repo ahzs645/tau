@@ -1,0 +1,14 @@
+import { assimp } from '@taucad/assimp';
+import { esbuild } from '@taucad/esbuild';
+import { middleware } from '@taucad/middleware';
+import { replicad } from '@taucad/replicad';
+import { defineRuntime } from '@taucad/runtime/worker';
+
+export const runtime = defineRuntime({
+  plugins: [
+    replicad({ kernels: { default: { wasm: 'single' } } }),
+    esbuild(),
+    assimp(),
+    middleware({ preset: 'cache' }),
+  ],
+});

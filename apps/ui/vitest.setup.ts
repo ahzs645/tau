@@ -1,10 +1,28 @@
 /* eslint-disable @typescript-eslint/naming-convention -- CONSTANT_CASE is expected for environment variables */
+import { readFile } from 'node:fs/promises';
 // oxlint-disable-next-line import-x/no-unassigned-import -- this is a side effect
 import '@testing-library/jest-dom';
+
+// Vite rewrites package-owned WASM/font assets to /@fs/ URLs. Jsdom has no Vite
+// HTTP server, so load those same real bytes directly while preserving normal fetches.
+const networkFetch = globalThis.fetch.bind(globalThis);
+globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  // `location` is absent in `@vitest-environment node` files (server.test.ts); their URLs are already absolute.
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the DOM lib types `location` as always present.
+  const url = new URL(input instanceof Request ? input.url : input.toString(), globalThis.location?.href);
+  const isLocalAsset = url.pathname.startsWith('/@fs/') && /\.(?:ttf|wasm)$/u.test(url.pathname);
+  if (!isLocalAsset) {
+    return networkFetch(input, init);
+  }
+  const bytes = await readFile(decodeURIComponent(url.pathname.slice('/@fs'.length)));
+  const contentType = url.pathname.endsWith('.wasm') ? 'application/wasm' : 'font/ttf';
+  return new Response(new Uint8Array(bytes), { headers: { 'Content-Type': contentType } });
+};
 
 // Mock window.ENV for testing - required since the app uses window.ENV in browser environments
 const mockEnv = {
   TAU_API_URL: 'http://localhost:4000',
+  TAU_WEBSOCKET_URL: 'ws://localhost:4001',
   TAU_FRONTEND_URL: 'http://localhost:3000',
   NODE_ENV: 'test',
 };
@@ -14,29 +32,64 @@ Object.defineProperty(globalThis, 'ENV', {
   value: mockEnv,
 });
 
-// Monaco 0.55+ evaluates `document.queryCommandSupported('paste')` at module load
-// (see monaco-editor clipboard contribution). jsdom does not implement it.
-// oxlint-disable-next-line @typescript-eslint/no-deprecated -- Monaco still probes the deprecated DOM API; jsdom needs the stub to load
-if (typeof document !== 'undefined' && typeof document.queryCommandSupported !== 'function') {
-  Object.defineProperty(document, 'queryCommandSupported', {
+// ESBuild-wasm checks that TextEncoder returns this realm's Uint8Array.
+// Jsdom can mix Node's TextEncoder with jsdom's typed-array constructors,
+// which fails that invariant before browser-side GeoSpec tests can bundle.
+const NativeTextEncoder = globalThis.TextEncoder;
+if (typeof NativeTextEncoder === 'function' && !(new NativeTextEncoder().encode('') instanceof Uint8Array)) {
+  class RealmSafeTextEncoder extends NativeTextEncoder {
+    public override encode(input?: string): Uint8Array<ArrayBuffer> {
+      return new Uint8Array(super.encode(input));
+    }
+  }
+
+  Object.defineProperty(globalThis, 'TextEncoder', {
     configurable: true,
     writable: true,
-    value: () => false,
+    value: RealmSafeTextEncoder,
   });
 }
 
-// oxlint-disable-next-line @typescript-eslint/naming-convention -- Monaco's global contract
-const g = globalThis as typeof globalThis & {
-  MonacoEnvironment?: { getWorkerUrl?: (moduleId: string, label: string) => string };
-};
-g.MonacoEnvironment ??= {
-  getWorkerUrl(): string {
-    const source = 'self.onmessage=function(){};';
-    return `data:application/javascript;charset=utf-8,${encodeURIComponent(source)}`;
-  },
-};
+// The jsdom environment omits the browser font-loading API used by rendered UI.
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- DOM types claim `fonts` is always there; jsdom omits it
+if (typeof document !== 'undefined' && (document.fonts as FontFaceSet | undefined) === undefined) {
+  Object.defineProperty(document, 'fonts', {
+    configurable: true,
+    value: {
+      load: async (): Promise<FontFace[]> => [],
+      addEventListener: (): void => undefined,
+      removeEventListener: (): void => undefined,
+      dispatchEvent: (): boolean => true,
+      ready: Promise.resolve(),
+      status: 'loaded',
+      check: (): boolean => true,
+    },
+  });
+}
 
-// Jsdom does not define the Web `Worker` global; Monaco still constructs one for TS diagnostics.
+// Browser clipboard consumers need a constructor and settled MIME promises in jsdom.
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition, @typescript-eslint/no-extraneous-class -- DOM types claim ClipboardItem is always defined and jsdom omits it; the stub is a constructor-only class because the platform's is
+globalThis.ClipboardItem ??= class ClipboardItem {
+  public constructor(items: Record<string, unknown>) {
+    // Consume deferred MIME values just as the browser clipboard does.
+    void Promise.allSettled(Object.values(items));
+  }
+} as unknown as typeof ClipboardItem;
+
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- DOM types claim `clipboard` is always there; jsdom omits it
+if (typeof navigator !== 'undefined' && (navigator.clipboard as Clipboard | undefined) === undefined) {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      read: async (): Promise<ClipboardItems> => [],
+      readText: async (): Promise<string> => '',
+      write: async (): Promise<void> => undefined,
+      writeText: async (): Promise<void> => undefined,
+    },
+  });
+}
+
+// The jsdom environment has no worker host; actual language workers are covered in browser tests.
 // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- DOM types claim Worker is always defined; jsdom omits it
 globalThis.Worker ??= class Worker {
   public postMessage(_message: unknown): void {
@@ -157,7 +210,7 @@ globalThis.performance.measure = (() => stubEntry) as typeof globalThis.performa
 // Jsdom returns null from HTMLCanvasElement.getContext('2d'), which crashes
 // `three/addons` modules that call `ctx.fillStyle = …` at module load time
 // (e.g. `lottie_canvas.module.js`'s ImagePreloader). Stub a minimal 2d context
-// shape so test files importing from `three/addons` don't fail to load.
+// shape so test files importing the `three/addons` barrel don't fail to load.
 // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- jsdom only ships HTMLCanvasElement when canvas package is installed
 if (typeof HTMLCanvasElement !== 'undefined') {
   const originalGetContext = HTMLCanvasElement.prototype.getContext;

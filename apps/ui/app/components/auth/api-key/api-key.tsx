@@ -1,18 +1,18 @@
 import { useAuth, useAuthPlugin } from '@better-auth-ui/react';
-import type { ListedApiKey } from '@better-auth-ui/react';
+import type { ListedApiKey } from '@better-auth-ui/core/plugins/api-key';
 import { Key, X } from 'lucide-react';
 import { useState } from 'react';
 
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent } from '#components/ui/card.js';
-import { apiKeyPlugin } from '#utils/api-key-plugin.js';
+import { Button } from '@taucad/ui/components/button';
+import { Card, CardContent } from '@taucad/ui/components/card';
+import { apiKeyPlugin } from '@taucad/ui-core/utils/api-key-plugin';
 import { DeleteApiKeyDialog } from '#components/auth/api-key/delete-api-key-dialog.js';
 
 export type ApiKeyProps = {
   apiKey: ListedApiKey;
 };
 
-export function ApiKey({ apiKey }: ApiKeyProps) {
+export function ApiKey({ apiKey }: ApiKeyProps): React.JSX.Element {
   const { localization } = useAuth();
   const { localization: apiKeyLocalization } = useAuthPlugin(apiKeyPlugin);
   const [deleteOpen, setDeleteOpen] = useState(false);

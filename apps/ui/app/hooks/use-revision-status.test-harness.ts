@@ -1,0 +1,309 @@
+/**
+ * One scriptable stand-in for the page's revision client.
+ *
+ * Every revision surface reads the same two hooks (`useRevisionStatus` and
+ * `useRevisionClient`), so their suites share one harness rather than each
+ * re-deriving a client mock — which is how two surfaces end up asserting
+ * different shapes of the same projection.
+ *
+ * @see apps/ui/app/hooks/use-revision-status.ts
+ */
+
+import { onTestFinished, vi } from 'vitest';
+import type {
+  RevisionDiffEntry,
+  RevisionGraph,
+  RevisionLogRequest,
+  RevisionRow,
+  RevisionStatusProjection,
+} from '@taucad/revisions';
+import type { RevisionFileComparison } from '@taucad/revisions/algorithms';
+import type {
+  BranchCreated,
+  RevisionToast,
+  WorkerRevisionEvent,
+} from '@taucad/revisions-ui/types/revision-worker-protocol';
+import type { ProjectAccessRole } from '#hooks/use-cloud-projects.js';
+
+const emptyStatus = (): RevisionStatusProjection => ({
+  projectId: 'p',
+  checkoutId: 'live',
+  checkoutRoot: '/projects/p',
+  line: { kind: 'branch', name: 'main' },
+  registrySettled: true,
+  projectDirty: false,
+  dirty: false,
+  minting: false,
+  headRevisionId: undefined,
+  follow: 'chat',
+  attention: 0,
+  restore: {
+    busy: false,
+    revisionNumber: undefined,
+    undoable: false,
+    canUndo: false,
+  },
+  remote: {
+    kind: 'none',
+    url: undefined,
+    phase: 'none',
+    storage: undefined,
+    overQuota: [],
+    error: undefined,
+    reason: undefined,
+    fetchOnly: false,
+    provider: undefined,
+    repositoryId: undefined,
+    quota: undefined,
+  },
+  branches: [{ name: 'main', head: undefined, checkoutId: 'live', checkoutRoot: '/projects/p', leaseChatIds: [] }],
+  branchVerb: { busy: false, operation: undefined, branch: undefined },
+  publish: { phase: 'idle', tags: [], publicationId: undefined, shareUrl: undefined, error: undefined },
+  sync: {
+    state: 'noRemote',
+    pendingCount: 0,
+    online: true,
+    conflictRef: undefined,
+    error: undefined,
+    reason: undefined,
+  },
+  conflicts: [],
+});
+
+const emptyComparison = (): RevisionFileComparison => ({
+  original: '',
+  modified: '',
+  kind: 'text',
+  change: 'unchanged',
+  notices: [],
+});
+
+/** What the scripted client answers, and what the surface under test sent it. */
+export const revisionStatusHarness = {
+  status: emptyStatus(),
+  /* The frame before the worker has answered at all, which a surface must
+   * render as nothing rather than as an empty project. */
+  connected: true,
+  rows: [] as readonly RevisionRow[],
+  rowsByBranch: new Map<string, readonly RevisionRow[]>(),
+  /** What a graph read answers (D2); every branch's rows on `main` when absent. */
+  graph: undefined as RevisionGraph | undefined,
+  diff: [] as readonly RevisionDiffEntry[],
+  /** Every revision a surface asked for a diff of, in order (C52). */
+  diffRequests: [] as string[],
+  comparisonRequests: [] as string[],
+  events: new Set<(event: WorkerRevisionEvent) => void>(),
+  /** Every branch a surface re-walked the graph for, in order (rule 20's log cost). */
+  logRequests: [] as string[],
+  /** Every revision a surface asked for on its own, by id (B4). */
+  rowRequests: [] as string[],
+  comparison: emptyComparison(),
+  comparisonError: undefined as Error | undefined,
+  comparisonRead: undefined as (() => Promise<RevisionFileComparison>) | undefined,
+  /** Answers a read of what changed since a revision (Compare with the current files), so a row can hold it pending. */
+  diffSinceRead: undefined as (() => Promise<readonly RevisionDiffEntry[]>) | undefined,
+  /** Answers a branch's log read in place of its rows, so a row can hold the read pending. */
+  logRead: undefined as (() => Promise<readonly RevisionRow[]>) | undefined,
+  /** D27: which role the account holds on this project, or none at all. */
+  role: undefined as ProjectAccessRole | undefined,
+  toasts: new Set<(toast: RevisionToast) => void>(),
+  commands: {
+    restore: vi.fn<(revisionId: string) => void>(),
+    undo: vi.fn(),
+    undoOperation: vi.fn(),
+    undoMerge: vi.fn(),
+    switchTo: vi.fn<(branch: string) => void>(),
+    /* Resolves like the real verb does (P4); a caller places a chat on it. */
+    createBranch: vi.fn<(name: string, from?: string) => Promise<BranchCreated>>(async (name) => ({
+      branch: name,
+      checkoutId: `checkout-${name}`,
+      checkoutRoot: `/checkouts/checkout-${name}`,
+    })),
+    discardBranch: vi.fn<(branch: string, checkoutId?: string) => void>(),
+    mergeBranch: vi.fn<(branch: string) => void>(),
+    renameBranch: vi.fn<(branch: string, name: string) => void>(),
+    resolveFile: vi.fn<(revisionId: string, path: string, side: 'mine' | 'theirs') => void>(),
+    openConflictInEditor: vi.fn<(revisionId: string, path: string) => void>(),
+    resolveFileInEditor: vi.fn<(revisionId: string, path: string, content: string) => void>(),
+    finishResolution: vi.fn<(revisionId: string) => void>(),
+    abandonResolution: vi.fn<(revisionId: string) => void>(),
+    askChatToResolve: vi.fn<(revisionId: string) => void>(),
+    followChat: vi.fn<(chatId: string) => void>(),
+    pinTo: vi.fn<(checkoutId: string) => void>(),
+    connectRemote: vi.fn<(kind: 'none' | 'tau' | 'git', url?: string) => void>(),
+    syncNow: vi.fn(),
+    saveRevision: vi.fn<(trigger?: 'save' | 'hidden' | 'close') => void>(),
+    tag: vi.fn(),
+    publishProject: vi.fn<(tag?: string, revisionId?: string) => void>(),
+    confirmPublish: vi.fn(),
+    cancelPublish: vi.fn(),
+    resetPublish: vi.fn(),
+    disconnectRemote: vi.fn(),
+    cancelRemote: vi.fn(),
+  },
+  reset(): void {
+    this.status = emptyStatus();
+    this.connected = true;
+    this.rows = [];
+    this.rowsByBranch.clear();
+    this.graph = undefined;
+    this.diff = [];
+    this.diffRequests.length = 0;
+    this.comparisonRequests.length = 0;
+    this.events.clear();
+    this.logRequests.length = 0;
+    this.rowRequests.length = 0;
+    this.comparison = emptyComparison();
+    this.comparisonError = undefined;
+    this.comparisonRead = undefined;
+    this.diffSinceRead = undefined;
+    this.logRead = undefined;
+    this.role = undefined;
+    this.toasts.clear();
+    for (const command of Object.values(this.commands)) {
+      command.mockClear();
+    }
+  },
+};
+
+/**
+ * Make *New branch* refuse, where a loose rejection is still observable.
+ *
+ * Not through `vi.fn`: the spy attaches its own settlement handler to every
+ * promise it records, so a rejection that went through one can never reach
+ * `process.on('unhandledRejection')` — which is the one thing a surface's
+ * `.catch` on this verb exists to prevent. The plain stand-in and the listener
+ * are both taken back when the case ends, since `reset()` clears spies only.
+ *
+ * @param name - The branch the surface is expected to ask for.
+ * @returns What it asked for, what went unhandled, and a flush to await.
+ */
+export const refuseCreateBranch = (
+  name: string,
+): Readonly<{ asked: string[]; unhandled: unknown[]; settled: () => Promise<void> }> => {
+  const asked: string[] = [];
+  const unhandled: unknown[] = [];
+  const note = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  const spy = revisionStatusHarness.commands.createBranch;
+  process.on('unhandledRejection', note);
+  revisionStatusHarness.commands.createBranch = (async (branch: string) => {
+    asked.push(branch);
+    throw Object.assign(new Error(`Branch ${name} already exists.`), { code: 'CHECKOUT_CONFLICT' });
+  }) as unknown as typeof spy;
+  onTestFinished(() => {
+    process.off('unhandledRejection', note);
+    revisionStatusHarness.commands.createBranch = spy;
+  });
+  return {
+    asked,
+    unhandled,
+    /* Node raises an unhandled rejection at the end of the tick that left one
+     * unhandled, so one macrotask after the click is when it is knowable. */
+    settled: async () =>
+      new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, 0);
+      }),
+  };
+};
+
+/** Every scripted history: the selected line's and each branch's. */
+const histories = (): ReadonlyArray<readonly RevisionRow[]> => [
+  revisionStatusHarness.rows,
+  ...revisionStatusHarness.rowsByBranch.values(),
+];
+
+/**
+ * The module factory `vi.mock('#hooks/use-revision-status.js', …)` returns.
+ *
+ * @returns The hook surface, backed by {@link revisionStatusHarness}.
+ */
+export const revisionStatusMock = (): Record<string, unknown> => {
+  /* One client object for the whole suite, because the product's
+   * `useRevisionClient` is memoized on the worker: a mock that minted a fresh
+   * object per render made every downstream `useMemo` miss, which is the very
+   * defect rule 20's log cost exists to catch. */
+  const client = {
+    status: () => revisionStatusHarness.status,
+    subscribe: () => () => undefined,
+    subscribeEvents: (listener: (event: WorkerRevisionEvent) => void) => {
+      revisionStatusHarness.events.add(listener);
+      return () => revisionStatusHarness.events.delete(listener);
+    },
+    subscribeToasts: (listener: (toast: RevisionToast) => void) => {
+      revisionStatusHarness.toasts.add(listener);
+      return () => revisionStatusHarness.toasts.delete(listener);
+    },
+    log: async (request?: RevisionLogRequest) => {
+      if (request?.from !== undefined) {
+        revisionStatusHarness.rowRequests.push(request.from);
+        const found = histories()
+          .flat()
+          .find((row) => row.revisionId === request.from);
+        return found === undefined ? [] : [found];
+      }
+      revisionStatusHarness.logRequests.push(request?.branch ?? '');
+      if (revisionStatusHarness.logRead !== undefined) {
+        return revisionStatusHarness.logRead();
+      }
+      const rows =
+        (request?.branch === undefined ? undefined : revisionStatusHarness.rowsByBranch.get(request.branch)) ??
+        revisionStatusHarness.rows;
+      return request?.limit === undefined ? rows : rows.slice(0, request.limit);
+    },
+    graph: async (request?: Readonly<{ limit?: number }>): Promise<RevisionGraph> => {
+      const graph = revisionStatusHarness.graph ?? {
+        branches: [],
+        rows: revisionStatusHarness.rows.map((row) => ({ ...row, line: 'main', branch: 'main' })),
+      };
+      return request?.limit === undefined ? graph : { ...graph, rows: graph.rows.slice(0, request.limit) };
+    },
+    /* Each scripted history is one line, newest first: a revision's history is its list from it down. */
+    divergence: async (head: string, base: string) => {
+      const below = (id: string): ReadonlySet<string> => {
+        const line = histories().find((rows) => rows.some((row) => row.revisionId === id)) ?? [];
+        return new Set(line.slice(line.findIndex((row) => row.revisionId === id)).map((row) => row.revisionId));
+      };
+      const [ahead, behind] = [below(head), below(base)];
+      return {
+        ahead: [...ahead].filter((id) => !behind.has(id)).length,
+        behind: [...behind].filter((id) => !ahead.has(id)).length,
+      };
+    },
+    diff: async (revisionId: string, from?: string, options?: { against?: 'checkout' }) => {
+      revisionStatusHarness.diffRequests.push(
+        options?.against === 'checkout'
+          ? `${revisionId}..checkout`
+          : from === undefined
+            ? revisionId
+            : `${from}..${revisionId}`,
+      );
+      if (options?.against === 'checkout' && revisionStatusHarness.diffSinceRead !== undefined) {
+        return revisionStatusHarness.diffSinceRead();
+      }
+      return revisionStatusHarness.diff;
+    },
+    compare: async (revisionId: string, path: string, options?: { against?: 'checkout' }) => {
+      revisionStatusHarness.comparisonRequests.push(`${revisionId}:${path}:${options?.against ?? 'parent'}`);
+      if (revisionStatusHarness.comparisonError !== undefined) {
+        throw revisionStatusHarness.comparisonError;
+      }
+      return revisionStatusHarness.comparisonRead === undefined
+        ? revisionStatusHarness.comparison
+        : revisionStatusHarness.comparisonRead();
+    },
+    send: () => undefined,
+    saveRevision: async () => undefined,
+    open: () => undefined,
+    close: () => undefined,
+  };
+  return {
+    useRevisionStatus: () => (revisionStatusHarness.connected ? revisionStatusHarness.status : undefined),
+    useRevisionCommands: () => revisionStatusHarness.commands,
+    useRevisionClient: () => client,
+    /* D27's role, from the harness rather than from `GET /v1/projects`: a pane
+       row that asserts revision UI must not depend on a network answer. */
+    useProjectRole: () => revisionStatusHarness.role,
+  };
+};

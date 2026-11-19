@@ -1,0 +1,32 @@
+/* oxlint-disable new-cap -- NestJS decorators are factories */
+import { Controller, Get, NotFoundException, Param, Query, UseGuards } from '@nestjs/common';
+import { AuthGuard, UseAuth, User } from '@taucad/api-auth';
+import { ReadDurableEventsDto } from '#api/durable-events/durable-events.dto.js';
+import { DurableEventsService } from '#api/durable-events/durable-events.service.js';
+import type { DurableStreamReadOutcome } from '#api/durable-events/durable-events.types.js';
+
+@Controller({ path: 'streams', version: '1' })
+@UseGuards(AuthGuard)
+export class DurableEventsController {
+  public constructor(private readonly durableEvents: DurableEventsService) {}
+
+  @Get(':streamId/events')
+  @UseAuth()
+  public async readEvents(
+    @Param('streamId') streamId: string,
+    @Query() query: ReadDurableEventsDto,
+    @User('id') userId: string,
+  ): Promise<Exclude<DurableStreamReadOutcome, { readonly found: false }>> {
+    const outcome = await this.durableEvents.waitForCallerEvents({
+      streamId,
+      userId,
+      afterSequence: query.afterSequence,
+      limit: query.limit,
+      longPollDuration: query.longPollDuration,
+    });
+    if (!outcome.found) {
+      throw new NotFoundException('Durable stream not found.');
+    }
+    return outcome;
+  }
+}

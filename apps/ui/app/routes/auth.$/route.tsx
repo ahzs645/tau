@@ -1,52 +1,226 @@
-import { lazy } from 'react';
-import { Link, useParams } from 'react-router';
+import { Heading } from '@taucad/ui/components/heading';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import type { MetaFunction } from 'react-router';
+import { useSession } from '@better-auth-ui/react';
 import { Auth } from '#components/auth/auth.js';
 import { AuthEmailDraftProvider } from '#components/auth/auth-email-draft.js';
-import { VerifyEmail } from '#components/auth/verify-email.js';
-import { TauWordmark } from '#components/icons/tau-wordmark.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
+import { AuthShowcase } from '#components/auth/auth-showcase.js';
+import { MagicLinkVerify } from '#components/auth/magic-link-verify.js';
+import { sanitizeVerifyEmailRedirectTo, VerifyEmail } from '#components/auth/verify-email.js';
+import { TauWordmark } from '@taucad/ui-kit/icons/tau-wordmark';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@taucad/ui/components/tooltip';
 import type { Handle } from '#types/matches.types.js';
-import { ClientOnly } from '#components/ui/utils/client-only.js';
-
-const AuthSplashbackLazy = lazy(async () => {
-  const m = await import('#routes/auth.$/splashback/auth-splashback.js');
-  return { default: m.AuthSplashback };
-});
+import { setEntryPreference } from '@taucad/ui-core/lib/entry-preference';
+import { authClient } from '#lib/auth-client.js';
+import { isDesktopTarget } from '#lib/build-target.js';
+import type { ShellAuthHandoff } from '#providers/auth-provider.js';
+import { authLocalization, callDesktopShell, useShellAuthHandoff } from '#providers/auth-provider.js';
+import { Button } from '@taucad/ui/components/button';
+import { cn } from '@taucad/ui/utils/cn';
 
 export const handle: Handle = {
   enablePageWrapper: false,
 };
 
+/** Each auth page's name, for its document title and the session check's heading. */
+const authPageTitles: Readonly<Record<string, string>> = {
+  'sign-in': authLocalization.auth.signIn,
+  'sign-up': authLocalization.auth.signUp,
+  'magic-link': authLocalization.auth.signIn,
+  'magic-link/verify': 'Magic link',
+  'forgot-password': authLocalization.auth.forgotPassword,
+  'reset-password': authLocalization.auth.resetPassword,
+  'verify-email': authLocalization.auth.verifyEmail,
+  'sign-out': authLocalization.auth.signOut,
+};
+
+const authPageTitle = (segment: string | undefined): string => authPageTitles[segment ?? ''] ?? 'Account';
+
+export const meta: MetaFunction = ({ params }) => [{ title: `${authPageTitle(params['*'])} · Tau` }];
+
+/**
+ * What the desktop window shows once the shell owns the flow.
+ *
+ * Signing out is immediate and needs no browser, so only the sign-in family
+ * gets the handoff copy and its retry. A missing bridge never falls back to the
+ * embedded web form.
+ *
+ * @param handoff - The shell-owned destination and whether its bridge exists.
+ * @returns The handoff panel.
+ */
+function ShellHandoff({ handoff }: { readonly handoff: ShellAuthHandoff }): React.JSX.Element | undefined {
+  if (!handoff.isBridgeAvailable) {
+    return (
+      <div className='w-full max-w-md text-center'>
+        <Heading level={1} variant='title'>
+          Sign-in is unavailable
+        </Heading>
+        <p className='mt-2 text-sm text-muted-foreground'>
+          Tau could not reach the desktop app&apos;s sign-in service. Restart Tau and try again.
+        </p>
+      </div>
+    );
+  }
+
+  if (handoff.action === 'signOut') {
+    return undefined;
+  }
+
+  return (
+    <div className='w-full max-w-md text-center'>
+      <Heading level={1} variant='title'>
+        Continue in your browser
+      </Heading>
+      <p className='mt-2 text-sm text-muted-foreground'>
+        Tau signs you in through your browser, then hands the session back to this window.
+      </p>
+      <Button
+        className='mt-6'
+        variant='outline'
+        onClick={() => {
+          const bridge = globalThis.window.tauAuth;
+          if (bridge) {
+            void callDesktopShell(bridge.signIn);
+          }
+        }}
+      >
+        Open my browser again
+      </Button>
+    </div>
+  );
+}
+
 export default function AuthPage(): React.JSX.Element {
+  const desktopTarget = isDesktopTarget();
   const { '*': segment } = useParams();
+  const shellHandoff = useShellAuthHandoff(`/auth/${segment ?? ''}`);
+  /* A session on a sign-in page continues to `redirectTo`: in the desktop window
+     main only announces that the session changed, and a browser that is already
+     signed in (e.g. `/auth/desktop` bouncing here) must not ask again. */
+  const { data: session, isSuccess, isFetching, isError, refetch } = useSession(authClient);
+  const [hasWaitExpired, setHasWaitExpired] = useState(false);
+  const [shouldShowForm, setShouldShowForm] = useState(false);
+  const [searchParameters] = useSearchParams();
+  const navigate = useNavigate();
+  const requestedDestination = sanitizeVerifyEmailRedirectTo(searchParameters.get('redirectTo') ?? undefined);
+  const destinationPath = requestedDestination.split(/[?#]/u)[0]?.replace(/\/+$/u, '');
+  const redirectTo =
+    destinationPath === '/auth/sign-in' || destinationPath === '/auth/sign-up' ? '/' : requestedDestination;
+  const isSignInPage =
+    shellHandoff === undefined ? segment === 'sign-in' || segment === 'sign-up' : shellHandoff.action === 'signIn';
+  const isSignedIn = isSignInPage && Boolean(session);
+  useEffect(() => {
+    // Preserve explicit app intent before OAuth leaves this origin or a magic
+    // link finishes. An older website choice must not intercept its callback.
+    if (!desktopTarget && (isSignInPage || segment === 'magic-link/verify' || segment === 'verify-email')) {
+      setEntryPreference('app');
+    }
+  }, [desktopTarget, isSignInPage, segment]);
+  useEffect(() => {
+    if (isSignedIn) {
+      if (!desktopTarget) {
+        setEntryPreference('app');
+      }
+      void navigate(redirectTo, { replace: true });
+    }
+  }, [desktopTarget, isSignedIn, navigate, redirectTo]);
+  useEffect(() => {
+    if (isSuccess && !isFetching && !session) {
+      setShouldShowForm(true);
+    }
+  }, [isSuccess, isFetching, session]);
+  useEffect(() => {
+    if (!isSignInPage || shouldShowForm || hasWaitExpired || shellHandoff !== undefined) {
+      return;
+    }
+    // Milliseconds. Give a stalled session request a visible recovery path.
+    const sessionTimer = setTimeout(() => {
+      setHasWaitExpired(true);
+    }, 5000);
+    return () => {
+      clearTimeout(sessionTimer);
+    };
+  }, [hasWaitExpired, isSignInPage, shouldShowForm, shellHandoff]);
+  const shouldContinue = isSignInPage && (isSignedIn || !shouldShowForm);
+  if (shellHandoff === undefined && shouldContinue) {
+    return (
+      <main className='flex min-h-svh flex-col items-center justify-center gap-6 bg-background p-6 text-foreground'>
+        <TauWordmark className='h-7 text-primary' />
+        {/* The form's own title is the heading once it shows; until then the page still names itself. */}
+        <h1 className='sr-only'>{authPageTitle(segment)}</h1>
+        <div className='w-full max-w-md text-center'>
+          {!isSignedIn && (isError || hasWaitExpired) ? (
+            <>
+              <p role='alert'>Couldn&apos;t check that you&apos;re signed in.</p>
+              <div className='mt-4 flex justify-center gap-2'>
+                <Button
+                  variant='outline'
+                  onClick={() => {
+                    setHasWaitExpired(false);
+                    void refetch();
+                  }}
+                >
+                  Retry
+                </Button>
+                <Button
+                  onClick={() => {
+                    setShouldShowForm(true);
+                  }}
+                >
+                  Continue to sign in
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p role='status' aria-label='Opening Tau' aria-busy='true' className='text-sm text-muted-foreground'>
+              Opening Tau…
+            </p>
+          )}
+        </div>
+      </main>
+    );
+  }
   return (
     <AuthEmailDraftProvider>
-      <div className='grid min-h-svh lg:grid-cols-2'>
-        <div className='flex flex-col gap-4 p-6 md:p-10'>
-          <div className='flex justify-center gap-2 md:justify-start'>
+      {/* The form is the page's main content; the sign-in check above is a `<main>` too. */}
+      <main className='grid min-h-svh lg:grid-cols-2'>
+        <div className={cn('flex flex-col gap-4 p-6 md:p-10', desktopTarget && 'gap-0 p-0 md:p-0')}>
+          <div
+            className={cn(
+              'flex justify-center gap-2 md:justify-start',
+              // Shell-less window: this row overlaps the desktop drag band.
+              desktopTarget &&
+                'h-9 shrink-0 items-center justify-start pl-(--desktop-titlebar-inset) md:justify-start [&_a]:[app-region:no-drag]',
+            )}
+          >
             <Tooltip>
               <TooltipTrigger asChild className='flex items-center gap-2 font-medium'>
-                <Link to='/'>
-                  <TauWordmark className='h-7 text-primary' />
+                <Link to='/' aria-label='Go home' className={cn(desktopTarget && 'h-7')}>
+                  <TauWordmark className={cn('h-7 text-primary', desktopTarget && 'h-5')} />
                 </Link>
               </TooltipTrigger>
               <TooltipContent side='right'>Go home</TooltipContent>
             </Tooltip>
           </div>
-          <div className='flex flex-1 items-center justify-center'>
-            {segment === 'verify-email' ? (
-              <VerifyEmail className='w-full max-w-md' />
+          <div className={cn('flex flex-1 items-center justify-center', desktopTarget && 'p-6 md:p-10')}>
+            {shellHandoff === undefined ? (
+              segment === 'verify-email' ? (
+                <VerifyEmail className='w-full max-w-md' />
+              ) : segment === 'magic-link/verify' ? (
+                <MagicLinkVerify className='w-full max-w-md' />
+              ) : (
+                <Auth path={segment} className='w-full max-w-md' />
+              )
             ) : (
-              <Auth path={segment} className='w-full max-w-md' />
+              <ShellHandoff handoff={shellHandoff} />
             )}
           </div>
         </div>
-        <div className='relative hidden lg:block'>
-          <ClientOnly>
-            <AuthSplashbackLazy />
-          </ClientOnly>
+        <div className='hidden lg:block'>
+          <AuthShowcase />
         </div>
-      </div>
+      </main>
     </AuthEmailDraftProvider>
   );
 }

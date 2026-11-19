@@ -1,0 +1,19 @@
+{
+  "title": "OpenSCAD bracket",
+  "entry": "main.scad",
+  "kernel": "OpenSCAD",
+  "language": "scad",
+  "description": "Boolean plate with posts and through holes.",
+  "exportFormats": [
+    "glb"
+  ],
+  "initialParameters": {
+    "plate": [
+      70,
+      38,
+      6
+    ],
+    "post_radius": 8,
+    "hole_radius": 3.2
+  }
+}

@@ -1,0 +1,8293 @@
+/**
+ * The effects behind the revision machines: one actor set per project.
+ *
+ * The machines own the lifecycle and nothing else; everything that touches a
+ * filesystem, a revision store or the clock is here, injected through each
+ * machine's own `provide({ actors })`. It is host-neutral — a page, a daemon and
+ * the Electron utility pass their own `RevisionPort` and their own way of
+ * opening a checkout's tree, and get the same behaviour.
+ *
+ * The fence here is in-process only: it serialises this host's own mints of one
+ * checkout. Across processes the fence is the expected-old ref update inside
+ * `casHead` — which orders *ref advancement*, not the file writes `applyTree`
+ * performs while merging. W9 decides whether a disk host needs more than that.
+ *
+ * This module replaces `TurnRevisionRecorder`: prepare, capture, merge and
+ * finalize are the same four steps, minus the lifecycle state the class also
+ * held (which is now the machines') and minus branch-per-chat placement, which
+ * is gone (D7/I18: a turn attaches to a checkout, it never creates one).
+ *
+ * **A lease record is the index of unsettled attempts.** `.tau/runs/<runId>.json`
+ * names one attempt; it retires only on `acknowledge`, after the host appended
+ * the attempt's settlement row. A host that died mid-turn leaves the record,
+ * and the next leader of its chat reconciles it: a root adopts it into a new
+ * turn actor (RM-R14), never an epoch sweep (W8 TS-S7, TS-R13).
+ */
+
+import { parseProjectManifestBytes } from '@taucad/project-core';
+import { mapConcurrent, ResourceQueue, timestampGranularityMilliseconds, workerTimings } from '@taucad/filesystem';
+import type { FileStatEntry, IndexChanges, WorkerTimingSpan } from '@taucad/filesystem';
+import { randomUuid } from '@taucad/utils/id';
+import {
+  captureRevisionTree,
+  createCaptureMemo,
+  ImmutableRevisionTree,
+  mergeFilePreferring,
+  mergeRevisionTrees,
+  revisionId,
+} from '#algorithms/index.js';
+import type { CaptureMemo, RevisionId, RevisionTreeInput } from '#algorithms/index.js';
+import {
+  createApplyTreeEffects,
+  isDeferredRevisionTree,
+  readDeferredRevisionTree,
+  sweepTemporarySiblings as sweepApplyLitter,
+} from '#apply-tree.js';
+import type { DeferredRevisionTree, MaterializeTarget } from '#apply-tree.js';
+import { createLargeObjectFill, declaredPlaceholders, largeObjectPlaceholders } from '#large-object-fill.js';
+import type { AttributesReading } from '#workspace-config.js';
+import { readEntryClosure } from '#open/entry-closure.js';
+import type { EntryClosure } from '#open/entry-closure.js';
+import { createContentReads } from '#open/content-reads.js';
+import { createLargeObjectAdoption } from '#large-object-adoption.js';
+import type { LargeObjectAdoption } from '#large-object-adoption.js';
+import type { ContentReadOptions, PlaceholderRequest, ReadOutcome } from '#open/content-reads.js';
+import {
+  prepareProjectManifest,
+  validateLegacyProjectIdentity,
+  verifyPreparedProjectManifest,
+} from '#project-manifest-conversion.js';
+import { caseCollisions } from '#case-collisions.js';
+import { checkoutIdOfBranch } from '#checkout-id.js';
+import { createChatEffects, storageRefusalOf } from '#chat-effects.js';
+import { revisionTreeId } from '#git-tree-id.js';
+import { createHandles } from '#handle-table.js';
+import { createTreeIdMemo, hasBlobOid, recordBlobOid } from '#tree-id-memo.js';
+import type { TreeIdMemo } from '#tree-id-memo.js';
+import {
+  conflictLabels,
+  conflictLineOf,
+  isReservedBranchName,
+  materializeConflict,
+  parseConflictLine,
+  readConflictTerms,
+} from '#revision-conflict.js';
+import type { ConflictPerspective, RevisionConflictTerms } from '#revision-conflict.js';
+import { integrationOf, mergeBaseHeads, mergeBaseOf } from '#revision-log-order.js';
+import { resolutionMachine } from '#resolution.machine.js';
+import type {
+  ResolutionActors,
+  ResolutionApplyActorInput,
+  ResolutionFinishActorOutput,
+  ResolutionLoadActorInput,
+  ResolutionLoadActorOutput,
+  ResolutionMaterializeActorOutput,
+  ResolutionSeedTurnActorOutput,
+} from '#resolution.machine.js';
+import type { ResolutionSide } from '#resolution.types.js';
+import { createActor, createAsyncLogic, createCallbackLogic } from 'xstate';
+import type { ActorOptions, AnyActorLogic, AnyEventObject, AsyncActorLogic, AsyncLogicFunction } from 'xstate';
+
+import { checkoutMachine } from '#checkout.machine.js';
+import type {
+  CheckoutActors,
+  CheckoutCaptureTreeActorInput,
+  CheckoutCaptureTreeActorOutput,
+  CheckoutCasHeadActorInput,
+  CheckoutCasHeadActorOutput,
+  CheckoutCutActorInput,
+  CheckoutCutActorOutput,
+  CheckoutCutTrigger,
+  CheckoutFenceActorInput,
+  CheckoutHead,
+  CheckoutWriteRevisionActorInput,
+} from '#checkout.machine.js';
+import { checkoutsMachine } from '#checkouts.machine.js';
+import { branchMachine } from '#branch.machine.js';
+import type {
+  BranchActors,
+  BranchApplySwitchActorOutput,
+  BranchCheckActorInput,
+  BranchCheckActorOutput,
+  BranchFailureCode,
+  BranchMergeActorOutput,
+  BranchRenameActorOutput,
+} from '#branch.machine.js';
+import type { AddCheckoutActorOutput, CheckoutsActors, ListCheckoutsActorOutput } from '#checkouts.machine.js';
+import { chatProjectionConcurrency, settleBounded } from '#chat-projection-pool.js';
+import { chatIdOfRef, chatRefName, chatRefPrefix, projectChats } from '#chat-ref.js';
+import { LfsQuotaError } from '#lfs-client.js';
+import {
+  cleanLargeObjects,
+  largeObjectBasisOf,
+  mayBeLfsPointerSize,
+  readLfsPointer,
+  withOwedAttributes,
+} from '#lfs.js';
+import type { LargeObjectBasis } from '#lfs.js';
+import { digestHex } from '#object-hash.js';
+import type { ObjectFormat } from '#object-hash.js';
+import { projectRevisionsMachine, selectRevisionStatus } from '#project-revisions.machine.js';
+import { publishMachine } from '#publish.machine.js';
+import type {
+  PublishActors,
+  PublishPushActorInput,
+  PublishPushActorOutput,
+  PublishTagActorInput,
+  PublishVersionsActorOutput,
+} from '#publish.machine.js';
+import type { PublishPublicationActorInput, PublishPublicationActorOutput } from '#publish.types.js';
+import { remoteMachine } from '#remote.machine.js';
+import type {
+  RemoteActors,
+  RemoteAuthorizeActorInput,
+  RemoteInitialSyncActorInput,
+  RemoteInitialSyncActorOutput,
+  RemoteReadActorOutput,
+  RemoteReadStorageActorInput,
+  RemoteValidateActorInput,
+  RemoteValidateActorOutput,
+  RemoteWriteActorInput,
+  RemoteWriteActorOutput,
+} from '#remote.machine.js';
+import type { RemoteStorage } from '#remote.types.js';
+import { isHostLocalRef, remoteKindOf, remoteOf, remoteTrackingRef, tauRemoteName } from '#remotes.js';
+import type { RevisionStreamMove } from '#revision-stream.js';
+import { controlPlaneFiles, jsonRecord, readControlRecord, writeControlRecord } from '#control-plane-records.js';
+import { createSyncQueue } from '#sync-queue.js';
+import { createOpsLog, opsRefName, opsRefPrefix, undoCandidates } from '#ops-ref.js';
+import { restoreMachine } from '#restore.machine.js';
+import { readRevisionLog } from '#revision-verbs.js';
+import type { RevisionRow } from '#revision-verbs.js';
+import { isVersionNumberRefusal } from '#refusal-markers.js';
+import { isNumberedTagNotVersion, renumberUnpushedVersions, versionNumberOfTag } from '#version-numbers.js';
+import { syncMachine } from '#sync.machine.js';
+import {
+  generatedGitattributesContent,
+  generatedGitattributesPath,
+  generatedIgnoreContent,
+  generatedIgnorePath,
+  isAttributesPath,
+  largeObjectThresholdBytes,
+  tauRevisionPolicy,
+} from '#workspace-config.js';
+import type {
+  SyncActors,
+  SyncHold,
+  SyncFastForwardActorOutput,
+  SyncFetchActorInput,
+  SyncFetchActorOutput,
+  SyncProjectRecordsActorInput,
+  SyncProjectRecordsActorOutput,
+  SyncIntegrateActorInput,
+  SyncMergeActorOutput,
+  SyncMovedCheckout,
+  SyncPushActorInput,
+  SyncPushActorOutput,
+  SyncReadPendingActorInput,
+  SyncReadRemoteActorOutput,
+  SyncRemoteMovesActorInput,
+  SyncWritePendingActorInput,
+} from '#sync.machine.js';
+import type { SyncFacet, SyncQueueEntry, SyncQueueRecord, SyncRefOutcome, VersionRenumbering } from '#sync.types.js';
+import type {
+  RestoreActors,
+  RestoreApplyPlanActorOutput,
+  RestoreComputePlanActorInput,
+  RestoreComputePlanActorOutput,
+  RestoreFailureCode,
+} from '#restore.machine.js';
+import type { RevisionIdentity, RevisionProvenance } from '#revision-authority.js';
+import { RevisionPortError, versionTagRef } from '#revision-port.js';
+import { parseStartRecord, startRecordPath, startSummary, startTrigger } from '#start-version.js';
+import type {
+  Checkout,
+  CheckoutRecord,
+  ConflictRecord,
+  RevisionPortErrorCode,
+  Remote,
+  RemoteRef,
+  RemoteStorageRefusal,
+  RevisionEngineDescriptor,
+  RevisionGitOperation,
+  RevisionHead,
+  RevisionLogEntry,
+  RevisionPort,
+  RevisionPushResult,
+  RevisionPushSession,
+  RevisionRemoteAddress,
+  RevisionReceipt,
+  RevisionRecord,
+  RevisionRef,
+  RevisionTag,
+  UpdateRevisionRefInput,
+  UpdateRevisionRefResult,
+  WriteRevisionInput,
+} from '#revision-port.js';
+import { turnMachine } from '#turn.machine.js';
+import type {
+  TurnActors,
+  TurnCaptureActorInput,
+  TurnFindActorInput,
+  TurnFindActorOutput,
+  TurnLeaseActorInput,
+  TurnMergeActorOutput,
+  TurnPrepareActorInput,
+  TurnFailureCode,
+  TurnOutcome,
+  TurnPrepareActorOutput,
+  TurnRetireLeaseActorInput,
+  TurnSettlement,
+  TurnWriteLeaseActorInput,
+  TurnWriteLeaseActorOutput,
+} from '#turn.machine.js';
+import type { TurnAttemptKey, TurnCutOf, TurnLease as TurnLeaseRecord } from '#turn.types.js';
+
+import type { RevisionActorsOptions, RevisionFileSystem, UseCheckoutFileSystem } from '#revision-effects.types.js';
+import { coveredByIgnoreListing } from '#git-ignore.js';
+import { revisionTreeFiles } from '#algorithms/revision-tree.js';
+import { parseTemporarySibling } from '#revision-temporary-sibling.js';
+import {
+  compareRecordMaximumFiles,
+  compareRecordOf,
+  compareRecordPath,
+  compareRulesText,
+  parseCompareRecord,
+  recordAnswers,
+  serializeCompareRecord,
+} from '#compare-record.js';
+import type { CompareObservation, CompareReading, CompareRecord } from '#compare-record.js';
+
+/** The head a listing was read under: the paths it tracks are never ignored. */
+type TrackedHead = Readonly<{ revisionId: string; tree: ImmutableRevisionTree }>;
+
+/** One checkout's own Git ignore rules, as its port answers them. */
+type CaptureIgnores = Readonly<{
+  /** What the rules read besides `.gitignore` files; `undefined` where the port cannot say, so every capture lists them whole. */
+  context: string | undefined;
+  /** The ignored paths, all of them or only those covering `paths`. */
+  list: (paths?: readonly string[]) => Promise<readonly string[] | undefined>;
+  /** The checkout's head now, whose tracked paths the answers depend on. */
+  head: () => Promise<TrackedHead | undefined>;
+}>;
+
+/* oxlint-disable no-barrel-files/no-barrel-files -- Preserve the published revision-effects contract names. */
+export type {
+  ApplyingTreeBracket,
+  ApplyingTreePurpose,
+  CheckoutFileSystems,
+  RevisionActorsOptions,
+  RevisionFileSystem,
+  TurnPlacement,
+  UseCheckoutFileSystem,
+} from '#revision-effects.types.js';
+/* oxlint-enable no-barrel-files/no-barrel-files */
+
+/**
+ * One attempt's lease record, as `.tau/runs/<runId>.json` holds it. Defined beside
+ * the turn machine (RM-S14); named here too, so this subpath keeps its name.
+ *
+ * @public
+ */
+export type TurnLease = TurnLeaseRecord;
+
+/**
+ * The host-attested settlement of one turn (A4, D9, S9).
+ *
+ * **One schema on every host.** `turn.machine` emits the settlement on the
+ * browser, the daemon, the Electron utility and the cloud alike, and
+ * {@link describeTurnSettlement} fills in the two graph facts the machine does
+ * not carry — so a revision card is projected from one shape wherever the turn
+ * ran, rather than from a per-host record the client has to learn.
+ *
+ * @public
+ */
+export type TurnFinalizedEvent = Readonly<{
+  type: 'turn.finalized';
+  /** The client's own stable user-message id for the turn. */
+  turnId: string;
+  runId: string;
+  chatId: string;
+  projectId: string;
+  checkoutId: string | undefined;
+  /** Absent when the turn changed nothing, so nothing was minted (I5). */
+  revisionId?: string;
+  /** The branch the checkout tracks, absent when it is detached. */
+  branch?: string;
+  changedPaths: readonly string[];
+  /** Object id of the recorded **tree**, not of the revision that carries it. */
+  treeId?: string;
+  trigger: 'turn';
+  /** Every lease on the checkout when the turn was placed (AC9). */
+  runIds: readonly string[];
+}>;
+
+/** A turn whose writes could not be merged into the checkout it ran on. @public */
+export type TurnConflictedEvent = Readonly<{
+  type: 'turn.conflicted';
+  turnId: string;
+  runId: string;
+  chatId: string;
+  checkoutId: string | undefined;
+}>;
+
+/** A turn that ran and ended without a revision: no outcome is silent. @public */
+export type TurnFailedEvent = Readonly<{
+  type: 'turn.failed';
+  turnId: string;
+  runId: string;
+  chatId: string;
+  checkoutId: string | undefined;
+  /** The diagnostic a console reads. Never shown to a person (Rule 1, E5). */
+  reason: string;
+  /**
+   * What the failure was, for the page that phrases it (P4): a
+   * `TurnFailureCode`, or `TURN_RELEASED` for a turn let go before it recorded
+   * anything. A string because it crosses the worker boundary and the durable
+   * log, both of which carry codes as text.
+   */
+  code?: string;
+}>;
+
+/**
+ * Writes the version a publish names. A new version takes the name given; a version published as it is keeps the
+ * name the store holds now, read here rather than when the dialog opened, so a rename since is never undone, and is
+ * not written again unless a note changes it.
+ *
+ * @param port - The store the version is in.
+ * @param input - What `publish.machine`'s `tagging` asks for.
+ * @param actor - Who writes it.
+ * @returns The version as written.
+ * @throws Error When the version named by number is no longer in the store, in words the person can act on.
+ * @public
+ */
+export const writePublishTag = async (
+  port: Pick<RevisionPort, 'listTags' | 'tag'>,
+  input: PublishTagActorInput,
+  actor: RevisionTag['actor'],
+): Promise<RevisionTag> => {
+  const note = input.note === undefined ? {} : { note: input.note };
+  if (input.name !== undefined || input.number === undefined) {
+    return port.tag({
+      name: input.name ?? '',
+      revisionId: revisionId(input.revisionId),
+      ...note,
+      ...(input.number === undefined ? {} : { number: input.number }),
+      actor,
+    });
+  }
+  const tags = await port.listTags();
+  const stored = tags.find((tag) => tag.number === input.number);
+  if (stored === undefined) {
+    throw new Error(`V${String(input.number)} is no longer on this device. Publish again to pick a version.`);
+  }
+  if (input.note === undefined && stored.revisionId === input.revisionId) {
+    return stored;
+  }
+  return port.tag({
+    name: stored.name,
+    revisionId: revisionId(input.revisionId),
+    ...note,
+    number: stored.number,
+    actor,
+  });
+};
+
+/**
+ * Fill in the two facts a settlement does not carry, and shape it for the wire.
+ *
+ * `changedPaths` and `treeId` are graph questions, so they are asked of the
+ * store rather than carried through a machine: the diff is tree-free and the
+ * tree id is a header on the commit. The diff runs against the revision's own
+ * first parent, which the store knows — a turn's base can move between
+ * placement and settlement (a dirty checkout is minted into a base revision
+ * *after* the turn is placed), so a host-side copy of it would diff against
+ * the wrong tree.
+ *
+ * @param port - The store the revision was recorded in.
+ * @param projectId - The project the turn ran in.
+ * @param settlement - What `turn.machine` emitted.
+ * @returns The event every host publishes for this turn.
+ * @public
+ */
+export const describeTurnSettlement = async (
+  port: RevisionPort,
+  projectId: string,
+  settlement: TurnSettlement,
+): Promise<TurnFinalizedEvent> => {
+  const record =
+    settlement.revisionId === undefined ? undefined : await port.readRevision(revisionId(settlement.revisionId));
+  const changes = record === undefined ? [] : await port.diff({ from: record.parents[0], to: record.id });
+  /* R7: the settling checkout's own branch. HEAD is the *live* checkout's, and
+   * a turn on a linked checkout would be labelled with the wrong one. */
+  const head = settlement.branch === undefined ? await port.readHead() : undefined;
+  const branch = settlement.branch ?? head?.branch;
+  return Object.freeze<TurnFinalizedEvent>({
+    type: 'turn.finalized',
+    turnId: settlement.turnId,
+    runId: settlement.runId,
+    chatId: settlement.chatId,
+    projectId,
+    checkoutId: settlement.checkoutId,
+    ...(settlement.revisionId === undefined ? {} : { revisionId: settlement.revisionId }),
+    ...(branch === undefined ? {} : { branch }),
+    /* Sorted here, at the one producer: the log compares a repeated settlement
+     * by value, arrays in order, so two views must spell one fact one way. */
+    changedPaths: changes.map(({ path }) => path).toSorted(),
+    ...(record?.treeId === undefined ? {} : { treeId: record.treeId }),
+    trigger: 'turn',
+    runIds: settlement.runIds.toSorted(),
+  });
+};
+
+/** The started root of one project's revision actor tree. @public */
+export type ProjectRevisionsActor = ReturnType<typeof createActor<ReturnType<typeof projectRevisionsMachine.provide>>>;
+
+/**
+ * Shape a turn that ran and recorded nothing for the wire.
+ *
+ * The root emits `turnReleased` for every turn that ends `failed` or
+ * `released`, so a host subscribes to it exactly as it does to the two
+ * settlements. This replaces `watchFailedTurns`, which polled each turn actor
+ * because the emit did not exist (W5 report §9).
+ *
+ * @param event - The root's `turnReleased` fact.
+ * @returns The event a host publishes, or `undefined` for an outcome that
+ *   settles through `turnFinalized` / `turnConflicted` instead.
+ * @public
+ */
+export const describeTurnRelease = (
+  event: Readonly<{
+    turnId: string;
+    chatId: string;
+    runId: string;
+    checkoutId: string | undefined;
+    outcome: TurnOutcome;
+    reason?: string;
+    code?: TurnFailureCode;
+  }>,
+): TurnFailedEvent | undefined =>
+  event.outcome === 'finalized' || event.outcome === 'conflicted'
+    ? undefined
+    : Object.freeze<TurnFailedEvent>({
+        type: 'turn.failed',
+        turnId: event.turnId,
+        runId: event.runId,
+        chatId: event.chatId,
+        checkoutId: event.checkoutId,
+        reason: event.reason ?? 'The turn ended before it recorded a revision.',
+        /* Absent rather than `undefined`: this object is compared by value in
+         * the log and validated by the worker's command frame. A release is a
+         * category of its own, not an unclassified failure. */
+        ...(event.code === undefined
+          ? event.outcome === 'released'
+            ? { code: 'TURN_RELEASED' }
+            : {}
+          : { code: event.code }),
+      });
+
+/** The actor sets `projectRevisionsMachine.provide` needs. @public */
+export type RevisionActors = Readonly<{
+  checkout: CheckoutActors;
+  turn: TurnActors;
+  restore: RestoreActors;
+  checkouts: CheckoutsActors;
+  remote: RemoteActors;
+  /** The branch verbs' own effects (W7 minus `merge`, which W10 completed). */
+  branch: BranchActors;
+  /** Per-file conflict resolution, one spawned child per conflicted revision (W10). */
+  resolution: ResolutionActors;
+  /** Naming, pushing and recording one publication (W8). */
+  publish: PublishActors;
+  /**
+   * Continuous sync: the queue's two record effects, the two transport effects
+   * and the apply (W13).
+   *
+   * Both divergence paths use the same three-way merge and conflict record.
+   */
+  sync: SyncActors;
+  /**
+   * Resolves once nothing this module started is still writing to the project.
+   *
+   * Stopping the actor tree cancels no promise: the store's own creation
+   * outlives it, so a host that closes and then removes the project directory
+   * has to wait for this first.
+   */
+  settled: () => Promise<void>;
+  /** The store reads the turn-placement adapter makes beside the root (W8 TS-S3). */
+  turns: TurnStore;
+  /** Free this root's liveness mark (RM-R8 narrowed); {@link createProjectRevisionsActor} calls it when the root stops. */
+  release: () => void /** Record an editor's overlapping edit as a conflicted revision (D14); see {@link EditorConflictInput}. */;
+  recordEditorConflict: (input: EditorConflictInput) => Promise<EditorConflictOutcome>;
+  /** Read one conflicted revision's files as text; see {@link RevisionConflictRead}. */
+  readConflict: (revision: string) => Promise<RevisionConflictRead>;
+  /**
+   * Read one checkout file with its large-object placeholder resolved to the
+   * object when it is on this device; `pending`, never empty bytes, when it is
+   * not (D9). `checkoutId` absent reads the project directory.
+   */
+  readContent: (checkoutId: string | undefined, path: string, options?: ContentReadOptions) => Promise<ReadOutcome>;
+  /**
+   * Make these paths physical files, fetching their objects first (D9);
+   * rejects with a `PendingError` for a path whose object could not be fetched.
+   */
+  materialize: (
+    checkoutId: string | undefined,
+    paths: readonly string[],
+    options?: Readonly<{ signal?: AbortSignal; stallMilliseconds?: number }>,
+  ) => Promise<void>;
+  /**
+   * The object one placeholder stands for, fetched by its oid when it is not
+   * on this device and written nowhere: what the authority answers a read of
+   * a pending entry with (slice a). `undefined` when the path holds no
+   * placeholder; rejects with a `PendingError` when the object cannot be had.
+   */
+  resolvePlaceholder: (
+    checkoutId: string | undefined,
+    path: string,
+    request?: PlaceholderRequest,
+  ) => Promise<Uint8Array<ArrayBuffer> | undefined>;
+  /**
+   * Store every large file the checkout's attributes track and holds whole,
+   * then leave only its pointer in the checkout (D9 adoption). Crash-safe: a
+   * kill at any step leaves the full file, or the pointer with the verified
+   * object. Nothing calls it on its own yet: a checkout of pointers needs the
+   * read-through of every consumer first.
+   */
+  adoptLargeObjects: (checkoutId: string | undefined) => Promise<LargeObjectAdoption>;
+  /**
+   * Check the checkout's large objects again now, even if its current write
+   * generation was answered: the visible way out of a wait the person can see
+   * (Try again). A running fill is replaced by the new check's.
+   */
+  checkLargeObjects: (checkoutId: string | undefined) => Promise<void>;
+  /**
+   * The entry closure of the checkout's head (`tau.json` and the files it
+   * names), read by the oids its tree names without reading any other blob
+   * (D10). `undefined` before the checkout has a head, or on a port that
+   * cannot list a tree without reading it.
+   */
+  readEntryClosure: (checkoutId: string | undefined) => Promise<EntryClosure | undefined>;
+  /**
+   * The record device this host's chat segments sync under (EQ10(a)), or `undefined` on a host that records no chats.
+   *
+   * A random id from the record set, never the host's own `deviceId`: a host stamps it where a synced row has to say
+   * which device wrote it, so a renamed machine keeps its id and two machines that share a name do not.
+   */
+  chatDevice: () => Promise<string | undefined>;
+  /**
+   * Whether this host pulls the project's chats from a remote at all (round 27): the project syncs its chats
+   * (`tau.json` `syncChats`, read each time) and this host has a device id to read them under (one not told yet, or
+   * whose record devices cannot be read now, still pulls). Without either, no pull ever brings another device's
+   * segment, or a record of its quiet.
+   */
+  pullsChats: () => Promise<boolean>;
+}>;
+
+/**
+ * Exact current attempt and opaque native execution identity, supplied only by the trusted host.
+ *
+ * @public
+ */
+export type TurnExecutionInput = Readonly<{ key: TurnAttemptKey; executionId: string }>;
+
+/** The durable result of a trusted host execution hold or release. @public */
+export type TurnExecutionAnswer =
+  | Readonly<{ status: 'applied' | 'replayed' }>
+  | Readonly<{
+      status: 'refused';
+      code: 'TURN_UNKNOWN' | 'REVISIONS_BUSY' | 'REVISIONS_UNAVAILABLE';
+      message: string;
+    }>;
+
+/**
+ * What one project's turn-placement adapter reads from the store beside its root (W8 TS-S3).
+ *
+ * The root drives the attempts; these are the reads it does not expose: the lease directory, a checkout's files, and a
+ * finalized settlement's graph facts. It also holds the per-record section in which a root takes over another root's
+ * record (RM-R8 narrowed), and the trusted host's exact execution holds that retirement must wait for (I7).
+ *
+ * @public
+ */
+export type TurnStore = Readonly<{
+  /** Every lease record in `.tau/runs`, read now, never from a cached list (TS-R17). */
+  leases: () => Promise<readonly TurnLease[]>;
+  /** Trusted host only: release attests native confirmed stop; replay means absence, never proof of prior acquisition. */
+  executions: Readonly<{
+    hold: (input: TurnExecutionInput) => Promise<TurnExecutionAnswer>;
+    release: (input: TurnExecutionInput) => Promise<TurnExecutionAnswer>;
+    /**
+     * Turn placement only, before a completion settles: `held` while any execution is held; otherwise `closed`, and
+     * every later hold of the attempt is refused. Serialized with holds in the run's record section (I7).
+     */
+    close: (key: TurnAttemptKey) => Promise<'closed' | 'held' | 'unavailable'>;
+  }>;
+  /** One checkout and its files, or `undefined` when the project has no checkout with that id. */
+  open: (
+    checkoutId: string,
+  ) => Promise<
+    Readonly<{ checkout: Checkout; filesystem: RevisionFileSystem; versioned: (path: string) => boolean }> | undefined
+  >;
+  /** A finalized settlement shaped for the wire, as {@link describeTurnSettlement} does. */
+  describe: (settlement: TurnSettlement) => Promise<TurnFinalizedEvent>;
+  /**
+   * Make this root the holder of the run's record before it adopts it (RM-R14): `held` while another root's liveness
+   * mark is held, and nothing changes. A missing record, or one this root holds, is `free`.
+   */
+  claim: (runId: string) => Promise<'free' | 'held'>;
+  /**
+   * Delete the record naming this attempt, for an acknowledge with no actor (TS-R5): `held` while another root's mark
+   * is held, `absent` when no record names the attempt. A record written before W5 names every attempt of its run.
+   */
+  retire: (key: TurnAttemptKey) => Promise<'retired' | 'absent' | 'held'>;
+  /** Resolves once the root that holds the run's record has stopped; at once when none does. */
+  holderReleased: (runId: string, signal: AbortSignal) => Promise<void>;
+  /**
+   * The branch a checkout id derives from, when this device knows that branch (XD4). A chat record synced from another
+   * device can name a linked checkout this device never opened; its branch is the portable fact. `unborn` when the
+   * branch has no revision here yet, which only the live checkout's or the default branch can be. `removed` when this
+   * device removed that checkout, or saw its branch removed, and has not opened the branch since: the id is refused for
+   * good, never opened again. `undefined` when no branch on this device derives the id: a later sync may bring it.
+   */
+  branchOf: (checkoutId: string) => Promise<Readonly<{ branch: string; unborn: boolean }> | 'removed' | undefined>;
+}>;
+
+/**
+ * An edit an editor could neither save nor merge (charter D14, RV-W5b2 R2-1).
+ *
+ * The text, not bytes: an editor holds a model's text, and the page speaks JSON.
+ *
+ * @public
+ */
+export type EditorConflictInput = Readonly<{
+  /** Checkout-relative path of the file. */
+  path: string;
+  /** What the editor's text was made from; `null` when the file was absent. */
+  // oxlint-disable-next-line typescript/no-restricted-types -- `null` is the checked-write absence sentinel the editor already carries.
+  base: string | null;
+  /** The editor's text. */
+  mine: string;
+}>;
+
+/**
+ * What recording an editor's edit did.
+ *
+ * `unchanged` means the file is back on the bytes the edit was made from (an
+ * apply rolled back), so the editor saves its text as usual.
+ *
+ * @public
+ */
+export type EditorConflictOutcome =
+  | Readonly<{ status: 'recorded'; revisionId: string; line: string; into: string }>
+  | Readonly<{ status: 'unchanged' }>;
+
+/**
+ * One conflicted revision's files as text, for a reader with no Revisions pane: the agent's `revisions` tool, so a
+ * chat asked to resolve a conflict reads both sides rather than guessing at the one its checkout does not hold.
+ *
+ * `ours` is the side this device's line holds, `theirs` the other side and `base` what both started from; each is
+ * `undefined` where that side has no such file. A file the pane cannot open in an editor — parametric, binary, a
+ * mode or a file-versus-directory collision — is `chooseOne` and carries no text (rule 8).
+ *
+ * @public
+ */
+export type RevisionConflictRead = Readonly<{
+  revisionId: string;
+  labels: RevisionConflictTerms['labels'];
+  files: ReadonlyArray<
+    Readonly<{
+      path: string;
+      chooseOne: boolean;
+      base: string | undefined;
+      ours: string | undefined;
+      theirs: string | undefined;
+    }>
+  >;
+}>;
+
+/**
+ * One resolved conflicted path: which side won, and the bytes when a person typed them.
+ *
+ * Held by the effects module rather than by `resolution.machine`, because a
+ * machine's context carries choices and never bytes (I29).
+ */
+type ChosenSide = Readonly<{
+  side: ResolutionSide;
+  content?: Uint8Array<ArrayBuffer>;
+  /** The two sides an editor's text was made against; a finish refuses when either moved (RV-W6 F9). */
+  madeFrom?: Readonly<{ ours: Uint8Array<ArrayBuffer> | undefined; theirs: Uint8Array<ArrayBuffer> | undefined }>;
+}>;
+
+/**
+ * A checkout an integration must leave alone for now (D12, rule 9).
+ *
+ * Thrown where the refusal is decided — before the fence, inside it, or at the
+ * ref move — with the code and sentence a person-driven verb already reads, and
+ * caught by the sync effects, which turn it into a hold rather than a failure:
+ * a dirty checkout is minted first, a leased one waits for its lease.
+ */
+class CheckoutHeld extends RevisionPortError {
+  public readonly hold: SyncHold['hold'];
+  public readonly checkoutId: string;
+
+  public constructor(
+    held: Readonly<{ hold: SyncHold['hold']; checkoutId: string; message: string; code?: RevisionPortErrorCode }>,
+  ) {
+    super(held.code ?? 'CHECKOUT_CONFLICT', held.message);
+    this.hold = held.hold;
+    this.checkoutId = held.checkoutId;
+  }
+}
+
+/* What a sync effect answers for a checkout it left alone, or `undefined` for any other failure. */
+const holdOf = (error: unknown, revisionId: string): SyncHold | undefined =>
+  error instanceof CheckoutHeld
+    ? { status: 'held', hold: error.hold, checkoutId: error.checkoutId, revisionId }
+    : undefined;
+
+/* The sentence every verb reads when a turn holds the files it would rewrite (D10, A1). */
+const leasedMessage = 'An agent is working in this project’s files.';
+
+/* A merge's *Undo* refused because the branch has a newer entry: nothing was written over it (rule 10). */
+const mergeMovedError = (): Error => {
+  const code: RestoreFailureCode = 'UNDO_MERGE_MOVED';
+  return Object.assign(new Error('This branch changed after the merge, so the merge can’t be undone here.'), { code });
+};
+
+/**
+ * M1: a merge refused because one side's newest restore took back history the two branches share (an Undo of a
+ * merge, or a Restore to before the merge base), so building on that base would leave work out of the files.
+ *
+ * @param undone - The restore entry that took it back, and the entry it restored.
+ * @returns The refusal, carrying `MERGE_UNDONE` and both entries.
+ */
+const mergeUndoneError = (undone: UndoneHistory): Error => {
+  const code: BranchFailureCode = 'MERGE_UNDONE';
+  return Object.assign(
+    new Error('Part of what these branches share was taken back by an Undo or a Restore, so nothing was merged.'),
+    { code, ...undone },
+  );
+};
+
+/** A restore entry above a merge base whose restored entry does not hold that base (M1). */
+type UndoneHistory = Readonly<{ restoreId: string; restoredFrom: string }>;
+
+/** Where leases live, relative to the project. A `records` row in the registry. */
+const leaseDirectory = '.tau/runs';
+
+/*
+ * RM-R8 narrowed: the Web Lock manager that holds each root's liveness mark and each record's section. Node 24 has one
+ * per process, which is all a Node root needs: host and root share the process (TS-S4), and another process reaches a
+ * chat's attempts only through that chat's kernel writer lock (EQ2), which the holder's process keeps until they
+ * settle and the kernel frees only when that process, root included, dies.
+ */
+const lockManager = (): LockManager | undefined =>
+  (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
+/* ponytail: where the runtime has no lock manager (jsdom tests, or a browser page in an insecure context, where
+ * `navigator.locks` is undefined), the marks and sections are this module's own, which is exact only for roots in one
+ * realm: another tab's root then cannot see this mark (W8.r1 L-E). Managers are per runtime family, so a browser-realm
+ * host and a Node host serving the same store do not exclude each other either; one store has one host family (W6). */
+const heldMarks = new Map<string, Promise<void>>();
+const recordSections = new ResourceQueue();
+/** The trunk: a project's live tree starts on it and a turn records onto it. */
+const mainBranch = 'main';
+
+/* The generated titles of a turn's two cuts when nothing better names them (A5, Q9). */
+const autosaveTitle = 'Autosave';
+const agentChangeTitle = 'Agent change';
+/* One row's line of History: 72 code points, a commit subject's length (Q9). */
+const requestTitleLength = 72;
+
+/*
+ * A result's title from the person's request (Q9): its first non-blank line,
+ * whitespace collapsed, shortened at a word with an ellipsis. `undefined` when
+ * the request holds no text, so the caller falls back to "Agent change".
+ */
+const requestTitleOf = (request: string | undefined): string | undefined => {
+  const line = request
+    ?.split(/\r?\n/u)
+    .map((part) => part.replaceAll(/\s+/gu, ' ').trim())
+    .find((part) => part.length > 0);
+  if (line === undefined) {
+    return undefined;
+  }
+  const points = [...line];
+  if (points.length <= requestTitleLength) {
+    return line;
+  }
+  const kept = points.slice(0, requestTitleLength - 1).join('');
+  const space = kept.lastIndexOf(' ');
+  return `${(space > requestTitleLength / 2 ? kept.slice(0, space) : kept).trimEnd()}…`;
+};
+/** Identity every revision this host records is committed under. */
+const hostAuthor = Object.freeze({ name: 'Tau', email: 'noreply@tau.new' });
+/* Whether a path is one of a capture's changed roots or lies under one; `''` is the whole tree. */
+const isUnderRoot = (path: string, roots: ReadonlySet<string>): boolean => {
+  if (roots.has('') || roots.has(path)) {
+    return true;
+  }
+  for (let at = path.indexOf('/'); at !== -1; at = path.indexOf('/', at + 1)) {
+    if (roots.has(path.slice(0, at))) {
+      return true;
+    }
+  }
+  return false;
+};
+/* How long a checkout's comparisons pause before the newest one's record is written (Tau #2013). */
+const keepComparisonDelayMilliseconds = 2000;
+const isMissingFile = (error: unknown): boolean => {
+  const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown };
+  return code === 'ENOENT' || name === 'NotFoundError';
+};
+/**
+ * How far back a pull looks to decide fast-forward from divergence.
+ *
+ * ponytail: a bounded walk read by `mergeBaseOf` — W10's, so there is one idea
+ * of "base" in the package. A base further back than this reads as diverged,
+ * which is the safe answer: it merges instead of fast-forwarding.
+ */
+const divergenceWalkLimit = 1000;
+
+/* Where a branch's line goes when it gives way to the remote's at connect; host-local (`isHostLocalRef`). */
+const supersededRefPrefix = 'refs/tau/superseded';
+
+/* The mode reads an index-driven capture keeps in flight: each is one stat, no bytes. */
+const captureModeConcurrency = 16;
+
+const textEncoder = new TextEncoder();
+const generatedSetupTree = new ImmutableRevisionTree([
+  [generatedGitattributesPath, generatedGitattributesContent(undefined)],
+  [generatedIgnorePath, generatedIgnoreContent(undefined)],
+]);
+
+/* Moved to `#git-tree-id.js` (W10.1); re-exported at its old position so
+ * `@taucad/revisions/revision-effects` keeps the surface it published. */
+// oxlint-disable-next-line no-barrel-files/no-barrel-files -- keeping a published `@public` symbol at its own subpath across an internal move; `unicorn/prefer-export-from` demands this form and `no-barrel-files` forbids it outside index.ts (the recorded conflict).
+export { revisionTreeId } from '#git-tree-id.js';
+
+/* Absent equals absent: a file that is gone on both sides is the same file. */
+const sameBytes = (left: Uint8Array<ArrayBuffer> | undefined, right: Uint8Array<ArrayBuffer> | undefined): boolean =>
+  left === undefined || right === undefined
+    ? left === right
+    : left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
+
+/**
+ * Whether an unborn line's files hold no work of their own: every file is
+ * either setup Tau generated or already in the arriving tree with the same
+ * bytes. An opener writes the remote's own `tau.json` before the open pull
+ * (E2E-D defect A), and minting that as a root revision merged the remote in
+ * as unrelated history. A file the arriving tree does not hold, or holds
+ * differently, is still work (rule 6).
+ *
+ * @param files - The checkout's captured tree.
+ * @param arriving - What the open pull brings, when a fetch has named it.
+ * @returns `true` when there is nothing here to record.
+ */
+const holdsNoWork = (files: ImmutableRevisionTree, arriving: ImmutableRevisionTree | undefined): boolean =>
+  files
+    .entries()
+    .every(
+      ({ path, content }) =>
+        sameBytes(content, arriving?.get(path)) || sameBytes(content, generatedSetupTree.get(path)),
+    );
+
+type TransferControl = Readonly<{ cancel: () => void; release: () => void }>;
+/* The actor factory binds the effect owner's transport control to its root.
+ * Directly composed roots have no such authority and cannot claim cancellation. */
+const transferControls = new WeakMap<RevisionActors | ProjectRevisionsActor, TransferControl>();
+
+const nonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+/*
+ * One lease record, strictly. A record written before W5 names no attempt (read as 0) and calls its head
+ * `baseRevisionId` (W8 TS-Q5); one written before W8 still carries the retired `authorityEpoch`, which nothing reads.
+ * Anything else malformed, including execution custody, answers `undefined`: a corrupt record is never evidence that
+ * its checkout is free (I7).
+ */
+const parseLeaseRecord = (name: string, text: string): TurnLease | undefined => {
+  let stored: unknown;
+  try {
+    stored = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) {
+    return undefined;
+  }
+  const record: Readonly<Record<string, unknown>> = { ...stored };
+  const { runId, turnId, chatId, checkoutId, attempt = 0, startedAt, holder, executionIds } = record;
+  const headRevisionId = record['headRevisionId'] ?? record['baseRevisionId'];
+  if (
+    !nonEmptyString(runId) ||
+    !nonEmptyString(turnId) ||
+    !nonEmptyString(chatId) ||
+    !nonEmptyString(checkoutId) ||
+    name !== `${encodeURIComponent(runId)}.json` ||
+    typeof startedAt !== 'number' ||
+    !Number.isFinite(startedAt) ||
+    typeof attempt !== 'number' ||
+    !Number.isSafeInteger(attempt) ||
+    attempt < 0 ||
+    (headRevisionId !== undefined && typeof headRevisionId !== 'string') ||
+    (holder !== undefined && !nonEmptyString(holder))
+  ) {
+    return undefined;
+  }
+  let executions: readonly string[] | undefined;
+  if (executionIds !== undefined) {
+    const ids: readonly unknown[] = Array.isArray(executionIds) ? executionIds : [undefined];
+    const valid = ids.filter((id): id is string => nonEmptyString(id));
+    if (valid.length !== ids.length || new Set(valid).size !== valid.length) {
+      return undefined;
+    }
+    executions = Object.freeze(valid);
+  }
+  return Object.freeze({
+    runId,
+    turnId,
+    chatId,
+    checkoutId,
+    attempt,
+    startedAt,
+    ...(headRevisionId === undefined ? {} : { headRevisionId }),
+    ...(holder === undefined ? {} : { holder }),
+    ...(executions === undefined ? {} : { executionIds: executions }),
+  });
+};
+
+/**
+ * Build one project's actor implementations over a port and its checkouts.
+ *
+ * @param options - The store, how to open a checkout, and the host's identity.
+ * @returns The four actor sets, ready for `provide`.
+ * @public
+ *
+ * @example <caption>Provide one machine's effects directly</caption>
+ * ```typescript
+ * import { NodeFsProvider } from '@taucad/filesystem/backend/node';
+ * import { createRevisionActors } from '@taucad/revisions/revision-effects';
+ * import { createNativeGitRevisionPort } from '@taucad/revisions/node';
+ * import { restoreMachine } from '@taucad/revisions/restore-machine';
+ * import { createActor } from 'xstate';
+ *
+ * const actors = createRevisionActors({
+ *   port: createNativeGitRevisionPort({ repositoryPath: '/srv/project' }),
+ *   projectId: 'project-1',
+ *   filesystem: (checkout) => new NodeFsProvider(checkout.root),
+ * });
+ * const restore = createActor(restoreMachine.provide({ actors: actors.restore }), {
+ *   input: { projectId: 'project-1', checkoutId: 'live' },
+ * });
+ * restore.start();
+ * ```
+ */
+// oxlint-disable-next-line eslint/max-lines-per-function -- one closure over one project's port; splitting it would thread the same six values through every half.
+export const createRevisionActors = (options: RevisionActorsOptions): RevisionActors => {
+  const { filesystem, projectId } = options;
+  const transfers = new Set<AbortController>();
+  let transfersStopped = false;
+  const control: TransferControl = {
+    cancel: () => {
+      transfersStopped = true;
+      for (const transfer of transfers) {
+        transfer.abort(new Error('Closing stopped the transfer; this project will try again.'));
+      }
+    },
+    release: () => {
+      transfersStopped = false;
+    },
+  };
+  const transport = async <Output>(
+    signal: AbortSignal | undefined,
+    run: (signal: AbortSignal) => Promise<Output>,
+  ): Promise<Output> => {
+    const controller = new AbortController();
+    const combined = signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]);
+    transfers.add(controller);
+    try {
+      if (transfersStopped) {
+        controller.abort(new Error('Closing stopped the transfer; this project will try again.'));
+      }
+      combined.throwIfAborted();
+      return await run(combined);
+    } finally {
+      transfers.delete(controller);
+    }
+  };
+  /*
+   * Every head this closure moves goes through one `updateRef`, so that is where
+   * the operation log is written (D15, rule 10): queued after the move settles
+   * and before the caller — and so any machine — hears of it (I5). Queued, not
+   * awaited: one log commit costs ~60 ms on isomorphic-git and ~97 ms (8–10
+   * spawns) on native git, which alone would spend B1's 100 ms on every save.
+   * The log's own reads wait behind the queue, so no reader misses the entry.
+   *
+   * ponytail: a crash inside that ~0.1 s loses the entry, and with it *Undo*
+   * of that operation; the owed push is still derived from the heads
+   * themselves (`withOwedPushes`). Upgrade path: write the log commit before
+   * the head moves and publish both in one ref transaction.
+   */
+  /*
+   * Every head move's records, settled: each move's promise also waits for the ones before it, so the newest settles
+   * last even when an earlier move's records (an operation log append, a removal) take longer than a later one's.
+   */
+  let loggedOperation: Promise<void> = Promise.resolve();
+  const afterBoth = async (prior: Promise<void>, next: Promise<void>): Promise<void> => {
+    await Promise.all([prior, next]);
+  };
+  const port: RevisionPort = Object.freeze({
+    ...options.port,
+    listRemoteRefs: async (
+      remote: Parameters<RevisionPort['listRemoteRefs']>[0],
+      input?: Parameters<RevisionPort['listRemoteRefs']>[1],
+    ) => transport(input?.signal, async (signal) => options.port.listRemoteRefs(remote, { ...input, signal })),
+    fetch: async (input: Parameters<RevisionPort['fetch']>[0]) =>
+      transport(input.signal, async (signal) => options.port.fetch({ ...input, signal })),
+    push: async (input: Parameters<RevisionPort['push']>[0]) =>
+      transport(input.signal, async (signal) => options.port.push({ ...input, signal })),
+    /* A revision this host writes with two parents is a merge — a merge, a
+     * sync's auto-merge, a conflict decision — which *Undo* never reaches past
+     * (D15). A cut's own kind, recorded after this, replaces it. */
+    writeRevision: async (input: WriteRevisionInput): Promise<RevisionReceipt> => {
+      const receipt = await options.port.writeRevision(input);
+      if (input.parents.length > 1) {
+        mintedOperations.set(receipt.commitId, { kind: 'merge', actor: input.provenance.actor });
+      }
+      return receipt;
+    },
+    updateRef: async (input: UpdateRevisionRefInput): Promise<UpdateRevisionRefResult> => {
+      const result = await options.port.updateRef(input);
+      if (result.status === 'updated') {
+        /* Held, so `settled()` — and a host removing the project — waits for it;
+         * `recordOperation` never rejects. */
+        loggedOperation = afterBoth(loggedOperation, recordOperation(input.name, result.previousHead, result.head));
+      }
+      return result;
+    },
+  });
+  const policy = options.policy ?? tauRevisionPolicy.policy;
+  const useFileSystem: UseCheckoutFileSystem =
+    options.useFileSystem ?? (async (checkout, operation) => operation(await filesystem(checkout)));
+  /* One codec for every merge (D12): a recorded conflict re-derives as it was made. */
+  const mergeOptions = options.parameters === undefined ? {} : { parameters: options.parameters };
+  /* A host that cannot re-send a push remembers none: the identity function. */
+  const recordHistoryPush = options.recordHistoryPush ?? (async <Result>(run: () => Promise<Result>) => run());
+  const clock = (): number => options.clock?.now?.() ?? Date.now();
+  /*
+   * Settles once the project's `revision` stream knows its tail (D13, W5b a1b).
+   * The open pull waits for it: the pull and the tail read are two reads of the
+   * remote, and a push between them would be in neither. Tail first, so a push
+   * after it is an entry and a push before it is in the pull.
+   */
+  let streamTail: Promise<void> | undefined;
+  let lastReading = 0;
+  /* Monotonic per process: a bounded `log` walk stops on committer time, so a
+   * clock that went backwards would truncate a history (W3a review R39). */
+  const now = (): number => {
+    lastReading = Math.max(lastReading, clock());
+    return lastReading;
+  };
+
+  /* `owesAttributes`: the cut supplied Tau's attributes file, whose live copy its mint writes (A4). */
+  const cuts = createHandles<{ tree: ImmutableRevisionTree; treeId: string; owesAttributes?: true }>('cut');
+  /**
+   * The side chosen for each conflicted path, by conflicted revision.
+   *
+   * ponytail: in memory, dropped when the resolution finishes. A person who
+   * reloads mid-resolution starts choosing again, which is the honest outcome of
+   * holding nothing on disk — the alternative is a fourth record type for a
+   * decision that takes seconds. Persist it under `.tau/` if a real conflict
+   * ever takes long enough for that to matter.
+   */
+  const resolutions = new Map<string, Map<string, ChosenSide>>();
+  const captures = createHandles<ImmutableRevisionTree>('capture');
+  const plans = createHandles<{
+    checkoutId: string;
+    revisionId: string;
+    /**
+     * An undo: the paths its operation changed, merged onto the head (D10).
+     * A restore of a recorded revision is written by oid diff from the head instead.
+     */
+    undo?: Readonly<{ paths: readonly string[]; tree: ImmutableRevisionTree; fillFrom: string | undefined }>;
+    /** The operation this plan reverses, when it is an undo (D15) or D2's *Undo restore*. */
+    undoes?: string;
+    /** The head the write requires, for the merge toast's *Undo*: the merge entry itself. */
+    expectHead?: string;
+  }>('plan');
+  const fences = new Map<string, Promise<void>>();
+  const activeOperations = new Set<Promise<unknown>>();
+  /**
+   * What each open checkout's captures may reuse instead of reading or hashing.
+   *
+   * One record per checkout, because `(path, size, mtimeMs)` only identifies
+   * bytes within one tree (EQ7), and each checkout's tree ids stay warm in its
+   * own memo (E3); it is dropped when the checkout is, and with this closure.
+   * `last` is the newest whole observation of the files, which a cut that names
+   * its changed paths starts from (E1): `lastCapture` orders captures by when
+   * they began, so a slow capture never replaces a newer one. `basis` is the
+   * head's tree, whose modes a capture inherits where the provider has none.
+   */
+  type CheckoutMemos = {
+    readonly capture: CaptureMemo;
+    readonly treeIds: TreeIdMemo;
+    last: ImmutableRevisionTree | undefined;
+    lastCapture: number;
+    basis: Readonly<{ revisionId: string; tree: ImmutableRevisionTree }> | undefined;
+    /** The comparison still running, and the write generation it covers. */
+    comparing: Readonly<{ generation: number; tree: Promise<ImmutableRevisionTree> }> | undefined;
+    /**
+     * Where the checkout's index stood when `last` was observed (S10): its
+     * epoch and generation, read before the capture began, the clock reading
+     * its racy guard keys on (EQ7). A capture whose ignore rules and
+     * inherited modes agree starts from `last` and reads only what the D5
+     * compare and the index changed and removed since.
+     */
+    cursor: Readonly<{ epoch: string; generation: number; observedAt: number }> | undefined;
+    /**
+     * The ignored paths `last` left out, and what they were read under: the
+     * ignore context, or the listing itself where the port gives no context.
+     * While the context holds and no `.gitignore` changed, a capture asks only
+     * about the paths it reads and keeps the rest of this listing.
+     */
+    ignore: Readonly<{ key: string; listing: ReadonlySet<string>; head: TrackedHead | undefined }> | undefined;
+  };
+  const checkoutMemos = new Map<string, CheckoutMemos>();
+  const memosOf = (checkoutId: string): CheckoutMemos => {
+    const memos = checkoutMemos.get(checkoutId) ?? {
+      capture: createCaptureMemo(),
+      treeIds: createTreeIdMemo(),
+      last: undefined,
+      lastCapture: 0,
+      basis: undefined,
+      comparing: undefined,
+      cursor: undefined,
+      ignore: undefined,
+    };
+    checkoutMemos.set(checkoutId, memos);
+    return memos;
+  };
+  /* Captures begin in this order; `last` only moves forward along it. */
+  let captureSequence = 0;
+  /*
+   * How each file of a captured tree was read: the index's stats of it and a
+   * clock reading, both taken before its bytes were, carried over from the tree
+   * a capture started from for the files it kept. A comparison's record keys on
+   * them (Tau #2013): stats taken after the read could name an edit the bytes
+   * never saw.
+   */
+  const readings = new WeakMap<ImmutableRevisionTree, ReadonlyMap<string, CompareReading>>();
+  const recordReadings = (
+    tree: ImmutableRevisionTree,
+    { at, stats }: Readonly<{ at: number; stats: readonly FileStatEntry[] | undefined }>,
+    kept?: Readonly<{ from: ImmutableRevisionTree; roots: ReadonlySet<string> }>,
+  ): void => {
+    const before = kept === undefined ? undefined : readings.get(kept.from);
+    const stated = new Map((stats ?? []).map((entry) => [entry.path, entry] as const));
+    const read = new Map<string, CompareReading>();
+    for (const path of revisionTreeFiles(tree).keys()) {
+      const reread = kept === undefined || isUnderRoot(path, kept.roots);
+      const stat = reread ? stated.get(path) : undefined;
+      const reading = reread
+        ? stat === undefined
+          ? undefined
+          : { readAt: at, size: stat.size, mtimeMs: stat.mtimeMs }
+        : before?.get(path);
+      if (reading === undefined) {
+        /* A file with no reading of its own: no record can key on this tree. */
+        return;
+      }
+      read.set(path, reading);
+    }
+    readings.set(tree, read);
+  };
+  /* ponytail: one bound for `last` and `basis` each; above it a capture walks and reads the head, as before E1. */
+  const heldTreeBytes = 256 * 1024 * 1024;
+  const heldTree = (tree: ImmutableRevisionTree): ImmutableRevisionTree | undefined =>
+    tree.byteLength <= heldTreeBytes ? tree : undefined;
+  /** Checkouts this process has already swept the litter of an interrupted apply from. */
+  const swept = new Set<string>();
+
+  /*
+   * Where a chosen remote is recorded, and under which name. A GitHub
+   * destination gets an identity-stable remote name: if it is replaced while an
+   * old request is settling, that request can only finish against (or fail
+   * with) the retired name; it can never resolve `origin` again and be
+   * redirected into the new repository.
+   */
+  const remoteAddressOf = (input: RemoteWriteActorInput): RevisionRemoteAddress => {
+    const name =
+      input.kind === 'tau'
+        ? tauRemoteName
+        : input.provider === 'github' && input.repositoryId !== undefined
+          ? `github-${input.repositoryId}`
+          : 'origin';
+    const url = input.url ?? (input.kind === 'tau' ? options.remoteUrl?.(input.projectId) : undefined);
+    if (url === undefined) {
+      throw new RevisionPortError('INVALID_TRANSPORT', 'Couldn’t find this project in the cloud. Try again.');
+    }
+    return { name, url };
+  };
+
+  /* D4's and I6's comparison capture, published for a cut on the same write generation to reuse. */
+  const compareCheckout = async (
+    input: CheckoutCaptureTreeActorInput,
+    signal?: AbortSignal,
+  ): Promise<CheckoutCaptureTreeActorOutput> => {
+    const memos = memosOf(input.checkoutId);
+    let published: CheckoutMemos['comparing'];
+    const compared = (async (): Promise<Readonly<{ treeId: string; tree?: ImmutableRevisionTree }>> => {
+      try {
+        const place = await placeOf(input.checkoutId);
+        return await useFileSystem(place, async (rooted) => {
+          /* A session that has captured nothing yet asks the record an earlier one left first, and once it has
+           * answered, the index's changes since (Tau #2013). */
+          if (memos.last === undefined) {
+            const held = heldAnswers.get(place.id);
+            const treeId = await (
+              held === undefined ? recordedComparison(place, rooted) : answerAgain(place, rooted, held)
+            ).catch(() => undefined);
+            if (treeId !== undefined) {
+              return { treeId };
+            }
+            heldAnswers.delete(place.id);
+          }
+          const head = await headOf(place);
+          const tree = await captureOpened(place, rooted, {
+            bypassMemo: false,
+            changed: { paths: input.changedPaths },
+            ...(signal === undefined ? {} : { signal }),
+          });
+          const treeId = await checkoutTreeId(input.checkoutId, tree);
+          /* Evidence for the next session, never this comparison's outcome: kept off its path. */
+          keepSoon(place, { treeId, head, tree });
+          return { treeId, tree };
+        });
+      } finally {
+        if (published !== undefined && memos.comparing === published) {
+          memos.comparing = undefined;
+        }
+      }
+    })();
+    /* A comparison the record answered has no tree: a cut waiting on it captures its own. */
+    const captured = (async (): Promise<ImmutableRevisionTree> => {
+      const { tree } = await compared;
+      if (tree === undefined) {
+        throw new Error('This comparison was answered from its record and holds no tree.');
+      }
+      return tree;
+    })();
+    // oxlint-disable-next-line promise/prefer-await-to-then -- marks the rejection handled without awaiting it.
+    captured.catch(() => undefined);
+    /* Published before the first await, so a cut asked on the next event finds it. */
+    if (input.generation !== undefined) {
+      published = { generation: input.generation, tree: captured };
+      memos.comparing = published;
+    }
+    const { treeId } = await compared;
+    return { treeId };
+  };
+
+  /*
+   * Tau #2013: what a session sees of one checkout without reading a file — its
+   * head, its ignore context and the Project Index's stats of every versioned
+   * path — or `undefined` where the stats cannot vouch for bytes: no index, a
+   * provider whose timestamps are not trustworthy, an ignore source with no
+   * context to compare (D5, closeout EQ7). `compare` runs the D5 compare first,
+   * so an edit no observer reported is in the stats.
+   */
+  const observeCheckout = async (
+    place: Checkout,
+    rooted: RevisionFileSystem,
+    compare: boolean,
+  ): Promise<CompareObservation | undefined> => {
+    const { compareIndex, statTree } = rooted;
+    if (rooted.capabilities.trustworthyMtime !== true || compareIndex === undefined || statTree === undefined) {
+      return undefined;
+    }
+    const rules = await compareRules();
+    if (rules === undefined) {
+      return undefined;
+    }
+    const ignores =
+      port.ignoredPaths === undefined ? '' : await port.ignoreContext?.(place.kind === 'live' ? undefined : place.root);
+    if (ignores === undefined) {
+      return undefined;
+    }
+    const head = await headOf(place);
+    if (compare) {
+      await compareIndex.call(rooted);
+    }
+    const stats = await statTree.call(rooted, '', { admits: versionedAdmits });
+    return { checkoutId: place.id, rules, head, ignores, stats };
+  };
+  /*
+   * What turns a checkout's files into a tree id beyond the files themselves:
+   * the registry that versions paths, the threshold that makes a file a large
+   * object, and the store's engine, format and attributes matching, beside
+   * Tau's own rules revision (`compareRulesRevision`). A record
+   * kept under other rules answers nothing. A host's own policy is opaque, so
+   * it keeps no record.
+   */
+  let registryRules: string | undefined;
+  const compareRules = async (): Promise<string | undefined> => {
+    if (policy !== tauRevisionPolicy.policy) {
+      return undefined;
+    }
+    const { engine, version, objectFormat, largeObjects, ignoreCase, keepsLargeObjectFiles } = await describePort();
+    registryRules ??= JSON.stringify([largeObjectThresholdBytes, tauRevisionPolicy.rows]);
+    const rules = compareRulesText([
+      registryRules,
+      engine,
+      version,
+      objectFormat,
+      largeObjects,
+      ignoreCase,
+      keepsLargeObjectFiles,
+    ]);
+    return digestHex('sha256', textEncoder.encode(rules));
+  };
+  /* Every path the registry versions, as a capture lists it: a reserved temporary sibling is none. */
+  const versionedAdmits = (path: string): boolean =>
+    policy.classify(path).versioned && parseTemporarySibling(path) === undefined;
+  /* The text each checkout's record was last written with, so an unchanged answer writes nothing. */
+  const keptComparisons = new Map<string, string>();
+  /*
+   * Keep a comparison's answer for the next session (Tau #2013): its tree id
+   * with the index's stats of every file it captured, as they stood before
+   * each was read. Kept only when everything the stats name is accounted for:
+   * each captured file has a reading and has not moved since, the head did not
+   * move under the capture, and every versioned path it left out is one the
+   * ignore rules leave out.
+   */
+  const keepComparison = async (
+    place: Checkout,
+    rooted: RevisionFileSystem,
+    compared: Readonly<{ treeId: string; head: string | undefined; tree: ImmutableRevisionTree }>,
+  ): Promise<void> => {
+    const path = compareRecordPath(place.id);
+    const read = readings.get(compared.tree);
+    if (path === undefined || read === undefined || read.size > compareRecordMaximumFiles) {
+      return;
+    }
+    const kept = await (async () => {
+      const now = await observeCheckout(place, rooted, false);
+      if (now === undefined || now.head !== compared.head || now.stats.length > compareRecordMaximumFiles) {
+        return undefined;
+      }
+      const left = now.stats.flatMap(({ path: statPath }) => (read.has(statPath) ? [] : [statPath]));
+      if (left.length > 0) {
+        const listing = new Set(
+          (await port.ignoredPaths?.(place.kind === 'live' ? undefined : place.root, left)) ?? [],
+        );
+        if (left.some((leftPath) => !coveredByIgnoreListing(listing, leftPath))) {
+          return undefined;
+        }
+      }
+      const modes =
+        rooted.getFileMode === undefined
+          ? undefined
+          : Object.fromEntries([...revisionTreeFiles(compared.tree)].map(([file, { mode }]) => [file, mode]));
+      return compareRecordOf(
+        {
+          treeId: compared.treeId,
+          checkoutId: now.checkoutId,
+          rules: now.rules,
+          head: now.head,
+          ignores: now.ignores,
+          modes,
+        },
+        now.stats,
+        read,
+      );
+    })();
+    if (kept === undefined) {
+      return;
+    }
+    const text = serializeCompareRecord(kept);
+    if (keptComparisons.get(place.id) === text) {
+      return;
+    }
+    await writeControlRecord(controlPlaneFiles(await recordsFileSystem()), path, text);
+    keptComparisons.set(place.id, text);
+  };
+  /*
+   * A comparison's record is written off its path (Tau #2013): the newest
+   * comparison of each checkout is kept once comparisons pause, and any still
+   * waiting when the actors settle is kept then. One keep runs at a time, so an
+   * older answer never lands over a newer one. Once the actors begin to settle
+   * no keep is scheduled: a comparison still in flight then leaves none, so
+   * nothing is written into a store its host has closed or removed.
+   */
+  let keepsClosed = false;
+  const pendingKeeps = new Map<
+    string,
+    Readonly<{ place: Checkout; compared: Parameters<typeof keepComparison>[2]; timer: ReturnType<typeof setTimeout> }>
+  >();
+  let keeping: Promise<void> = Promise.resolve();
+  const runKeep = (checkoutId: string): void => {
+    const pending = pendingKeeps.get(checkoutId);
+    if (pending === undefined) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pendingKeeps.delete(checkoutId);
+    const before = keeping;
+    // async-iife: bootstrap -- chained so keeps land in order; a keep that fails leaves the record as it was.
+    keeping = (async (): Promise<void> => {
+      await before;
+      try {
+        await useFileSystem(pending.place, async (rooted) => keepComparison(pending.place, rooted, pending.compared));
+      } catch {
+        /* Evidence for the next session only: a keep that fails costs that session a walk. */
+      }
+    })();
+  };
+  const keepSoon = (place: Checkout, compared: Parameters<typeof keepComparison>[2]): void => {
+    if (keepsClosed || compareRecordPath(place.id) === undefined || !readings.has(compared.tree)) {
+      return;
+    }
+    const previous = pendingKeeps.get(place.id);
+    if (previous !== undefined) {
+      clearTimeout(previous.timer);
+    }
+    const timer = setTimeout(() => {
+      runKeep(place.id);
+    }, keepComparisonDelayMilliseconds); // Bound: keepComparisonDelayMilliseconds.
+    /* A pending keep never holds a Node process open: the settle that closes it writes it. */
+    if (typeof timer === 'object' && 'unref' in timer) {
+      timer.unref();
+    }
+    pendingKeeps.set(place.id, { place, compared, timer });
+  };
+  /*
+   * A removed checkout's record goes with it: its held answer, its pending
+   * keep and its last text are forgotten, and the file is removed once any keep
+   * already running has landed, so nothing it answered outlives it.
+   */
+  const forgetComparison = async (checkoutId: string): Promise<void> => {
+    heldAnswers.delete(checkoutId);
+    const pending = pendingKeeps.get(checkoutId);
+    if (pending !== undefined) {
+      clearTimeout(pending.timer);
+      pendingKeeps.delete(checkoutId);
+    }
+    keptComparisons.delete(checkoutId);
+    const path = compareRecordPath(checkoutId);
+    if (path === undefined) {
+      return;
+    }
+    await keeping;
+    await controlPlaneFiles(await recordsFileSystem())
+      .unlink(path)
+      .catch((error: unknown) => {
+        if (!isMissingFile(error)) {
+          throw error;
+        }
+      });
+  };
+  const flushKeeps = async (): Promise<void> => {
+    for (const checkoutId of pendingKeeps.keys()) {
+      runKeep(checkoutId);
+    }
+    await keeping;
+  };
+  /*
+   * The tree id an earlier session's record answers for the files now, or
+   * `undefined` when anything it was answered over has moved: the comparison
+   * then reads the checkout (Tau #2013; I5).
+   */
+  const recordedComparison = async (place: Checkout, rooted: RevisionFileSystem): Promise<string | undefined> => {
+    const path = compareRecordPath(place.id);
+    if (path === undefined) {
+      return undefined;
+    }
+    const text = await readControlRecord(controlPlaneFiles(await recordsFileSystem()), path, {
+      accepts: (candidate) => parseCompareRecord(candidate) !== undefined,
+    });
+    const record = text === undefined ? undefined : parseCompareRecord(text);
+    if (record === undefined) {
+      return undefined;
+    }
+    /* Where the index stands before its compare, so a change the compare finds is named to the next comparison. */
+    const at = await rooted.changedSince?.(Number.MAX_SAFE_INTEGER).catch(() => undefined);
+    const now = await observeCheckout(place, rooted, true);
+    if (now === undefined || !recordAnswers(record, now) || !(await modesHold(rooted, record))) {
+      return undefined;
+    }
+    if (at !== undefined) {
+      heldAnswers.set(place.id, { record, epoch: at.epoch, generation: at.generation });
+    }
+    checkFill(place);
+    return record.treeId;
+  };
+  /* A mode change moves neither size nor timestamp, so where the provider reports modes each is asked again. */
+  const modesHold = async (rooted: RevisionFileSystem, record: CompareRecord): Promise<boolean> => {
+    const { getFileMode } = rooted;
+    if ((getFileMode === undefined) !== (record.modes === undefined)) {
+      return false;
+    }
+    if (getFileMode === undefined) {
+      return true;
+    }
+    const moved = await mapConcurrent(
+      Object.entries(record.modes ?? {}),
+      captureModeConcurrency,
+      async ([file, mode]) => {
+        const current = await getFileMode.call(rooted, file).catch(() => undefined);
+        return current !== mode;
+      },
+    );
+    return !moved.some(Boolean);
+  };
+  /*
+   * A record that answered, with where the index stood when it did: until the
+   * checkout is captured, a comparison whose index names no change since, under
+   * the same head and ignore rules, answers the same tree id, at the cost of an
+   * index compare, as a capture from the index would (Tau #2013).
+   */
+  const heldAnswers = new Map<string, Readonly<{ record: CompareRecord; epoch: string; generation: number }>>();
+  const answerAgain = async (
+    place: Checkout,
+    rooted: RevisionFileSystem,
+    held: Readonly<{ record: CompareRecord; epoch: string; generation: number }>,
+  ): Promise<string | undefined> => {
+    const { compareIndex, changedSince } = rooted;
+    if (compareIndex === undefined || changedSince === undefined) {
+      return undefined;
+    }
+    const compared = await compareIndex.call(rooted);
+    const changes = await changedSince.call(rooted, held.generation, { epoch: held.epoch, admits: versionedAdmits });
+    if (
+      changes.rescan === true ||
+      changes.entries.length > 0 ||
+      changes.removed.length > 0 ||
+      compared.racy.length > 0
+    ) {
+      return undefined;
+    }
+    const ignores =
+      port.ignoredPaths === undefined ? '' : await port.ignoreContext?.(place.kind === 'live' ? undefined : place.root);
+    if (ignores !== held.record.ignores || (await headOf(place)) !== held.record.head) {
+      return undefined;
+    }
+    if (!(await modesHold(rooted, held.record))) {
+      return undefined;
+    }
+    checkFill(place);
+    return held.record.treeId;
+  };
+
+  /* An effect timed as one worker span, whether it settles or fails. */
+  const timedEffect =
+    <Output, Input>(
+      span: WorkerTimingSpan,
+      effect: AsyncLogicFunction<Output, Input>,
+    ): AsyncLogicFunction<Output, Input> =>
+    async (arguments_, enqueue) =>
+      workerTimings.span(span, async () => effect(arguments_, enqueue));
+
+  const fromAuthorityPromise = <Output, Input>(
+    effect: AsyncLogicFunction<Output, Input>,
+  ): AsyncActorLogic<Output, Input> =>
+    createAsyncLogic<Output, Input>({
+      run: async (arguments_, enqueue) => {
+        const operation = (async (): Promise<Output> => {
+          arguments_.signal.throwIfAborted();
+          return effect(arguments_, enqueue);
+        })();
+        activeOperations.add(operation);
+        try {
+          return await operation;
+        } finally {
+          activeOperations.delete(operation);
+        }
+      },
+    });
+
+  const acquireCheckoutFence = (checkoutId: string): Readonly<{ granted: Promise<void>; release: () => void }> => {
+    const granted = fences.get(checkoutId) ?? Promise.resolve();
+    let unlock = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
+    const queued = (async (): Promise<void> => {
+      await granted;
+      await held;
+    })();
+    fences.set(checkoutId, queued);
+    return {
+      granted,
+      release: () => {
+        unlock();
+      },
+    };
+  };
+
+  const withCheckoutFence = async <Result>(checkoutId: string, operation: () => Promise<Result>): Promise<Result> => {
+    const fence = acquireCheckoutFence(checkoutId);
+    const waitedAt = workerTimings.now();
+    await fence.granted;
+    workerTimings.record('fence.wait', waitedAt);
+    const heldAt = workerTimings.now();
+    try {
+      return await operation();
+    } finally {
+      fence.release();
+      workerTimings.record('fence.held', heldAt);
+    }
+  };
+
+  let created: Promise<void> | undefined;
+  let opened: Promise<void> | undefined;
+  /* The store alone, with the ignore file the registry generates: what a
+   * background resume needs to ask where the project's files are. It never
+   * mints the Start version, whose remote check belongs to the host's first
+   * question, after the host has set the project up (A6). */
+  const createStore = async (): Promise<void> => {
+    created ??= port.init({ author: hostAuthor });
+    await created;
+  };
+  /* The store is created before the first question is asked of it, and a new
+   * project's Start version is minted in it (A6). Idempotent on both legs. */
+  const ensureStore = async (): Promise<void> => {
+    opened ??= (async () => {
+      await createStore();
+      try {
+        await mintStart();
+      } catch (error) {
+        /* The record stays, so the next open asks again; the project opens without its Start meanwhile. */
+        console.warn('[revisions] the Start version could not be recorded', error);
+      }
+    })();
+    await opened;
+  };
+
+  /* The store's creation and a queued operation-log commit are the effects that
+   * can outlive a stopped actor tree: every other one is awaited inside the
+   * actor that started it. */
+  const settled = async (): Promise<void> => {
+    try {
+      await created;
+      await opened;
+    } catch {
+      /* A store that could not be created is reported where it was asked for,
+       * never from the close that waits for it. */
+    }
+    keepsClosed = true;
+    await stopFills();
+    while (activeOperations.size > 0) {
+      // oxlint-disable-next-line no-await-in-loop -- operations may admit another tracked authority operation before settling.
+      await Promise.allSettled(activeOperations);
+    }
+    await flushKeeps();
+    await loggedOperation;
+  };
+
+  /* One id per push this process makes, so a settlement can name exactly one. */
+  let pushSequence = 0;
+
+  /**
+   * The Tau Cloud remote this project publishes to, created if it has none.
+   *
+   * Publishing is *ensure the graph is on the Tau Hosted Remote* (A21), so a
+   * project nobody connected by hand still publishes — but only where the host
+   * knows which API it is signed in to, which is `remoteUrl`'s whole job.
+   *
+   * @returns The remote's name.
+   * @throws RevisionPortError When this host cannot name the project's remote.
+   */
+  const publishRemote = async (): Promise<string> => {
+    const remotes = await port.listRemotes();
+    const tau = remotes.find((remote) => remote.kind === 'tau');
+    if (tau !== undefined) {
+      return tau.name;
+    }
+    const url = options.remoteUrl?.(projectId);
+    if (url === undefined) {
+      throw new RevisionPortError('INVALID_TRANSPORT', 'Couldn’t find this project in the cloud. Try again.');
+    }
+    await port.setRemote({ name: tauRemoteName, url });
+    return tauRemoteName;
+  };
+
+  let described: Promise<RevisionEngineDescriptor> | undefined;
+  /* A description that failed is asked again next time, never kept: every later caller would inherit the rejection. */
+  const describePort = async (): Promise<RevisionEngineDescriptor> => {
+    described ??= (async () => {
+      try {
+        return await port.describe();
+      } catch (error) {
+        described = undefined;
+        throw error;
+      }
+    })();
+    return described;
+  };
+  /* How the repository reads its attributes: every leg that decides a placeholder folds case as it does (D9). */
+  const attributesReading = async (): Promise<AttributesReading> => {
+    const descriptor = await describePort();
+    return { ignoreCase: descriptor.ignoreCase === true };
+  };
+  const formatOf = async (): Promise<ObjectFormat> => {
+    const descriptor = await describePort();
+    return descriptor.objectFormat;
+  };
+
+  /**
+   * The tree this store will record, which is the only one worth hashing.
+   *
+   * A store that pointerises large objects records a different tree than the
+   * one captured from disk, and the I5 gate compares a cut against a recorded
+   * head — so the cut runs the same host-neutral clean step the writer does.
+   *
+   * The writer keeps the representation of every entry unchanged from the
+   * cut's first parent (rule 13), so the prediction reads the same parent's
+   * listing — blob ids only — and folds case exactly where the writer does.
+   * A change here that can move a tree id bumps `compareRulesRevision`.
+   *
+   * @param tree - The captured tree.
+   * @param parent - The revision the cut would follow: the checkout's head.
+   * @returns The tree as the store will hold it.
+   */
+  const recordedTree = async (
+    tree: ImmutableRevisionTree,
+    parent: string | undefined,
+  ): Promise<ImmutableRevisionTree> => {
+    const descriptor = await describePort();
+    if (!descriptor.largeObjects) {
+      return tree;
+    }
+    return cleanLargeObjects(tree, {
+      basis: parent === undefined ? undefined : await largeObjectBasisFor(parent),
+      ignoreCase: descriptor.ignoreCase === true,
+    }).tree;
+  };
+  /* ponytail: a handful of heads are live at once; one entry per head keeps the clean step's per-basis cache warm. */
+  const largeObjectBases = new Map<string, Promise<LargeObjectBasis | undefined>>();
+  const largeObjectBasisFor = async (head: string): Promise<LargeObjectBasis | undefined> => {
+    let held = largeObjectBases.get(head);
+    if (held === undefined) {
+      held = (async () => {
+        try {
+          const listing = await port.listTree?.(revisionId(head));
+          return listing === undefined ? undefined : largeObjectBasisOf(await formatOf(), listing);
+        } catch (error) {
+          largeObjectBases.delete(head);
+          throw error;
+        }
+      })();
+      largeObjectBases.set(head, held);
+      if (largeObjectBases.size > 8) {
+        largeObjectBases.delete(largeObjectBases.keys().next().value!);
+      }
+    }
+    return held;
+  };
+
+  /* The project directory as a checkout, at the head it names: the one place a port without checkouts has. */
+  const liveCheckout = (head: RevisionHead | undefined): Checkout =>
+    Object.freeze<Checkout>({
+      id: 'live',
+      projectId,
+      root: `/projects/${projectId}`,
+      kind: 'live',
+      branch: head?.branch,
+      baseRevisionId: head?.head,
+    });
+
+  /*
+   * Every place this project's files are.
+   *
+   * A port without the `checkouts` capability has exactly one: the live tree it
+   * was constructed over.
+   */
+  const listPlaces = async (opening: 'question' | 'background' = 'question'): Promise<readonly Checkout[]> => {
+    /* Before any question is asked of the store, including the first sweep:
+     * an engine that has no repository yet cannot answer what its object
+     * format is, let alone where its checkouts are. A background resume only
+     * creates it: the Start mint waits for the host's own first question. */
+    await (opening === 'question' ? ensureStore() : createStore());
+    /* The advertised capability, not the presence of the method: an adapter
+     * that has one but was constructed without a checkouts directory refuses
+     * the call, and this project still has exactly one place. */
+    const descriptor = await describePort();
+    if (port.listCheckouts !== undefined && descriptor.checkouts) {
+      return port.listCheckouts();
+    }
+    return [liveCheckout(await port.readHead())];
+  };
+
+  const placeOf = async (checkoutId: string): Promise<Checkout> => {
+    const places = await listPlaces();
+    const place = places.find((candidate) => candidate.id === checkoutId);
+    if (place === undefined) {
+      throw new RevisionPortError('CHECKOUT_CONFLICT', 'Those files are not open in this project.');
+    }
+    return place;
+  };
+
+  const headOf = async (place: Checkout): Promise<string | undefined> =>
+    place.baseRevisionId ?? (place.branch === undefined ? undefined : await port.readRef(place.branch));
+
+  /**
+   * The Git operation another process left in progress in one checkout, which
+   * its mints wait out: stock Git mid-merge, mid-rebase, on a detached head or
+   * holding the index lock. A port with no stock Git beside it answers nothing.
+   *
+   * @param place - The checkout.
+   * @returns The operation, or `undefined` when its mints may go on.
+   */
+  const gitOperationOf = async (place: Checkout): Promise<RevisionGitOperation | undefined> =>
+    port.gitOperation?.(place.kind === 'live' ? undefined : place.root);
+
+  /**
+   * What an open pull would bring to an unborn checkout.
+   *
+   * @param place - The checkout.
+   * @returns Its remote's fetched head's tree, when a fetch has named one.
+   */
+  const arrivingTree = async (place: Checkout): Promise<ImmutableRevisionTree | undefined> => {
+    const [remote] = await port.listRemotes();
+    const head =
+      remote === undefined || place.branch === undefined
+        ? undefined
+        : await port.readRef(remoteTrackingRef(remote.name, `refs/heads/${place.branch}`));
+    return head === undefined ? undefined : port.readTree(head);
+  };
+
+  /**
+   * Whether an unborn checkout holds only an opener's scaffold before any
+   * fetch — a fresh device's first open, offline (W13d, W13c's residual).
+   *
+   * Nothing has named what the pull will bring, so the opener's own `tau.json`
+   * (this project's manifest) counts as setup: minted, it is the root the first
+   * pull merges in as unrelated history. An edit to it is not lost, only
+   * recorded by the first pull's dirty-first mint (rule 6).
+   *
+   * @param files - The checkout's captured tree.
+   * @returns `true` when there is nothing here to record yet.
+   */
+  const holdsOnlyUnfetchedScaffold = async (files: ImmutableRevisionTree): Promise<boolean> => {
+    const manifest = files.get('tau.json');
+    const [remote] = await port.listRemotes();
+    if (manifest === undefined || remote === undefined || !parseProjectManifestBytes(manifest).success) {
+      return false;
+    }
+    // This checkout's identity comes from its established host binding; the manifest is authored content.
+    const fetched = await port.listRefs(`refs/remotes/${remote.name}`);
+    return fetched.length === 0 && holdsNoWork(files, new ImmutableRevisionTree([['tau.json', manifest]]));
+  };
+
+  /**
+   * Whether `tau.json` is the placeholder a Tau Cloud open writes before its
+   * first pull (`cloudProjectStub`): the remote's name and
+   * otherwise the stub's defaults. Setup like the generated files: the remote's
+   * own manifest replaces it (e921b3d96). Any other edit is work (rule 6).
+   *
+   * @param manifest - The checkout's `tau.json` bytes.
+   * @returns `true` for the untouched placeholder.
+   */
+  const isOpenPlaceholder = (manifest: Uint8Array<ArrayBuffer> | undefined): boolean => {
+    if (manifest === undefined) {
+      return false;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(manifest));
+    } catch {
+      return false;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return false;
+    }
+    const { $schema, name, description, tags, assets, ...rest } = parsed as Readonly<Record<string, unknown>>;
+    return (
+      Object.keys(rest).length === 0 &&
+      ($schema === undefined || typeof $schema === 'string') &&
+      typeof name === 'string' &&
+      description === '' &&
+      Array.isArray(tags) &&
+      tags.length === 0 &&
+      JSON.stringify(assets) === JSON.stringify({ main: { entryPath: 'main.scad' } })
+    );
+  };
+
+  /**
+   * {@link holdsNoWork} once the arriving tree is known, with the cloud open's
+   * placeholder manifest counted as setup.
+   *
+   * @param files - The checkout's captured tree.
+   * @param arriving - What the open pull brings.
+   * @returns `true` when there is nothing here to record.
+   */
+  const holdsNoWorkBeforePull = (files: ImmutableRevisionTree, arriving: ImmutableRevisionTree): boolean =>
+    holdsNoWork(
+      isOpenPlaceholder(files.get('tau.json'))
+        ? new ImmutableRevisionTree(
+            files
+              .entries()
+              .filter(({ path }) => path !== 'tau.json')
+              .map(({ path, content, mode }) => [path, content, mode] as const),
+          )
+        : files,
+      arriving,
+    );
+
+  /* Tau-owned siblings carry their role in the reserved name, so recovery can
+   * distinguish unpublished staging bytes from the only copy of a backup. */
+  const temporarySibling = (path: string, role: 'staged' | 'backup'): string => {
+    const separator = path.lastIndexOf('/');
+    const directory = separator === -1 ? '' : path.slice(0, separator + 1);
+    const name = path.slice(separator + 1);
+    return `${directory}.${name}.tau-${role}.${randomUuid()}.tmp`;
+  };
+
+  /**
+   * Remove the staged and backup siblings a killed apply left behind.
+   *
+   * They are ordinary authored paths to the registry, so the first capture after
+   * a process died inside `applyTree` would record them as the person's own
+   * files. Once per checkout per process, before that first capture (W8f).
+   *
+   * @param place - The checkout being opened.
+   * @param live - Its tree.
+   */
+  const sweepTemporarySiblings = async (place: Checkout, live: RevisionFileSystem): Promise<void> => {
+    if (swept.has(place.id)) {
+      return;
+    }
+    swept.add(place.id);
+    await sweepApplyLitter(live, (path) => policy.classify(path).versioned);
+  };
+
+  /**
+   * Remove one path, tolerating one that is already gone.
+   *
+   * @param live - The checkout tree.
+   * @param path - Root-relative path to remove.
+   * @returns When removal or the not-found result settles.
+   */
+  const unlinkIfPresent = async (live: RevisionFileSystem, path: string): Promise<void> => {
+    await live.unlink(path).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    });
+  };
+
+  /**
+   * Capture one already-open checkout filesystem.
+   *
+   * With `changed`, and a feed the host promised complete, the capture starts
+   * from this checkout's `last` and re-reads only the named paths (E1). Every
+   * capture on a complete feed becomes the new `last` unless a newer one
+   * already has: the checkout forgets the paths a capture read only when it
+   * accepts that capture's answer, so any other capture is still followed by
+   * every path written since it started.
+   *
+   * @param rooted - The checkout tree.
+   * @param basisOf - Recorded modes to inherit where the provider has none, read only for a walk.
+   * @param captureOptions - This checkout's memos, whether reuse is safe, and the paths written since `last`.
+   * @returns The complete versioned tree.
+   */
+  /*
+   * D12: the first revision after an import is built from the blob ids its
+   * record holds, measured once from the read-back of what it wrote (EQ6),
+   * so those files are not hashed a second time (I2). Only the record's own
+   * facts are taken (`recorded: 'import'`), asked for after the read, for
+   * bytes of the size the walk listed, and the index confirms each with a
+   * provider stat at exactly the recorded size and mtime: a change it has not
+   * observed yet is hashed. Bytes the walk reused from the capture memo, and
+   * that have no id yet, are offered too: an earlier capture (the root's start
+   * sweep) may have held a file before its import recorded it, and the memo
+   * vouches for them at the same stat the record names. Every other file is
+   * hashed by the memo as before, never read again here.
+   */
+  const recordedBlobOids = async (
+    rooted: RevisionFileSystem,
+    read: ReadonlyMap<string, Uint8Array<ArrayBuffer>>,
+    stats: readonly FileStatEntry[] | undefined,
+  ): Promise<void> => {
+    if (rooted.facts === undefined || stats === undefined || read.size === 0 || (await formatOf()) !== 'sha1') {
+      return;
+    }
+    const sizes = new Map(stats.map(({ path, size }) => [path, size] as const));
+    const paths = [...read.keys()].filter((path) => sizes.get(path) === read.get(path)?.byteLength);
+    const facts = await rooted
+      .facts(paths, { digests: ['blobOid'], measure: false, recorded: 'import' })
+      .catch(() => undefined);
+    for (const [path, { blobOid }] of facts ?? []) {
+      const content = read.get(path);
+      if (content !== undefined && blobOid !== undefined) {
+        recordBlobOid(content, 'sha1', blobOid);
+      }
+    }
+  };
+
+  const captureFileSystem = async (
+    rooted: RevisionFileSystem,
+    basisOf: () => Promise<ImmutableRevisionTree | undefined>,
+    captureOptions: Readonly<{
+      memos: CheckoutMemos;
+      bypassMemo: boolean;
+      changed?: Readonly<{ paths: readonly string[] | undefined }>;
+      /** The checkout's own Git ignore rules, as its port answers them. */
+      ignores?: CaptureIgnores | undefined;
+      /** A comparison a newer write has made stale: the walk stops rather than finish for nobody. */
+      signal?: AbortSignal | undefined;
+      /** A fill's placeholder check, which records nothing: an import's record is left for the next cut (D12). */
+      leavesRecords?: boolean | undefined;
+    }>,
+  ): Promise<ImmutableRevisionTree> => {
+    const { memos, bypassMemo, changed, ignores, signal, leavesRecords } = captureOptions;
+    const started = ++captureSequence;
+    /* The ignored paths this capture leaves out, and what they were read under (`CheckoutMemos.ignore`). */
+    let ignored: ReadonlySet<string> = new Set();
+    let ignoreKey = ignores === undefined ? '' : undefined;
+    let listedWhole = ignores === undefined;
+    let headNow: TrackedHead | undefined;
+    /* Git lists an ignored directory with its trailing `/`. A walk never
+     * descends into one, but the index names a changed path by itself, so a
+     * path under a listed directory is left out too. */
+    const exclude = (path: string): boolean =>
+      !policy.classify(path).versioned || coveredByIgnoreListing(ignored, path);
+    const contextKey = ignores?.context === undefined ? undefined : `context:${ignores.context}`;
+    /* The whole listing: what a walk leaves out, and where the captures after it start. */
+    const listWhole = async (): Promise<void> => {
+      if (listedWhole) {
+        return;
+      }
+      headNow = await ignores?.head();
+      const listing = new Set((await ignores?.list()) ?? []);
+      ignored = listing;
+      /* Without a context, the listing is its own key; only an entry that changes what is captured moves
+       * it, so a new generated output the registry never versions still lets the next capture start from `last`. */
+      ignoreKey =
+        contextKey ??
+        `listing:${[...listing]
+          .filter((path) => path.endsWith('/') || policy.classify(path).versioned)
+          .toSorted()
+          .join('\n')}`;
+      listedWhole = true;
+    };
+    /* The listing `last` was captured under, while it still speaks for the files. */
+    const held = contextKey !== undefined && memos.ignore?.key === contextKey ? memos.ignore.listing : undefined;
+    /*
+     * The paths whose tracking moved since that listing in a way `last` does
+     * not already account for: one the old head tracked that `last` holds and
+     * the new head does not (an outside `git rm --cached` and commit, its file
+     * untouched, may now be ignored), and one the new head tracks that `last`
+     * left out (never ignored now). A cut Tau made moves neither, so its next
+     * capture asks nothing more.
+     */
+    const trackingMoved = async (from: ImmutableRevisionTree): Promise<readonly string[]> => {
+      if (ignores === undefined || held === undefined) {
+        return [];
+      }
+      headNow = await ignores.head();
+      const before = memos.ignore?.head;
+      if (before?.revisionId === headNow?.revisionId) {
+        return [];
+      }
+      const moved: string[] = [];
+      for (const { path } of before?.tree.entries() ?? []) {
+        if (headNow?.tree.has(path) !== true && from.has(path)) {
+          moved.push(path);
+        }
+      }
+      for (const { path } of headNow?.tree.entries() ?? []) {
+        if (before?.tree.has(path) !== true && !from.has(path)) {
+          moved.push(path);
+        }
+      }
+      return moved;
+    };
+    /*
+     * Keep the held listing current for the paths this capture reads: each is
+     * asked again (a head move can track a file inside a directory Git listed
+     * whole, so a listed directory above it is asked again too), and a removed
+     * one is forgotten. A changed `.gitignore`, ignore context or bare listing
+     * changes what every path answers, so it walks instead: `false`.
+     */
+    const askAgain = async (paths: Iterable<string>, removed: ReadonlySet<string>): Promise<boolean> => {
+      if (ignores === undefined) {
+        return true;
+      }
+      if (held === undefined || contextKey === undefined) {
+        /* Another context (an `info/exclude` or `core.ignoreCase` change, which names no file), or a bare
+         * port's listing that moved, changes what paths no one named answer: only a walk takes them. */
+        await listWhole();
+        return memos.ignore?.key === ignoreKey;
+      }
+      const named = [...paths];
+      if (named.some((path) => /(?:^|\/)\.gitignore$/iu.test(path))) {
+        return false;
+      }
+      const listing = new Set(held);
+      const asked = named.filter((path) => !removed.has(path) && policy.classify(path).versioned);
+      for (const path of named) {
+        listing.delete(path);
+        listing.delete(`${path}/`);
+      }
+      for (const path of asked) {
+        for (let at = path.indexOf('/'); at !== -1; at = path.indexOf('/', at + 1)) {
+          listing.delete(path.slice(0, at + 1));
+        }
+      }
+      let answer: readonly string[] | undefined;
+      try {
+        answer = asked.length === 0 ? [] : await ignores.list(asked);
+      } catch {
+        /* A port that cannot answer for the paths says nothing about them: the capture walks instead. */
+        return false;
+      }
+      for (const entry of answer ?? []) {
+        listing.add(entry);
+      }
+      ignored = listing;
+      ignoreKey = contextKey;
+      return true;
+    };
+    let cursor: CheckoutMemos['cursor'];
+    const walk = async (): Promise<ImmutableRevisionTree> => {
+      await listWhole();
+      /* Where the index stands, read before anything else, so a write this walk races is named next time.
+       * A generation past any it issued answers `rescan` at once, with where it stands. */
+      const at = await rooted.changedSince?.(Number.MAX_SAFE_INTEGER).catch(() => undefined);
+      /* The reading comes first, so a file whose timestamp the stats then report
+       * as this recent is racily clean and is read rather than trusted (EQ7).
+       * The raw clock, not the monotonic `now()`: after a clock step back the
+       * high-water mark lies in the future of every fresh write, and a file
+       * written moments ago would read as old enough to trust (RV-W4W5a #5). */
+      const observedAt = clock();
+      const stats = await rooted.statTree?.('', { admits: (path) => !exclude(path) });
+      const memoOptions = memos.capture.unchanged(stats, observedAt);
+      signal?.throwIfAborted();
+      const basis = await basisOf();
+      signal?.throwIfAborted();
+      /* Without the index's stats the next capture could not tell which of these reads were racy. */
+      cursor =
+        at === undefined || stats === undefined
+          ? undefined
+          : { epoch: at.epoch, generation: at.generation, observedAt };
+      /* The bytes this walk read, and those it reused with no id yet: an import's record answers either (D12). */
+      const read = new Map<string, Uint8Array<ArrayBuffer>>();
+      const { reuse } = memoOptions;
+      const captured = await captureRevisionTree(rooted, {
+        exclude,
+        inheritedMode: (path) => basis?.mode(path),
+        reuse:
+          bypassMemo || reuse === undefined
+            ? undefined
+            : (path) => {
+                const held = reuse(path);
+                if (held !== undefined && !hasBlobOid(held, 'sha1')) {
+                  read.set(path, held);
+                }
+                return held;
+              },
+        onRead: (path, content) => {
+          read.set(path, content);
+          memoOptions.onRead?.(path, content);
+        },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      if (leavesRecords !== true) {
+        await recordedBlobOids(rooted, read, stats);
+      }
+      recordReadings(captured, { at: observedAt, stats });
+      return captured;
+    };
+    /* A feed the host promised complete names the paths without asking the index, so it wins
+     * whenever it has them; the index answers every other capture that has a `last` to start from. */
+    const since = options.completeChanges === true && changed?.paths !== undefined ? memos.last : undefined;
+    const fromIndex = async (): Promise<ImmutableRevisionTree> => {
+      const { last, cursor: previous } = memos;
+      const { compareIndex, changedSince, statTree, getFileMode } = rooted;
+      if (
+        bypassMemo ||
+        last === undefined ||
+        previous === undefined ||
+        compareIndex === undefined ||
+        changedSince === undefined ||
+        statTree === undefined
+      ) {
+        return walk();
+      }
+      if (ignores !== undefined) {
+        if (contextKey === undefined) {
+          /* A port with no context is listed whole each time, and a capture under another listing walks. */
+          await listWhole();
+          if (memos.ignore?.key !== ignoreKey) {
+            return walk();
+          }
+        } else if (held === undefined) {
+          return walk();
+        } else {
+          ignored = held;
+        }
+      }
+      const admits = (path: string): boolean => !exclude(path);
+      /* Every change the registry versions is named, one under a directory Git listed whole too: a head
+       * move can track a file there, and only asking again tells. */
+      const versioned = (path: string): boolean => policy.classify(path).versioned;
+      const observedAt = clock();
+      let found: Readonly<{ changes: IndexChanges; racy: readonly string[]; stats: readonly FileStatEntry[] }>;
+      try {
+        /* D5 first: the index learns what no observer told it (another program, a head move, a burst
+         * past the change limit) before its changes are trusted, and names what it holds as racy. */
+        const compared = await compareIndex.call(rooted);
+        signal?.throwIfAborted();
+        const changes = await changedSince.call(rooted, previous.generation, {
+          epoch: previous.epoch,
+          admits: versioned,
+          ...(signal === undefined ? {} : { signal }),
+        });
+        signal?.throwIfAborted();
+        found = {
+          changes,
+          racy: compared.racy,
+          stats: changes.rescan === true ? [] : await statTree.call(rooted, '', { admits }),
+        };
+      } catch {
+        /* An index that cannot answer says nothing about the files: walk them. */
+        signal?.throwIfAborted();
+        return walk();
+      }
+      const { changes, racy, stats } = found;
+      /* `rescan` is never "nothing changed": the index cannot say, so everything is walked. */
+      if (changes.rescan === true) {
+        return walk();
+      }
+      const basis = await basisOf();
+      signal?.throwIfAborted();
+      const paths = new Set([
+        ...changes.entries.map(({ path }) => path),
+        ...changes.removed.map(({ path }) => path),
+        ...racy,
+        /* EQ7: a file whose timestamp was this close to the last capture's reading may have changed
+         * after it was read without changing its stats, so it is read again, as the walk would. */
+        ...stats
+          .filter(({ mtimeMs }) => previous.observedAt - mtimeMs <= timestampGranularityMilliseconds)
+          .map(({ path }) => path),
+        ...(await trackingMoved(last)),
+      ]);
+      const kept = last.entries().filter(({ path }) => !paths.has(path));
+      if (getFileMode === undefined) {
+        /* A walk gives each file the head's mode, or 100644: a kept entry that disagrees walks (I6). */
+        if (kept.some(({ path, mode }) => (basis?.mode(path) ?? '100644') !== mode)) {
+          return walk();
+        }
+      } else {
+        /* A mode change moves neither size nor timestamp, so the index cannot name it: the provider's
+         * own modes are asked for every kept file, and a file whose mode moved is read again. */
+        await mapConcurrent(kept, captureModeConcurrency, async ({ path, mode }) => {
+          const now = await getFileMode.call(rooted, path).catch(() => undefined);
+          if (now !== mode) {
+            paths.add(path);
+          }
+        });
+        signal?.throwIfAborted();
+      }
+      if (!(await askAgain(paths, new Set(changes.removed.map(({ path }) => path))))) {
+        return walk();
+      }
+      cursor = { epoch: changes.epoch, generation: changes.generation, observedAt };
+      const captured = await captureRevisionTree(rooted, {
+        exclude,
+        inheritedMode: (path) => basis?.mode(path),
+        changedSince: { tree: last, paths: [...paths] },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      recordReadings(captured, { at: observedAt, stats }, { from: last, roots: paths });
+      return captured;
+    };
+    /* A complete feed names the paths: only they are asked about, unless an ignore rule changed, which walks. */
+    const fromFeed = async (from: ImmutableRevisionTree, named: readonly string[]): Promise<ImmutableRevisionTree> => {
+      const readAt = clock();
+      const paths = [...new Set([...named, ...(await trackingMoved(from))])];
+      if (!(await askAgain(paths, new Set()))) {
+        return walk();
+      }
+      const roots = new Set(paths);
+      /* The index's stats of the named paths alone, before their bytes: what a record keys their reading on. */
+      const above = new Set(
+        paths.flatMap((path) => [...path.matchAll(/\//gu)].map(({ index }) => path.slice(0, index))),
+      );
+      const stats = await rooted
+        .statTree?.('', {
+          admits: (path, kind) => isUnderRoot(path, roots) || (kind === 'dir' && above.has(path)),
+        })
+        .catch(() => undefined);
+      /* `last` carries the modes it inherited, and a moved head empties the paths, so it is still the head's (I6). */
+      const captured = await captureRevisionTree(rooted, {
+        exclude,
+        inheritedMode: (path) => from.mode(path),
+        changedSince: { tree: from, paths },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      recordReadings(captured, { at: readAt, stats }, { from, roots });
+      return captured;
+    };
+    const tree =
+      since === undefined || changed?.paths === undefined ? await fromIndex() : await fromFeed(since, changed.paths);
+    const collisions = caseCollisions(tree);
+    if (collisions.length > 0) {
+      throw new RevisionPortError(
+        'ENGINE_FAILED',
+        `These paths cannot be checked out together on every computer (they differ only by letter case or accents, or one names a file another needs as a folder): ${collisions.join(', ')}`,
+      );
+    }
+    /* A complete feed keeps its own cursor, the paths it names; an index keeps this one. A capture
+     * from the feed leaves the cursor older than `last`, which only names more paths next time.
+     * A fill's check is never `last`: its bytes carry no recorded id, so the next cut walks,
+     * reusing them from the memo, and offers them to an import's record (D12). */
+    if (
+      leavesRecords !== true &&
+      (options.completeChanges === true || cursor !== undefined) &&
+      started > memos.lastCapture
+    ) {
+      memos.lastCapture = started;
+      memos.last = heldTree(tree);
+      memos.ignore =
+        memos.last === undefined || ignoreKey === undefined
+          ? undefined
+          : { key: ignoreKey, listing: ignored, head: headNow };
+      if (cursor !== undefined || since === undefined) {
+        memos.cursor = memos.last === undefined ? undefined : cursor;
+      }
+    }
+    return tree;
+  };
+
+  /* The head's tree for its modes, read once per head rather than once per capture. */
+  const headBasis = async (place: Checkout, memos: CheckoutMemos): Promise<ImmutableRevisionTree | undefined> => {
+    const head = await headOf(place);
+    if (head === undefined) {
+      return undefined;
+    }
+    if (memos.basis?.revisionId === head) {
+      return memos.basis.tree;
+    }
+    /* Modes only, so nothing is fetched: a placeholder's mode is its file's (load-path audit, open first). */
+    const tree = await port.readTree(revisionId(head), { largeObjects: 'local' });
+    const held = tree === undefined ? undefined : heldTree(tree);
+    memos.basis = held === undefined ? undefined : { revisionId: head, tree: held };
+    return tree;
+  };
+
+  /* Checkouts whose placeholders this session has declared at least once (D9). */
+  const declaredCheckouts = new Set<string>();
+  type CheckoutCaptureOptions = Readonly<{
+    modeBasis?: ImmutableRevisionTree | undefined;
+    bypassMemo: boolean;
+    changed?: Readonly<{ paths: readonly string[] | undefined }>;
+    signal?: AbortSignal | undefined;
+    leavesRecords?: boolean | undefined;
+  }>;
+  const captureCheckout = async (
+    place: Checkout,
+    captureOptions: CheckoutCaptureOptions,
+  ): Promise<ImmutableRevisionTree> =>
+    useFileSystem(place, async (rooted) => captureOpened(place, rooted, captureOptions));
+  /*
+   * One capture over a checkout the caller already holds open. D9: this layer owns the checkout's placeholders, and
+   * making its view of the checkout said it will declare them: every other view holds a file the size of a pointer
+   * until it does (I7). A capture that ends without the first declaration, failed or stopped, lets go, so nothing
+   * waits on a word that will not come.
+   */
+  const captureOpened = async (
+    place: Checkout,
+    rooted: RevisionFileSystem,
+    captureOptions: CheckoutCaptureOptions,
+  ): Promise<ImmutableRevisionTree> => {
+    try {
+      return await captureDeclared(place, rooted, captureOptions);
+    } finally {
+      if (!declaredCheckouts.has(place.id)) {
+        rooted.releaseDeclaration?.();
+      }
+    }
+  };
+  const captureDeclared = async (
+    place: Checkout,
+    rooted: RevisionFileSystem,
+    captureOptions: CheckoutCaptureOptions,
+  ): Promise<ImmutableRevisionTree> => {
+    captureOptions.signal?.throwIfAborted();
+    await sweepTemporarySiblings(place, rooted);
+    /* The project directory, where an open writes placeholders; a pull resumes any other checkout's, and any
+     * checkout a failed tree write owes a check is checked again here (D10). */
+    checkFill(place);
+    const { modeBasis, bypassMemo, changed, signal, leavesRecords } = captureOptions;
+    const memos = memosOf(place.id);
+    const ignoreRoot = place.kind === 'live' ? undefined : place.root;
+    const ignores: CaptureIgnores | undefined =
+      port.ignoredPaths === undefined
+        ? undefined
+        : {
+            context: await port.ignoreContext?.(ignoreRoot),
+            list: async (paths) => port.ignoredPaths?.(ignoreRoot, paths),
+            head: async () => {
+              const head = await headOf(place);
+              const tree = head === undefined ? undefined : await headBasis(place, memos);
+              return head === undefined || tree === undefined ? undefined : { revisionId: head, tree };
+            },
+          };
+    /* Taken before it looks: a tree write that announces a newer tree meanwhile owns the next word (D10, I7). */
+    const basis = rooted.declarationBasis?.();
+    const tree = await captureFileSystem(rooted, async () => modeBasis ?? headBasis(place, memos), {
+      memos,
+      bypassMemo,
+      signal,
+      leavesRecords,
+      ...(changed === undefined ? {} : { changed }),
+      ...(ignores === undefined ? {} : { ignores }),
+    });
+    /*
+     * D9: the placeholders' only writer says which they are, from the attributes it reads, every time it looks:
+     * after its own writes (an apply verifies by capturing), on open, at a pull and at each cut, which also
+     * catches a checkout edited from outside. Every other view answers a path by this mark alone.
+     */
+    try {
+      await rooted.declarePending?.(
+        declaredPlaceholders(tree, { reading: await attributesReading() }),
+        undefined,
+        basis === undefined ? undefined : { basis },
+      );
+      declaredCheckouts.add(place.id);
+    } catch (error) {
+      /* An index that cannot open answers no mark at all: the capture stands, and the next one declares again. */
+      console.warn('[revisions] the checkout index could not learn its placeholders', error);
+    }
+    return tree;
+  };
+  /* The tree id of one checkout's capture, through that checkout's warm memo (E3). */
+  const checkoutTreeId = async (checkoutId: string, tree: ImmutableRevisionTree): Promise<string> =>
+    memosOf(checkoutId).treeIds.treeId(await recordedTree(tree, await recordingParentOf(checkoutId)), await formatOf());
+  /* The head a cut of this checkout would follow — asked only of a store that pointerises. */
+  const recordingParentOf = async (checkoutId: string): Promise<string | undefined> => {
+    const descriptor = await describePort();
+    return descriptor.largeObjects ? headOf(await placeOf(checkoutId)) : undefined;
+  };
+  /* The versioned tree of one checkout: every path the registry versions. */
+  const capture = async (place: Checkout, modeBasis?: ImmutableRevisionTree): Promise<ImmutableRevisionTree> =>
+    captureCheckout(place, { modeBasis, bypassMemo: false });
+  /*
+   * The placeholders a checkout holds, found from the Project Index's stats
+   * (D4, I3; Tau #2013): a pointer is a few lines of fixed form, so only a
+   * versioned file of a pointer's size is read, and the rest of the checkout is
+   * never read to answer the fill. The D5 compare runs first, so a pointer
+   * another program wrote is found. Ignored paths are left out, as a capture
+   * leaves them out. Every attributes file is read too: a pointer is a
+   * placeholder only where they track it (D9, the one rule a declaration
+   * uses). Without an index it captures the checkout, as before.
+   */
+  const placeholdersOf = async (
+    place: Checkout,
+    generation: number,
+  ): Promise<ReturnType<typeof largeObjectPlaceholders>> =>
+    useFileSystem(place, async (rooted) => {
+      const { compareIndex, statTree } = rooted;
+      if (compareIndex === undefined || statTree === undefined) {
+        return largeObjectPlaceholders(
+          await captureOpened(place, rooted, { bypassMemo: false, leavesRecords: true }),
+          await attributesReading(),
+        );
+      }
+      /*
+       * What it finds is every placeholder the checkout holds, by a capture's own rule: it declares them (D9). Only
+       * for the tree it read: a tree write that began meanwhile owns the next word, which its own capture gives, so
+       * this look never declares over it, here or in the index (`basis`; D10, I7).
+       */
+      const basis = rooted.declarationBasis?.();
+      try {
+        const found = await indexedPlaceholders(place, rooted, { compareIndex, statTree });
+        try {
+          if (generationOf(place.id) !== generation || runningTreeWrites.has(place.id)) {
+            return found;
+          }
+          await rooted.declarePending?.(
+            new Map(
+              [...found].map(
+                ([path, { oid, size, pointer }]) =>
+                  [path, { object: { oid, size }, pointerSize: pointer.byteLength }] as const,
+              ),
+            ),
+            undefined,
+            basis === undefined ? undefined : { basis },
+          );
+          declaredCheckouts.add(place.id);
+        } catch (error) {
+          /* An index that cannot open answers no mark at all: the fill stands, and the next look declares again. */
+          console.warn('[revisions] the checkout index could not learn its placeholders', error);
+        }
+        return found;
+      } finally {
+        if (!declaredCheckouts.has(place.id)) {
+          rooted.releaseDeclaration?.();
+        }
+      }
+    });
+  const readVersioned = async (
+    rooted: RevisionFileSystem,
+    paths: readonly string[],
+  ): Promise<Array<readonly [string, Uint8Array<ArrayBuffer>]>> => {
+    const read = await mapConcurrent(paths, captureModeConcurrency, async (path) => {
+      try {
+        return [path, await rooted.readFile(path)] as const;
+      } catch (error) {
+        /* Gone since the listing: a capture skips it too. */
+        if (isMissingFile(error)) {
+          return undefined;
+        }
+        throw error;
+      }
+    });
+    return read.flatMap((entry) => (entry === undefined ? [] : [entry]));
+  };
+  const indexedPlaceholders = async (
+    place: Checkout,
+    rooted: RevisionFileSystem,
+    { compareIndex, statTree }: Required<Pick<RevisionFileSystem, 'compareIndex' | 'statTree'>>,
+  ): Promise<ReturnType<typeof largeObjectPlaceholders>> => {
+    await compareIndex.call(rooted);
+    const stats = await statTree.call(rooted, '', { admits: versionedAdmits });
+    const candidates = await readVersioned(
+      rooted,
+      stats.flatMap(({ path, size }) => (mayBeLfsPointerSize(size) ? [path] : [])),
+    );
+    const pointers = candidates.filter(([, content]) => readLfsPointer(content) !== undefined);
+    if (pointers.length === 0) {
+      return new Map();
+    }
+    /* A pointer is a placeholder only where the attributes files track it: they are read too, as a capture reads them. */
+    const attributes = await readVersioned(
+      rooted,
+      stats.flatMap(({ path }) => (isAttributesPath(path) ? [path] : [])),
+    );
+    let entries = [...pointers, ...attributes];
+    if (port.ignoredPaths !== undefined) {
+      const listing = new Set(
+        (await port.ignoredPaths(
+          place.kind === 'live' ? undefined : place.root,
+          entries.map(([path]) => path),
+        )) ?? [],
+      );
+      entries = entries.filter(([path]) => !coveredByIgnoreListing(listing, path));
+    }
+    return largeObjectPlaceholders(new ImmutableRevisionTree(entries), await attributesReading());
+  };
+
+  /**
+   * The live checkout, asked of a store that already exists, without waiting
+   * for {@link ensureStore}: the Start mint runs inside it.
+   *
+   * @returns The project directory's checkout, or `undefined` when the port lists none.
+   */
+  const livePlaceOfStore = async (): Promise<Checkout | undefined> => {
+    const descriptor = await describePort();
+    if (port.listCheckouts !== undefined && descriptor.checkouts) {
+      const checkouts = await port.listCheckouts();
+      return checkouts.find((candidate) => candidate.kind === 'live');
+    }
+    return liveCheckout(await port.readHead());
+  };
+
+  /**
+   * Mint the Start version, V1, where a creation flow asked for it (A6).
+   *
+   * Runs once, as the store is opened, before any question is asked of it. A
+   * project Tau created carries {@link startRecordPath}; Tau creating the store
+   * is what makes it Tau's, so its files gain both generated blocks — the
+   * ignore block merged into a folder's own `.gitignore`, the large-object
+   * block into its `.gitattributes` — and the first entry records them with
+   * everything else, large files as LFS pointers. Only an unborn line with no
+   * remote is minted on: a project that arrives from a remote already has its
+   * history, and its record is removed unminted. A line that already has
+   * revisions is never minted on, and a record a lost race left on it is
+   * removed.
+   *
+   * Not an operation of the log: *Undo* never reaches the Start version.
+   */
+  const mintStart = async (): Promise<void> => {
+    const place = await livePlaceOfStore();
+    if (place === undefined) {
+      return;
+    }
+    /* A line with revisions already has its first entry: a record left by a lost race is dropped, never minted on. */
+    if ((await headOf(place)) !== undefined) {
+      await useFileSystem(place, async (rooted) => unlinkIfPresent(rooted, startRecordPath));
+      return;
+    }
+    await useFileSystem(place, async (rooted) => {
+      if (!(await rooted.exists(startRecordPath))) {
+        return;
+      }
+      const origin = parseStartRecord(await rooted.readFile(startRecordPath));
+      const remotes = await port.listRemotes();
+      if (origin !== undefined && place.branch !== undefined && remotes.length === 0) {
+        const readText = async (path: string): Promise<string | undefined> =>
+          (await rooted.exists(path)) ? rooted.readFile(path, 'utf8') : undefined;
+        for (const [path, generate] of [
+          [generatedIgnorePath, generatedIgnoreContent],
+          [generatedGitattributesPath, generatedGitattributesContent],
+        ] as const) {
+          // oxlint-disable-next-line no-await-in-loop -- two files, in order: the ignore block decides what the capture holds.
+          const existing = await readText(path);
+          const content = generate(existing);
+          if (content !== existing) {
+            // oxlint-disable-next-line no-await-in-loop -- as above.
+            await rooted.writeFile(path, content);
+          }
+        }
+        const tree = await captureCheckout(place, { bypassMemo: true });
+        const capture = startTrigger(origin);
+        const receipt = await options.port.writeRevision({
+          parents: [],
+          tree,
+          provenance: Object.freeze({
+            source: capture === 'create' ? 'user' : 'import',
+            /* B1: the person who created or brought in the project, never a stand-in. */
+            actor: options.identity.resolve({ runId: undefined, trigger: capture }),
+            capture,
+            via: options.identity.via,
+            createdAt: now(),
+          }),
+          summary: Object.freeze({ generated: startSummary(origin) }),
+        });
+        const moved = await options.port.updateRef({
+          name: place.branch,
+          expectedHead: undefined,
+          head: revisionId(receipt.commitId),
+        });
+        /* The record stays for the next open when the line gained a head first. */
+        if (moved.status !== 'updated') {
+          throw new RevisionPortError(
+            'CHECKOUT_CONFLICT',
+            `${place.branch} moved while the Start version was recorded.`,
+          );
+        }
+      }
+      await unlinkIfPresent(rooted, startRecordPath);
+    });
+  };
+  /* A decision that discards or replaces a working copy on the strength of
+   * "nothing here is unrevisioned" never trusts metadata an external replacement
+   * can preserve (same size, restored mtime). The turn's own captures keep the
+   * memo: that is git's racy-index limit, and re-reading every file twice a turn
+   * is what the memo exists to stop. */
+  const captureFresh = async (place: Checkout, modeBasis?: ImmutableRevisionTree): Promise<ImmutableRevisionTree> =>
+    captureCheckout(place, { modeBasis, bypassMemo: true });
+
+  /* The tree object id of one revision, as the store recorded it. */
+  const treeIdOf = async (revision: string | undefined): Promise<string | undefined> => {
+    if (revision === undefined) {
+      return undefined;
+    }
+    const record = await port.readRevision(revisionId(revision));
+    return record?.treeId;
+  };
+
+  /* Tree writes per checkout: a fill started for an older tree after a newer one began never speaks for the newer one. */
+  const treeWrites = new Map<string, number>();
+  const {
+    equalEntry,
+    entryOf,
+    materializeTree: applyMaterializedTree,
+    repairTornCheckout,
+  } = createApplyTreeEffects({
+    useFileSystem,
+    capture,
+    /* A write of another revision's tree ends the old tree's fill first, silently: the new tree's fill speaks next (D10, I7). */
+    onApplyingTree: (place, paths, bracket) => {
+      if (bracket?.purpose === 'tree') {
+        treeWrites.set(place.id, (treeWrites.get(place.id) ?? 0) + 1);
+        /* The write owns its generation's word (`fillSoon`): no check meanwhile starts a second fill. */
+        answeredFills.set(place.id, generationOf(place.id));
+        /* A retry for the old generation would do nothing: the new tree's fill speaks, and re-arms one if it throws. */
+        cancelFillRetry(place.id);
+        largeObjects.forget(place.id);
+      }
+      return options.onApplyingTree?.(place, paths, bracket);
+    },
+    policy,
+    withCheckoutFence,
+    checkoutTreeId,
+    temporarySibling,
+    unlinkIfPresent,
+    attributesReading,
+    prepareTarget: async (place, target, signal) => {
+      const expected = target.get('tau.json');
+      if (expected === undefined) {
+        return { tree: target };
+      }
+      const prepared = await useFileSystem(place, async (filesystem) =>
+        prepareProjectManifest({ filesystem, projectId: options.projectId, expected, signal }),
+      );
+      if (prepared === undefined) {
+        return { tree: target };
+      }
+      return {
+        tree: new ImmutableRevisionTree(
+          target
+            .entries()
+            .map((entry) => [entry.path, entry.path === 'tau.json' ? prepared.bytes : entry.content, entry.mode]),
+        ),
+        verify: async () =>
+          useFileSystem(place, async (filesystem) => verifyPreparedProjectManifest(filesystem, prepared, signal)),
+      };
+    },
+  });
+  const materializeTree: typeof applyMaterializedTree = async (place, target, materialization) => {
+    if (typeof target === 'function') {
+      const checked = async (before: ImmutableRevisionTree): Promise<ImmutableRevisionTree | DeferredRevisionTree> => {
+        const built = await target(before);
+        /* A deferred tree holds its manifest. */
+        validateLegacyProjectIdentity(
+          (isDeferredRevisionTree(built) ? built.held : built).get('tau.json'),
+          options.projectId,
+        );
+        return built;
+      };
+      return applyMaterializedTree(place, checked, materialization);
+    }
+    validateLegacyProjectIdentity(target.get('tau.json'), options.projectId);
+    return applyMaterializedTree(place, target, materialization);
+  };
+  /* The files open before their large objects arrive; the fill writes each one as it lands.
+   * Its reads are transfers, so a close that cancels transfers stops them too. */
+  const largeObjects = createLargeObjectFill({
+    port: {
+      readTree: async (id, readOptions) =>
+        transport(readOptions?.signal, async (signal) => port.readTree(id, { ...readOptions, signal })),
+      ...(port.fetchLargeObjects === undefined
+        ? {}
+        : {
+            fetchLargeObjects: async (pointers, fetchOptions) =>
+              transport(fetchOptions?.signal, async (signal) =>
+                port.fetchLargeObjects!(pointers, { ...fetchOptions, signal }),
+              ),
+          }),
+    },
+    /* The fill's own look, and its closing one: the index's stats and the pointer-sized files, not a capture (D9). */
+    placeholders: async (place) => placeholdersOf(place, generationOf(place.id)),
+    /*
+     * One flush reads the paths it fills and the attributes on their way, never the checkout (#2010), by the rule a
+     * capture and the look read them: a path the registry does not version, or one Git ignores, is absent, so an
+     * ignored attributes file never decides a fill the look would decide otherwise (D9).
+     */
+    readPaths: async (place, paths) =>
+      useFileSystem(place, async (rooted) => {
+        const versioned = paths.filter((path) => versionedAdmits(path));
+        const ignored =
+          port.ignoredPaths === undefined || versioned.length === 0
+            ? undefined
+            : await port.ignoredPaths(place.kind === 'live' ? undefined : place.root, versioned);
+        const listing = new Set(ignored ?? []);
+        const admitted = versioned.filter((path) => !coveredByIgnoreListing(listing, path));
+        const read = await mapConcurrent(admitted, captureModeConcurrency, async (path) => {
+          const entry = await entryOf(rooted, path).catch((error: unknown) => {
+            /* Gone, or a folder where a file was: no placeholder, as a capture would not list it. */
+            if (isMissingFile(error) || (error as { code?: unknown } | undefined)?.code === 'EISDIR') {
+              return undefined;
+            }
+            throw error;
+          });
+          return entry === undefined ? undefined : ([path, entry] as const);
+        });
+        return new Map(read.flatMap((entry) => (entry === undefined ? [] : [entry])));
+      }),
+    /* What a flush filled is no placeholder now, said for those paths alone (D9). */
+    declareFilled: async (place, paths) =>
+      useFileSystem(place, async (rooted) => {
+        try {
+          await rooted.declarePending?.(new Map(), paths);
+        } catch (error) {
+          /* The write ended the marks itself; an index that cannot open answers no mark at all. */
+          console.warn('[revisions] the checkout index could not learn what a fill wrote', error);
+        }
+      }),
+    attributesReading,
+    withCheckoutFence,
+    materializeTree,
+    /* A checkout over the host's store clones each object in place of writing its bytes (W11.3). */
+    landsFromStore: async (place) =>
+      useFileSystem(place, async (rooted) => rooted.capabilities.largeObjectSources === true),
+    report: options.onLargeObjects,
+  });
+  /*
+   * The fill's word, level-triggered (D10; Brain
+   * research/new-project-viewer-stuck-downloading-blueprint.md, T2-T4).
+   *
+   * A checkout's readiness waits on the fill's word for its current write
+   * generation (`treeWrites`). Only a write of a tree, a new checkout or a
+   * previous session's disk can put a placeholder in it; a mint moves the head
+   * without writing the tree, so the word is per generation, never per head.
+   * Every path that may meet a checkout (the root's start, any capture, a
+   * pull, a new checkout) asks `checkFill`, and the one check a generation
+   * owes runs once, with or without a head: with no placeholder there is
+   * nothing to fetch, so the answer needs none. A failed check is not
+   * recorded, so the next path that meets the checkout checks again.
+   */
+  const answeredFills = new Map<string, number>();
+  const checkingFills = new Set<string>();
+  const resumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  /* Checks in a row that threw, per checkout: the next one waits longer (L7). A check that answers clears it. */
+  const failedChecks = new Map<string, number>();
+  /* The one retry waiting per checkout: a failure re-arms it, so retries never multiply into parallel chains. */
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let fillsStopped = false;
+  const generationOf = (checkoutId: string): number => treeWrites.get(checkoutId) ?? 0;
+  const cancelFillRetry = (checkoutId: string): void => {
+    const timer = retryTimers.get(checkoutId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      resumeTimers.delete(timer);
+      retryTimers.delete(checkoutId);
+    }
+  };
+  /* A check that answered: the backoff starts over and no retry is still waiting. */
+  const fillAnswered = (checkoutId: string): void => {
+    failedChecks.delete(checkoutId);
+    cancelFillRetry(checkoutId);
+  };
+  const unanswerFill = (checkoutId: string): void => {
+    if (answeredFills.get(checkoutId) === generationOf(checkoutId)) {
+      answeredFills.delete(checkoutId);
+    }
+  };
+  /*
+   * A check that threw is tried again on its own, live or linked, with backoff (L7; blueprint T3): readiness never
+   * waits on another path happening to meet the checkout. A newer tree write owns the next word, so a retry for an
+   * older generation does nothing.
+   */
+  const checkFillLater = (place: Checkout, generation: number): void => {
+    if (fillsStopped) {
+      return;
+    }
+    const failures = (failedChecks.get(place.id) ?? 0) + 1;
+    failedChecks.set(place.id, failures);
+    const wait = fillCheckRetryMilliseconds[Math.min(failures, fillCheckRetryMilliseconds.length) - 1];
+    cancelFillRetry(place.id);
+    const timer = setTimeout(() => {
+      resumeTimers.delete(timer);
+      retryTimers.delete(place.id);
+      if (generationOf(place.id) !== generation) {
+        return;
+      }
+      // async-iife: bootstrap -- a background retry; a listing that fails retries the checkout it had.
+      void (async (): Promise<void> => {
+        let current: Checkout | undefined = place;
+        try {
+          const places = await listPlaces('background');
+          current = places.find((candidate) => candidate.id === place.id);
+        } catch {
+          /* Not known to be gone: the check itself says whether it still fails. */
+        }
+        /* A checkout removed meanwhile ends its chain: no retry checks files that are gone. */
+        if (current === undefined) {
+          failedChecks.delete(place.id);
+          return;
+        }
+        if (generationOf(place.id) === generation) {
+          checkFill(current);
+        }
+      })();
+    }, wait); // Bound: fillCheckRetryMilliseconds.
+    resumeTimers.add(timer);
+    retryTimers.set(place.id, timer);
+  };
+  /*
+   * D9: a look that failed before this session ever declared a checkout lets go of it, so no stat waits out the
+   * bound on a word that will not come; its reads still refuse an undeclared pointer (I7).
+   */
+  const releaseUndeclared = async (place: Checkout): Promise<void> => {
+    if (declaredCheckouts.has(place.id)) {
+      return;
+    }
+    try {
+      await useFileSystem(place, async (rooted) => {
+        rooted.releaseDeclaration?.();
+      });
+    } catch {
+      /* A checkout that cannot be opened holds nothing to let go of. */
+    }
+  };
+  const checkFill = (place: Checkout): void => {
+    if (fillsStopped || checkingFills.has(place.id) || answeredFills.get(place.id) === generationOf(place.id)) {
+      return;
+    }
+    /* Taken before any await: a tree write that begins in the gap owns the checkout's next word. */
+    const generation = generationOf(place.id);
+    checkingFills.add(place.id);
+    const timer = setTimeout(() => {
+      resumeTimers.delete(timer);
+      // async-iife: bootstrap -- a background check; a fill's own failures are reported through `onLargeObjects`.
+      void (async (): Promise<void> => {
+        try {
+          /* The placeholders first: they declare the checkout, so a head that cannot be read holds nothing. */
+          const placeholders = await placeholdersOf(place, generation);
+          const head = await headOf(place);
+          if (fillsStopped || generationOf(place.id) !== generation) {
+            return;
+          }
+          answeredFills.set(place.id, generation);
+          await largeObjects.fill(place, head === undefined ? undefined : revisionId(head), placeholders);
+          fillAnswered(place.id);
+        } catch (error) {
+          if (answeredFills.get(place.id) === generation) {
+            answeredFills.delete(place.id);
+          }
+          console.warn('[revisions] large-object placeholders could not be checked', error);
+          await releaseUndeclared(place);
+          checkFillLater(place, generation);
+        } finally {
+          checkingFills.delete(place.id);
+        }
+      })();
+    }, 0);
+    resumeTimers.add(timer);
+  };
+  /*
+   * Tree writes running on each checkout, and the checkouts a Try again was pressed on meanwhile. The write's own
+   * fill gives its tree's word, so the press waits for the write: it checks again only when the write opened no new
+   * generation, or left the one it opened unanswered.
+   */
+  const runningTreeWrites = new Map<string, number>();
+  const retriesDuringWrite = new Set<string>();
+  const recheckFill = (place: Checkout): void => {
+    fillAnswered(place.id);
+    answeredFills.delete(place.id);
+    checkFill(place);
+  };
+  const endTreeWrite = (place: Checkout, generationBefore: number): void => {
+    const remaining = (runningTreeWrites.get(place.id) ?? 1) - 1;
+    if (remaining > 0) {
+      runningTreeWrites.set(place.id, remaining);
+      return;
+    }
+    runningTreeWrites.delete(place.id);
+    if (!retriesDuringWrite.delete(place.id)) {
+      return;
+    }
+    const generation = generationOf(place.id);
+    if (generation === generationBefore || answeredFills.get(place.id) !== generation) {
+      recheckFill(place);
+    }
+  };
+  /* A close: no fill starts again, and none is still writing when this resolves. */
+  const stopFills = async (): Promise<void> => {
+    fillsStopped = true;
+    for (const timer of resumeTimers) {
+      clearTimeout(timer);
+    }
+    resumeTimers.clear();
+    retryTimers.clear();
+    await largeObjects.stop();
+  };
+  /* As the root starts, every checkout: a reload may show any of them, live or linked. A
+   * background listing: the Start mint waits for the host's own first question (A6). */
+  // async-iife: bootstrap -- the start's checks run off the caller's path; a listing that fails is checked again at the next capture.
+  void (async (): Promise<void> => {
+    try {
+      for (const place of await listPlaces('background')) {
+        checkFill(place);
+      }
+    } catch (error) {
+      console.warn('[revisions] checkouts could not be listed for their large objects', error);
+      /* The project directory is a checkout whatever the store answers: it is let go of, unless declared. */
+      await releaseUndeclared(liveCheckout(undefined));
+    }
+  })();
+
+  /* `before` with `paths` as `written` holds them: a path `written` lacks is removed, every other path kept. */
+  const overlay = (
+    before: ImmutableRevisionTree,
+    paths: readonly string[],
+    written: ImmutableRevisionTree,
+  ): ImmutableRevisionTree => {
+    const touched = new Set(paths);
+    return new ImmutableRevisionTree(
+      [
+        ...before.entries().filter(({ path }) => !touched.has(path)),
+        ...written.entries().filter(({ path }) => touched.has(path)),
+      ].map(({ path, content, mode }): RevisionTreeInput => [path, content, mode]),
+    );
+  };
+
+  /**
+   * The tree `to` names, as a checkout holding `from`'s tree comes to hold it
+   * (D10): only the paths an oid diff of the two says changed are read, their
+   * large objects from this store alone (a missing one stays its pointer, for
+   * the fill), and every other path keeps the bytes the checkout already has.
+   *
+   * @param from - The revision whose tree `before` is; each caller proves that under the fence.
+   * @param to - The revision whose tree is wanted.
+   * @param before - The checkout as captured under the fence.
+   * @returns The tree to write.
+   */
+  const treeFrom = async (
+    from: RevisionId,
+    to: RevisionId,
+    before: ImmutableRevisionTree,
+  ): Promise<ImmutableRevisionTree> => {
+    const changes = await port.diff({ from, to });
+    const changed = changes.filter(({ kind }) => kind !== 'deleted').map(({ path }) => path);
+    const read =
+      changed.length === 0
+        ? new ImmutableRevisionTree([])
+        : await port.readTree(to, { largeObjects: 'local', paths: changed });
+    if (read === undefined || changed.some((path) => !read.has(path))) {
+      throw new RevisionPortError('UNKNOWN_REVISION', `The store holds no tree for ${to}.`);
+    }
+    return overlay(
+      before,
+      changes.map(({ path }) => path),
+      read,
+    );
+  };
+
+  /**
+   * Put another revision's tree in a checkout: a restore, an undo, a switch, a
+   * pull, a merge or a decision landing (D10).
+   *
+   * The write is bracketed as `tree`, so the host announces a new tree before
+   * any state of it is read (I7), and the fill of that tree speaks next: the
+   * placeholders the write left, or its word that there are none. A write that
+   * failed after its tree was built is filled from what the checkout holds.
+   *
+   * @param place - The checkout.
+   * @param target - The tree, or how to build it from the capture.
+   * @param write - As {@link materializeTree} takes it, and `fillFrom`: the
+   *   revision whose tree names the large objects written, or the checkout's
+   *   head once the write is done when absent.
+   * @returns What {@link materializeTree} answered.
+   */
+  const writeRevisionTree = async <Result = void>(
+    place: Checkout,
+    target: MaterializeTarget,
+    write: Readonly<{
+      fillFrom?: RevisionId | undefined;
+      validate?: (before: ImmutableRevisionTree) => Promise<void>;
+      publish?: () => Promise<Result>;
+      signal?: AbortSignal;
+    }> = {},
+  ): Promise<Readonly<{ paths: readonly string[]; result: Result | undefined }>> => {
+    const { fillFrom, ...materialization } = write;
+    /* The generation before this write: a write refused before its bracket opened leaves that generation's word alone. */
+    const generationBefore = generationOf(place.id);
+    /* What the fill reads the written tree's placeholders from: a deferred tree holds every pointer and attributes file. */
+    let written: ImmutableRevisionTree | undefined;
+    const built = async (before: ImmutableRevisionTree): Promise<ImmutableRevisionTree | DeferredRevisionTree> => {
+      const tree = typeof target === 'function' ? await target(before) : target;
+      written = isDeferredRevisionTree(tree) ? tree.held : tree;
+      return tree;
+    };
+    /* The written tree from `fillFrom`; after a failure, whatever the checkout holds from its head. */
+    const fillSoon = (tree: ImmutableRevisionTree | undefined): void => {
+      /* Taken before any await: a tree write that begins in the gap owns the checkout's next word (D10). */
+      const writes = treeWrites.get(place.id);
+      /* This write's generation is answered here, before any await: a capture meanwhile starts no second fill. */
+      answeredFills.set(place.id, writes ?? 0);
+      // async-iife: bootstrap -- a background fill; its failures are reported through `onLargeObjects`.
+      void (async (): Promise<void> => {
+        try {
+          const head = (tree === undefined ? undefined : fillFrom) ?? (await headOf(place));
+          if (fillsStopped) {
+            return;
+          }
+          const placeholders =
+            tree === undefined
+              ? await placeholdersOf(place, writes ?? 0)
+              : largeObjectPlaceholders(tree, await attributesReading());
+          if (treeWrites.get(place.id) !== writes) {
+            return;
+          }
+          await largeObjects.fill(place, head === undefined ? undefined : revisionId(head), placeholders);
+          fillAnswered(place.id);
+        } catch (error) {
+          /* Unanswered, and checked again with backoff: readiness never waits on a word nobody gives (L7). */
+          if (answeredFills.get(place.id) === (writes ?? 0)) {
+            answeredFills.delete(place.id);
+          }
+          console.warn('[revisions] large-object placeholders could not be checked', error);
+          checkFillLater(place, writes ?? 0);
+        }
+      })();
+    };
+    runningTreeWrites.set(place.id, (runningTreeWrites.get(place.id) ?? 0) + 1);
+    try {
+      const answer = await materializeTree(place, built, { ...materialization, purpose: 'tree' });
+      fillSoon(written);
+      return answer;
+    } catch (error) {
+      if (written === undefined) {
+        /* A bracket opened and nothing was written: no fill speaks for its generation, so the next capture checks it. */
+        if (generationOf(place.id) !== generationBefore) {
+          unanswerFill(place.id);
+        }
+      } else {
+        fillSoon(undefined);
+      }
+      throw error;
+    } finally {
+      endTreeWrite(place, generationBefore);
+    }
+  };
+
+  /* D9: reads that resolve a placeholder to its object, and `materialize` for a consumer that needs the file. */
+  const contentReads = createContentReads({
+    useFileSystem,
+    attributesReading,
+    readStoredObject: async (pointer) => port.readLargeObject?.(pointer),
+    /* No reader's signal: the transfer may be the fill's too, and only a close stops it (I10, S4). */
+    fetchObject: async (pointer, onProgress) => {
+      if (port.fetchLargeObjects === undefined) {
+        return undefined;
+      }
+      const fetched = await transport(undefined, async (bounded) =>
+        port.fetchLargeObjects!([pointer], {
+          signal: bounded,
+          ...(onProgress === undefined
+            ? {}
+            : {
+                onTransferProgress: () => {
+                  onProgress();
+                },
+              }),
+        }),
+      );
+      return fetched.get(pointer.oid);
+    },
+    fill: largeObjects,
+    startFill: async (place) => {
+      const head = await headOf(place);
+      if (head === undefined || fillsStopped) {
+        return;
+      }
+      const generation = generationOf(place.id);
+      /* Captured before the generation is answered: a capture that fails leaves the next check owed. */
+      const placeholders = await placeholdersOf(place, generation);
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- a close during the capture stops fills.
+      if (fillsStopped || generationOf(place.id) !== generation) {
+        return;
+      }
+      answeredFills.set(place.id, generation);
+      /* Given its placeholders, the fill is registered before this returns, so the caller's wait finds it. */
+      void largeObjects.fill(place, revisionId(head), placeholders);
+    },
+  });
+  /* A checkout by id; the project directory when none is named. */
+  const readPlaceOf = async (checkoutId: string | undefined): Promise<Checkout> => {
+    if (checkoutId !== undefined) {
+      return placeOf(checkoutId);
+    }
+    const places = await listPlaces();
+    const live = places.find((candidate) => candidate.kind === 'live');
+    if (live === undefined) {
+      throw new RevisionPortError('CHECKOUT_CONFLICT', 'Those files are not open in this project.');
+    }
+    return live;
+  };
+  const readContent = async (
+    checkoutId: string | undefined,
+    path: string,
+    readOptions?: ContentReadOptions,
+  ): Promise<ReadOutcome> => contentReads.readContent(await readPlaceOf(checkoutId), path, readOptions);
+  const materialize = async (
+    checkoutId: string | undefined,
+    paths: readonly string[],
+    materializeOptions?: Readonly<{ signal?: AbortSignal; stallMilliseconds?: number }>,
+  ): Promise<void> => contentReads.materialize(await readPlaceOf(checkoutId), paths, materializeOptions);
+  const resolvePlaceholder: RevisionActors['resolvePlaceholder'] = async (checkoutId, path, request) =>
+    contentReads.resolvePlaceholder(await readPlaceOf(checkoutId), path, request);
+  /* D9: one copy of every large object; see `large-object-adoption.ts`. A port that cannot store one adopts nothing. */
+  const { storeLargeObject, readLargeObject } = port;
+  const adoption =
+    storeLargeObject === undefined || readLargeObject === undefined
+      ? undefined
+      : createLargeObjectAdoption({
+          capture: captureFresh,
+          withCheckoutFence,
+          materializeTree,
+          attributesReading,
+          storeObject: async (pointer, content) => storeLargeObject.call(port, pointer, content),
+          readStoredObject: async (pointer) => readLargeObject.call(port, pointer),
+        });
+  const entryClosureOf = async (checkoutId: string | undefined): Promise<EntryClosure | undefined> => {
+    const head = await headOf(await readPlaceOf(checkoutId));
+    return head === undefined ? undefined : readEntryClosure(port, revisionId(head));
+  };
+  /* A host whose checkouts keep the file beside the store (D9, desktop) never swaps it for its pointer. */
+  const adoptLargeObjects = async (checkoutId: string | undefined): Promise<LargeObjectAdoption> => {
+    const descriptor = await describePort();
+    return adoption === undefined || descriptor.keepsLargeObjectFiles === true
+      ? { adopted: [], left: [] }
+      : adoption.adopt(await readPlaceOf(checkoutId));
+  };
+
+  /**
+   * The project's *Sync chats* answer, read per push (D25, W17).
+   *
+   * Read, never written: the toggle is W17's writer and the person's choice, and
+   * a scheduler that cached it would keep pushing chats for the rest of a
+   * session after they turned it off. Absent means on.
+   */
+  /**
+   * Both `tau.json` answers, from one read (C23).
+   *
+   * Read per push and never cached across one, because the toggles are the
+   * person's and a scheduler that remembered them would keep pushing chats for
+   * the rest of a session after they were turned off (D25, W17). Reading the
+   * same file twice to answer two booleans is the part that was not paying for
+   * itself.
+   *
+   * @returns Whether chats and generated exports are synced. Chats default on,
+   *   exports default off; an unreadable manifest is both defaults.
+   */
+  const projectSyncPreferences = async (): Promise<Readonly<{ syncChats: boolean; syncLargeExports: boolean }>> => {
+    const records = await recordsFileSystem();
+    try {
+      const manifest: unknown = JSON.parse(await records.readFile('tau.json', 'utf8'));
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- a parsed manifest is `unknown` until read.
+      const record = manifest as Readonly<{ syncChats?: unknown; syncLargeExports?: unknown }>;
+      return { syncChats: record.syncChats !== false, syncLargeExports: record.syncLargeExports === true };
+    } catch {
+      return { syncChats: true, syncLargeExports: false };
+    }
+  };
+
+  /* Persisted tracking refs do not prove a prior process finished LFS hydration.
+   * Keep only this session's latest successful remote/tip set, bounded by the
+   * selected refs. The first pull re-establishes hydration without reading trees. */
+  let hydratedTips: Readonly<{ identity: string; heads: ReadonlyMap<string, string> }> | undefined;
+  /* `validate`'s listing, kept for the `initialSync` that follows it (R6): the
+   * connect-time fetch then needs no advertisement of its own. */
+  let validations = 0;
+  let validatedListing:
+    | Readonly<{ remote: string; identity: string | undefined; refs: readonly RemoteRef[] }>
+    | undefined;
+  /*
+   * STO-25 SP6: a Tau Cloud connect's advertisement, asked for as the connect is written, beside the store's creation,
+   * its Start version and the config write that `validate` otherwise waits for. Tau Cloud has no credential to
+   * authorize (the session is the credential), and `probe` already lists an unrecorded address the same way (R2).
+   *
+   * Only a connect that names its URL is listed early (the browser's page resolves it): a host that resolves the
+   * destination itself (`remoteUrl`) is asked once, after the store exists, as before, since what it answers can
+   * depend on state set while the connect starts (a daemon's API origin).
+   *
+   * Kept for the `validate` of that connect alone: another connect, a failed write or a removed remote forgets it, and
+   * `validate` takes it only for the destination it was asked for. The outcome never rejects: refs, a `404` this host
+   * can register on (which `validate` registers on at once, D11), or nothing, after which `validate` asks again. The
+   * listing is asked with the credential current when `writeRemote` starts (for Tau Cloud, the session cookie then);
+   * `initialSync`'s fetch that takes it runs under the session current at its own time, which the server checks
+   * again for every object it serves.
+   */
+  type EarlyListingOutcome =
+    | Readonly<{ refs: readonly RemoteRef[] }>
+    | Readonly<{ notFound: RevisionPortError }>
+    | undefined;
+  let earlyListing: Readonly<{ address: RevisionRemoteAddress; listing: Promise<EarlyListingOutcome> }> | undefined;
+  /* A `404` registering can answer (`listRegistered`'s own test): never a `410`, never on a host that cannot register. */
+  const isRegistrable = (kind: string | undefined, error: unknown): error is RevisionPortError =>
+    kind === 'tau' &&
+    options.registerRemoteProject !== undefined &&
+    error instanceof RevisionPortError &&
+    error.code === 'REMOTE_NOT_FOUND' &&
+    error.status !== 410;
+  const listEarly = (input: RemoteWriteActorInput): void => {
+    earlyListing = undefined;
+    if (input.kind !== 'tau' || input.url === undefined || input.provider !== undefined || input.fetchOnly === true) {
+      return;
+    }
+    /* Named by the connect itself: no host lookup, and nothing to throw. */
+    const address = remoteAddressOf(input);
+    // async-iife: bootstrap -- the outcome is taken by `validate`; a failure never rejects, and is asked again or registered on.
+    const listing = (async (): Promise<EarlyListingOutcome> => {
+      try {
+        return { refs: await port.listRemoteRefs(address) };
+      } catch (error) {
+        return isRegistrable('tau', error) ? { notFound: error } : undefined;
+      }
+    })();
+    earlyListing = { address, listing };
+  };
+  /* The early outcome, taken once, when the recorded remote is still the Tau destination it was asked for. */
+  const takeEarlyListing = async (configured: Remote | undefined): Promise<EarlyListingOutcome> => {
+    const early = earlyListing;
+    earlyListing = undefined;
+    if (
+      early === undefined ||
+      configured?.kind !== 'tau' ||
+      configured.name !== early.address.name ||
+      configured.url !== early.address.url ||
+      configured.provider !== undefined ||
+      configured.repositoryId !== undefined ||
+      configured.fetchOnly === true
+    ) {
+      return undefined;
+    }
+    return early.listing;
+  };
+  const remoteIdentity = async (name: string): Promise<string | undefined> => {
+    const remotes = await port.listRemotes();
+    const remote = remotes.find((entry) => entry.name === name);
+    return remote === undefined
+      ? undefined
+      : JSON.stringify([remote.name, remote.url, remote.kind, remote.provider, remote.repositoryId, remote.fetchOnly]);
+  };
+
+  /**
+   * How this device's branch stands to the remote's at connect time.
+   *
+   * `ahead` contains the remote's head, so a push fast-forwards it; `behind`
+   * is contained by it; `forked` shares a base with it; `unrelated` shares
+   * none in a walk that reached every root. A walk that cannot be read, or
+   * that stops at its bound, is `forked`: nothing is pushed or moved on it.
+   *
+   * @param head - This device's head.
+   * @param remoteHead - The remote's head, fetched into this store.
+   * @returns The relation.
+   */
+  const openingRelation = async (
+    head: RevisionId,
+    remoteHead: RevisionId,
+  ): Promise<'ahead' | 'behind' | 'forked' | 'unrelated'> => {
+    const walk = await port.log({ heads: [remoteHead, head], limit: divergenceWalkLimit }).catch(() => undefined);
+    if (walk === undefined) {
+      return 'forked';
+    }
+    const relation = integrationOf(walk, head, remoteHead);
+    if (relation !== 'diverged') {
+      return relation === 'upToDate' ? 'ahead' : 'behind';
+    }
+    return walk.length < divergenceWalkLimit && mergeBaseOf(walk, head, remoteHead) === undefined
+      ? 'unrelated'
+      : 'forked';
+  };
+
+  /**
+   * Give way to the remote's history where this device's line shares none of
+   * it and holds no work of its own: a first revision minted over what an
+   * earlier, unfinished open left on this device. Every file it holds is the
+   * remote's, byte for byte, or setup Tau generated, so the branch goes back
+   * to unborn and the opening pull writes the remote's tree as it would on a
+   * fresh device. The line is kept on a host-local ref, never pushed. A line
+   * with work of its own stays, and the opening pull merges it.
+   *
+   * @param branch - The branch, without `refs/heads/`.
+   * @param head - This device's head.
+   * @param remoteHead - The remote's head.
+   * @returns Whether the branch gave way.
+   */
+  const yieldUnrelatedLine = async (branch: string, head: RevisionId, remoteHead: RevisionId): Promise<boolean> => {
+    const [local, remote] = await Promise.all([
+      port.readTree(head, { largeObjects: 'local' }),
+      port.readTree(remoteHead, { largeObjects: 'local' }),
+    ]);
+    if (local === undefined || remote === undefined || !holdsNoWorkBeforePull(local, remote)) {
+      return false;
+    }
+    await port.updateRef({ name: `${supersededRefPrefix}/${head}`, expectedHead: undefined, head });
+    const reset = await port.updateRef({ name: `refs/heads/${branch}`, expectedHead: head });
+    return reset.status === 'updated';
+  };
+
+  /* P51, D11: Tau Cloud answers `404` until the project is registered, so the
+   * registering PUT is sent only on that answer, and a reconnect costs none. */
+  const listRegistered = async (
+    kind: string | undefined,
+    list: () => Promise<readonly RemoteRef[]>,
+  ): Promise<readonly RemoteRef[]> => {
+    try {
+      return await list();
+    } catch (error) {
+      /* A `410` is a project Tau Cloud tombstoned: registering cannot bring it back. */
+      if (!isRegistrable(kind, error) || options.registerRemoteProject === undefined) {
+        throw error;
+      }
+      /* A refused registration is reported as the listing's own refusal, which says what the remote answered. */
+      try {
+        await options.registerRemoteProject(projectId);
+      } catch {
+        throw error;
+      }
+      return list();
+    }
+  };
+
+  const evidenceRefName = 'refs/tau/evidence/exports';
+  /*
+   * The remote's evidence record this device has written to disk (SP2h review): one control record under `.git` per
+   * remote, holding its head or `""` for none. A projection's fetch moves the remote-tracking ref before it writes a
+   * file, and a projection can stop after that fetch (a failed apply beside it, a deadline, a close), so the tracking
+   * ref is no proof the exports landed. This record moves only once they have. A device with no record for a remote,
+   * as one an older build restored from, takes the tracking head it holds before the pull's records are fetched, once.
+   * Each remote's record is a whole file of its own, so two remotes written at once never read and rewrite each
+   * other's entry (SP2h final review), and a torn or corrupt one reads as absent for its remote alone.
+   */
+  /* `.` is escaped too, so one remote's `<record>.<uuid>.writing` siblings never begin with another's record name. */
+  const appliedEvidencePathOf = (remote: string): string =>
+    `.git/tau-applied-evidence-${encodeURIComponent(remote).replaceAll('.', '%2E')}.json`;
+  const wholeAppliedEvidence = jsonRecord(
+    (value) =>
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      typeof (value as { head?: unknown }).head === 'string',
+  );
+  const readAppliedEvidence = async (remote: string): Promise<string | undefined> => {
+    const text = await readControlRecord(controlPlaneFiles(await recordsFileSystem()), appliedEvidencePathOf(remote), {
+      accepts: wholeAppliedEvidence,
+    });
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- `wholeAppliedEvidence` checked the shape.
+    return text !== undefined && wholeAppliedEvidence(text) ? (JSON.parse(text) as { head: string }).head : undefined;
+  };
+  const writeAppliedEvidence = async (remote: string, head: string): Promise<void> => {
+    await writeControlRecord(
+      controlPlaneFiles(await recordsFileSystem()),
+      appliedEvidencePathOf(remote),
+      `${JSON.stringify({ head })}\n`,
+    );
+  };
+  /*
+   * What this device has applied of a remote's evidence record before this pull: its applied entry, seeded once from
+   * the tracking head held before any record is fetched (an older build's trust, kept for migration only).
+   */
+  const appliedEvidenceBasis = async (
+    remote: string,
+    trackingHead: string | undefined,
+  ): Promise<string | undefined> => {
+    const applied = await readAppliedEvidence(remote);
+    if (applied !== undefined) {
+      return applied === '' ? undefined : applied;
+    }
+    await writeAppliedEvidence(remote, trackingHead ?? '');
+    return trackingHead;
+  };
+  const candidateRefName = 'refs/tau/artifacts/geospec-candidates';
+
+  /*
+   * The advertised refs a pull's authored fetch takes, and so the ones the
+   * connect-time fetch takes too (R4): one rule, so the opening pull finds
+   * every one of them already hydrated and does not fetch again.
+   *
+   * Operation logs are pushed, never pulled: *Undo* reads only this host's
+   * own, and fetching every device's on every pull is two requests each,
+   * forever (RV-W7 #1). Chats and generated evidence are the record set, which
+   * `projectRecords` fetches by name after the authored apply, and only when
+   * this project syncs them. Candidates have their own bounded transport.
+   */
+  const authoredFetchReferences = (advertised: readonly RemoteRef[], remote: string): string[] => {
+    const candidateTrackingRef = remoteTrackingRef(remote, candidateRefName);
+    return advertised
+      .map((entry) => entry.name)
+      .filter(
+        (name) =>
+          name !== candidateRefName &&
+          !name.startsWith(`${candidateRefName}/`) &&
+          name !== candidateTrackingRef &&
+          !name.startsWith(`${candidateTrackingRef}/`) &&
+          !name.startsWith(`${opsRefPrefix}/`) &&
+          !name.startsWith(`${chatRefPrefix}/`) &&
+          !name.startsWith('refs/tau/evidence/'),
+      );
+  };
+
+  /*
+   * Fetch the authored refs of one listing and, when the remote stayed the
+   * same destination throughout, remember those tips as hydrated by this
+   * session. A failed fetch forgets every earlier proof.
+   */
+  const fetchAuthored = async (
+    input: Readonly<{
+      remote: string;
+      wanted: readonly string[];
+      advertised: readonly RemoteRef[];
+      identity: string | undefined;
+      signal: AbortSignal;
+      /** Rejects when the caller's deadline passes; the fetch loses the race. */
+      deadline?: Promise<never>;
+    }>,
+  ): Promise<void> => {
+    const { remote, wanted, advertised, identity, signal } = input;
+    hydratedTips = undefined;
+    /* The listing goes back with the fetch, so a port that kept its advertisement does not ask again (R6). */
+    const fetched = port.fetch({ remote, signal, refs: wanted, advertised });
+    await (input.deadline === undefined ? fetched : Promise.race([fetched, input.deadline]));
+    signal.throwIfAborted();
+    const finalIdentity = await remoteIdentity(remote);
+    signal.throwIfAborted();
+    if (identity !== undefined && finalIdentity === identity) {
+      const advertisedHeads = new Map(advertised.map((entry) => [entry.name, String(entry.head)]));
+      hydratedTips = {
+        identity,
+        heads: new Map(wanted.map((name) => [name, advertisedHeads.get(name) ?? ''])),
+      };
+    }
+  };
+  const isSyncedEvidencePath = (path: string): boolean =>
+    path === '.tau' ||
+    path === '.tau/artifacts' ||
+    path === '.tau/tool-results' ||
+    path === '.tau/offloaded-tool-results' ||
+    path === 'exports' ||
+    path === 'thumbnail.webp' ||
+    path.startsWith('exports/') ||
+    path.startsWith('.tau/artifacts/') ||
+    path.startsWith('.tau/tool-results/') ||
+    path.startsWith('.tau/offloaded-tool-results/');
+
+  /** A brand-new device learns the preference from the fetched project manifest. */
+  /**
+   * Both `tau.json` toggles as one revision records them, read by that manifest's oid alone (R5): an empty checkout is
+   * exactly the cold open, where reading the whole tree read every blob and looked up every large object.
+   *
+   * @param revision - The revision.
+   * @returns Its toggles, with {@link projectSyncPreferences}' defaults for an unreadable manifest; `undefined` when
+   *   the revision holds none.
+   */
+  const revisionSyncPreferences = async (
+    revision: RevisionId,
+  ): Promise<Readonly<{ syncChats: boolean; syncLargeExports: boolean }> | undefined> => {
+    const tree = await port.readTree(revision, { largeObjects: 'local', paths: ['tau.json'] });
+    const manifest = tree?.get('tau.json');
+    if (manifest === undefined) {
+      return undefined;
+    }
+    try {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- a parsed manifest is `unknown` until read.
+      const record = JSON.parse(new TextDecoder().decode(manifest)) as Readonly<{
+        syncChats?: unknown;
+        syncLargeExports?: unknown;
+      }>;
+      return { syncChats: record.syncChats !== false, syncLargeExports: record.syncLargeExports === true };
+    } catch {
+      return { syncChats: true, syncLargeExports: false };
+    }
+  };
+
+  const fetchedProjectSyncsLargeExports = async (
+    remote: string,
+    branch: string,
+    preferencesOf: typeof revisionSyncPreferences,
+  ): Promise<boolean> => {
+    const records = await recordsFileSystem();
+    if (await records.exists('tau.json')) {
+      return false;
+    }
+    const head = await port.readRef(remoteTrackingRef(remote, `refs/heads/${branch}`));
+    const preferences = head === undefined ? undefined : await preferencesOf(revisionId(head));
+    return preferences?.syncLargeExports === true;
+  };
+
+  /*
+   * The remote's evidence head, when this device's own evidence ref already
+   * holds it: the head itself, or a descendant of it this device recorded.
+   *
+   * Before R4 the connect-time fetch wrote the evidence tracking ref, so the
+   * opening pull read the remote's record as already applied and never
+   * restored it over local exports. The connect no longer fetches records, so
+   * a reconnecting device with no tracking ref would restore — and move every
+   * export it changed since into `sync-conflicts`. A record this device's own
+   * ref already contains is not news to it (C21); one it does not hold, as on
+   * a fresh device, is restored as before. A head this store cannot walk to is
+   * not held.
+   */
+  const heldEvidenceHead = async (remoteHead: string | undefined): Promise<string | undefined> => {
+    if (remoteHead === undefined) {
+      return undefined;
+    }
+    const local = await port.readRef(evidenceRefName);
+    if (local === undefined) {
+      return undefined;
+    }
+    if (String(local) === remoteHead) {
+      return remoteHead;
+    }
+    try {
+      const { behind } = await port.divergence({ head: local, base: revisionId(remoteHead) });
+      return behind === 0 ? remoteHead : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** Record generated evidence on its own ref; authored history stays clean. */
+  const recordEvidence = async (enabled: boolean, remoteHead?: string): Promise<readonly SyncRefOutcome[]> => {
+    if (!enabled) {
+      return [];
+    }
+    try {
+      const records = await recordsFileSystem();
+      const tree = await captureRevisionTree(records, { exclude: (path) => !isSyncedEvidencePath(path) });
+      const current = await port.readRef(evidenceRefName);
+      if (current === undefined && tree.size === 0) {
+        return [];
+      }
+      const currentTreeId = await treeIdOf(current);
+      if (
+        currentTreeId === revisionTreeId(await recordedTree(tree, current ?? remoteHead), await formatOf()) &&
+        (remoteHead === undefined || current === remoteHead)
+      ) {
+        return [{ name: evidenceRefName, status: 'upToDate', head: current }];
+      }
+      const parents = [...new Set([current, remoteHead].filter((head): head is string => head !== undefined))];
+      const receipt = await port.writeRevision({
+        parents: parents.map((head) => revisionId(head)),
+        tree,
+        provenance: provenanceOf('save', []),
+        summary: Object.freeze({ generated: 'Backed up generated exports' }),
+      });
+      const head = revisionId(receipt.commitId);
+      const updated = await port.updateRef({ name: evidenceRefName, expectedHead: current, head });
+      return [
+        {
+          name: evidenceRefName,
+          status: updated.status === 'updated' ? 'upToDate' : 'rejected',
+          head: updated.status === 'updated' ? head : current,
+          ...(updated.status === 'updated' ? {} : { reason: 'Generated exports changed while they were recorded.' }),
+        },
+      ];
+    } catch (error) {
+      return [
+        {
+          name: evidenceRefName,
+          status: 'rejected',
+          head: await port.readRef(evidenceRefName).catch(() => undefined),
+          reason: error instanceof Error ? error.message : 'Generated exports could not be recorded.',
+        },
+      ];
+    }
+  };
+
+  /** Restore generated evidence, retaining a differing local value before replacement. */
+  const projectEvidence = async (
+    references: ReadonlyArray<Readonly<{ name: string; head: string }>>,
+    signal: AbortSignal,
+  ) => {
+    const ref = references.find(
+      (candidate) => candidate.name === evidenceRefName || candidate.name.endsWith('/tau/evidence/exports'),
+    );
+    if (ref === undefined) {
+      return;
+    }
+    const tree = await port.readTree(revisionId(ref.head));
+    if (tree === undefined) {
+      throw new RevisionPortError('UNKNOWN_REVISION', 'The generated-export record has no tree.');
+    }
+    const collisions = caseCollisions(tree);
+    const invalid = tree
+      .entries()
+      .find((entry) => !isSyncedEvidencePath(entry.path) || policy.classify(entry.path).class !== 'records');
+    if (invalid !== undefined || collisions.length > 0) {
+      throw new RevisionPortError(
+        'UNSUPPORTED_OPERATION',
+        invalid === undefined
+          ? `Generated export paths collide on a supported filesystem: ${collisions.join(', ')}`
+          : `Generated export record contains a reserved path: ${invalid.path}`,
+      );
+    }
+    const records = await recordsFileSystem();
+    for (const entry of tree.entries()) {
+      signal.throwIfAborted();
+      // oxlint-disable-next-line no-await-in-loop -- each record is reconciled before the next.
+      const current = await entryOf(records, entry.path);
+      if (equalEntry(current, entry)) {
+        continue;
+      }
+      if (current !== undefined) {
+        const conflictBase = `.tau/artifacts/sync-conflicts/${encodeURIComponent(entry.path)}.${ref.head.slice(0, 12)}`;
+        let conflictPath: string | undefined;
+        let attempt = 0;
+        let retained: Awaited<ReturnType<typeof entryOf>>;
+        while (conflictPath === undefined) {
+          const candidate = attempt === 0 ? conflictBase : `${conflictBase}.${attempt}`;
+          // oxlint-disable-next-line no-await-in-loop -- finds a non-colliding retention path.
+          retained = tree.has(candidate) ? undefined : await entryOf(records, candidate);
+          if (!tree.has(candidate) && (retained === undefined || equalEntry(retained, current))) {
+            conflictPath = candidate;
+          } else {
+            attempt += 1;
+          }
+        }
+        if (retained === undefined) {
+          signal.throwIfAborted();
+          // oxlint-disable-next-line no-await-in-loop -- preserve-before-replace is ordered deliberately.
+          await records.writeFile(conflictPath, current.content);
+          if (records.setFileMode !== undefined) {
+            // oxlint-disable-next-line no-await-in-loop -- mode belongs to the preceding write.
+            await records.setFileMode(conflictPath, current.mode);
+          }
+        }
+      }
+      signal.throwIfAborted();
+      // oxlint-disable-next-line no-await-in-loop -- replacement follows successful retention.
+      await records.writeFile(entry.path, entry.content);
+      if (records.setFileMode !== undefined) {
+        // oxlint-disable-next-line no-await-in-loop -- mode belongs to the preceding write.
+        await records.setFileMode(entry.path, entry.mode);
+      }
+    }
+  };
+
+  const leasePathOf = (runId: string): string => `${leaseDirectory}/${encodeURIComponent(runId)}.json`;
+
+  /* The project's own root: `.tau/runs` is a records row inside the project. */
+  const recordsFileSystem = async (): Promise<RevisionFileSystem> => {
+    const places = await listPlaces();
+    const live = places.find((place) => place.kind === 'live') ?? places[0];
+    if (live === undefined) {
+      throw new RevisionPortError('INVALID_REPOSITORY', 'This project has no files open to record this run against.');
+    }
+    return filesystem(live);
+  };
+
+  /* The unwrapped store: an ops ref is not a head, and its own writes are not operations. */
+  const opsLog = createOpsLog({ port: options.port, recordsFileSystem, now, identity: options.identity });
+
+  const {
+    chatContext,
+    offerOf,
+    outcomeOf,
+    pushRecordRef,
+    pushRecordSet,
+    recordChats,
+    refusedAll,
+    replayRejectedChat,
+    staysPerRef,
+  } = createChatEffects({
+    port,
+    recordsFileSystem,
+    deviceId: options.deviceId,
+    recordDevices: opsLog,
+    identity: options.identity,
+    onChatsProjected: options.onChatsProjected,
+    now,
+  });
+
+  const { readPendingQueue, writePendingQueue } = createSyncQueue({ recordsFileSystem });
+
+  /**
+   * What the cut that minted a revision said about it, taken when a head moves
+   * to that revision. A revision whose CAS lost leaves its entry behind.
+   *
+   * ponytail: unbounded by lost CASes, which are rare and each a few bytes; drop
+   * entries by age if a host ever loses thousands in one session.
+   */
+  const mintedOperations = new Map<
+    string,
+    Readonly<{ kind: CheckoutCutTrigger; undoes?: string; actor: RevisionIdentity }>
+  >();
+
+  /**
+   * Whether the push offers a branch: not host-local, and not another device's
+   * conflict line, which is that device's to push (D14).
+   *
+   * @param name - The branch, in full.
+   * @param own - This host's record devices.
+   * @returns `true` when the push offers it.
+   */
+  const pushOffers = (name: string, own: ReadonlySet<string>): boolean =>
+    !isHostLocalRef(name) && parseConflictLine(name, own)?.foreign !== true;
+
+  /**
+   * This host's record devices, or none when the device file cannot be read:
+   * a broken file must never stop history from being offered (I8).
+   *
+   * @param read - Which set: every own device, or the current ones.
+   * @returns The set; empty after reporting a read failure.
+   */
+  const devicesOrNone = async (
+    read: () => Promise<ReadonlySet<string>> = opsLog.ownDevices,
+  ): Promise<ReadonlySet<string>> => {
+    try {
+      return await read();
+    } catch (error) {
+      console.error('[revisions] record devices', error);
+      return new Set();
+    }
+  };
+
+  /**
+   * An own operation log a remote refused as a rewrite, offered again under a
+   * new record device (RV-W7 #11).
+   *
+   * Only another host holding the same record device — a copied `.git` — makes
+   * a remote refuse this host's log as not fast-forwarding: neither log can
+   * ever fast-forward the other's, so the refusal would be owed forever. The
+   * form moves to a new device carrying the log, and the old id stays this
+   * host's own.
+   *
+   * @param input - The record, what the remote answered, and the push's remote and leases.
+   * @returns The new log's outcome, or `undefined` when the record is not an
+   *   own log refused as a rewrite.
+   */
+  const reofferRefusedLog = async (
+    input: Readonly<{
+      name: string;
+      outcome: SyncRefOutcome;
+      remote: string;
+      repositoryUrl?: string;
+      signal?: AbortSignal;
+      leases: Readonly<Record<string, string>>;
+    }>,
+  ): Promise<SyncRefOutcome | undefined> => {
+    if (
+      !input.name.startsWith(`${opsRefPrefix}/`) ||
+      input.outcome.status !== 'rejected' ||
+      !/fast-forward|only grows|fetch first|stale info/iu.test(input.outcome.reason ?? '')
+    ) {
+      return undefined;
+    }
+    const successor = await opsLog.retire(input.name.slice(`${opsRefPrefix}/`.length));
+    const name = successor === undefined ? undefined : opsRefName(successor);
+    const head = name === undefined ? undefined : await port.readRef(name);
+    if (name === undefined || head === undefined) {
+      return undefined;
+    }
+    const { outcome } = await pushRecordRef({
+      name,
+      remote: input.remote,
+      repositoryUrl: input.repositoryUrl,
+      signal: input.signal,
+      leases: input.leases,
+      offered: new Map([[name, String(head)]]),
+    });
+    return outcome;
+  };
+
+  /**
+   * The durable queue, plus every branch the push would offer that holds work
+   * its push remote has not taken (D15): a crash between a mint and its push
+   * leaves no queue entry, and the heads themselves still say the push is owed.
+   *
+   * @param record - The queue as it was written.
+   * @returns The queue with the owed branches appended; the record unchanged
+   *   when the heads cannot be read, because that must never stop the scheduler
+   *   that reads it.
+   */
+  const withOwedPushes = async (record: SyncQueueRecord): Promise<SyncQueueRecord> => {
+    try {
+      /* The remote `readRemote` answers with: the first, unless it only fetches. */
+      const [first] = await port.listRemotes();
+      const remote = first?.fetchOnly === true || first?.provider === 'github' ? undefined : first?.name;
+      if (remote === undefined) {
+        return record;
+      }
+      const queued = new Set(record.entries.map((entry) => entry.ref));
+      const [heads, own] = await Promise.all([port.listRefs('refs/heads'), devicesOrNone()]);
+      const owed = await Promise.all(
+        heads
+          .filter((entry) => !queued.has(entry.name) && pushOffers(entry.name, own))
+          .map(async ({ name, head }): Promise<readonly SyncQueueEntry[]> => {
+            const tracked = await port.readRef(remoteTrackingRef(remote, name));
+            /* Owed only when the branch holds revisions the remote lacks: one
+             * that is merely behind has nothing to push. */
+            const divergence =
+              tracked === undefined || tracked === head ? undefined : await port.divergence({ head, base: tracked });
+            const ahead = tracked === undefined ? 1 : (divergence?.ahead ?? 0);
+            return ahead === 0
+              ? []
+              : [
+                  {
+                    ref: name,
+                    operation: 'push',
+                    remote,
+                    head: String(head),
+                    expected: tracked === undefined ? undefined : String(tracked),
+                    reason: 'Not backed up yet.',
+                    recordedAt: now(),
+                  },
+                ];
+          }),
+      );
+      return { ...record, entries: [...record.entries, ...owed.flat()] };
+    } catch {
+      return record;
+    }
+  };
+
+  /* An undo's plan, by checkout, waiting for the `restore` cut that mints its tree (D15). */
+  const pendingUndos = new Map<string, Readonly<{ treeId: string; undoes: string }>>();
+
+  /*
+   * XD4: the checkouts this device removed, and the checkouts of branches it saw removed, by id. A chat record synced
+   * from elsewhere can still name one; it is refused for good rather than opened again or waited on. Opening the
+   * branch here again forgets it. Device state in a control-plane file no tree records, like the record devices.
+   */
+  const removedCheckoutsPath = '.git/tau-removed-checkouts.json';
+  /*
+   * Absent is none, and a read that fails throws (the caller refuses retryably). A file that reads but does not parse
+   * as a list of ids would refuse every checkout for ever and is never repaired by a write, so it is moved aside whole
+   * (`.corrupt-<time>`, never written over), reported, and read as none: losing a removal marker only lets that
+   * checkout's id open its branch again, or wait on it, instead of refusing it for good.
+   */
+  const wholeRemovedCheckouts = jsonRecord(
+    (value) => Array.isArray(value) && value.every((id) => typeof id === 'string'),
+  );
+  const readRemovedCheckouts = async (): Promise<ReadonlySet<string>> => {
+    const records = controlPlaneFiles(await recordsFileSystem());
+    const text = await readControlRecord(records, removedCheckoutsPath, { accepts: wholeRemovedCheckouts });
+    if (text === undefined) {
+      return new Set();
+    }
+    let stored: unknown;
+    try {
+      stored = JSON.parse(text);
+    } catch {
+      stored = undefined;
+    }
+    if (Array.isArray(stored) && stored.every((id) => typeof id === 'string')) {
+      return new Set(stored);
+    }
+    const aside = `${removedCheckoutsPath}.corrupt-${String(Date.now())}`;
+    try {
+      await records.rename(removedCheckoutsPath, aside);
+      console.warn(`[revisions] ${removedCheckoutsPath} is not a list of checkout ids; kept as ${aside}.`);
+    } catch {
+      /* Another reader moved it aside first, or a writer replaced it: the next read answers from what is there. */
+    }
+    return new Set();
+  };
+  let removedWrites: Promise<void> = Promise.resolve();
+  /* Written whole beside the file, then renamed over it, as the record devices are: a torn write leaves the old list. */
+  const writeRemovedCheckout = async (id: string, removed: boolean): Promise<void> => {
+    const ids = new Set(await readRemovedCheckouts());
+    if (ids.has(id) === removed) {
+      return;
+    }
+    if (removed) {
+      ids.add(id);
+    } else {
+      ids.delete(id);
+    }
+    await writeControlRecord(
+      controlPlaneFiles(await recordsFileSystem()),
+      removedCheckoutsPath,
+      `${JSON.stringify([...ids])}\n`,
+    );
+  };
+  const noteRemovedCheckout = async (id: string, removed: boolean): Promise<void> => {
+    const prior = removedWrites;
+    const write = (async (): Promise<void> => {
+      await prior;
+      try {
+        await writeRemovedCheckout(id, removed);
+      } catch {
+        /* Evidence, never a verb's outcome: a write that fails, or a list that cannot be read, is left as it was. */
+      }
+    })();
+    removedWrites = write;
+    await write;
+  };
+  /* Never rejects: the head has already moved, and this is evidence for a later placement, not the move's outcome. */
+  const noteBranchRemoved = async (branch: string, removed: boolean): Promise<void> => {
+    try {
+      const { objectFormat } = await describePort();
+      await noteRemovedCheckout(checkoutIdOfBranch(objectFormat, branch.replace(/^refs\/heads\//u, '')), removed);
+    } catch {
+      /* A store with no checkout to keep the record beside, or no format yet, records nothing. */
+    }
+  };
+
+  /**
+   * Append one head move to the log of the form that made it (D15, I5).
+   *
+   * @param name - The ref as the caller named it: a branch, or a ref in full.
+   * @param from - Where it stood.
+   * @param to - Where it stands; `undefined` when it was removed.
+   */
+  const recordOperation = async (
+    name: string,
+    from: RevisionId | undefined,
+    to: RevisionId | undefined,
+  ): Promise<void> => {
+    const ref = name.startsWith('refs/') ? name : `refs/heads/${name}`;
+    if (!ref.startsWith('refs/heads/')) {
+      return;
+    }
+    const minted = to === undefined ? undefined : mintedOperations.get(to);
+    if (to !== undefined) {
+      mintedOperations.delete(to);
+    }
+    const actor = minted === undefined ? options.identity.resolve({ runId: undefined, trigger: 'save' }) : minted.actor;
+    try {
+      await opsLog.append(actor, {
+        v: 1,
+        ref,
+        ...(from === undefined ? {} : { from: String(from) }),
+        ...(to === undefined ? {} : { to: String(to) }),
+        kind: minted?.kind ?? 'move',
+        ...(minted?.undoes === undefined ? {} : { undoes: minted.undoes }),
+        actor: actor.id,
+        at: now(),
+      });
+    } catch (error) {
+      /* Reported, never thrown: the head has moved, and failing the caller would
+       * report a landed revision as lost. Only this operation is missing from
+       * *Undo*; the push is still derived from the head (`withOwedPushes`). */
+      console.error('[revisions] operation log', error);
+    }
+    /* After the operation log, which *Undo* needs, and never failing the move (XD4). */
+    if (from === undefined || to === undefined) {
+      await noteBranchRemoved(ref.slice('refs/heads/'.length), to === undefined);
+    }
+  };
+
+  /* A corrupt custody record cannot become evidence that a checkout is free. */
+  const readLeases = async (): Promise<readonly TurnLease[]> => {
+    const records = await recordsFileSystem();
+    if (!(await records.exists(leaseDirectory))) {
+      return [];
+    }
+    const entries = await records.readdir(leaseDirectory);
+    const files = entries.filter((name) => name.endsWith('.json')).toSorted();
+    const leases = await Promise.all(
+      files.map(async (name): Promise<TurnLease | undefined> => {
+        let text: string;
+        try {
+          text = await records.readFile(`${leaseDirectory}/${name}`, 'utf8');
+        } catch (error) {
+          /* Listed, then retired in its own run's section before it could be read: it is gone, as if never listed. */
+          if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            return undefined;
+          }
+          throw error;
+        }
+        const lease = parseLeaseRecord(name, text);
+        if (lease === undefined) {
+          throw new RevisionPortError('INVALID_REPOSITORY', `The saved run record ${name} cannot be read safely.`);
+        }
+        return lease;
+      }),
+    );
+    return leases.filter((lease): lease is TurnLease => lease !== undefined);
+  };
+
+  const leaseOf = async (runId: string): Promise<TurnLease | undefined> => {
+    const leases = await readLeases();
+    return leases.find((lease) => lease.runId === runId);
+  };
+  /* Legacy retirement keeps its attempt-zero compatibility; new holds require exact identity. */
+  const namesAttempt = (record: TurnLease, key: TurnAttemptKey): boolean =>
+    (record.attempt === 0 || record.attempt === key.attempt) &&
+    record.turnId === key.turnId &&
+    record.chatId === key.chatId;
+  const hasExecutions = (record: TurnLease | undefined): boolean => (record?.executionIds?.length ?? 0) > 0;
+  const refuseHeldExecutions = (record: TurnLease | undefined): void => {
+    if (hasExecutions(record)) {
+      throw new RevisionPortError(
+        'CHECKOUT_CONFLICT',
+        'Running work still holds these files. Stop it before continuing.',
+      );
+    }
+  };
+  /*
+   * The executions this root last wrote for each run (I7). A hold counts before its bytes land and a release only
+   * after, so `closeExecutions` can answer from memory without waiting on the store; a failed write forgets the run,
+   * which sends the next close back to the durable record.
+   */
+  const knownExecutions = new Map<string, readonly string[]>();
+  /* Call only inside the run's record section. Failure to delete is not successful retirement. */
+  const dropLease = async (runId: string): Promise<void> => {
+    refuseHeldExecutions(await leaseOf(runId));
+    const records = await recordsFileSystem();
+    if (await records.exists(leasePathOf(runId))) {
+      await records.unlink(leasePathOf(runId));
+    }
+    knownExecutions.set(runId, []);
+  };
+  const retireAttempt = async (key: TurnAttemptKey): Promise<void> =>
+    inRecordSection(key.runId, async () => {
+      const record = await leaseOf(key.runId);
+      if (record !== undefined && !namesAttempt(record, key)) {
+        return;
+      }
+      await dropLease(key.runId);
+    });
+
+  /*
+   * RM-R8 narrowed (W8 H1): this root's liveness mark, taken before its first lease write and held until the root
+   * stops. A record names its holder; another root adopts or retires it only inside the record's section, and only
+   * while the holder's mark is free.
+   */
+  const rootInstanceId = `root_${randomUuid()}`;
+  const markOf = (holder: string): string => `tau:revisions-root:${projectId}:${holder}`;
+  const rootStopped = Promise.withResolvers<void>();
+  const takeMark = async (): Promise<void> => {
+    const name = markOf(rootInstanceId);
+    heldMarks.set(name, rootStopped.promise);
+    const locks = lockManager();
+    if (locks === undefined) {
+      return;
+    }
+    const taken = Promise.withResolvers<void>();
+    /* Never stolen; the browser frees it when the realm holding the root ends. A refused request leaves the in-process
+     * mark, which is all this realm can offer. */
+    const hold = async (): Promise<void> => {
+      try {
+        await locks.request(name, async () => {
+          taken.resolve();
+          await rootStopped.promise;
+        });
+      } catch {
+        /* See above. */
+      } finally {
+        taken.resolve();
+      }
+    };
+    void hold();
+    await taken.promise;
+  };
+  let marked: Promise<void> | undefined;
+  const holdMark = async (): Promise<void> => {
+    marked ??= takeMark();
+    await marked;
+  };
+  const markFree = async (holder: string | undefined): Promise<boolean> => {
+    if (holder === undefined || holder === rootInstanceId) {
+      return true;
+    }
+    const name = markOf(holder);
+    const locks = lockManager();
+    return locks === undefined
+      ? !heldMarks.has(name)
+      : locks.request(name, { ifAvailable: true }, (lock) => lock !== null);
+  };
+  const inRecordSection = async <T>(runId: string, operation: () => Promise<T>): Promise<T> => {
+    const name = `tau:revisions-lease:${projectId}:${runId}`;
+    return recordSections.queueFor(name, async () => {
+      const locks = lockManager();
+      return locks === undefined ? operation() : locks.request(name, async () => operation());
+    });
+  };
+  const writeLeaseRecord = async (lease: TurnLease): Promise<void> => {
+    const next = lease.executionIds ?? [];
+    knownExecutions.set(lease.runId, [...new Set([...(knownExecutions.get(lease.runId) ?? []), ...next])]);
+    try {
+      const records = await recordsFileSystem();
+      await records.writeFile(leasePathOf(lease.runId), `${JSON.stringify(lease, undefined, 2)}\n`);
+    } catch (error) {
+      knownExecutions.delete(lease.runId);
+      throw error;
+    }
+    knownExecutions.set(lease.runId, next);
+  };
+  const releaseMark = (): void => {
+    heldMarks.delete(markOf(rootInstanceId));
+    rootStopped.resolve();
+  };
+
+  /* Attempts whose completion began in this root: a hold can no longer slip in behind their settlement (I7). */
+  const closingAttempts = new Set<string>();
+  const closingIdOf = (key: TurnAttemptKey): string => JSON.stringify([key.chatId, key.turnId, key.runId, key.attempt]);
+  const closeExecutions = async (key: TurnAttemptKey): Promise<'closed' | 'held' | 'unavailable'> => {
+    /* Answered in one synchronous step, so no hold can land between the check and the closing mark. */
+    const known = knownExecutions.get(key.runId);
+    if (known !== undefined) {
+      if (known.length > 0) {
+        return 'held';
+      }
+      closingAttempts.add(closingIdOf(key));
+      return 'closed';
+    }
+    try {
+      return await inRecordSection(key.runId, async () => {
+        const record = await leaseOf(key.runId);
+        if (record !== undefined && namesAttempt(record, key) && hasExecutions(record)) {
+          return 'held';
+        }
+        closingAttempts.add(closingIdOf(key));
+        return 'closed';
+      });
+    } catch {
+      return 'unavailable';
+    }
+  };
+  const changeExecution = async (input: TurnExecutionInput, hold: boolean): Promise<TurnExecutionAnswer> => {
+    try {
+      return await inRecordSection(input.key.runId, async (): Promise<TurnExecutionAnswer> => {
+        if (hold && closingAttempts.has(closingIdOf(input.key))) {
+          return { status: 'refused', code: 'REVISIONS_BUSY', message: 'This turn is closing; no command can start.' };
+        }
+        const record = await leaseOf(input.key.runId);
+        if (
+          record === undefined ||
+          !namesAttempt(record, input.key) ||
+          record.attempt !== input.key.attempt ||
+          input.executionId.length === 0
+        ) {
+          return { status: 'refused', code: 'TURN_UNKNOWN', message: 'That run attempt is no longer current.' };
+        }
+        if (!(await markFree(record.holder))) {
+          return { status: 'refused', code: 'REVISIONS_BUSY', message: 'Another session still owns this run.' };
+        }
+        const current = record.executionIds ?? [];
+        if (current.includes(input.executionId) === hold) {
+          return { status: 'replayed' };
+        }
+        /* Checked again with no await before the write records the hold, because a close answers from memory. */
+        if (hold && closingAttempts.has(closingIdOf(input.key))) {
+          return { status: 'refused', code: 'REVISIONS_BUSY', message: 'This turn is closing; no command can start.' };
+        }
+        const executionIds = hold ? [...current, input.executionId] : current.filter((id) => id !== input.executionId);
+        await writeLeaseRecord({ ...record, executionIds });
+        return { status: 'applied' };
+      });
+    } catch (error) {
+      return {
+        status: 'refused',
+        code: 'REVISIONS_UNAVAILABLE',
+        message: error instanceof Error ? error.message : 'The saved run record could not be updated.',
+      };
+    }
+  };
+
+  /**
+   * When a merged branch's checkout becomes offerable for removal (A25).
+   *
+   * Thirty days, and the offer is *data*: the pane shows it and a person
+   * decides. Nothing is ever removed silently, and no local garbage collection
+   * exists at all — Restore-by-id, chat cards and conflict evidence all reach
+   * revisions that no branch names.
+   */
+  const removalOfferMilliseconds = 30 * 24 * 60 * 60 * 1000;
+
+  /**
+   * Which revisions the live tree's branch already contains, and when each landed.
+   *
+   * One walk for a whole listing: a linked checkout whose branch is inside this
+   * history has nothing left of its own, which is what makes it offerable.
+   *
+   * ponytail: one unbounded `log` per `listCheckouts`, to compute a 30-day
+   * *offer*. The bound to add when a long history costs a pane its open is the
+   * oldest linked checkout's head — nothing older can change an answer.
+   *
+   * @returns Creation time by revision id, over everything the live branch reaches.
+   */
+  const mergedHistory = async (): Promise<ReadonlyMap<string, number>> => {
+    const head = await port.readHead();
+    if (head?.head === undefined) {
+      return new Map();
+    }
+    const walked = await port.log({ heads: [head.head] });
+    return new Map(walked.map((entry) => [entry.id, entry.provenance.createdAt]));
+  };
+
+  const recordOf = async (
+    place: Checkout,
+    leases: readonly TurnLease[],
+    merged: ReadonlyMap<string, number> = new Map(),
+  ): Promise<CheckoutRecord> => {
+    const headRevisionId = await headOf(place);
+    const headTreeId = await treeIdOf(headRevisionId);
+    const mergedAt = headRevisionId === undefined ? undefined : merged.get(headRevisionId);
+    return Object.freeze<CheckoutRecord>({
+      id: place.id,
+      projectId: place.projectId,
+      root: place.root,
+      kind: place.kind,
+      branch: place.branch,
+      ...(headRevisionId === undefined ? {} : { headRevisionId }),
+      ...(headTreeId === undefined ? {} : { headTreeId }),
+      leaseRunIds: leases.filter((lease) => lease.checkoutId === place.id).map((lease) => lease.runId),
+      leaseChatIds: [...new Set(leases.filter((lease) => lease.checkoutId === place.id).map((lease) => lease.chatId))],
+      /* Offered, never acted on: a linked checkout whose branch the live one
+       * already contains, last touched more than a month ago (A25). */
+      ...(place.kind === 'linked' && mergedAt !== undefined && now() - mergedAt > removalOfferMilliseconds
+        ? { removable: true }
+        : {}),
+    });
+  };
+
+  /** Which conflict line each listed conflicted revision is on, refilled by every listing. */
+  const lineOf = new Map<string, string>();
+
+  /**
+   * Every conflicted revision no decision has landed yet (charter D14).
+   *
+   * Read from the conflict lines, recorded here or fetched: each line is walked
+   * from its tip back through the third parent — the tip a conflict was
+   * recorded on — and the walk stops at the first revision the line it decides
+   * already contains, because a landed decision has that revision among its
+   * parents and everything older on the line is behind it too. So "resolved" is
+   * ancestry, and nothing records it. A decision another device landed counts
+   * once it is on the remote's copy of that line, even while this device's own
+   * copy has diverged from it (RV-W6 F6).
+   *
+   * @returns One record per unresolved conflicted revision, newest first per line.
+   */
+  const listConflicts = async (): Promise<readonly ConflictRecord[]> => {
+    const own = await devicesOrNone();
+    const records: ConflictRecord[] = [];
+    lineOf.clear();
+    const tracking = await port.listRefs('refs/remotes');
+    for (const reference of await port.listRefs('refs/heads/conflicts')) {
+      const line = reference.name.replace(/^refs\/heads\//u, '');
+      const parsed = parseConflictLine(line, own);
+      if (parsed === undefined) {
+        continue;
+      }
+      // oxlint-disable-next-line no-await-in-loop -- one read per line; lines are few.
+      const intoHead = await port.readRef(parsed.into);
+      const decidedOn = [
+        ...(intoHead === undefined ? [] : [intoHead]),
+        /* `refs/remotes/<remote>/<into>`, for every remote. */
+        ...tracking
+          .filter((entry) => entry.name.replace(/^refs\/remotes\/[^/]+\//u, '') === parsed.into)
+          .map((entry) => String(entry.head)),
+      ];
+      let current: RevisionId | undefined = reference.head;
+      while (current !== undefined) {
+        // oxlint-disable-next-line no-await-in-loop -- the chain is one revision per recorded conflict.
+        const record = await port.readRevision(current);
+        if (record?.receipt.conflicted !== true) {
+          break;
+        }
+        // oxlint-disable-next-line no-await-in-loop -- as above.
+        if (await decidedOnAny(decidedOn, current)) {
+          break;
+        }
+        lineOf.set(current, line);
+        records.push(Object.freeze({ revisionId: current, line, into: parsed.into, foreign: parsed.foreign }));
+        current = record.parents[2];
+      }
+    }
+    return records;
+  };
+
+  /**
+   * Whether any of these heads' history holds `revision`.
+   *
+   * @param heads - Candidate tips.
+   * @param revision - The revision asked about.
+   * @returns `true` when one of them contains it.
+   */
+  const decidedOnAny = async (heads: readonly string[], revision: string): Promise<boolean> => {
+    for (const head of heads) {
+      // oxlint-disable-next-line no-await-in-loop -- one local and a remote or two, stopping at the first.
+      if (await lineContains(head, revision)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  /**
+   * Whether `head`'s history holds `revision`.
+   *
+   * @param head - A line's tip.
+   * @param revision - The revision asked about.
+   * @returns `true` when `revision` is `head` or one of its ancestors.
+   */
+  const lineContains = async (head: string, revision: string): Promise<boolean> => {
+    if (head === revision) {
+      return true;
+    }
+    const { behind } = await port.divergence({ head: revisionId(head), base: revisionId(revision) });
+    return behind === 0;
+  };
+
+  /**
+   * Where this device reads one conflicted revision from (D14): its own tip of
+   * the line the decision lands on, and whether it recorded the conflict.
+   *
+   * @param revision - A conflicted revision.
+   * @returns The perspective, or `undefined` for a revision on no conflict line.
+   */
+  const perspectiveOf = async (
+    revision: string,
+  ): Promise<(ConflictPerspective & Readonly<{ line: string; into: string }>) | undefined> => {
+    if (!lineOf.has(revision)) {
+      await listConflicts();
+    }
+    const line = lineOf.get(revision);
+    const parsed = line === undefined ? undefined : parseConflictLine(line, await devicesOrNone());
+    if (line === undefined || parsed === undefined) {
+      return undefined;
+    }
+    return { line, into: parsed.into, head: await port.readRef(parsed.into), recorder: !parsed.foreign };
+  };
+
+  /**
+   * One conflicted revision's terms, or a named refusal.
+   *
+   * @param revision - The conflicted revision.
+   * @returns Its three trees, labels and what did not settle.
+   * @throws RevisionPortError When the revision records no conflict.
+   */
+  const conflictTermsOf = async (revision: string): Promise<RevisionConflictTerms> => {
+    await ensureStore();
+    const terms = await readConflictTerms(port, revision, {
+      ...mergeOptions,
+      perspective: await perspectiveOf(revision),
+    });
+    if (terms === undefined) {
+      throw new RevisionPortError('UNSUPPORTED_OPERATION', 'That revision records no conflict to resolve.');
+    }
+    return terms;
+  };
+
+  /**
+   * Move one branch under the lease the merge read it with.
+   *
+   * A ref that moved while the merge ran is the one case where finishing would
+   * lose someone's work, so it is refused rather than forced (D29's
+   * compare-and-set, the same rule every other ref write here follows).
+   *
+   * @param branch - The branch to move.
+   * @param expectedHead - Where it stood when the merge read it.
+   * @param head - Where it must stand now.
+   * @throws RevisionPortError When it moved underneath.
+   */
+  const publishMerge = async (branch: string, expectedHead: string | undefined, head: string): Promise<void> => {
+    const published = await port.updateRef({
+      name: branch,
+      expectedHead: expectedHead === undefined ? undefined : revisionId(expectedHead),
+      head: revisionId(head),
+    });
+    if (published.status === 'conflicted') {
+      throw new RevisionPortError('ENGINE_FAILED', `${branch} moved while the merge was running. Try again.`);
+    }
+  };
+
+  const ordinalPage = 50;
+  /**
+   * One revision's first-parent ordinal on a checkout's line (D5).
+   *
+   * @param place - The checkout whose branch numbers it.
+   * @param revision - The revision to number.
+   * @returns `Rev N`'s `N`, or `undefined` when the revision is not on that line (A9).
+   */
+  const rowOnLine = async (place: Checkout, revision: string): Promise<RevisionRow | undefined> => {
+    /* ponytail: the page History reads first, then the whole line; a restore
+     * reaches for a recent revision, and the page's numbers come from the
+     * ordinal memo (E5, E6). A per-revision lookup is the upgrade path. */
+    const page = await readRevisionLog(port, { branch: place.branch, limit: ordinalPage });
+    const found = page.find((row) => row.revisionId === revision);
+    if (found !== undefined || page.length < ordinalPage) {
+      return found;
+    }
+    const rows = await readRevisionLog(port, { branch: place.branch });
+    return rows.find((row) => row.revisionId === revision);
+  };
+  const ordinalOnLine = async (place: Checkout, revision: string): Promise<number | undefined> => {
+    const row = await rowOnLine(place, revision);
+    return row?.revisionNumber;
+  };
+
+  /**
+   * How a restore or undo row refers to the entry it brought back (M11): a
+   * version by its number, an entry by a title a person or Tau gave it, never
+   * by a save number. A generated title (`Saved changes (…)`, `Autosave`,
+   * `Agent change`) names nothing a person would recognise, so it is left out.
+   *
+   * @param row - The entry, when the line holds it.
+   * @returns `V3` or `“Add vent slots”`, or `undefined` when nothing names it.
+   */
+  const referenceOf = (row: RevisionRow | undefined): string | undefined => {
+    const version = row?.versions?.[0];
+    if (version !== undefined) {
+      return `V${String(version.number)}`;
+    }
+    if (row?.start !== undefined) {
+      return 'V1';
+    }
+    const summary = row?.summary;
+    return summary === undefined ||
+      summary.startsWith('Saved changes (') ||
+      summary === autosaveTitle ||
+      summary === agentChangeTitle
+      ? undefined
+      : `“${summary}”`;
+  };
+
+  /* A cut's generated title; a restore row names what it restored, never a number (A9, M11). */
+  const summaryOf = async (input: CheckoutWriteRevisionActorInput, undoes?: string): Promise<string> => {
+    if (input.turn !== undefined) {
+      /* A5: a base cut holds the person's own edits; Q9: a result is titled by the request. */
+      return input.turn.turnCut === 'base' ? autosaveTitle : (requestTitleOf(input.turn.request) ?? agentChangeTitle);
+    }
+    if (input.restoredFrom === undefined) {
+      if (undoes === undefined) {
+        return `Saved changes (${input.trigger})`;
+      }
+      /* D15: an undo row names the entry it undid, as a restore row names its source;
+       * a restore's own title is generated, so undoing one says so plainly. */
+      const undoneRow = await rowOnLine(await placeOf(input.checkoutId), undoes);
+      if (undoneRow?.restoredFrom !== undefined) {
+        return 'Undid the restore';
+      }
+      const undone = referenceOf(undoneRow);
+      return undone === undefined ? 'Undid an earlier change' : `Undid ${undone}`;
+    }
+    const restored = referenceOf(await rowOnLine(await placeOf(input.checkoutId), input.restoredFrom));
+    return restored === undefined ? 'Restored an earlier point' : `Restored ${restored}`;
+  };
+
+  /**
+   * *Undo* (D15): the scoped inverse of this form's newest undoable operation on
+   * the checkout's line, as a plan the restore pipeline applies and mints.
+   *
+   * The inverse is a three-way merge of that operation's own delta onto the
+   * head: `base` is what the operation made, `theirs` what it started from,
+   * `ours` the line as it is now. Paths nobody touched since come back; paths a
+   * later revision also changed merge, and an overlap refuses, so another
+   * device's revision is never reverted by content. An operation whose changes
+   * are already gone is passed over for the next older one.
+   *
+   * @param checkoutId - The checkout the verb pinned.
+   * @param skip - The revision the verb's own pre-cut minted, which is the
+   *   person's work rather than what they asked to undo.
+   * @returns The plan the restore pipeline applies and mints.
+   * @throws Error With `NOTHING_TO_UNDO` or `UNDO_CONFLICT`.
+   */
+  const planUndo = async (checkoutId: string, skip: string | undefined): Promise<RestoreComputePlanActorOutput> => {
+    const place = await placeOf(checkoutId);
+    const head = await headOf(place);
+    const empty = new ImmutableRevisionTree([]);
+    const entries = await opsLog.read(options.identity.resolve({ runId: undefined, trigger: 'restore' }));
+    const candidates =
+      place.branch === undefined || head === undefined
+        ? []
+        : undoCandidates(entries, `refs/heads/${place.branch}`, skip);
+    for (const operation of candidates) {
+      const { from, to } = operation;
+      if (to === undefined) {
+        continue;
+      }
+      /* By oid diff (D10): only the paths the operation changed can differ from the head, so only they are read and merged. */
+      // oxlint-disable-next-line no-await-in-loop -- newest first; almost always the first candidate answers.
+      const changes = await port.diff({ from: from === undefined ? undefined : revisionId(from), to: revisionId(to) });
+      const paths = changes.map(({ path }) => path);
+      const scoped = async (id: string | undefined): Promise<ImmutableRevisionTree | undefined> =>
+        id === undefined ? empty : port.readTree(revisionId(id), { largeObjects: 'local', paths });
+      // oxlint-disable-next-line no-await-in-loop -- as above.
+      const [base, theirs, ours] = await Promise.all([scoped(to), scoped(from), scoped(head)]);
+      if (base === undefined || theirs === undefined || ours === undefined) {
+        continue;
+      }
+      /* A merge this host made ends the walk: Undo never reaches past it (RV-W7 #7). */
+      if (operation.kind === 'merge') {
+        const code: RestoreFailureCode = 'UNDO_PAST_MERGE';
+        throw Object.assign(
+          new Error('Your last change on this branch was a merge. Restore an earlier point instead.'),
+          { code },
+        );
+      }
+      const merged = mergeRevisionTrees(base, ours, theirs, mergeOptions);
+      // oxlint-disable-next-line no-await-in-loop -- as above.
+      const number = await ordinalOnLine(place, to);
+      if (merged.status === 'conflicted') {
+        const code: RestoreFailureCode = 'UNDO_CONFLICT';
+        throw Object.assign(
+          new Error(
+            'A later change touched the same lines, so this one can’t be undone. Restore an earlier point instead.',
+          ),
+          { code, ...(number === undefined ? {} : { revisionNumber: number }) },
+        );
+      }
+      /* Already undone: the merge leaves every path it read as the head has it. */
+      // oxlint-disable-next-line no-await-in-loop -- as above.
+      if ((await checkoutTreeId(place.id, merged.tree)) === (await checkoutTreeId(place.id, ours))) {
+        continue;
+      }
+      return {
+        planId: plans.put(checkoutId, {
+          checkoutId,
+          revisionId: to,
+          undo: { paths, tree: merged.tree, fillFrom: from },
+          undoes: to,
+        }),
+        revisionId: to,
+        revisionNumber: number,
+      };
+    }
+    const code: RestoreFailureCode = 'NOTHING_TO_UNDO';
+    throw Object.assign(new Error('Nothing you did on this branch is left to undo.'), { code });
+  };
+  /*
+   * RM-R9: a turn's revision names its admitting attempt and which of its two
+   * revisions it is, and lists the checkout's other leases. The actor is the
+   * run's for a result. A base holds the person's own edits, saved before the
+   * agent started, so it is the person's (A5). Any other cut keeps the
+   * attribution of the first other lease, or the person's.
+   */
+  const provenanceOf = (
+    trigger: CheckoutCutTrigger,
+    leaseIds: readonly string[],
+    about: Readonly<{ turn?: TurnCutOf | undefined; restoredFrom?: string | undefined }> = {},
+  ): RevisionProvenance => {
+    const { turn, restoredFrom } = about;
+    const runId = turn?.key.runId;
+    const heldRunIds = leaseIds.filter((id) => id !== runId).toSorted();
+    const actorRunId = turn === undefined ? heldRunIds[0] : turn.turnCut === 'result' ? runId : undefined;
+    const actor = options.identity.resolve({ runId: actorRunId, trigger });
+    return Object.freeze({
+      /* Only the restore row is the restore's: the cut before it records the
+       * person's own bytes under the same trigger (D1, A9). */
+      source:
+        trigger === 'turn' && turn?.turnCut !== 'base'
+          ? 'agent'
+          : restoredFrom === undefined
+            ? trigger === 'merge'
+              ? 'merge'
+              : 'user'
+            : 'restore',
+      /* S37, B1: who, in the shape stock `git log` renders, what asked (S30), and on which leg. */
+      actor,
+      capture: trigger,
+      via: options.identity.via,
+      ...(turn === undefined
+        ? {}
+        : {
+            runId: turn.key.runId,
+            attempt: turn.key.attempt,
+            turnCut: turn.turnCut,
+            /* The turn a card hangs under, durable on the revision itself (I3, S10). */
+            turnId: turn.key.turnId,
+          }),
+      ...(heldRunIds.length === 0 ? {} : { heldRunIds }),
+      ...(restoredFrom === undefined ? {} : { restoredFrom }),
+      createdAt: now(),
+    });
+  };
+
+  /**
+   * Refuse a branch name conflict lines own (D14).
+   *
+   * @param name - The name a person asked for.
+   * @throws RevisionPortError When it is `conflicts` or under it.
+   */
+  const refuseReservedName = (name: string): void => {
+    if (isReservedBranchName(name)) {
+      throw new RevisionPortError(
+        'BRANCH_NAME_RESERVED',
+        '“conflicts” is kept for decisions that travel between devices. Choose another name.',
+      );
+    }
+  };
+
+  /**
+   * Move one branch, and the checkout that holds it, onto its remote head.
+   *
+   * Refuses with `CHECKOUT_CONFLICT` when that would not be a fast-forward; a
+   * checkout whose files are not its head (unsaved, or a run holds them) is
+   * left alone and answered as a hold (D12, rule 9).
+   *
+   * @param input - The remote and the branch.
+   * @param signal - Ends the work when the caller stops waiting.
+   * @returns The checkout re-headed or held, or `undefined` for a ref-only branch.
+   */
+  const fastForwardBranch = async (
+    input: Readonly<{ remote: string; branch: string }>,
+    signal: AbortSignal,
+  ): Promise<SyncFastForwardActorOutput> => {
+    const tracking = remoteTrackingRef(input.remote, `refs/heads/${input.branch}`);
+    const head = await port.readRef(tracking);
+    signal.throwIfAborted();
+    if (head === undefined) {
+      return undefined;
+    }
+    /*
+     * R04, above both branches (C20).
+     *
+     * Compare-and-swap proves the ref did not move *during* the call; it
+     * proves nothing about whether the replacement is a fast-forward. The
+     * checkout-bearing branch below got that recheck as the R04 repair and
+     * the checkout-less one — a ref-only branch, which is exactly what a
+     * second device's branches are — kept CASing straight to the remote
+     * head, so work on a branch nobody has open could be replaced without
+     * ever being composed.
+     */
+    const ancestryHolds = async (local: RevisionId | undefined): Promise<boolean> => {
+      if (local === undefined || local === head) {
+        return true;
+      }
+      const walk = await port.log({ heads: [head, local], limit: divergenceWalkLimit });
+      return integrationOf(walk, local, head) === 'fastForward';
+    };
+    const places = await listPlaces();
+    signal.throwIfAborted();
+    const place = places.find((entry) => entry.branch === input.branch);
+    if (place === undefined) {
+      const expected = await port.readRef(`refs/heads/${input.branch}`);
+      signal.throwIfAborted();
+      if (!(await ancestryHolds(expected))) {
+        throw new RevisionPortError(
+          'CHECKOUT_CONFLICT',
+          `${input.branch} has work the remote does not. Fetch and compose the two lines first.`,
+        );
+      }
+      signal.throwIfAborted();
+      const updated = await port.updateRef({ name: `refs/heads/${input.branch}`, expectedHead: expected, head });
+      if (updated.status !== 'updated') {
+        throw new RevisionPortError('CHECKOUT_CONFLICT', `${input.branch} changed while backing up.`);
+      }
+      return undefined;
+    }
+    const branch = `refs/heads/${input.branch}`;
+    /* From this store alone: a large object not here yet is written as its
+     * pointer, and the fill writes its bytes as they land. The pointer is
+     * what the store records either way, so the checkout is clean at once.
+     * Read whole only for an unborn line (the open); a pull reads by oid diff.
+     * The open begins from the store's listing (STO-25): the write's bracket
+     * opens once the tree's structure is known, and each file's bytes are read
+     * as it lands, the entry closure first; a store that cannot list the tree
+     * with its sizes is read whole. */
+    let whole: ImmutableRevisionTree | DeferredRevisionTree | undefined;
+    const wholeTree = async (): Promise<ImmutableRevisionTree | DeferredRevisionTree> => {
+      whole ??=
+        (await readDeferredRevisionTree(port, head, { signal })) ??
+        (await port.readTree(head, { largeObjects: 'local', signal }));
+      if (whole === undefined) {
+        throw new RevisionPortError('UNKNOWN_REVISION', `The store holds no tree for ${head}.`);
+      }
+      return whole;
+    };
+    /* What the tree holds at the checkout's own paths: all an unborn line's work check compares. */
+    const arrivingAt = async (before: ImmutableRevisionTree): Promise<ImmutableRevisionTree> => {
+      const paths = [...revisionTreeFiles(before).keys()];
+      const arriving =
+        paths.length === 0
+          ? new ImmutableRevisionTree([])
+          : await port.readTree(head, { largeObjects: 'local', paths, signal });
+      if (arriving === undefined) {
+        throw new RevisionPortError('UNKNOWN_REVISION', `The store holds no tree for ${head}.`);
+      }
+      return arriving;
+    };
+    let expected: RevisionId | undefined;
+    /* `validate` proves the files are `expected`'s tree, so only what the oid diff to `head` names is read (D10). */
+    const target = async (before: ImmutableRevisionTree): Promise<ImmutableRevisionTree | DeferredRevisionTree> =>
+      expected === undefined ? wholeTree() : treeFrom(expected, head, before);
+    try {
+      await writeRevisionTree(place, target, {
+        fillFrom: head,
+        signal,
+        validate: async (before) => {
+          expected = await port.readRef(branch);
+          if (!(await ancestryHolds(expected))) {
+            throw new RevisionPortError(
+              'CHECKOUT_CONFLICT',
+              `${input.branch} changed after synchronization checked it. Fetch and compose the newer work first.`,
+            );
+          }
+          signal.throwIfAborted();
+          const expectedTreeId = await treeIdOf(expected);
+          /* An unborn line is dirty only when it holds work of its own (E2E-D defect A);
+           * a cloud open's placeholder manifest is not (e921b3d96). */
+          const dirty =
+            expectedTreeId === undefined
+              ? !holdsNoWorkBeforePull(before, await arrivingAt(before))
+              : expectedTreeId !== (await checkoutTreeId(place.id, before));
+          const leases = await readLeases();
+          const leased = leases.some((lease) => lease.checkoutId === place.id);
+          signal.throwIfAborted();
+          /* The lease first: a turn's own writes are what make its checkout dirty (rule 9). */
+          if (leased) {
+            throw new CheckoutHeld({
+              hold: 'leased',
+              checkoutId: place.id,
+              message: 'These files are being changed by an active run. Synchronization will retry after it settles.',
+            });
+          }
+          if (dirty) {
+            throw new CheckoutHeld({
+              hold: 'dirty',
+              checkoutId: place.id,
+              message: 'These files have changes that are not in a revision yet. Save them before synchronizing.',
+            });
+          }
+        },
+        publish: async () => {
+          signal.throwIfAborted();
+          const currentLeases = await readLeases();
+          if (currentLeases.some((lease) => lease.checkoutId === place.id)) {
+            throw new CheckoutHeld({
+              hold: 'leased',
+              checkoutId: place.id,
+              message:
+                'A run started changing these files while synchronization was applying. It will retry after the run settles.',
+            });
+          }
+          const updated = await port.updateRef({ name: branch, expectedHead: expected, head });
+          if (updated.status !== 'updated') {
+            throw new RevisionPortError('CHECKOUT_CONFLICT', `${input.branch} changed while backing up.`);
+          }
+        },
+      });
+    } catch (error) {
+      /* Left alone, not failed (D12): the scheduler mints or waits. */
+      const held = holdOf(error, head);
+      if (held === undefined) {
+        throw error;
+      }
+      return held;
+    }
+    const treeId = await treeIdOf(head);
+    if (treeId === undefined) {
+      throw new RevisionPortError('UNKNOWN_REVISION', `No recorded tree for ${head}.`);
+    }
+    return { checkoutId: place.id, revisionId: head, treeId };
+  };
+
+  type MergeBranchesInput = Readonly<{
+    branch: string;
+    into: string;
+    sourceLabel?: string;
+    /**
+     * What a merge does when a side's newest restore took back the history both share (M1). A person's *Merge* refuses
+     * (`MERGE_UNDONE`); a ruling that it should redo the undone merge replaces `'refuse'`. Absent — a sync of one line
+     * with its own remote — the restore is that line's own and merges as any entry does.
+     */
+    undone?: 'refuse';
+  }>;
+
+  /**
+   * This device's conflict line for decisions landing on `into` (charter D14),
+   * named by the record device of the actor form a merge records as (EQ10(a)).
+   *
+   * @param into - The line the decision lands on.
+   * @returns `conflicts/<into>/<record device>`.
+   */
+  const ownConflictLine = async (into: string): Promise<string> =>
+    conflictLineOf(into, await opsLog.deviceFor(options.identity.resolve({ runId: undefined, trigger: 'merge' })));
+
+  /**
+   * The one conflict write (charter D14): sync, a branch merge and an editor all
+   * record here.
+   *
+   * The conflicted revision parents on the two diverged heads **and** on its
+   * line's tip, so the line only ever fast-forwards and pushes like any branch.
+   * The same divergence recorded twice — every re-pull reaches here — returns
+   * the tip it already has rather than minting a copy.
+   *
+   * @param input - The line decided on, both sides, their merge base, the labels
+   *   the markers carry, and the summary.
+   * @returns The conflicted revision and its line.
+   */
+  const recordConflict = async (
+    input: Readonly<{
+      into: string;
+      theirs: string;
+      ours: string;
+      base: string | undefined;
+      theirsLabel: string;
+      summary: string;
+    }>,
+  ): Promise<Readonly<{ revisionId: string; line: string }>> => {
+    const line = await ownConflictLine(input.into);
+    const tip = await port.readRef(line);
+    if (tip !== undefined) {
+      const previous = await port.readRevision(revisionId(tip));
+      if (
+        previous?.receipt.conflicted === true &&
+        previous.parents[0] === input.theirs &&
+        previous.parents[1] === input.ours
+      ) {
+        return { revisionId: tip, line };
+      }
+    }
+    const [oursTreeId, baseTreeId, theirsTreeId, theirsTree] = await Promise.all([
+      treeIdOf(input.ours),
+      treeIdOf(input.base),
+      treeIdOf(input.theirs),
+      port.readTree(revisionId(input.theirs)),
+    ]);
+    if (theirsTree === undefined) {
+      throw new RevisionPortError('UNKNOWN_REVISION', 'This project no longer holds both sides of that conflict.');
+    }
+    const receipt = await port.writeRevision({
+      parents: [revisionId(input.theirs), revisionId(input.ours), ...(tip === undefined ? [] : [revisionId(tip)])],
+      tree: theirsTree,
+      provenance: provenanceOf('merge', []),
+      summary: Object.freeze({ generated: input.summary }),
+      conflict: {
+        /* Two sides with no common revision share the empty tree as their base. */
+        trees: [
+          oursTreeId ?? '',
+          baseTreeId ?? revisionTreeId(new ImmutableRevisionTree([]), await formatOf()),
+          theirsTreeId ?? '',
+        ],
+        labels: conflictLabels({ ours: input.into, theirs: input.theirsLabel }),
+      },
+    });
+    await publishMerge(line, tip, receipt.commitId);
+    return { revisionId: receipt.commitId, line };
+  };
+
+  /**
+   * Refuse to rewrite a checkout a turn holds (rule 9, D10): the merge waits for
+   * the lease to retire, so nothing is re-based under a running agent.
+   *
+   * @param place - The checkout the merge would write.
+   * @throws CheckoutHeld When a lease names it.
+   */
+  const refuseLeased = async (place: Checkout): Promise<void> => {
+    const leases = await readLeases();
+    if (leases.some((lease) => lease.checkoutId === place.id)) {
+      throw new CheckoutHeld({ hold: 'leased', checkoutId: place.id, message: leasedMessage });
+    }
+  };
+
+  /**
+   * The newest restore entry on `head`'s own line above `base`, when the entry it restored does not hold `base` (M1).
+   *
+   * Read from what the commits record (`restoredFrom` and parents), so every device answers alike. The newest restore
+   * decides: a later Restore of the merge, or *Undo restore*, puts the shared history back.
+   *
+   * @param entries - The graph both heads reach, as `log` answered it.
+   * @param head - One side's head.
+   * @param base - The two sides' merge base.
+   * @returns The restore that took the shared history back, or `undefined`.
+   */
+  const undoneHistoryOf = async (
+    entries: readonly RevisionLogEntry[],
+    head: string,
+    base: string,
+  ): Promise<UndoneHistory | undefined> => {
+    const byId = new Map(entries.map((entry) => [entry.id as string, entry]));
+    const shared = new Set<string>();
+    const frontier = [base];
+    while (frontier.length > 0) {
+      const current = frontier.pop()!;
+      if (!shared.has(current)) {
+        shared.add(current);
+        frontier.push(...(byId.get(current)?.parents ?? []));
+      }
+    }
+    let current: string | undefined = head;
+    while (current !== undefined && !shared.has(current)) {
+      const entry = byId.get(current);
+      const restoredFrom = entry?.provenance.restoredFrom;
+      if (restoredFrom !== undefined) {
+        // oxlint-disable-next-line no-await-in-loop -- the newest restore decides, so this runs at most once.
+        return (await lineContains(restoredFrom, base)) ? undefined : { restoreId: current, restoredFrom };
+      }
+      current = entry?.parents[0];
+    }
+    return undefined;
+  };
+
+  /**
+   * Refuse a person's *Merge* when either side's newest restore took back the history both share (M1). A redo of the
+   * undone merge, if ruled, replaces this refusal.
+   *
+   * @param entries - The graph both heads reach.
+   * @param heads - Both sides' heads; an unborn side has none.
+   * @param base - Their merge base, if they share history.
+   * @throws Error With `MERGE_UNDONE`, naming the restore entry and what it restored.
+   */
+  const refuseUndone = async (
+    entries: readonly RevisionLogEntry[],
+    heads: ReadonlyArray<string | undefined>,
+    base: string | undefined,
+  ): Promise<void> => {
+    if (base === undefined) {
+      return;
+    }
+    for (const head of heads) {
+      // oxlint-disable-next-line no-await-in-loop -- two sides, and the first refusal ends the merge.
+      const undone = head === undefined ? undefined : await undoneHistoryOf(entries, head, base);
+      if (undone !== undefined) {
+        throw mergeUndoneError(undone);
+      }
+    }
+  };
+
+  /**
+   * Compose one branch into another, recording a conflict on `into`'s conflict line (D14).
+   *
+   * `checkoutId` names the checkout a landed merge moved, so its actor can
+   * re-head; it is absent when nothing moved.
+   *
+   * @param input - The branch to merge, the branch it lands on, and the source's label.
+   * @returns What landed, or the conflict line the decision was recorded on.
+   */
+  const mergeBranches = async (
+    input: MergeBranchesInput,
+  ): Promise<
+    | Readonly<{ status: 'merged'; revisionId: string; checkoutId?: string; before?: string }>
+    /* `base === theirs`: nothing to bring, and nothing moved. */
+    | Readonly<{ status: 'upToDate'; revisionId: string }>
+    | Readonly<{ status: 'conflicted'; line: string; paths: readonly string[] }>
+  > => {
+    await ensureStore();
+    if (input.into === '' || input.into === input.branch) {
+      throw new RevisionPortError('UNSUPPORTED_OPERATION', 'A branch cannot be merged into itself.');
+    }
+    const theirs = await port.readRef(input.branch);
+    const sourceLabel = input.sourceLabel ?? input.branch;
+    if (theirs === undefined) {
+      throw new RevisionPortError('UNKNOWN_REVISION', `${sourceLabel} has no revision yet.`);
+    }
+    const ours = await port.readRef(input.into);
+    const places = await listPlaces();
+    const target = places.find((place) => place.branch === input.into) ?? places.find((place) => place.kind === 'live');
+    if (target === undefined) {
+      throw new RevisionPortError('UNSUPPORTED_OPERATION', 'This project has no files open to merge into.');
+    }
+    const graph = ours === undefined ? [] : await port.log({ heads: mergeBaseHeads(ours, theirs) });
+    const base = ours === undefined ? undefined : mergeBaseOf(graph, ours, theirs);
+    /*
+     * M1: a side whose newest restore took back shared history (an undone merge, a Restore past the fork) would
+     * fast-forward over the other side's entries or bring only part of a branch. A person's merge refuses, before
+     * the no-op answer, which would say a branch is in whose files are not.
+     */
+    if (input.undone === 'refuse') {
+      await refuseUndone(graph, [ours, theirs], base);
+    }
+    if (base === theirs) {
+      return { status: 'upToDate', revisionId: ours ?? theirs };
+    }
+    /*
+     * The lease before the files, always (rule 9): a turn's own writes make its
+     * checkout dirty, and a dirty hold would be minted — which the root declines
+     * while a turn holds the checkout — so a leased checkout must read as leased.
+     * Before anything is written, even a revision.
+     */
+    await refuseLeased(target);
+    const live = await captureFresh(target);
+    const targetHead = await headOf(target);
+    const headTreeId = await treeIdOf(targetHead);
+    if (headTreeId !== (await checkoutTreeId(target.id, live))) {
+      throw new CheckoutHeld({
+        hold: 'dirty',
+        checkoutId: target.id,
+        code: 'UNSUPPORTED_OPERATION',
+        message: 'The files you have open have changes that are not in a revision yet. Save a revision before merging.',
+      });
+    }
+    /* Proven again inside the fence, where a turn that started meanwhile has written its lease. */
+    const validateTarget = async (current: ImmutableRevisionTree): Promise<void> => {
+      await refuseLeased(target);
+      const currentTreeId = await checkoutTreeId(target.id, current);
+      if (currentTreeId !== headTreeId) {
+        throw new CheckoutHeld({
+          hold: 'dirty',
+          checkoutId: target.id,
+          message: 'The files you have open changed while the merge was being prepared. Save a revision and try again.',
+        });
+      }
+    };
+    /* And at the ref move, as the fast-forward checks: the files are put back if a turn got in. */
+    const landMerge = async (expectedHead: string | undefined, head: string): Promise<void> => {
+      await refuseLeased(target);
+      await publishMerge(input.into, expectedHead, head);
+    };
+    if (ours === undefined || base === ours) {
+      /*
+       * `validateTarget` proves the files are the target's head: when that is `ours`, only what the oid diff to
+       * `theirs` names is read (D10); a checkout on another line is written `theirs` whole, as a real merge is.
+       */
+      const fastForward: MaterializeTarget =
+        ours === undefined || targetHead !== ours
+          ? async () => {
+              const tree = await port.readTree(theirs, { largeObjects: 'local' });
+              if (tree === undefined) {
+                throw new RevisionPortError('UNKNOWN_REVISION', `The store holds no tree for ${sourceLabel}.`);
+              }
+              return tree;
+            }
+          : async (before) => treeFrom(ours, theirs, before);
+      await writeRevisionTree(target, fastForward, {
+        fillFrom: theirs,
+        validate: validateTarget,
+        publish: async () => landMerge(ours, theirs),
+      });
+      /* `before` is what the toast's Undo returns `into` to; an unborn target has nothing to return to. */
+      return {
+        status: 'merged',
+        revisionId: theirs,
+        checkoutId: target.id,
+        ...(ours === undefined ? {} : { before: ours }),
+      };
+    }
+
+    /* By oid diff (D10): a path `theirs` left as the base had it merges to ours, so only what it changed is read. */
+    const theirsChanged = await port.diff({ from: base, to: theirs });
+    const paths = theirsChanged.map(({ path }) => path);
+    const scoped = { largeObjects: 'local', paths } as const;
+    const [baseTree, oursTree, theirsTree] = await Promise.all([
+      base === undefined ? new ImmutableRevisionTree([]) : port.readTree(base, scoped),
+      port.readTree(ours, scoped),
+      port.readTree(theirs, scoped),
+    ]);
+    if (baseTree === undefined || oursTree === undefined || theirsTree === undefined) {
+      throw new RevisionPortError('UNKNOWN_REVISION', 'This project no longer holds both sides of that merge.');
+    }
+    const merged = mergeRevisionTrees(baseTree, oursTree, theirsTree, mergeOptions);
+    if (merged.status === 'conflicted') {
+      /* Neither branch moves and no checkout is made: the decision is a value
+       * on `into`'s conflict line, which travels (D14, I1). */
+      const { line } = await recordConflict({
+        into: input.into,
+        theirs,
+        ours,
+        base,
+        theirsLabel: sourceLabel,
+        summary: `Merging ${sourceLabel} into ${input.into} needs your decision`,
+      });
+      return { status: 'conflicted', line, paths: merged.conflicts.map((conflict) => conflict.path) };
+    }
+
+    /* The merged paths over ours as a whole: the files, proven to be ours, unless the checkout is on another line. */
+    const oursFiles = targetHead === ours ? live : await port.readTree(ours, { largeObjects: 'local' });
+    if (oursFiles === undefined) {
+      throw new RevisionPortError('UNKNOWN_REVISION', 'This project no longer holds both sides of that merge.');
+    }
+    const tree = overlay(oursFiles, paths, merged.tree);
+    const receipt = await port.writeRevision({
+      parents: [ours, theirs],
+      tree,
+      provenance: provenanceOf('merge', []),
+      summary: Object.freeze({ generated: `Merged ${sourceLabel} into ${input.into}` }),
+    });
+    /* Over the fenced capture when it is ours: a fill that landed since `live` keeps its file, never its pointer again. */
+    await writeRevisionTree(
+      target,
+      targetHead === ours ? async (before) => overlay(before, paths, merged.tree) : tree,
+      {
+        fillFrom: revisionId(receipt.commitId),
+        validate: validateTarget,
+        publish: async () => landMerge(ours, revisionId(receipt.commitId)),
+      },
+    );
+    return { status: 'merged', revisionId: receipt.commitId, checkoutId: target.id, before: ours };
+  };
+
+  /**
+   * The checkout a landed merge moved, for its actor to re-head (D3).
+   *
+   * @param outcome - What `mergeBranches` landed.
+   * @returns The moved checkout, or `undefined` when nothing moved.
+   */
+  const movedOf = async (
+    outcome: Readonly<{ revisionId: string; checkoutId?: string }>,
+  ): Promise<SyncMovedCheckout | undefined> => {
+    const treeId = outcome.checkoutId === undefined ? undefined : await treeIdOf(outcome.revisionId);
+    return outcome.checkoutId === undefined || treeId === undefined
+      ? undefined
+      : { checkoutId: outcome.checkoutId, revisionId: outcome.revisionId, treeId };
+  };
+
+  /**
+   * The newest revision on `head`'s first-parent line an editor's text can be
+   * said to be made from: the one whose `path` holds `base`, else the first
+   * whose `path` is not yet the other writer's bytes, else the oldest walked.
+   *
+   * ponytail: bounded at 20 revisions and read by whole trees; an editor
+   * conflict is rare. A `base` no revision ever held (typed and saved, never
+   * minted) makes the three-way coarser, never lossy: both whole texts still
+   * reach the decision.
+   *
+   * @param head - The live line's head.
+   * @param file - The file's `path`, what the editor's text was made from (`base`), and what it holds now (`theirs`).
+   * @returns The revision whose tree the editor's side starts from, and whether
+   *   that side must stand alone: when no walked revision differs from `theirs`,
+   *   parenting on any of them would make the terms clean and land *mine*
+   *   wholesale, so the side is an orphan and the path an add/add (RV-W6 F10).
+   */
+  const originOf = async (
+    head: string,
+    file: Readonly<{
+      path: string;
+      base: Uint8Array<ArrayBuffer> | undefined;
+      theirs: Uint8Array<ArrayBuffer> | undefined;
+    }>,
+  ): Promise<Readonly<{ revision: string; orphan: boolean }>> => {
+    const { path, base, theirs } = file;
+    let current: RevisionId | undefined = revisionId(head);
+    let fallback: string | undefined;
+    let last = head;
+    for (let step = 0; step < 20 && current !== undefined; step += 1) {
+      // oxlint-disable-next-line no-await-in-loop -- a first-parent walk is sequential by nature.
+      const [tree, record]: [ImmutableRevisionTree | undefined, RevisionRecord | undefined] = await Promise.all([
+        port.readTree(current),
+        port.readRevision(current),
+      ]);
+      const bytes = tree?.get(path);
+      if (sameBytes(bytes, base)) {
+        return { revision: current, orphan: false };
+      }
+      if (fallback === undefined && !sameBytes(bytes, theirs)) {
+        fallback = current;
+      }
+      last = current;
+      current = record?.parents[0];
+    }
+    return fallback === undefined ? { revision: last, orphan: true } : { revision: fallback, orphan: false };
+  };
+
+  /*
+   * An overlapping editor edit, recorded durably (D14, RV-W5b2 R2-1, R2-3).
+   *
+   * Under the live checkout's fence, so it lands after any apply in flight:
+   * the other side is whatever the live line holds when the decision is made
+   * (read by `perspectiveOf` as this line's tip), and the editor's side is one
+   * revision on the conflict line only — its text on top of the revision it was
+   * made from. No bookkeeping revision reaches `main`; nothing is written into
+   * the files (I7).
+   */
+  const recordEditorConflict = async (input: EditorConflictInput): Promise<EditorConflictOutcome> => {
+    await ensureStore();
+    const places = await listPlaces();
+    const live = places.find((place) => place.kind === 'live');
+    const into = live?.branch;
+    if (live === undefined || into === undefined) {
+      throw new RevisionPortError('UNSUPPORTED_OPERATION', 'This project has no files open to record a decision on.');
+    }
+    return withCheckoutFence(live.id, async () => {
+      const captured = await capture(live);
+      const theirs = captured.get(input.path);
+      const base = input.base === null ? undefined : textEncoder.encode(input.base);
+      if (sameBytes(theirs, base)) {
+        return { status: 'unchanged' };
+      }
+      const head = await port.readRef(into);
+      if (head === undefined) {
+        throw new RevisionPortError('UNKNOWN_REVISION', `${into} has no revision yet.`);
+      }
+      const { revision: origin, orphan } = await originOf(head, { path: input.path, base, theirs });
+      const originTree = await port.readTree(revisionId(origin));
+      if (originTree === undefined) {
+        throw new RevisionPortError('UNKNOWN_REVISION', `The store holds no tree for ${origin}.`);
+      }
+      const mine = await port.writeRevision({
+        parents: orphan ? [] : [revisionId(origin)],
+        tree: new ImmutableRevisionTree([
+          ...originTree
+            .entries()
+            .filter((entry) => entry.path !== input.path)
+            .map((entry) => [entry.path, entry.content, entry.mode] as RevisionTreeInput),
+          [input.path, textEncoder.encode(input.mine), originTree.mode(input.path) ?? '100644'],
+        ]),
+        provenance: provenanceOf('save', []),
+        summary: Object.freeze({ generated: `Your edit to ${input.path}` }),
+      });
+      const recorded = await recordConflict({
+        into,
+        theirs: head,
+        ours: mine.commitId,
+        base: orphan ? undefined : origin,
+        theirsLabel: into,
+        summary: `Your edit to ${input.path} needs your decision`,
+      });
+      return { status: 'recorded', revisionId: recorded.revisionId, line: recorded.line, into };
+    });
+  };
+
+  /**
+   * The same terms the pane's *Edit manually* reads (`materialize`), decoded once for a reader with no pane.
+   *
+   * @param revision - The conflicted revision.
+   * @returns Its files as text, choose-one files without any.
+   * @throws RevisionPortError When the revision records no conflict.
+   */
+  const readConflict = async (revision: string): Promise<RevisionConflictRead> => {
+    const terms = await conflictTermsOf(revision);
+    const decoder = new TextDecoder();
+    const text = (tree: ImmutableRevisionTree, path: string): string | undefined => {
+      const bytes = tree.get(path);
+      return bytes === undefined ? undefined : decoder.decode(bytes);
+    };
+    return {
+      revisionId: revision,
+      labels: terms.labels,
+      files: terms.conflicts.map(({ type, path }) =>
+        type === 'text'
+          ? {
+              path,
+              chooseOne: false,
+              base: text(terms.base, path),
+              ours: text(terms.ours, path),
+              theirs: text(terms.theirs, path),
+            }
+          : { path, chooseOne: true, base: undefined, ours: undefined, theirs: undefined },
+      ),
+    };
+  };
+
+  const actors: RevisionActors = {
+    settled,
+    turns: {
+      leases: readLeases,
+      executions: {
+        hold: async (input) => changeExecution(input, true),
+        release: async (input) => changeExecution(input, false),
+        close: closeExecutions,
+      },
+      open: async (checkoutId) => {
+        const places = await listPlaces();
+        const checkout = places.find((candidate) => candidate.id === checkoutId);
+        return checkout === undefined
+          ? undefined
+          : { checkout, filesystem: await filesystem(checkout), versioned: (path) => policy.classify(path).versioned };
+      },
+      describe: async (settlement) => describeTurnSettlement(port, projectId, settlement),
+      claim: async (runId) =>
+        inRecordSection(runId, async () => {
+          const record = await leaseOf(runId);
+          if (hasExecutions(record)) {
+            return 'held';
+          }
+          if (record === undefined || record.holder === rootInstanceId) {
+            return 'free';
+          }
+          if (!(await markFree(record.holder))) {
+            return 'held';
+          }
+          /* Re-stamped in the same section, so a third root probes this one's mark from here on. */
+          await holdMark();
+          await writeLeaseRecord(Object.freeze({ ...record, holder: rootInstanceId }));
+          return 'free';
+        }),
+      retire: async (key) =>
+        inRecordSection(key.runId, async () => {
+          const record = await leaseOf(key.runId);
+          if (record === undefined || !namesAttempt(record, key)) {
+            return 'absent';
+          }
+          if (hasExecutions(record) || !(await markFree(record.holder))) {
+            return 'held';
+          }
+          await dropLease(key.runId);
+          return 'retired';
+        }),
+      holderReleased: async (runId, signal) => {
+        const lease = await leaseOf(runId);
+        const holder = lease?.holder;
+        if (holder === undefined || holder === rootInstanceId) {
+          return;
+        }
+        const name = markOf(holder);
+        const locks = lockManager();
+        await (locks === undefined ? heldMarks.get(name) : locks.request(name, { signal }, () => undefined));
+      },
+      branchOf: async (checkoutId) => {
+        await ensureStore();
+        /*
+         * A head move records its removal evidence after the move resolves (`recordOperation`): a pull that made a
+         * dropped branch again has cleared its record only once that settles, so the record is read after it.
+         */
+        await loggedOperation;
+        await removedWrites;
+        const removed = await readRemovedCheckouts();
+        if (removed.has(checkoutId)) {
+          return 'removed';
+        }
+        const { objectFormat } = await describePort();
+        const [heads, places] = await Promise.all([port.listRefs('refs/heads'), listPlaces()]);
+        const born = new Set(heads.map((reference) => reference.name.replace(/^refs\/heads\//, '')));
+        /* An unborn branch is a candidate only where a checkout already tracks it or a new project starts on it. */
+        const candidates = new Set([
+          ...born,
+          mainBranch,
+          ...places.flatMap((place) => (place.branch === undefined ? [] : [place.branch])),
+        ]);
+        for (const branch of candidates) {
+          if (checkoutIdOfBranch(objectFormat, branch) === checkoutId) {
+            return { branch, unborn: !born.has(branch) };
+          }
+        }
+        return undefined;
+      },
+    },
+    release: releaseMark,
+    recordEditorConflict,
+    readConflict,
+    readContent,
+    materialize,
+    resolvePlaceholder,
+    adoptLargeObjects,
+    checkLargeObjects: async (checkoutId) => {
+      const place = await readPlaceOf(checkoutId);
+      /* A checkout a failed write left torn is put back first, then its tree is given the fill's word (L5). */
+      await repairTornCheckout(place);
+      /* During a tree write, the write's own fill answers; a second fill now would fetch the same objects again. */
+      if (runningTreeWrites.has(place.id)) {
+        retriesDuringWrite.add(place.id);
+        return;
+      }
+      recheckFill(place);
+    },
+    readEntryClosure: entryClosureOf,
+    chatDevice: async () => {
+      const context = await chatContext();
+      return context?.deviceId;
+    },
+    /* Round 28: only a host with no device id says no. One that has not been told its id yet, or cannot read its
+     * record devices now, cannot tell, so it pulls: a read failure is never taken for no identity. */
+    pullsChats: async () => {
+      const { syncChats } = await projectSyncPreferences();
+      return syncChats && options.deviceId !== undefined && options.deviceId() !== '';
+    },
+    checkout: {
+      cut: fromAuthorityPromise<CheckoutCutActorOutput, CheckoutCutActorInput>(async ({ input }) => {
+        /* A comparison running when this cut was asked, over the same write
+         * generation, already captures every write this cut takes, which the
+         * complete feed names: reading them again beside it is the double read
+         * E1 forbids (FX1 M). Read before the first await, as it was published. */
+        const running = memosOf(input.checkoutId).comparing;
+        const place = await placeOf(input.checkoutId);
+        /* Checked before anything is read: a capture now would hold conflict markers, and its mint would move the
+         * branch under the person's own operation. The checkout waits instead, and says why. */
+        const waitFor = await gitOperationOf(place);
+        if (waitFor !== undefined) {
+          return { treeId: '', cutId: '', waitFor };
+        }
+        const own = async (): Promise<ImmutableRevisionTree> =>
+          captureCheckout(place, { bypassMemo: false, changed: { paths: input.changedPaths } });
+        const captured =
+          options.completeChanges === true && running !== undefined && running.generation === input.generation
+            ? await running.tree.catch(own)
+            : await own();
+        const capturedTreeId = await checkoutTreeId(place.id, captured);
+        const head = await headOf(place);
+        /* A cut taken before the open pull lands — a close, a hidden tab —
+         * follows the same rule as the pull (W13c). Before any fetch, the
+         * opener's own manifest is setup too (W13d); a project with no remote
+         * has no pull to merge a root into, so its first cut is an ordinary one. */
+        if (head === undefined) {
+          const arriving = await arrivingTree(place);
+          if (
+            arriving === undefined
+              ? await holdsOnlyUnfetchedScaffold(captured)
+              : holdsNoWorkBeforePull(captured, arriving)
+          ) {
+            return { treeId: capturedTreeId, cutId: '', nothingToSave: true };
+          }
+        }
+        /* A4: opening wrote no attributes file (I4), so the cut that records
+         * something supplies the one the tree owes, and `writeRevision` writes
+         * its live copy in the same mint. A cut that records nothing owes
+         * nothing: Tau's own file never makes an entry of its own. */
+        const owed = withOwedAttributes(captured);
+        if (owed === undefined || capturedTreeId === (await treeIdOf(head))) {
+          return {
+            treeId: capturedTreeId,
+            cutId: cuts.put(input.checkoutId, { tree: captured, treeId: capturedTreeId }),
+          };
+        }
+        const treeId = await checkoutTreeId(place.id, owed);
+        return { treeId, cutId: cuts.put(input.checkoutId, { tree: owed, treeId, owesAttributes: true }) };
+      }),
+
+      /* D4's and I6's comparison: the same memoised capture a cut reads, and
+       * the next cut's starting tree, so that cut re-reads only what changed after it. */
+      captureTree: fromAuthorityPromise<CheckoutCaptureTreeActorOutput, CheckoutCaptureTreeActorInput>(
+        async ({ input, signal }) => {
+          const startedAt = workerTimings.now();
+          workerTimings.gauge('capture.inflight', 1);
+          try {
+            /* A `changed` re-enters `comparing` and stops this actor: the stale walk stops with it. */
+            return await compareCheckout(input, signal);
+          } finally {
+            workerTimings.gauge('capture.inflight', -1);
+            workerTimings.record('capture.tree', startedAt);
+          }
+        },
+      ),
+
+      writeRevision: fromAuthorityPromise<
+        Readonly<{ status: 'written'; revisionId: string }> | Readonly<{ status: 'held'; heldBy: TurnAttemptKey }>,
+        CheckoutWriteRevisionActorInput
+      >(async ({ input }) => {
+        const held = cuts.take(input.cutId);
+        /*
+         * RM-R16, the fresh fence: a cut no turn asked for reads the lease
+         * records after its capture and before its compare-and-swap. A lease
+         * on this checkout — another tab's, another host's — means an agent
+         * is recording these bytes, so nothing is minted and the answer names
+         * the attempt that holds them. The order is enough: agent bytes exist
+         * only after their record, and a record retired after this read has
+         * already been cut, so the compare-and-swap refuses a save built on
+         * the older head.
+         */
+        if (input.turn === undefined) {
+          const leases = await readLeases();
+          const holder = leases.find((lease) => lease.checkoutId === input.checkoutId);
+          if (holder !== undefined) {
+            return {
+              status: 'held',
+              heldBy: {
+                chatId: holder.chatId,
+                turnId: holder.turnId,
+                runId: holder.runId,
+                attempt: holder.attempt,
+              },
+            };
+          }
+        }
+        /* The `restore` cut that mints an undo's planned tree is that undo (D15). */
+        const pendingUndo = input.trigger === 'restore' ? pendingUndos.get(input.checkoutId) : undefined;
+        const undoes = pendingUndo?.treeId === input.treeId ? pendingUndo.undoes : undefined;
+        if (undoes !== undefined) {
+          pendingUndos.delete(input.checkoutId);
+        }
+        const provenance = provenanceOf(input.trigger, input.leaseIds, {
+          turn: input.turn,
+          restoredFrom: input.restoredFrom,
+        });
+        const receipt = await port.writeRevision({
+          parents: input.parents.map((parent) => revisionId(parent)),
+          tree: held.tree,
+          provenance,
+          summary: Object.freeze({ generated: await summaryOf(input, undoes) }),
+        });
+        mintedOperations.set(receipt.commitId, {
+          kind: input.trigger,
+          ...(undoes === undefined ? {} : { undoes }),
+          actor: provenance.actor,
+        });
+        /* The claim {@link revisionTreeId} makes, checked where it is cheap:
+         * a tree id this host computed differently from the engine's would
+         * hold the I5 gate open forever and mint an identical revision per
+         * turn, silently. */
+        const recorded = await treeIdOf(receipt.commitId);
+        if (recorded !== input.treeId) {
+          throw new RevisionPortError(
+            'ENGINE_FAILED',
+            `The store recorded tree ${String(recorded)} for a cut computed as ${input.treeId}.`,
+          );
+        }
+        /* A4: the attributes file this mint supplied gets its live copy now, as
+         * the store recorded it, so the checkout reads clean against the new
+         * head. A file that appeared since the cut is someone's and is kept.
+         * The revision is already minted, so a failed copy only warns: the next
+         * capture reads the file as removed and records that, never loses it. */
+        if (held.owesAttributes === true) {
+          try {
+            const recordedFiles = await recordedTree(held.tree, input.parents[0]);
+            const attributes = recordedFiles.get(generatedGitattributesPath);
+            await useFileSystem(await placeOf(input.checkoutId), async (rooted) => {
+              if (attributes !== undefined && !(await rooted.exists(generatedGitattributesPath))) {
+                await rooted.writeFile(generatedGitattributesPath, attributes);
+              }
+            });
+          } catch (error) {
+            console.warn('[revisions] the recorded attributes file could not be written to the checkout', error);
+          }
+        }
+        /* The revision's tree is the one just cut, so the next walk inherits
+         * its modes without reading it back from the store. */
+        const basis = heldTree(held.tree);
+        memosOf(input.checkoutId).basis =
+          basis === undefined ? undefined : { revisionId: receipt.commitId, tree: basis };
+        return { status: 'written', revisionId: receipt.commitId };
+      }),
+
+      casHead: fromAuthorityPromise<CheckoutCasHeadActorOutput, CheckoutCasHeadActorInput>(async ({ input }) => {
+        /* No detached checkout exists (D1): a revision no ref reaches would be
+         * a written tree nobody can find, so it is refused rather than orphaned (I1). */
+        if (input.branch === undefined) {
+          throw new RevisionPortError(
+            'UNSUPPORTED_OPERATION',
+            'These files are not on a branch, so nothing can record them.',
+          );
+        }
+        /* W0.10 (W5 F7): the mint runs inside the checkout fence, which every
+         * move of this checkout also takes. A checkout that has left the mint's
+         * branch refuses here, or a fresh branch's equal head would let its
+         * save land on the branch it left. */
+        const place = await placeOf(input.checkoutId);
+        if (place.branch !== input.branch) {
+          return { status: 'conflicted', head: await headOf(place) };
+        }
+        const result = await port.updateRef({
+          name: input.branch,
+          expectedHead: input.expectedHead === undefined ? undefined : revisionId(input.expectedHead),
+          head: revisionId(input.head),
+        });
+        return result.status === 'updated'
+          ? { status: 'updated', head: result.head }
+          : { status: 'conflicted', head: result.actualHead };
+      }),
+
+      readHead: fromAuthorityPromise<CheckoutHead, CheckoutFenceActorInput>(async ({ input }) => {
+        const place = await placeOf(input.checkoutId);
+        const head = await headOf(place);
+        const waitFor = await gitOperationOf(place);
+        /* RM-R5: all three facts the checkout owns, from one read, and the operation a waiting checkout waits on. */
+        return {
+          revisionId: head,
+          treeId: await treeIdOf(head),
+          branch: place.branch,
+          ...(waitFor === undefined ? {} : { waitFor }),
+        };
+      }),
+
+      /*
+       * The checkout fence is the same in-process queue on every host: it
+       * serializes the mints of one checkout inside this process, which is what
+       * keeps two chats from cutting the same tree at once. Nothing here spans
+       * documents or processes. Across documents, the ref Web Lock serializes
+       * publication; across processes, git's lockfile does, and the
+       * expected-old update inside `casHead` is where writers meet (I7, RM-S14).
+       */
+      fence: createCallbackLogic<AnyEventObject, CheckoutFenceActorInput>(({ input, sendBack }) => {
+        let live = true;
+        const fence = acquireCheckoutFence(input.checkoutId);
+        const grant = async (): Promise<void> => {
+          await fence.granted;
+          if (live) {
+            sendBack({ type: 'fenceGranted' });
+          }
+        };
+        // async-iife: bootstrap -- the fence grants when its turn in the queue comes; the actor's cleanup ends it.
+        void grant();
+        return (): void => {
+          live = false;
+          fence.release();
+        };
+      }),
+    },
+
+    turn: {
+      prepare: fromAuthorityPromise<TurnPrepareActorOutput, TurnPrepareActorInput>(async ({ input }) => {
+        const { turnId, chatId, runId } = input.key;
+        try {
+          await ensureStore();
+          const places = await listPlaces();
+          const place =
+            input.checkoutId === undefined
+              ? (places.find((candidate) => candidate.kind === 'live') ?? places[0])
+              : places.find((candidate) => candidate.id === input.checkoutId);
+          /* Placement never branches (D7/I18): a chat attaches to the checkout
+           * it names or to the live one, and a name that matches nothing is a
+           * refusal, not a new branch. */
+          if (place === undefined) {
+            throw new RevisionPortError(
+              'CHECKOUT_CONFLICT',
+              'That chat is working in files this project does not have open.',
+            );
+          }
+          const storedHead = await port.readHead();
+          const branch = place.branch ?? storedHead?.branch ?? mainBranch;
+          const baseRevisionId = await headOf(place);
+          const headTreeId = await treeIdOf(baseRevisionId);
+          /* A dirty base costs a second capture, since `checkout.cut` takes its
+           * own — ponytail: reusing this one needs an invalidation the seam does
+           * not have yet, and `changed` is the upgrade path (W6). */
+          const tree = await capture(place);
+          const dirty =
+            headTreeId === undefined ? tree.size > 0 : headTreeId !== (await checkoutTreeId(place.id, tree));
+          options.onPlacement?.({ turnId, chatId, runId, status: 'placed', checkout: place, baseRevisionId });
+          return { checkoutId: place.id, branch, baseRevisionId, dirty };
+        } catch (error) {
+          /* A turn a host could not place is refused, never run unrecorded
+           * (I-EDIT); the host learns here, because a `turn` that never
+           * prepared raises nothing else it can see. */
+          options.onPlacement?.({
+            turnId,
+            chatId,
+            runId,
+            status: 'refused',
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+      }),
+
+      /* RM-R12: the record, naming the attempt and the head read inside the fence, before any mint of the attempt. */
+      writeLease: fromAuthorityPromise<TurnWriteLeaseActorOutput, TurnWriteLeaseActorInput>(async ({ input }) =>
+        withCheckoutFence(input.checkoutId, async () => {
+          /* RM-R8 narrowed: the mark before the first record that names this root. */
+          await holdMark();
+          const headRevisionId = await headOf(await placeOf(input.checkoutId));
+          const lease: TurnLease = Object.freeze({
+            runId: input.key.runId,
+            turnId: input.key.turnId,
+            chatId: input.key.chatId,
+            checkoutId: input.checkoutId,
+            attempt: input.key.attempt,
+            ...(headRevisionId === undefined ? {} : { headRevisionId }),
+            startedAt: now(),
+            holder: rootInstanceId,
+          });
+          await inRecordSection(input.key.runId, async () => {
+            refuseHeldExecutions(await leaseOf(input.key.runId));
+            await writeLeaseRecord(lease);
+          });
+          /* Every lease on this checkout, this attempt's first: the provenance
+           * set (AC9), never a retirement list. The others are announced as
+           * `leaseHeld` (RM-R16). */
+          const leases = await readLeases();
+          const others = leases.filter(
+            (other) => other.checkoutId === input.checkoutId && other.runId !== input.key.runId,
+          );
+          return {
+            lease,
+            leaseIds: [input.key.runId, ...others.map((other) => other.runId)],
+            held: others.map(
+              (other): TurnAttemptKey => ({
+                chatId: other.chatId,
+                turnId: other.turnId,
+                runId: other.runId,
+                attempt: other.attempt,
+              }),
+            ),
+          };
+        }),
+      ),
+
+      /* Only the record naming this attempt is dropped; a missing one counts as retired (TS-R5, RM-S14). */
+      retireLease: fromAuthorityPromise<void, TurnRetireLeaseActorInput>(async ({ input }) => {
+        await retireAttempt(input.key);
+      }),
+
+      /*
+       * Find-or-cut (RM-R14): walk first parents from the checkout's head back
+       * to, not including, the lease's head, and return the revisions whose
+       * provenance names this attempt, by `turnCut`. Under the checkout fence,
+       * so a mint of this checkout is not half-published while it reads.
+       */
+      find: fromAuthorityPromise<TurnFindActorOutput, TurnFindActorInput>(async ({ input }) =>
+        withCheckoutFence(input.checkoutId, async () => {
+          const leases = input.stopAt === undefined ? await readLeases() : [];
+          const stopAt = input.stopAt ?? leases.find((lease) => lease.runId === input.key.runId)?.headRevisionId;
+          let cursor = await headOf(await placeOf(input.checkoutId));
+          const found: { base?: string; result?: string } = {};
+          while (cursor !== undefined && cursor !== stopAt && found.result === undefined) {
+            // oxlint-disable-next-line no-await-in-loop -- a first-parent walk reads one commit at a time.
+            const record = await port.readRevision(revisionId(cursor));
+            if (record === undefined) {
+              break;
+            }
+            const { provenance } = record;
+            if (provenance.runId === input.key.runId && (provenance.attempt ?? 0) === input.key.attempt) {
+              if (provenance.turnCut === 'result') {
+                found.result = record.id;
+              } else if (provenance.turnCut === 'base') {
+                found.base ??= record.id;
+              }
+            }
+            cursor = record.parents[0];
+          }
+          return found;
+        }),
+      ),
+
+      capture: fromAuthorityPromise<Readonly<{ captureId: string }>, TurnCaptureActorInput>(async ({ input }) => ({
+        captureId: captures.put(input.turnId, await capture(await placeOf(input.checkoutId))),
+      })),
+
+      merge: fromAuthorityPromise<
+        TurnMergeActorOutput,
+        Readonly<{ checkoutId: string; captureId: string; baseRevisionId: string | undefined }>
+      >(async ({ input }) => {
+        const agent = captures.take(input.captureId);
+        const place = await placeOf(input.checkoutId);
+        const base =
+          input.baseRevisionId === undefined
+            ? new ImmutableRevisionTree([])
+            : ((await port.readTree(revisionId(input.baseRevisionId))) ?? new ImmutableRevisionTree([]));
+        /* One walk of the live tree for the whole settlement (CI4): the merge's
+         * third side and the apply's `from` are the same capture, taken inside
+         * the fence that the apply will run under — so there is no window left
+         * between them for a second mint to change what was merged. */
+        return withCheckoutFence(place.id, async () => {
+          const live = await capture(place);
+          /* A file where the other side has a directory used to throw out of here
+           * (W3a re-review); it is a typed `file-directory` conflict now, so a
+           * conflicted turn is one return rather than an exception (W10). */
+          const merged = mergeRevisionTrees(base, live, agent, mergeOptions);
+          if (merged.status === 'conflicted') {
+            return { status: 'conflicted' };
+          }
+          await materializeTree(place, merged.tree, { before: live });
+          return { status: 'recorded' };
+        });
+      }),
+
+      /*
+       * Leases are plural (S6, AC9): two chats hold one checkout at the same
+       * time, so this grants on sight. The record is `.tau/runs/<runId>.json`
+       * and the only exclusion in the system is the mint fence above.
+       */
+      lease: createCallbackLogic<AnyEventObject, TurnLeaseActorInput>(({ sendBack }) => {
+        /* `onPlacement('leased')` is reported on the root's `turnPlaced`, after the base (RM-S14). */
+        sendBack({ type: 'leaseGranted' });
+        return (): void => undefined;
+      }),
+    },
+
+    restore: {
+      readUndoable: fromAuthorityPromise<boolean, Readonly<{ checkoutId: string }>>(async ({ input }) => {
+        await ensureStore();
+        const place = await placeOf(input.checkoutId);
+        if (place.branch === undefined) {
+          return false;
+        }
+        const entries = await opsLog.read(options.identity.resolve({ runId: undefined, trigger: 'restore' }));
+        return undoCandidates(entries, `refs/heads/${place.branch}`).length > 0;
+      }),
+
+      computePlan: fromAuthorityPromise<RestoreComputePlanActorOutput, RestoreComputePlanActorInput>(
+        async ({ input }) => {
+          await ensureStore();
+          pendingUndos.delete(input.checkoutId);
+          if ('undo' in input) {
+            return planUndo(input.checkoutId, input.skip);
+          }
+          const place = await placeOf(input.checkoutId);
+          /* The merge toast's *Undo* (I11): only while `into` still stands where the merge left it. */
+          if (input.expectHead !== undefined && (await headOf(place)) !== input.expectHead) {
+            throw mergeMovedError();
+          }
+          /* *Undo restore* is a restore of the restore row's first parent (D2). */
+          const restored = input.firstParent === true ? await port.readRevision(revisionId(input.target)) : undefined;
+          const target = input.firstParent === true ? restored?.parents[0] : input.target;
+          if (target === undefined) {
+            throw new RevisionPortError('UNKNOWN_REVISION', 'There is no revision to return these files to.');
+          }
+          if ((await port.readRevision(revisionId(target))) === undefined) {
+            throw new RevisionPortError('UNKNOWN_REVISION', `No recorded revision to restore: ${target}`);
+          }
+          /* Nothing is asked here (I11): step 1 already minted what the checkout
+           * had (D1), and `applyPlan`'s `validate` proves the head again inside
+           * the fence before one byte is written. */
+          return {
+            /* D2's undo also records which restore it undid, so *Undo* (D15) passes over both. */
+            planId: plans.put(input.checkoutId, {
+              checkoutId: input.checkoutId,
+              revisionId: target,
+              ...(input.firstParent === true ? { undoes: input.target } : {}),
+              /* Undoing a merge undoes that entry, and the head must still be it at the write. */
+              ...(input.expectHead === undefined ? {} : { undoes: input.expectHead, expectHead: input.expectHead }),
+            }),
+            revisionId: target,
+            revisionNumber: await ordinalOnLine(place, target),
+          };
+        },
+      ),
+
+      /*
+       * Writes the target tree and nothing else: no ref and no HEAD move here
+       * (A4, A5). The checkout's own `restore` cut is what fast-forwards the
+       * line, so a restore never leaves its branch.
+       */
+      applyPlan: fromAuthorityPromise<RestoreApplyPlanActorOutput, Readonly<{ checkoutId: string; planId: string }>>(
+        async ({ input }) => {
+          const plan = plans.take(input.planId);
+          const place = await placeOf(plan.checkoutId);
+          const changedMeanwhile = (): RevisionPortError =>
+            new RevisionPortError(
+              'CHECKOUT_CONFLICT',
+              'These files changed while the restore was being prepared. Try again.',
+            );
+          /* The head `validate` proved the files equal, which the oid diff starts from. */
+          let proven: string | undefined;
+          let built: ImmutableRevisionTree | undefined;
+          const { undo } = plan;
+          const target = async (before: ImmutableRevisionTree): Promise<ImmutableRevisionTree> => {
+            if (proven === undefined) {
+              throw changedMeanwhile();
+            }
+            built =
+              undo === undefined
+                ? await treeFrom(revisionId(proven), revisionId(plan.revisionId), before)
+                : overlay(before, undo.paths, undo.tree);
+            return built;
+          };
+          const fillFrom = undo === undefined ? plan.revisionId : undo.fillFrom;
+          await writeRevisionTree(place, target, {
+            fillFrom: fillFrom === undefined ? undefined : revisionId(fillFrom),
+            /*
+             * A3: the pre-restore cut and this write are two fenced sections, so
+             * the head is proven again inside this one — the files equal the
+             * line's head and no turn holds them — or nothing is written.
+             */
+            validate: async (before) => {
+              const head = await headOf(await placeOf(place.id));
+              /* A merge's Undo writes only over the merge itself: a later entry is never restored over (rule 10). */
+              if (plan.expectHead !== undefined && head !== plan.expectHead) {
+                throw mergeMovedError();
+              }
+              const headTreeId = await treeIdOf(head);
+              if (headTreeId === undefined || headTreeId !== (await checkoutTreeId(place.id, before))) {
+                throw changedMeanwhile();
+              }
+              proven = head;
+              /* A turn another window or host started while the question was open:
+               * refused in Switch's words, as A1's is, and before a byte is written
+               * — the restore cut could not land on a leased checkout (M4). No port
+               * names this refusal, so the code rides a plain error, read the
+               * structural way the machine reads every code. */
+              const leases = await readLeases();
+              if (leases.some((lease) => lease.checkoutId === place.id)) {
+                const code: RestoreFailureCode = 'LEASE_UNAVAILABLE';
+                throw Object.assign(new Error('An agent is working in this project’s files.'), { code });
+              }
+            },
+          });
+          if (plan.undoes === undefined) {
+            const treeId = await treeIdOf(plan.revisionId);
+            return { revisionId: plan.revisionId, treeId: treeId ?? '' };
+          }
+          /* The next `restore` cut of exactly this tree is the undo (D15). */
+          const treeId = built === undefined ? '' : await checkoutTreeId(place.id, built);
+          pendingUndos.set(place.id, { treeId, undoes: plan.undoes });
+          return { revisionId: plan.revisionId, treeId };
+        },
+      ),
+    },
+
+    checkouts: {
+      listCheckouts: fromAuthorityPromise<ListCheckoutsActorOutput, Readonly<{ projectId: string }>>(async () => {
+        await ensureStore();
+        const leases = await readLeases();
+        const places = await listPlaces();
+        const merged = await mergedHistory();
+        return {
+          checkouts: await Promise.all(places.map(async (place) => recordOf(place, leases, merged))),
+          conflicts: await listConflicts(),
+        };
+      }),
+
+      addCheckout: fromAuthorityPromise<
+        AddCheckoutActorOutput,
+        Readonly<{ projectId: string; branch: string; from: string }>
+      >(async ({ input }) => {
+        refuseReservedName(input.branch);
+        if (port.addCheckout === undefined) {
+          throw new RevisionPortError('UNSUPPORTED_OPERATION', 'This project cannot open another set of files.');
+        }
+        const added = await port.addCheckout({
+          branch: input.branch,
+          ...(input.from === '' ? {} : { from: revisionId(input.from) }),
+        });
+        await noteRemovedCheckout(added.id, false);
+        /* A new checkout is a new tree: its readiness waits on the fill's word, owed here even with nothing to fetch. */
+        checkFill(added);
+        return { checkout: await recordOf(added, await readLeases()) };
+      }),
+
+      /* Discard is gated on the tree equalling its head (A25, S36): a checkout
+       * with work in it that no revision holds is the one thing removal can
+       * destroy, so the answer is "save a revision first" rather than a
+       * confirmation dialog nobody reads. */
+      removeCheckout: fromAuthorityPromise<void, Readonly<{ projectId: string; id: string }>>(async ({ input }) => {
+        if (port.removeCheckout === undefined) {
+          throw new RevisionPortError('UNSUPPORTED_OPERATION', 'This project has no open files to close.');
+        }
+        /* Final effect-level check: a stale registry lease list cannot discard a checkout that holds execution (I7). */
+        const leases = await readLeases();
+        refuseHeldExecutions(leases.find((lease) => lease.checkoutId === input.id && hasExecutions(lease)));
+        const place = await placeOf(input.id);
+        const headTreeId = await treeIdOf(await headOf(place));
+        if (headTreeId !== (await checkoutTreeId(place.id, await captureFresh(place)))) {
+          throw new RevisionPortError(
+            'CHECKOUT_CONFLICT',
+            'This branch has changes that are not in a revision yet. Save a revision before discarding it.',
+          );
+        }
+        await port.removeCheckout(input.id);
+        await noteRemovedCheckout(input.id, true);
+        /* Evidence for a checkout that is gone: a failure to remove it is never the removal's. */
+        await forgetComparison(input.id).catch(() => undefined);
+        /* The bytes a closed checkout's captures could reuse describe a tree
+         * this process can no longer reach (EQ7). */
+        checkoutMemos.delete(input.id);
+        swept.delete(input.id);
+        /* No retry checks a checkout that is gone, and a checkout of the same id later starts its backoff over. */
+        cancelFillRetry(input.id);
+        failedChecks.delete(input.id);
+      }),
+
+      /* A turn's retirement names its attempt and is checked like the turn's own; a run-only one drops the record. */
+      retireLease: fromAuthorityPromise<void, Readonly<{ projectId: string; runId: string; key?: TurnAttemptKey }>>(
+        async ({ input }) => {
+          await (input.key === undefined
+            ? inRecordSection(input.runId, async () => dropLease(input.runId))
+            : retireAttempt(input.key));
+        },
+      ),
+    },
+
+    /*
+     * The branch verbs (S42, W7). `create` and `discard` are not here: they are
+     * the checkout registry's `addCheckout`/`removeCheckout`, which
+     * `branch.machine` asks for through its parent so the registry stays the one
+     * writer of those records.
+     */
+    branch: {
+      /* D10, answered where the trees are. *Switch* into a branch that already
+       * has a checkout re-roots; into one that does not, the live tree is
+       * rewritten. Neither asks (I11): `branch.machine` records the live
+       * checkout's unsaved work on the branch it leaves before it moves. */
+      checkBranch: fromAuthorityPromise<BranchCheckActorOutput, BranchCheckActorInput>(async ({ input }) => {
+        await ensureStore();
+        if (input.operation !== 'switch') {
+          return {};
+        }
+        const places = await listPlaces();
+        const linked = places.find((place) => place.branch === input.branch && place.kind === 'linked');
+        if (linked !== undefined) {
+          return { checkoutId: linked.id, mode: 'reroot' };
+        }
+        const live = places.find((place) => place.kind === 'live');
+        return live === undefined ? {} : { checkoutId: live.id, mode: 'applyToLive' };
+      }),
+
+      /* Apply-to-live: the *other* half of one verb a person never
+       * distinguishes (D10). The tree the branch names replaces the working
+       * copy and the live head follows the branch. The tree write goes through
+       * the same `materializeTree` a restore's does, so one checkout has one
+       * way of being rewritten (I20); unlike a restore, which moves no head of
+       * its own and lets its restore cut fast-forward the line (D1), a switch
+       * also moves the live head to the branch. */
+      applySwitch: fromAuthorityPromise<
+        BranchApplySwitchActorOutput,
+        Readonly<{ projectId: string; branch: string; checkoutId: string | undefined }>
+      >(async ({ input }) => {
+        await ensureStore();
+        const places = await listPlaces();
+        const place =
+          input.checkoutId === undefined
+            ? places.find((candidate) => candidate.kind === 'live')
+            : await placeOf(input.checkoutId);
+        if (place === undefined) {
+          throw new RevisionPortError('UNSUPPORTED_OPERATION', 'This project has no files open to move.');
+        }
+        const head = await port.readRef(input.branch);
+        if (head === undefined) {
+          throw new RevisionPortError('UNKNOWN_REVISION', `${input.branch} has no revision yet.`);
+        }
+        /*
+         * By oid diff from the checkout's head when the files are that head
+         * (D10), which they are once `branch.machine`'s recording cut saved
+         * them (I11); files that changed since that cut are not, and until the
+         * index knows which paths those are, the branch's whole tree is read
+         * (its large objects from this store alone, for the fill).
+         */
+        const branchTree = async (before: ImmutableRevisionTree): Promise<ImmutableRevisionTree> => {
+          const current = await headOf(place);
+          const currentTreeId = await treeIdOf(current);
+          if (current !== undefined && currentTreeId === (await checkoutTreeId(place.id, before))) {
+            return treeFrom(revisionId(current), head, before);
+          }
+          const tree = await port.readTree(head, { largeObjects: 'local' });
+          if (tree === undefined) {
+            throw new RevisionPortError('UNKNOWN_REVISION', `The store holds no tree for ${input.branch}.`);
+          }
+          return tree;
+        };
+        await writeRevisionTree(place, branchTree, {
+          fillFrom: head,
+          publish: place.kind === 'live' ? async () => port.setHead(input.branch) : undefined,
+        });
+        return {
+          checkoutId: place.id,
+          revisionId: head,
+          treeId: (await treeIdOf(head)) ?? '',
+          branch: input.branch,
+        };
+      }),
+
+      /*
+       * *Merge into `<current>`* — the verb that was unrendered until W10,
+       * because composing two lines needs a merge base and nothing in the tree
+       * computed one (W7-a2 report).
+       *
+       * Three outcomes, and only one of them writes a file: already-merged and
+       * fast-forward move a ref (and the working copy, for the latter); a real
+       * three-way merge that settles records a merge revision; one that does
+       * not settle mints a **conflicted revision on the source branch** and
+       * touches neither `<current>` nor its checkout (A22, AC14). The conflict
+       * terms travel in `jj:trees`, so the graph alone says what collided.
+       */
+      merge: fromAuthorityPromise<
+        BranchMergeActorOutput,
+        Readonly<{ projectId: string; branch: string; into: string }>
+      >(async ({ input }) => {
+        /* The registry is re-read on `branchMerged`, so the moved checkout stays this module's. */
+        const outcome = await mergeBranches({ ...input, undone: 'refuse' });
+        if (outcome.status === 'conflicted') {
+          return { status: 'conflicted', paths: outcome.paths };
+        }
+        return outcome.status === 'upToDate'
+          ? outcome
+          : {
+              status: 'merged',
+              revisionId: outcome.revisionId,
+              ...(outcome.before === undefined ? {} : { before: outcome.before }),
+            };
+      }),
+      /* A rename is two ref writes, in the order that cannot lose the head: the
+       * new name is born first, and only a ref that still points where we read
+       * it is removed (D29's compare-and-set).
+       *
+       * Those two writes are all it is, so a branch something else names by its
+       * old name is refused before either (D91): a linked checkout's id and
+       * record are its branch's, and a remote keeps the old name because no
+       * push removes a ref (rule 19). Renamed anyway, the checkout sat on a
+       * branch with no revision and the remote held both names. */
+      rename: fromAuthorityPromise<
+        BranchRenameActorOutput,
+        Readonly<{ projectId: string; branch: string; name: string }>
+      >(async ({ input }) => {
+        refuseReservedName(input.name);
+        await ensureStore();
+        const head = await port.readRef(input.branch);
+        if (head === undefined) {
+          throw new RevisionPortError('UNKNOWN_REVISION', `${input.branch} has no revision yet.`);
+        }
+        const places = await listPlaces();
+        if (places.some((place) => place.kind === 'linked' && place.branch === input.branch)) {
+          throw new RevisionPortError(
+            'BRANCH_RENAME_LINKED',
+            `${input.branch} has its own checkout, which is named by the branch.`,
+          );
+        }
+        // ponytail: a push already reading the old name can still land it after this check; the refusal covers every settled push.
+        const remotes = await port.listRemotes();
+        const tracked = await Promise.all(
+          remotes.map(async (remote) => port.readRef(remoteTrackingRef(remote.name, `refs/heads/${input.branch}`))),
+        );
+        if (tracked.some((remoteHead) => remoteHead !== undefined)) {
+          throw new RevisionPortError('BRANCH_RENAME_PUSHED', `A remote already holds ${input.branch}.`);
+        }
+        const taken = await port.readRef(input.name);
+        if (taken !== undefined) {
+          throw new RevisionPortError('CHECKOUT_CONFLICT', `${input.name} is already a branch of this project.`);
+        }
+        const created = await port.updateRef({ name: input.name, expectedHead: undefined, head });
+        if (created.status !== 'updated') {
+          throw new RevisionPortError('CHECKOUT_CONFLICT', `${input.name} was created while the branch was renamed.`);
+        }
+        const live = await port.readHead();
+        if (live?.branch === input.branch) {
+          await port.setHead(input.name);
+        }
+        const removed = await port.updateRef({ name: input.branch, expectedHead: head });
+        if (removed.status !== 'updated') {
+          throw new RevisionPortError('CHECKOUT_CONFLICT', `${input.branch} moved while the branch was renamed.`);
+        }
+        /* RM-R5: the checkout whose HEAD this moved re-reads its branch. */
+        const moved = live?.branch === input.branch ? places.find((place) => place.kind === 'live') : undefined;
+        return { branch: input.name, ...(moved === undefined ? {} : { checkoutId: moved.id }) };
+      }),
+    },
+
+    /*
+     * Resolving one conflicted revision (S33, W10).
+     *
+     * Everything a person chooses is a *choice*, held here by revision and path
+     * until `finishMerge` composes the tree — so no checkout ever holds marker
+     * bytes and the conflicted revision stays exactly what the merge recorded
+     * (A22, AC14).
+     */
+    resolution: {
+      loadConflict: fromAuthorityPromise<ResolutionLoadActorOutput, ResolutionLoadActorInput>(async ({ input }) => {
+        const terms = await conflictTermsOf(input.revisionId);
+        const perspective = await perspectiveOf(input.revisionId);
+        /* The sides chosen for a conflicted revision no line lists any more are
+           dead: it resolved or was removed (review R12). */
+        for (const key of resolutions.keys()) {
+          if (!lineOf.has(key)) {
+            resolutions.delete(key);
+          }
+        }
+        const places = await listPlaces();
+        return {
+          branch: perspective?.line,
+          labels: terms.labels,
+          paths: terms.conflicts.map((conflict) => ({
+            path: conflict.path,
+            /* *Open in editor* only for text: a parametric or binary file and a
+             * file-versus-directory collision are choose-one (rule 8). */
+            openable: conflict.type === 'text',
+            ...(conflict.type === 'parameters' && conflict.pointers.length > 0 ? { keys: conflict.pointers } : {}),
+          })),
+          checkoutId:
+            perspective === undefined ? undefined : places.find((place) => place.branch === perspective.into)?.id,
+        };
+      }),
+
+      materialize: fromAuthorityPromise<
+        ResolutionMaterializeActorOutput,
+        Readonly<{ projectId: string; revisionId: string; path: string }>
+      >(async ({ input }) => {
+        await ensureStore();
+        /* One read of the terms answers both questions a person can ask of a
+           conflicted file: what the markers say, and what each side says on its
+           own (*Compare* — A27, D19). */
+        const terms = await conflictTermsOf(input.revisionId);
+        const decoder = new TextDecoder();
+        return {
+          path: input.path,
+          text: await materializeConflict(port, input, {
+            ...mergeOptions,
+            perspective: await perspectiveOf(input.revisionId),
+          }),
+          ours: decoder.decode(terms.ours.get(input.path)),
+          theirs: decoder.decode(terms.theirs.get(input.path)),
+        };
+      }),
+
+      applyResolution: fromAuthorityPromise<void, ResolutionApplyActorInput>(async ({ input }) => {
+        const terms = await conflictTermsOf(input.revisionId);
+        const conflict = terms.conflicts.find((entry) => entry.path === input.path);
+        if (conflict === undefined) {
+          throw new RevisionPortError('UNSUPPORTED_OPERATION', `${input.path} is not one of this conflict's files.`);
+        }
+        if (input.side === 'editor') {
+          if (input.content === undefined) {
+            throw new RevisionPortError('UNSUPPORTED_OPERATION', `No resolved text arrived for ${input.path}.`);
+          }
+          if (conflict.type === 'file-directory') {
+            throw new RevisionPortError(
+              'UNSUPPORTED_OPERATION',
+              `${input.path} is a file on one side and a folder on the other. Keep one side.`,
+            );
+          }
+        }
+        const chosen = resolutions.get(input.revisionId) ?? new Map<string, ChosenSide>();
+        chosen.set(input.path, {
+          side: input.side,
+          ...(input.content === undefined ? {} : { content: textEncoder.encode(input.content) }),
+          ...(input.side === 'editor'
+            ? { madeFrom: { ours: terms.ours.get(input.path), theirs: terms.theirs.get(input.path) } }
+            : {}),
+        });
+        resolutions.set(input.revisionId, chosen);
+      }),
+
+      finishMerge: fromAuthorityPromise<
+        ResolutionFinishActorOutput,
+        Readonly<{ projectId: string; revisionId: string }>
+      >(async ({ input }) => {
+        const perspective = await perspectiveOf(input.revisionId);
+        if (perspective === undefined) {
+          throw new RevisionPortError('UNSUPPORTED_OPERATION', 'That decision is no longer on a conflict line.');
+        }
+        if (perspective.head === undefined) {
+          /* A decision about a line that is gone has nowhere to land (RV-W6 F11). */
+          throw new RevisionPortError(
+            'UNSUPPORTED_OPERATION',
+            `${perspective.into} no longer exists on this device, so this decision has nowhere to land. Remove it from Branches instead.`,
+          );
+        }
+        const terms = await conflictTermsOf(input.revisionId);
+        const chosen = resolutions.get(input.revisionId) ?? new Map<string, ChosenSide>();
+        const entries = new Map(
+          terms.merged
+            .entries()
+            .map((entry) => [entry.path, [entry.path, entry.content, entry.mode] as RevisionTreeInput]),
+        );
+        for (const conflict of terms.conflicts) {
+          const choice = chosen.get(conflict.path);
+          if (choice === undefined) {
+            throw new RevisionPortError('UNSUPPORTED_OPERATION', `Choose a side for ${conflict.path} first.`);
+          }
+          if (choice.side === 'editor' && choice.content !== undefined) {
+            if (
+              !sameBytes(choice.madeFrom?.ours, terms.ours.get(conflict.path)) ||
+              !sameBytes(choice.madeFrom?.theirs, terms.theirs.get(conflict.path))
+            ) {
+              throw new RevisionPortError(
+                'UNSUPPORTED_OPERATION',
+                `${conflict.path} changed since you edited it. Open it again to decide with its newest text.`,
+              );
+            }
+            entries.set(conflict.path, [conflict.path, choice.content, terms.ours.mode(conflict.path) ?? '100644']);
+            continue;
+          }
+          const side = choice.side === 'mine' ? terms.ours : terms.theirs;
+          if (conflict.type === 'file-directory') {
+            /* The chosen *shape* wins: either the file at that path, or every
+             * path that side holds under it. The two can never both be in one
+             * tree, which is what made this a conflict. */
+            for (const entry of side.entries()) {
+              if (entry.path === conflict.path || entry.path.startsWith(`${conflict.path}/`)) {
+                entries.set(entry.path, [entry.path, entry.content, entry.mode]);
+              }
+            }
+            continue;
+          }
+          /* Keep mine on text or a parameter record keeps the other side's
+           * clean hunks and keys: the chosen side wins only where both changed
+           * (RV-W5b2 R2-4). Anything else is the whole side. */
+          const preferred =
+            conflict.type === 'text' || conflict.type === 'parameters'
+              ? mergeFilePreferring(
+                  conflict.path,
+                  {
+                    base: terms.base.get(conflict.path) ?? new Uint8Array(),
+                    ours: terms.ours.get(conflict.path) ?? new Uint8Array(),
+                    theirs: terms.theirs.get(conflict.path) ?? new Uint8Array(),
+                  },
+                  { ...mergeOptions, prefer: choice.side === 'mine' ? 'ours' : 'theirs' },
+                )
+              : undefined;
+          const bytes = preferred ?? side.get(conflict.path);
+          if (bytes === undefined) {
+            /* That side deleted it, which is a resolution like any other. */
+            entries.delete(conflict.path);
+          } else {
+            entries.set(conflict.path, [conflict.path, bytes, side.mode(conflict.path) ?? '100644']);
+          }
+        }
+
+        /*
+         * The decision lands on the line it decides, with the conflicted
+         * revision among the merge's parents (D14): that ancestry is what hides
+         * the conflict line, here and on every device that fetches it, and the
+         * line itself never moves. The terms were read against this line's tip,
+         * so the merge carries everything the line gained since the conflict.
+         */
+        const { into, head } = perspective;
+        const tree = new ImmutableRevisionTree(entries.values());
+        const receipt = await port.writeRevision({
+          parents: [revisionId(head), revisionId(input.revisionId)],
+          tree,
+          provenance: provenanceOf('merge', []),
+          summary: Object.freeze({
+            /* A later merge can leave no file to choose (R13): count only files a person decided. */
+            generated:
+              terms.conflicts.length === 0
+                ? `Finished the merge into ${into}`
+                : `Resolved ${String(terms.conflicts.length)} ${terms.conflicts.length === 1 ? 'file' : 'files'} on ${into}`,
+          }),
+        });
+        /* The terms were read against `head`; a line that moved since is new
+         * work this decision has not seen, never something to overwrite. */
+        const land = async (): Promise<void> => {
+          try {
+            await publishMerge(into, head, receipt.commitId);
+          } catch (error) {
+            throw error instanceof RevisionPortError && error.code === 'ENGINE_FAILED'
+              ? new RevisionPortError(
+                  'ENGINE_FAILED',
+                  `${into} has new work since this decision was opened. Open it again to decide with it.`,
+                )
+              : error;
+          }
+        };
+        const places = await listPlaces();
+        const place = places.find((candidate) => candidate.branch === into);
+        if (place === undefined) {
+          await land();
+        } else {
+          /* Never over files no revision holds, and never under a running turn
+           * (I1, rule 9): the same refusals a branch merge gives, read from the
+           * files themselves rather than a remembered capture (RV-W6 F9). */
+          const headTreeId = await treeIdOf(head);
+          const refuseHeld = async (current?: ImmutableRevisionTree): Promise<void> => {
+            await refuseLeased(place);
+            if (current !== undefined && (await checkoutTreeId(place.id, current)) !== headTreeId) {
+              throw new CheckoutHeld({
+                hold: 'dirty',
+                checkoutId: place.id,
+                code: 'UNSUPPORTED_OPERATION',
+                message:
+                  'The files you have open have changes that are not in a revision yet. Save a revision before you finish this decision.',
+              });
+            }
+          };
+          await refuseHeld(await captureFresh(place));
+          /* `refuseHeld` proves the files are `head`'s, so only what the decision changed is written (D10). */
+          const decided = async (before: ImmutableRevisionTree): Promise<ImmutableRevisionTree> =>
+            treeFrom(revisionId(head), revisionId(receipt.commitId), before);
+          await writeRevisionTree(place, decided, {
+            fillFrom: revisionId(receipt.commitId),
+            validate: refuseHeld,
+            publish: async () => {
+              await refuseHeld();
+              await land();
+            },
+          });
+        }
+        resolutions.delete(input.revisionId);
+        return { revisionId: receipt.commitId, branch: perspective.line };
+      }),
+
+      seedTurn: fromAuthorityPromise<
+        ResolutionSeedTurnActorOutput,
+        Readonly<{ projectId: string; revisionId: string }>
+      >(async ({ input }) => {
+        const terms = await conflictTermsOf(input.revisionId);
+        const perspective = await perspectiveOf(input.revisionId);
+        const places = await listPlaces();
+        return {
+          /* A turn resolves on the line the decision lands on (rule 8). */
+          checkoutId:
+            perspective === undefined ? undefined : places.find((place) => place.branch === perspective.into)?.id,
+          paths: terms.conflicts.map((conflict) => conflict.path),
+        };
+      }),
+    },
+
+    remote: {
+      /* Git's own remotes list is the record (D29). One remote is exposed; the
+       * list can hold several and a later program can show them (A23). */
+      readRemote: fromAuthorityPromise<RemoteReadActorOutput, Readonly<{ projectId: string }>>(async () => {
+        await ensureStore();
+        const [remote] = await port.listRemotes();
+        return { remote };
+      }),
+
+      writeRemote: fromAuthorityPromise<RemoteWriteActorOutput, RemoteWriteActorInput>(async ({ input }) => {
+        listEarly(input);
+        const asked = earlyListing;
+        try {
+          await ensureStore();
+          /* Read after the store, as before: a host's own lookup answers once, with what it knows by then. */
+          const { name, url } = asked?.address ?? remoteAddressOf(input);
+          const [current] = await port.listRemotes();
+          if (
+            current !== undefined &&
+            (current.name !== name ||
+              current.url !== url ||
+              current.provider !== input.provider ||
+              current.repositoryId !== input.repositoryId)
+          ) {
+            await port.removeRemote(current.name);
+          }
+          await port.setRemote({
+            name,
+            url,
+            ...(input.provider === undefined ? {} : { provider: input.provider }),
+            ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
+            ...(input.fetchOnly === true ? { fetchOnly: true } : {}),
+          });
+          return {
+            remote: remoteOf(name, url, {
+              ...(input.provider === undefined ? {} : { provider: input.provider }),
+              ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
+              ...(input.fetchOnly === true ? { fetchOnly: true } : {}),
+            }),
+          };
+        } catch (error) {
+          /* A connect whose write failed is no connect a later `validate` continues: its listing goes with it. */
+          if (earlyListing === asked) {
+            earlyListing = undefined;
+          }
+          throw error;
+        }
+      }),
+
+      /*
+       * Disconnecting is a config edit and nothing else (C12).
+       *
+       * It used to also delete every `refs/remotes/<name>/*` and empty the
+       * durable queue, so a disconnect silently discarded work that had never
+       * reached any remote — `Not backed up · n` simply vanished — and threw
+       * away the leases a reconnect compares against. Policy Rule 9 wants the
+       * old destination's queue *paused*, and `SyncQueueEntry.remote` is what
+       * makes pausing safe: an entry names who it is owed to, so no other
+       * remote is ever offered it.
+       */
+      removeRemote: fromAuthorityPromise<void, Readonly<{ name: string }>>(async ({ input }) => {
+        earlyListing = undefined;
+        await ensureStore();
+        await port.removeRemote(input.name);
+      }),
+
+      /* I8: no *credential* work for Tau Cloud — the credential is the session,
+       * and the `HttpClient` sets the header from it at request time. The
+       * project must exist on it (P51), and `validating` registers it when the
+       * remote answers `404` (D11).
+       *
+       * W12 replaces this actor for a GitHub remote, where consent is a popup. */
+      authorize: fromAuthorityPromise<void, RemoteAuthorizeActorInput>(async () => undefined),
+
+      /*
+       * R2: *Change backup* asks the new remote `validate`'s question before
+       * `writeRemote` replaces the old one, so a refused address costs nothing.
+       * Nothing is recorded: the address is read under the name it would be
+       * recorded with, on this host's own transport, so the refusal reads as a
+       * sync would read it. Tau Cloud answers only for a registered project (P51).
+       */
+      probe: fromAuthorityPromise<void, RemoteWriteActorInput>(async ({ input }) => {
+        await ensureStore();
+        await listRegistered(input.kind, async () => port.listRemoteRefs(remoteAddressOf(input)));
+      }),
+
+      /* The cheapest question that proves a remote is really there: what refs
+       * does it advertise. No object is fetched. */
+      validate: fromAuthorityPromise<RemoteValidateActorOutput, RemoteValidateActorInput>(async ({ input, signal }) => {
+        /* Only the newest validation, and only one nobody stopped, leaves its
+         * listing for `initialSync`: a stopped or overtaken one is not the
+         * connection that state continues. */
+        validations += 1;
+        const validation = validations;
+        validatedListing = undefined;
+        const identity = await remoteIdentity(input.remote);
+        const remotes = await port.listRemotes();
+        const configured = remotes.find((remote) => remote.name === input.remote);
+        const kind = configured?.kind;
+        const early = await takeEarlyListing(configured);
+        /* A `404` the early listing already heard is registered on at once (D11), then listed: no second `404`. */
+        let heard = early !== undefined && 'notFound' in early ? early.notFound : undefined;
+        const listed =
+          early !== undefined && 'refs' in early
+            ? early.refs
+            : await listRegistered(kind, async () => {
+                if (heard !== undefined) {
+                  const answer = heard;
+                  heard = undefined;
+                  throw answer;
+                }
+                return port.listRemoteRefs(input.remote);
+              });
+        if (!signal.aborted && validation === validations) {
+          validatedListing = { remote: input.remote, identity, refs: listed };
+        }
+        return {};
+      }),
+
+      /* D18: what Tau Cloud says the owner's account stores, read by the host
+       * that knows how to ask. Not the repository's business, so not an
+       * authority operation: nothing waits on it to close. A Git remote has no
+       * plan to report. */
+      readStorage: createAsyncLogic<RemoteStorage | undefined, RemoteReadStorageActorInput>({
+        run: async ({ input }) => (input.kind === 'tau' ? options.remoteStorage?.(input.remote) : undefined),
+      }),
+
+      /*
+       * Once, at connect time: bring the remote's graph in, then offer this
+       * project's branch. Everything after this is `sync.machine`'s debounce.
+       *
+       * R4: only the refs the opening pull's own fetch would take, and those
+       * tips are remembered as hydrated, so that pull lists the remote and
+       * fetches nothing. Operation logs never come down; chats and evidence
+       * come with the opening pull's record projection, after the authored
+       * apply, exactly as on every later pull.
+       */
+      initialSync: fromAuthorityPromise<RemoteInitialSyncActorOutput, RemoteInitialSyncActorInput>(
+        async ({ input, signal }) => {
+          const identity = await remoteIdentity(input.remote);
+          /* R6: `validating` hands straight to this state, so its listing is
+           * the one this fetch acts on — taken once, and only for the same
+           * recorded destination. */
+          const validated = validatedListing;
+          validatedListing = undefined;
+          const advertised =
+            validated !== undefined &&
+            validated.remote === input.remote &&
+            validated.identity !== undefined &&
+            validated.identity === identity
+              ? validated.refs
+              : await port.listRemoteRefs(input.remote, { signal });
+          signal.throwIfAborted();
+          const wanted = authoredFetchReferences(advertised, input.remote);
+          if (wanted.length > 0) {
+            await fetchAuthored({
+              remote: input.remote,
+              wanted,
+              advertised,
+              identity,
+              signal,
+            });
+          }
+          const remotes = await port.listRemotes();
+          const configured = remotes.find((remote) => remote.name === input.remote);
+          if (configured?.fetchOnly === true || configured?.provider === 'github') {
+            return {};
+          }
+          const active = await port.readHead();
+          const branch = active?.branch ?? input.branch;
+          const head = await port.readRef(branch);
+          /* A project whose branch is unborn has nothing to back up yet; the
+           * first revision pushes on its own debounce. One whose branch the
+           * remote already advertises at this head has nothing to send, and
+           * asking costs a second `info/refs` (D11). */
+          const remoteHead = advertised.find((ref) => ref.name === `refs/heads/${branch}`)?.head;
+          if (head === undefined || remoteHead === head) {
+            return {};
+          }
+          /* Only a head that contains the remote's is offered: the remote's own
+           * fast-forward rule would refuse anything else, and an open that
+           * fails on that refusal never reaches the pull that integrates it.
+           * Behind or forked, the opening pull fast-forwards or merges, and
+           * the push after it sends the result. */
+          if (remoteHead !== undefined) {
+            const relation = await openingRelation(head, remoteHead);
+            if (relation === 'unrelated') {
+              await yieldUnrelatedLine(branch, head, remoteHead);
+            }
+            if (relation !== 'ahead') {
+              return {};
+            }
+          }
+          const result = await (async () => {
+            try {
+              /* No lease on the first sync: nothing is being rewritten, so the
+               * remote's own fast-forward rule is the right refusal. W13's pushes
+               * carry `expected` (A32). */
+              return await port.push({
+                signal,
+                remote: input.remote,
+                refs: [{ name: `refs/heads/${branch}` }],
+                atomic: true,
+              });
+            } catch (error) {
+              /* Storage is the one refusal that is not a failed connection: the
+               * person keeps the remote and gets the file list (D16, P19). The
+               * machine turns this into `quotaRefused`; W13 forwards the same
+               * error from its own pushes. */
+              if (error instanceof LfsQuotaError) {
+                return error.refusal;
+              }
+              throw error;
+            }
+          })();
+          if ('paths' in result) {
+            /* The numbers the server sent travel with the file list (C13): they
+             * are what a storage meter can render, and they used to be parsed
+             * here and dropped one line later. */
+            const storage = {
+              ...(result.remainingBytes === undefined ? {} : { remainingBytes: result.remainingBytes }),
+              ...(result.shortfallBytes === undefined ? {} : { shortfallBytes: result.shortfallBytes }),
+            };
+            return {
+              overQuota: result.paths,
+              message: result.message,
+              ...(Object.keys(storage).length === 0 ? {} : { storage }),
+            };
+          }
+          const refused = result.refs.find((entry) => entry.status === 'rejected');
+          if (refused !== undefined) {
+            /* The remote refused the ref, not the transport: classified `rejected`, so no surface reads it as a
+             * download that did not finish. */
+            throw new RevisionPortError(
+              'REMOTE_REJECTED',
+              `The remote refused ${refused.name}: ${refused.reason ?? 'no reason given'}`,
+            );
+          }
+          return {};
+        },
+      ),
+    },
+
+    publish: {
+      /* The versions a project already has, the revision about to get one, and
+       * the leases for the push, the tag's by its `v<number>` name. */
+      listVersions: fromAuthorityPromise<PublishVersionsActorOutput, Readonly<{ projectId: string; branch: string }>>(
+        async ({ input }) => {
+          await ensureStore();
+          const remote = await publishRemote();
+          const [tags, head, expected, advertised] = await Promise.all([
+            port.listTags(),
+            port.readRef(input.branch),
+            port.readRef(remoteTrackingRef(remote, `refs/heads/${input.branch}`)),
+            /* The tag leases (P38). A remote that cannot be reached answers
+               nothing, which leases "must not exist" — a re-publish is then
+               refused with a sentence rather than forced over whatever is
+               there. */
+            port.listRemoteRefs(remote).catch(() => []),
+          ]);
+          const remoteTags = Object.fromEntries(
+            advertised
+              .filter((ref) => ref.name.startsWith('refs/tags/'))
+              .map((ref) => [ref.name.slice('refs/tags/'.length), String(ref.head)]),
+          );
+          return { tags, revisionId: head, expected, remoteTags };
+        },
+      ),
+
+      /* W6's tag members, on a revision that already exists. */
+      createTag: fromAuthorityPromise<RevisionTag, PublishTagActorInput>(async ({ input }) => {
+        await ensureStore();
+        return writePublishTag(port, input, options.identity.resolve({ runId: undefined, trigger: 'save' }));
+      }),
+
+      /*
+       * The history set in one atomic offer: the branch under its lease (P18)
+       * and the name that points into it. Atomic because a publication whose
+       * tag landed without its history names a revision the remote cannot
+       * resolve, and the materializer would then have nothing to read.
+       */
+      push: fromAuthorityPromise<PublishPushActorOutput, PublishPushActorInput>(async ({ input, signal }) => {
+        await ensureStore();
+        const remote = await publishRemote();
+        const result = await port.push({
+          signal,
+          remote,
+          atomic: true,
+          refs: [
+            {
+              name: `refs/heads/${input.branch}`,
+              ...(input.expected === undefined ? {} : { expected: revisionId(input.expected) }),
+            },
+            {
+              name: `refs/tags/${input.tag}`,
+              /* Always present, so the key itself is the lease: a revision
+                 leases "still exactly there", `undefined` leases "must not
+                 exist" (P18, P38). Never a force. */
+              expected: input.expectedTag === undefined ? undefined : revisionId(input.expectedTag),
+            },
+          ],
+        });
+        const refused = result.refs.find((entry) => entry.status === 'rejected');
+        if (refused !== undefined) {
+          throw new RevisionPortError(
+            'INVALID_TRANSPORT',
+            refused.reason === 'leaseLost'
+              ? 'This project changed somewhere else. Open it again before publishing.'
+              : 'Couldn’t back up this project before publishing. Try again.',
+          );
+        }
+        pushSequence += 1;
+        return { pushId: `${input.branch}:${String(clock())}:${String(pushSequence)}`, remote };
+      }),
+
+      createPublication: fromAuthorityPromise<PublishPublicationActorOutput, PublishPublicationActorInput>(
+        async ({ input }) => {
+          const record = options.publishPublication;
+          if (record === undefined) {
+            throw new RevisionPortError('INVALID_TRANSPORT', 'This host is not signed in, so it cannot publish.');
+          }
+          return record(input);
+        },
+      ),
+    },
+
+    sync: {
+      /* The record, not a snapshot: this is the whole of what "retried on the
+       * next open of the project on that device" reads (D28, D29). */
+      readPending: fromAuthorityPromise<SyncQueueRecord, SyncReadPendingActorInput>(async () =>
+        withOwedPushes(await readPendingQueue()),
+      ),
+
+      writePending: fromAuthorityPromise<void, SyncWritePendingActorInput>(async ({ input }) => {
+        await writePendingQueue(input.record);
+      }),
+
+      /* Git's own remotes list again — reading a record twice is not a second
+       * model, and `remote.machine` does not announce a *rehydrated* remote. */
+      readRemote: fromAuthorityPromise<SyncReadRemoteActorOutput, Readonly<{ projectId: string }>>(async () => {
+        await ensureStore();
+        const [[remote], head] = await Promise.all([port.listRemotes(), port.readHead()]);
+        return {
+          remote: remote?.fetchOnly === true && remote.provider !== 'github' ? undefined : remote?.name,
+          automaticPush: remote?.provider !== 'github',
+          ...(head?.branch === undefined ? {} : { branch: head.branch }),
+        };
+      }),
+
+      /**
+       * The two sets, pushed the two ways A39 requires.
+       *
+       * The history set (`refs/heads/*`, `refs/tags/*`) goes **atomic**, so
+       * `main` and its tags land together or not at all. The record set
+       * (`refs/tau/chats/*`, `refs/tau/evidence/*`) goes as **one non-atomic
+       * push** after it, so a chat the server refuses fails only itself and
+       * never blocks a branch; a set the server refused whole is offered again
+       * one ref at a time (W13c). A rejected chat ref is replayed here rather
+       * than left to a retry that would be refused for the same reason forever
+       * (W17 contract 1/4/5).
+       *
+       * Two receive-packs, not one: `atomic` is a whole-push capability, so one
+       * push carrying both sets either sinks history with a refused chat or
+       * drops history's atomicity on every remote that is not Tau's.
+       */
+      push: fromAuthorityPromise<SyncPushActorOutput, SyncPushActorInput>(async ({ input, signal }) => {
+        await ensureStore();
+        signal.throwIfAborted();
+        const remotes = await port.listRemotes();
+        const configured = remotes.find((remote) => remote.name === input.remote);
+        if (
+          (input.explicit === true && configured?.url !== input.repositoryUrl) ||
+          (configured?.provider === 'github' && input.explicit !== true)
+        ) {
+          throw new RevisionPortError('INVALID_TRANSPORT', 'GitHub requires an explicit Push request.');
+        }
+        const { syncChats, syncLargeExports } = await projectSyncPreferences();
+        /* One attempt, one advertisement (F5): the history push and the record set's read the remote once. */
+        const session: RevisionPushSession = {};
+        const wanted = input.refs === undefined ? undefined : new Set(input.refs);
+        const offered = (name: string): boolean => wanted === undefined || wanted.has(name);
+        /* A narrowed retry owes exactly the refs it names, so capturing and
+         * hashing the whole evidence tree for a push that is not offering the
+         * evidence ref is work nothing reads (C23). */
+        const preparedRecords = [
+          ...(await recordChats(syncChats, input.remote)),
+          ...(offered(evidenceRefName) ? await recordEvidence(syncLargeExports, input.leases[evidenceRefName]) : []),
+        ];
+        signal.throwIfAborted();
+        const failedPreparation = new Set(
+          preparedRecords.filter((entry) => entry.status === 'rejected').map((entry) => entry.name),
+        );
+        /* Three namespaced reads, not one bare `listRefs()`: the port answers in
+         * the vocabulary it was asked in, and a bare call lists *branch names*
+         * — which would offer `main` instead of `refs/heads/main` and would not
+         * see a chat ref at all. */
+        /* First: they answer once every queued log commit has landed. */
+        const own = await devicesOrNone();
+        const current = await devicesOrNone(opsLog.currentDevices);
+        const trackedTags = remoteTrackingRef(input.remote, 'refs/tags');
+        const [heads, tags, versions, trackedTagReferences, chats, evidence, logs] = await Promise.all([
+          port.listRefs('refs/heads'),
+          port.listRefs('refs/tags'),
+          configured?.kind === 'tau' ? port.listTags() : Promise.resolve([]),
+          port.listRefs(trackedTags),
+          syncChats ? port.listRefs(chatRefPrefix) : Promise.resolve([]),
+          syncLargeExports ? port.listRefs('refs/tau/evidence') : Promise.resolve([]),
+          port.listRefs(opsRefPrefix),
+        ]);
+        /* This host's own operation logs ride the record set (D15): pushed
+         * beside history, never able to block it (I8). */
+        const ops = logs.filter((entry) => current.has(entry.name.slice(`${opsRefPrefix}/`.length)));
+        /* Another device's conflict line is that device's to push: offering a
+         * copy this host fetched earlier would only sink the atomic set when
+         * the owner has moved it on since (D14). */
+        /* A `refs/tags/v<n>` that is not a version (`git tag v2` in a terminal)
+         * stays here: Tau Cloud refuses it, and the atomic set with it (M2). */
+        const history = [...heads, ...tags]
+          .map((entry) => entry.name)
+          .filter(
+            (name) =>
+              offered(name) &&
+              pushOffers(name, own) &&
+              !(configured?.kind === 'tau' && isNumberedTagNotVersion(name, versions)),
+          );
+        const records = [...chats, ...evidence, ...ops]
+          .map((entry) => entry.name)
+          .filter((name) => offered(name) && !failedPreparation.has(name));
+        /* What this push offers, by name: a refused ref reports no head of its
+         * own, and "which local revision is unsent" is the whole of what the
+         * queue entry is for (review 2 R8). */
+        const localHeads = new Map(
+          [...heads, ...tags, ...chats, ...evidence, ...ops].map((entry) => [entry.name, String(entry.head)] as const),
+        );
+        const results: SyncRefOutcome[] = preparedRecords.filter((entry) => entry.status === 'rejected');
+        let overQuota: readonly string[] | undefined;
+        let quotaMessage: string | undefined;
+        let quotaStorage: RemoteStorageRefusal | undefined;
+
+        /*
+         * D54: a lease is only a licence to rewrite the remote when this device
+         * has *integrated* what it leases. The lease is the head the last fetch
+         * saw, and a fetch whose merge did not happen (open files mid-save, a
+         * branch this checkout is not on) still records it — so a push under
+         * it overwrote the remote's own commits. A branch whose local head does
+         * not contain its lease is refused here as `leaseLost`, never offered;
+         * the scheduler's retry pulls and merges, or raises the conflict.
+         */
+        const unintegrated = new Set<string>();
+        for (const name of history) {
+          const lease = input.leases[name];
+          const local = localHeads.get(name);
+          if (!name.startsWith('refs/heads/') || lease === undefined || local === undefined || lease === local) {
+            continue;
+          }
+          // oxlint-disable-next-line no-await-in-loop -- one bounded walk per diverging branch, before anything is sent.
+          const walk = await port.log({ heads: [revisionId(local), revisionId(lease)], limit: divergenceWalkLimit });
+          if (integrationOf(walk, revisionId(local), revisionId(lease)) !== 'upToDate') {
+            unintegrated.add(name);
+            results.push({ name, status: 'rejected', head: local, reason: 'leaseLost' });
+          }
+        }
+        let offeredHistory = history.filter((name) => !unintegrated.has(name));
+        let renumbered: readonly VersionRenumbering[] = [];
+
+        if (offeredHistory.length > 0) {
+          signal.throwIfAborted();
+          try {
+            /* The one push a `pagehide` re-send may carry (D28, S41, review 2
+             * R3): the host's recorder is armed for exactly this call. */
+            /* B6: a version tag is leased on what this host last fetched of it, or
+             * "must not exist" when it never saw one. A rename rewrites the tag at
+             * the same ref, so it is offered under the remote's own tag; a number
+             * another device took since is refused rather than overwritten. */
+            const leasesOf = (tracked: readonly RevisionRef[]): Readonly<Record<string, string>> =>
+              Object.fromEntries(
+                tracked.map((entry) => [`refs/tags/${entry.name.slice(trackedTags.length + 1)}`, String(entry.head)]),
+              );
+            let leasedTags = leasesOf(trackedTagReferences);
+            const offerHistory = async (pushSession: RevisionPushSession): Promise<RevisionPushResult> =>
+              port.push({
+                remote: input.remote,
+                repositoryUrl: input.repositoryUrl,
+                signal,
+                atomic: true,
+                refs: offeredHistory.map((name) =>
+                  versionNumberOfTag(name) === undefined
+                    ? offerOf(name, input.leases)
+                    : { name, expected: leasedTags[name] === undefined ? undefined : revisionId(leasedTags[name]) },
+                ),
+                session: pushSession,
+              });
+            // An explicit GitHub gesture must never arm a pagehide resend.
+            const first =
+              input.explicit === true ? offerHistory(session) : recordHistoryPush(async () => offerHistory(session));
+            /* B6: Tau Cloud refused a version whose number another version
+             * holds — per ref on the browser leg, thrown on the native one.
+             * Only this device has seen its provisional number, so its own
+             * versions that are not backed up take the next free numbers and
+             * the history set is offered once more, on a fresh advertisement
+             * because the remote moved. */
+            let taken: unknown;
+            let pushed = await first.catch((error: unknown) => {
+              if (!(error instanceof RevisionPortError && isVersionNumberRefusal(error.message))) {
+                throw error;
+              }
+              taken = error;
+              return undefined;
+            });
+            /* A version tag refused with a lost lease, with the lease this push
+             * held for it. Both ports say `leaseLost` for every command of an
+             * atomic push when any one ref moved, so the refusal alone never
+             * decides: only a tag the remote itself moved off that lease is a
+             * rename another device made first, and the remote's name wins
+             * (Revisions Policy rule 19, N3). */
+            const lostRenames = (pushed?.refs ?? []).flatMap((entry) => {
+              const number =
+                entry.status === 'rejected' && entry.reason === 'leaseLost'
+                  ? versionNumberOfTag(entry.name)
+                  : undefined;
+              return number === undefined ? [] : [{ number, lease: leasedTags[entry.name] }];
+            });
+            let adopted: readonly SyncRefOutcome[] = [];
+            if (
+              taken !== undefined ||
+              lostRenames.length > 0 ||
+              pushed?.refs.some((entry) => entry.status === 'rejected' && isVersionNumberRefusal(entry.reason)) === true
+            ) {
+              renumbered = await renumberUnpushedVersions(port, { remote: input.remote, adopt: lostRenames, signal });
+              const [localTags, trackedNow] = await Promise.all([
+                port.listRefs('refs/tags'),
+                port.listRefs(trackedTags),
+              ]);
+              for (const tag of localTags) {
+                localHeads.set(tag.name, String(tag.head));
+              }
+              leasedTags = leasesOf(trackedNow);
+              const local = new Map(localTags.map((tag) => [tag.name, String(tag.head)] as const));
+              /* A lost rename that now holds the remote's own tag has nothing left to offer. */
+              adopted = lostRenames
+                .map(({ number }) => versionTagRef(number))
+                .filter((name) => local.has(name) && local.get(name) === leasedTags[name])
+                .map((name): SyncRefOutcome => Object.freeze({ name, status: 'upToDate', head: leasedTags[name] }));
+              const settled = new Set([
+                ...adopted.map((entry) => entry.name),
+                /* A moved version's old ref is gone here, or the remote's again. */
+                ...renumbered.map((step) => versionTagRef(step.from)),
+              ]);
+              if (renumbered.length > 0 || adopted.length > 0) {
+                /* A moved version is at a ref the first offer did not name. */
+                offeredHistory = [
+                  ...new Set([
+                    ...offeredHistory.filter((name) => !settled.has(name)),
+                    ...renumbered.map((step) => versionTagRef(step.to)),
+                  ]),
+                ];
+                pushed = offeredHistory.length === 0 ? { refs: [] } : await offerHistory({});
+              } else if (pushed === undefined) {
+                throw taken;
+              }
+            }
+            results.push(...adopted);
+            results.push(...(pushed?.refs ?? []).map((entry) => outcomeOf(entry, localHeads)));
+          } catch (error) {
+            /* A refusal of the whole push — a credential, a plan, a missing
+             * repository, the network — is the scheduler's to classify (its R5
+             * path): flattened into per-ref outcomes it read as a ref refusal,
+             * and every class offered *Sync now*. Only the server's own per-ref
+             * answer and storage stay here, where the records still push. */
+            if (!staysPerRef(error)) {
+              throw error;
+            }
+            /* Storage is the one refusal that is not a failed connection: the
+             * files are named and `remote.machine` owns the list (D16, P19). */
+            const message = error instanceof Error ? error.message : 'Couldn’t back up this project’s history.';
+            if (error instanceof LfsQuotaError) {
+              overQuota = error.refusal.paths;
+              quotaMessage = error.refusal.message;
+              quotaStorage = storageRefusalOf(error.refusal) ?? quotaStorage;
+            }
+            results.push(...refusedAll(offeredHistory, message, localHeads));
+          }
+        }
+
+        signal.throwIfAborted();
+        const together =
+          records.length > 1
+            ? await pushRecordSet({
+                names: records,
+                retryRejected: input.explicit !== true,
+                remote: input.remote,
+                repositoryUrl: input.repositoryUrl,
+                signal,
+                leases: input.leases,
+                offered: localHeads,
+                session,
+              })
+            : undefined;
+        for (const name of records) {
+          signal.throwIfAborted();
+          const chatId = chatIdOfRef(name);
+          const joint = together?.get(name);
+          const offered_: Awaited<ReturnType<typeof pushRecordRef>> =
+            joint === undefined
+              ? // oxlint-disable-next-line no-await-in-loop -- alone, so a refused record fails only itself.
+                await pushRecordRef({
+                  name,
+                  remote: input.remote,
+                  repositoryUrl: input.repositoryUrl,
+                  signal,
+                  leases: input.leases,
+                  offered: localHeads,
+                  session,
+                })
+              : { outcome: joint };
+          const { outcome } = offered_;
+          if (offered_.overQuota !== undefined) {
+            overQuota = [...(overQuota ?? []), ...offered_.overQuota];
+            quotaMessage = offered_.quotaMessage;
+            quotaStorage = offered_.quotaStorage ?? quotaStorage;
+          }
+          if (input.explicit === true) {
+            results.push(outcome);
+            continue;
+          }
+          if (chatId === undefined) {
+            results.push(
+              // oxlint-disable-next-line no-await-in-loop -- serial by design: each re-offer is a push to one rate-budgeted remote, and its result is recorded before the next ref's.
+              (await reofferRefusedLog({
+                name,
+                outcome,
+                remote: input.remote,
+                repositoryUrl: input.repositoryUrl,
+                signal,
+                leases: input.leases,
+              })) ?? outcome,
+            );
+            continue;
+          }
+          if (outcome.status !== 'rejected') {
+            results.push(outcome);
+            continue;
+          }
+          /* The CAS loser's whole recovery: fetch what the remote holds, write
+           * the projection, replay this device's own segment onto it, and offer
+           * it again under the head that was just fetched. A union over disjoint
+           * paths, so nothing merges a line (S39, P27). */
+          try {
+            // oxlint-disable-next-line no-await-in-loop -- a rejected record is replayed before its result is recorded.
+            const replayed = await replayRejectedChat({
+              chatId,
+              name,
+              remote: input.remote,
+              repositoryUrl: input.repositoryUrl,
+              signal,
+              syncChats,
+              refusal: outcome.reason,
+            });
+            results.push(replayed);
+          } catch (error) {
+            results.push({
+              name,
+              status: 'rejected',
+              head: localHeads.get(name),
+              reason: error instanceof Error ? error.message : 'This chat could not be replayed.',
+            });
+          }
+        }
+
+        return {
+          refs: results,
+          ...(overQuota === undefined ? {} : { overQuota }),
+          ...(quotaMessage === undefined ? {} : { quotaMessage }),
+          ...(quotaStorage === undefined ? {} : { quotaStorage }),
+          ...(renumbered.length === 0 ? {} : { renumbered }),
+        };
+      }),
+
+      /**
+       * Opening pulls first (D28), and the fetch path writes the projection (A39).
+       *
+       * Two fetches, because `isomorphic-git` deletes every advertised ref
+       * outside `refs/heads/*` before refspec translation, so the record set has
+       * to be named (W11b §1.2). The per-record-ref round trip is that lane's
+       * known ceiling and this is where it is paid.
+       */
+      fetch: fromAuthorityPromise<SyncFetchActorOutput, SyncFetchActorInput>(async ({ input, signal }) => {
+        const tail = streamTail;
+        if (tail !== undefined) {
+          /* ponytail: a stream that never answers holds the pull at most this long; the gap reopens only then.
+           * A stopped pull stops waiting at once (RV-W5b F9): a close waits on `settled()`. */
+          let bound: ReturnType<typeof setTimeout> | undefined;
+          const stopped = Promise.withResolvers<void>();
+          const abandon = (): void => {
+            stopped.resolve();
+          };
+          signal.addEventListener('abort', abandon, { once: true });
+          await Promise.race([
+            tail,
+            stopped.promise,
+            new Promise((resolve) => {
+              bound = setTimeout(resolve, streamTailWaitMilliseconds);
+            }),
+          ]);
+          clearTimeout(bound);
+          signal.removeEventListener('abort', abandon);
+        }
+        await ensureStore();
+        signal.throwIfAborted();
+        const { syncChats, syncLargeExports: initialSyncLargeExports } = await projectSyncPreferences();
+        let syncLargeExports = initialSyncLargeExports;
+        /*
+         * The deadline is a signal the port carries, so it ends the request and
+         * not only this host's wait (review 2 P36).
+         *
+         * Both HTTP and native Git carry cancellation to the transport;
+         * native process groups also terminate any Git LFS descendants.
+         */
+        const abort = AbortSignal.any([signal, AbortSignal.timeout(input.deadlineMilliseconds)]);
+        const deadline = new Promise<never>((_resolve, reject) => {
+          abort.addEventListener('abort', () => {
+            reject(new RevisionPortError('INVALID_TRANSPORT', 'The remote did not answer in time.'));
+          });
+        });
+        /* Before the listing: the chats' pull records count quiet between such readings (`pullRecordAfter`). */
+        const pulledAt = clock();
+        const advertised = await Promise.race([port.listRemoteRefs(input.remote, { signal: abort }), deadline]);
+        signal.throwIfAborted();
+        const [localBranchesBefore, trackingBefore, places] = await Promise.all([
+          port.listRefs('refs/heads'),
+          port.listRefs(`refs/remotes/${input.remote}`),
+          listPlaces(),
+        ]);
+        const active = places.find((place) => place.branch === input.branch);
+        if (active !== undefined) {
+          checkFill(active);
+        }
+        const wanted = authoredFetchReferences(advertised, input.remote);
+        /* Skip unchanged tips only after this effect session completed a fetch
+         * for them. Older clients could publish tracking refs before LFS failed;
+         * the first pull repairs that cache through the normal bounded fetch. */
+        const trackedByName = new Map(trackingBefore.map((entry) => [entry.name, entry]));
+        const advertisedHeads = new Map(advertised.map((entry) => [entry.name, String(entry.head)]));
+        const current = wanted.flatMap((name) => {
+          const tracked = trackedByName.get(remoteTrackingRef(input.remote, name));
+          return tracked !== undefined && String(tracked.head) === advertisedHeads.get(name) ? [tracked] : [];
+        });
+        const identity = await remoteIdentity(input.remote);
+        const hydrated =
+          identity !== undefined &&
+          hydratedTips?.identity === identity &&
+          wanted.every((name) => hydratedTips?.heads.get(name) === advertisedHeads.get(name));
+        if (wanted.length > 0 && (current.length !== wanted.length || !hydrated)) {
+          await fetchAuthored({
+            remote: input.remote,
+            wanted,
+            advertised,
+            identity,
+            signal: abort,
+            deadline,
+          });
+        }
+        signal.throwIfAborted();
+        /* One read of a fetched manifest per pull, whichever question asks it first. */
+        const fetchedPreferences = new Map<string, ReturnType<typeof revisionSyncPreferences>>();
+        const fetchedPreferencesOf = async (revision: RevisionId): ReturnType<typeof revisionSyncPreferences> => {
+          let read = fetchedPreferences.get(revision);
+          if (read === undefined) {
+            read = revisionSyncPreferences(revision);
+            fetchedPreferences.set(revision, read);
+          }
+          return read;
+        };
+        if (
+          !syncLargeExports &&
+          (await fetchedProjectSyncsLargeExports(input.remote, input.branch, fetchedPreferencesOf))
+        ) {
+          syncLargeExports = true;
+        }
+
+        /*
+         * Fetch owns remote-tracking refs; this is the one reconciliation from
+         * those facts into project branch identity. Unborn or previously clean
+         * ref-only branches follow the remote, and so does another checkout's
+         * branch whose files are clean (D60). Diverged branches, and checkouts
+         * with unsaved or leased files, are preserved, including when the
+         * remote renames or deletes a name.
+         */
+        const localByName = new Map(localBranchesBefore.map((entry) => [entry.name, String(entry.head)]));
+        const priorTrackingPrefix = `refs/remotes/${input.remote}/`;
+        const priorByBranch = new Map(
+          trackingBefore.flatMap((entry) =>
+            entry.name.startsWith(priorTrackingPrefix)
+              ? [[`refs/heads/${entry.name.slice(priorTrackingPrefix.length)}`, String(entry.head)] as const]
+              : [],
+          ),
+        );
+        const advertisedBranches = new Map<`refs/heads/${string}`, string>(
+          advertised.flatMap((entry) =>
+            entry.name.startsWith('refs/heads/')
+              ? [[entry.name as `refs/heads/${string}`, String(entry.head)] as const]
+              : [],
+          ),
+        );
+        const activeBranch = `refs/heads/${input.branch}` as const;
+        const checkedOut = new Set(
+          places.flatMap((place) => (place.branch === undefined ? [] : [`refs/heads/${place.branch}`])),
+        );
+        const advanced: Array<SyncMovedCheckout & Readonly<{ branch: string }>> = [];
+        const merged: string[] = [];
+        const conflicts: Array<Readonly<{ branch: string; into: string; paths: readonly string[] }>> = [];
+        /*
+         * D87: another checkout's branch that diverged composes with its remote
+         * head as the live one does in `merge` (rule 9). The merge revision is
+         * this device's unsent work, so the pull's exit pushes it; a conflict
+         * is announced only when this pull recorded it, not when it is the one
+         * already waiting on the line (D55). A held checkout stays where it is.
+         */
+        const mergeLinked = async (branch: `refs/heads/${string}`, name: string): Promise<void> => {
+          const waiting = await port.readRef(await ownConflictLine(name));
+          let outcome: Awaited<ReturnType<typeof mergeBranches>>;
+          try {
+            outcome = await mergeBranches({
+              branch: remoteTrackingRef(input.remote, branch),
+              into: name,
+              sourceLabel: `${input.remote}/${name}`,
+            });
+          } catch (error) {
+            /* Unsaved or leased files, or a branch that moved meanwhile: the next pull tries again. */
+            if (
+              error instanceof CheckoutHeld ||
+              (error instanceof RevisionPortError && error.code === 'CHECKOUT_CONFLICT')
+            ) {
+              return;
+            }
+            throw error;
+          }
+          if (outcome.status === 'conflicted') {
+            if ((await port.readRef(outcome.line)) !== waiting) {
+              conflicts.push({ branch: outcome.line, into: name, paths: outcome.paths });
+            }
+            return;
+          }
+          localByName.set(branch, outcome.revisionId);
+          merged.push(name);
+          const moved = await movedOf(outcome);
+          if (moved !== undefined) {
+            advanced.push({ ...moved, branch: name });
+          }
+        };
+        /* D60: another checkout's branch the remote moved on, with no work of
+         * its own, follows as the live one does. Left behind, every push
+         * offered it under a lease it could never integrate — `leaseLost` on
+         * each retry, for ever. Unsaved or leased files keep it where it is,
+         * and local work merges (D87). Ancestry, not the tracking ref before
+         * this fetch: an earlier fetch that moved the tracking ref while the
+         * files were unsaved must not strand the branch once they are saved. */
+        const followRemote = async (branch: `refs/heads/${string}`, head: string): Promise<void> => {
+          const local = localByName.get(branch);
+          if (local === undefined || local === head) {
+            return;
+          }
+          const walk = await port.log({ heads: [revisionId(head), revisionId(local)], limit: divergenceWalkLimit });
+          const relation = integrationOf(walk, revisionId(local), revisionId(head));
+          const name = branch.slice('refs/heads/'.length);
+          if (relation === 'diverged') {
+            await mergeLinked(branch, name);
+            return;
+          }
+          if (relation !== 'fastForward') {
+            return;
+          }
+          try {
+            const moved = await fastForwardBranch({ remote: input.remote, branch: name }, signal);
+            /* A held checkout stays where it is: its files are the person's or a run's. */
+            if (moved !== undefined && 'hold' in moved) {
+              return;
+            }
+            localByName.set(branch, head);
+            if (moved !== undefined) {
+              advanced.push({ ...moved, branch: name });
+            }
+          } catch (error) {
+            if (!(error instanceof RevisionPortError && error.code === 'CHECKOUT_CONFLICT')) {
+              throw error;
+            }
+          }
+        };
+        for (const [branch, head] of advertisedBranches) {
+          if (branch === activeBranch) {
+            continue;
+          }
+          if (checkedOut.has(branch)) {
+            // oxlint-disable-next-line no-await-in-loop -- each checkout is fenced on its own.
+            await followRemote(branch, head);
+            continue;
+          }
+          const local = localByName.get(branch);
+          if (local === undefined || local === priorByBranch.get(branch)) {
+            // oxlint-disable-next-line no-await-in-loop -- each branch has its own CAS.
+            const updated = await port.updateRef({
+              name: branch,
+              expectedHead: local === undefined ? undefined : revisionId(local),
+              head: revisionId(head),
+            });
+            if (updated.status === 'updated') {
+              localByName.set(branch, head);
+            }
+          }
+        }
+        const own = await devicesOrNone();
+        for (const [branch, prior] of priorByBranch) {
+          /* This device's own conflict line is its record of a decision, not a
+           * copy of the remote's: another device's *Remove* drops only the
+           * tracking ref, so the next push offers the line again (D14, RV-W6 F2). */
+          if (!advertisedBranches.has(branch) && parseConflictLine(branch, own)?.foreign === false) {
+            // oxlint-disable-next-line no-await-in-loop -- paired cleanup for one remote branch.
+            await port.updateRef({ name: remoteTrackingRef(input.remote, branch), expectedHead: revisionId(prior) });
+            continue;
+          }
+          if (
+            branch === activeBranch ||
+            advertisedBranches.has(branch) ||
+            checkedOut.has(branch) ||
+            localByName.get(branch) !== prior
+          ) {
+            continue;
+          }
+          // oxlint-disable-next-line no-await-in-loop -- each deleted remote branch has its own CAS.
+          const removed = await port.updateRef({ name: branch, expectedHead: revisionId(prior) });
+          if (removed.status === 'updated') {
+            /* XD4: the wrapped port records the removal (`recordOperation`), so a chat naming it is refused for good. */
+            localByName.delete(branch);
+          }
+          const tracking = remoteTrackingRef(input.remote, branch);
+          // oxlint-disable-next-line no-await-in-loop -- paired cleanup for the same remote branch.
+          await port.updateRef({ name: tracking, expectedHead: revisionId(prior) });
+        }
+        /*
+         * The branch this pull is *integrating* belongs in the answer too (C21).
+         *
+         * Both loops above skip it on purpose — `fastForward` owns it and moves
+         * it a step later — but `branches` is what the Branches region renders,
+         * and a fresh device whose `main` is still unborn was reporting every
+         * branch in the project except the one it is on.
+         */
+        const reported = new Map(localByName);
+        const activeAdvertised = advertisedBranches.get(activeBranch);
+        if (!reported.has(activeBranch) && activeAdvertised !== undefined) {
+          reported.set(activeBranch, activeAdvertised);
+        }
+        const branches = [...reported]
+          .filter(([name]) => !isHostLocalRef(name))
+          .map(([name, head]) => ({
+            name: name.slice('refs/heads/'.length),
+            head,
+            /* Every listed branch has a local ref by now; this is what *Remote only* may claim (D93). */
+            onRemote: advertisedBranches.has(name as `refs/heads/${string}`),
+          }));
+        /* The lease is keyed by the ref this host would *offer*, not by the
+         * remote-tracking ref it landed in (P18). */
+        const leases = Object.fromEntries(advertised.map((entry) => [entry.name, String(entry.head)]));
+        const branchRef = `refs/heads/${input.branch}`;
+        const localHead = await port.readRef(branchRef);
+        const remoteHead = advertised.find((entry) => entry.name === branchRef)?.head;
+        const integration = await (async (): Promise<SyncFetchActorOutput['integration']> => {
+          if (localHead === remoteHead) {
+            return 'upToDate';
+          }
+          /* A branch the remote has never had — an import's setup revision is written
+           * straight to the ref, so nothing is queued to push it (D38). */
+          if (remoteHead === undefined) {
+            return 'ahead';
+          }
+          if (localHead === undefined) {
+            return 'fastForward';
+          }
+          /*
+           * Both heads, one walk, one relation (review 2 R1).
+           *
+           * Walking only the *remote* head answered `diverged` for a device that
+           * is merely **ahead** — the state of every device with unacknowledged
+           * work — which sent the next open to `conflicted`, where there is no
+           * push edge and the durable queue could never drain.
+           *
+           * ponytail: bounded at `divergenceWalkLimit`, so a base further back
+           * than that reads as a fork. The safe wrong answer: it composes rather
+           * than overwriting. Upgrade path: `mergeBase` on `RevisionPort`.
+           */
+          const walk = await port.log({ heads: [remoteHead, localHead], limit: divergenceWalkLimit });
+          const relation = integrationOf(walk, localHead, remoteHead);
+          /*
+           * `integrationOf` answers what this device has to *integrate*, and
+           * "the remote has everything" and "this device is ahead" both need
+           * nothing integrated — so it collapses them into `upToDate`. The
+           * scheduler needs the opposite distinction: the heads differ here
+           * (checked above), so an `upToDate` relation is precisely "the remote
+           * is missing my revisions" (C15).
+           */
+          return relation === 'upToDate' ? 'ahead' : relation;
+        })();
+        const recordReferences = advertised.filter(
+          (ref) => ref.name.startsWith(`${chatRefPrefix}/`) || (syncLargeExports && ref.name === evidenceRefName),
+        );
+        /*
+         * Records write only unversioned paths, disjoint from the apply's, so a fast-forward lets them run while it
+         * writes (SP2h) — when the manifest it writes asks for chats as the checkout's does. A change of mind waits for
+         * the apply, and the manifest it lands decides, as before.
+         */
+        const applied =
+          integration === 'fastForward' && remoteHead !== undefined
+            ? await fetchedPreferencesOf(remoteHead)
+            : undefined;
+        const besideApply = integration === 'fastForward' && (applied?.syncChats ?? true) === syncChats;
+        const pending = await readPendingQueue();
+        return {
+          leases,
+          integration,
+          branches,
+          recordProjection: {
+            remote: input.remote,
+            fetchRefs: recordReferences
+              .filter(
+                (ref) =>
+                  String(trackedByName.get(remoteTrackingRef(input.remote, ref.name))?.head) !== String(ref.head),
+              )
+              .map((ref) => ref.name),
+            refs: recordReferences.map((ref) => ({ name: remoteTrackingRef(input.remote, ref.name), head: ref.head })),
+            syncChats,
+            syncLargeExports,
+            pulledAt,
+            ...(besideApply ? { besideApply } : {}),
+            priorEvidenceHead: pending.entries.some(
+              (entry) => entry.operation === 'projection' && entry.ref === evidenceRefName,
+            )
+              ? undefined
+              : ((await appliedEvidenceBasis(
+                  input.remote,
+                  trackingBefore.find(
+                    (ref) => ref.name === evidenceRefName || ref.name.endsWith('/tau/evidence/exports'),
+                  )?.head,
+                )) ?? (await heldEvidenceHead(advertised.find((ref) => ref.name === evidenceRefName)?.head))),
+          },
+          ...(advanced.length === 0 ? {} : { advanced }),
+          ...(merged.length === 0 ? {} : { merged }),
+          ...(conflicts.length === 0 ? {} : { conflicts }),
+        };
+      }),
+
+      projectRecords: fromAuthorityPromise<SyncProjectRecordsActorOutput, SyncProjectRecordsActorInput>(
+        timedEffect('records.project', async ({ input, signal }) => {
+          const preferences = input.besideApply === true ? input : await projectSyncPreferences();
+          const { syncChats } = preferences;
+          const fetchReferences = input.fetchRefs.filter((ref) => syncChats || !ref.startsWith(`${chatRefPrefix}/`));
+          const fetched =
+            fetchReferences.length > 0
+              ? await port.fetch({ remote: input.remote, refs: fetchReferences, signal })
+              : undefined;
+          const references = input.refs.map((ref) => fetched?.refs.find((entry) => entry.name === ref.name) ?? ref);
+          signal.throwIfAborted();
+          const context =
+            syncChats && references.some((ref) => chatIdOfRef(ref.name) !== undefined)
+              ? await chatContext()
+              : undefined;
+          const recordTasks: Array<() => Promise<SyncRefOutcome>> = [];
+          if (context === undefined && syncChats) {
+            for (const ref of references) {
+              const id = chatIdOfRef(ref.name);
+              if (id !== undefined) {
+                recordTasks.push(async () => ({
+                  name: chatRefName(id),
+                  status: 'rejected',
+                  head: ref.head,
+                  reason: 'Couldn’t back up this project’s chats.',
+                }));
+              }
+            }
+          }
+          if (context !== undefined && syncChats) {
+            for (const ref of references) {
+              const chatId = chatIdOfRef(ref.name);
+              if (chatId === undefined) {
+                continue;
+              }
+              recordTasks.push(async (): Promise<SyncRefOutcome> => {
+                /* Every chat whose files changed is announced, a conflicted record
+                 * included: its segments were written (RV-W7 #5). */
+                const written: string[] = [];
+                try {
+                  const projected = await projectChats({
+                    ...context,
+                    refs: [ref],
+                    signal,
+                    pulledAt: input.pulledAt,
+                    onWritten: (id) => written.push(id),
+                  });
+                  return {
+                    name: chatRefName(chatId),
+                    status: projected.length > 0 ? 'updated' : 'upToDate',
+                    head: ref.head,
+                  };
+                } catch (error) {
+                  return {
+                    name: chatRefName(chatId),
+                    status: 'rejected',
+                    head: ref.head,
+                    reason: error instanceof Error ? error.message : 'This chat could not be restored.',
+                  };
+                } finally {
+                  /* A chat written before a stop is on disk: it is announced, since a later pull finds it current
+                   * and announces nothing (SP2h review). */
+                  if (written.length > 0) {
+                    options.onChatsProjected?.(written);
+                  }
+                }
+              });
+            }
+          }
+          const fetchedEvidence = references.find(
+            (ref) => ref.name === evidenceRefName || ref.name.endsWith('/tau/evidence/exports'),
+          );
+          /*
+           * A record the remote has not moved is not restored again (C21, R11).
+           *
+           * `projectEvidence` is preserve-then-replace: it copies whatever is on
+           * disk into `.tau/artifacts/sync-conflicts/` and writes the recorded
+           * bytes over it. Run on every pull that is what it should do for a
+           * record that *changed* — and what it must never do for one that did
+           * not, which is how a device that had already restored an export, and
+           * then edited it, had its own file replaced by the same remote bytes on
+           * the very next pull. What this device has already applied is its
+           * applied-evidence record, which moves only once the record is on disk,
+           * or a record its own evidence ref already holds; never the tracking
+           * ref, which a projection's fetch moves before it writes anything
+           * (SP2h review), but for an older build's device's first pull.
+           */
+          const { priorEvidenceHead } = input;
+          const fetchedEvidenceHead = fetchedEvidence?.head;
+          if (fetchedEvidenceHead !== undefined && String(priorEvidenceHead) === fetchedEvidenceHead) {
+            recordTasks.push(async () => ({
+              name: evidenceRefName,
+              status: 'upToDate',
+              head: fetchedEvidenceHead,
+            }));
+          } else if (input.syncLargeExports && fetchedEvidence !== undefined) {
+            recordTasks.push(async (): Promise<SyncRefOutcome> => {
+              try {
+                await projectEvidence([fetchedEvidence], signal);
+                await writeAppliedEvidence(input.remote, fetchedEvidence.head);
+                return { name: evidenceRefName, status: 'upToDate', head: fetchedEvidence.head };
+              } catch (error) {
+                return {
+                  name: evidenceRefName,
+                  status: 'rejected',
+                  head: fetchedEvidence.head,
+                  reason: error instanceof Error ? error.message : 'Generated exports could not be restored.',
+                };
+              }
+            });
+          }
+          const settled = await settleBounded(recordTasks, chatProjectionConcurrency, async (run) => {
+            signal.throwIfAborted();
+            return run();
+          });
+          const rejected = settled.find((result) => result.status === 'rejected');
+          if (rejected?.status === 'rejected') {
+            throw rejected.reason instanceof Error
+              ? rejected.reason
+              : new Error('Optional records could not be restored.', { cause: rejected.reason });
+          }
+          const records = settled.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+          return {
+            records,
+            chats: syncChats
+              ? records.some((record) => record.name.startsWith(`${chatRefPrefix}/`) && record.status === 'rejected')
+                ? 'failed'
+                : 'ready'
+              : 'disabled',
+          };
+        }),
+      ),
+
+      /** A clean checkout takes the remote head; nothing is composed (A2). */
+      fastForward: fromAuthorityPromise<SyncFastForwardActorOutput, Readonly<{ remote: string; branch: string }>>(
+        async ({ input, signal }) => fastForwardBranch(input, signal),
+      ),
+
+      merge: fromAuthorityPromise<SyncMergeActorOutput, SyncIntegrateActorInput>(async ({ input }) => {
+        const tracking = remoteTrackingRef(input.remote, `refs/heads/${input.branch}`);
+        let outcome: Awaited<ReturnType<typeof mergeBranches>>;
+        try {
+          outcome = await mergeBranches({
+            branch: tracking,
+            into: input.branch,
+            sourceLabel: `${input.remote}/${input.branch}`,
+          });
+        } catch (error) {
+          /* A dirty checkout is minted first and a leased one waits (D12, rule 9). */
+          const held = holdOf(error, (await port.readRef(tracking)) ?? '');
+          if (held === undefined) {
+            throw error;
+          }
+          return held;
+        }
+        if (outcome.status === 'conflicted') {
+          return { status: 'conflicted', branch: outcome.line, into: input.branch, paths: outcome.paths };
+        }
+        const moved = await movedOf(outcome);
+        return moved === undefined ? { status: 'merged' } : { status: 'merged', moved };
+      }),
+
+      /* D13: the project's `revision` entries, for the remote the scheduler names. */
+      remoteMoves: createCallbackLogic<AnyEventObject, SyncRemoteMovesActorInput>(({ input, sendBack, receive }) => {
+        /*
+         * The echo of this device's own push (W13e): every ref the entry moved
+         * already names the announced head here, so a pull would bring nothing
+         * and none is asked for — not even the advertisement. The pushed local
+         * ref counts as well as the tracking ref: the API announces before it
+         * answers the push, so the entry usually arrives before the push's reply
+         * has written the tracking ref, and native `git push` writes none for a
+         * ref outside `refs/heads/*`. Operation logs are never pulled (RV-W7 #1).
+         * A ref without a head — an older server, a removal — pulls, as does
+         * any read that fails. A skipped echo can delay an integration a
+         * backoff was waiting for until the next move or retry: a delay, not a loss.
+         */
+        const holdsEveryHead = async (remote: string, move: RevisionStreamMove): Promise<boolean> => {
+          const { heads } = move;
+          if (heads === undefined || heads.size === 0) {
+            return false;
+          }
+          try {
+            const held = await Promise.all(
+              move.refs
+                .filter((ref) => !ref.startsWith(`${opsRefPrefix}/`))
+                .map(async (ref) => {
+                  const head = heads.get(ref);
+                  return (
+                    head !== undefined &&
+                    ((await port.readRef(ref)) === head ||
+                      (await port.readRef(remoteTrackingRef(remote, ref))) === head)
+                  );
+                }),
+            );
+            return held.every(Boolean);
+          } catch {
+            return false;
+          }
+        };
+        /*
+         * One session per `watch` (RV-W5b F3): a stream's handlers act only while
+         * their session is the current one, so a stopped stream's late refusal
+         * can neither end the live stream's ownership nor report a refusal.
+         * A refused session stays current, marked `refused`: every open re-sends
+         * `watch`, and a stream that refuses this credential must not become one
+         * request per pull (F5). `unwatch` — a disconnect — ends it.
+         */
+        type Session = { remote: string; stop: () => void; tailKnown: () => void; refused: boolean };
+        let session: Session | undefined;
+        const unwatch = (): void => {
+          session?.stop();
+          session?.tailKnown();
+          session = undefined;
+          streamTail = undefined;
+        };
+        receive((event) => {
+          if (event.type === 'unwatch') {
+            unwatch();
+            return;
+          }
+          const remote: unknown = event.type === 'watch' ? event['remote'] : undefined;
+          if (typeof remote !== 'string' || remote === session?.remote) {
+            return;
+          }
+          unwatch();
+          /* Only Tau Cloud announces its commits; any other Git remote is read at open and push. */
+          if (options.remoteMoves === undefined || remoteKindOf(remote) !== 'tau') {
+            return;
+          }
+          const current: Session = { remote, stop: () => undefined, tailKnown: () => undefined, refused: false };
+          session = current;
+          streamTail = new Promise<void>((resolve) => {
+            current.tailKnown = resolve;
+          });
+          const live = (): boolean => session === current && !current.refused;
+          current.stop = options.remoteMoves(
+            { projectId: input.projectId },
+            {
+              watching: () => {
+                current.tailKnown();
+              },
+              moved: (move) => {
+                if (!live()) {
+                  return;
+                }
+                const report = async (): Promise<void> => {
+                  if (!(await holdsEveryHead(current.remote, move)) && live()) {
+                    sendBack({ type: 'remoteMoved', generation: move.generation, refs: move.refs });
+                  }
+                };
+                // async-iife: bootstrap -- local reads that never reject; `live()` drops a verdict that outlived its session.
+                void report();
+              },
+              refused: (error) => {
+                if (!live()) {
+                  return;
+                }
+                current.refused = true;
+                current.tailKnown();
+                sendBack({ type: 'remoteRefused', code: error.code, message: error.message });
+              },
+            },
+          );
+        });
+        return unwatch;
+      }),
+
+      connectivity: createCallbackLogic<AnyEventObject>(({ sendBack }) => {
+        const subscribe = options.connectivity;
+        if (subscribe === undefined) {
+          /* A host that says nothing is a host that is online: `offline` is a
+           * fact somebody has to report, never one this module guesses. */
+          return () => undefined;
+        }
+        return subscribe((online) => {
+          sendBack({ type: online ? 'online' : 'offline' });
+        });
+      }),
+    },
+  };
+  transferControls.set(actors, control);
+  return actors;
+};
+
+/**
+ * One project's running revision actor tree, as {@link createProjectRevisionsActor} returns it.
+ *
+ * @public
+ */
+export type ProjectRevisions = Readonly<{
+  /** The root, unstarted. */
+  actor: ProjectRevisionsActor;
+  /** Resolves once nothing the tree started is still writing to the project. */
+  settled: () => Promise<void>;
+  /** The store reads a turn-placement adapter makes beside the root (W8 TS-S3). */
+  turns: TurnStore;
+  /** Record an editor's overlapping edit; the *Needs your decision* card follows (D14). */
+  recordEditorConflict: (input: EditorConflictInput) => Promise<EditorConflictOutcome>;
+  /** Read one conflicted revision's files as text, for the agent's `revisions` tool. */
+  readConflict: (revision: string) => Promise<RevisionConflictRead>;
+  /** See {@link RevisionActors.readContent}. */
+  readContent: RevisionActors['readContent'];
+  /** See {@link RevisionActors.materialize}. */
+  materialize: RevisionActors['materialize'];
+  /** See {@link RevisionActors.resolvePlaceholder}. */
+  resolvePlaceholder: RevisionActors['resolvePlaceholder'];
+  /** See {@link RevisionActors.adoptLargeObjects}. */
+  adoptLargeObjects: RevisionActors['adoptLargeObjects'];
+  /** See {@link RevisionActors.checkLargeObjects}. */
+  checkLargeObjects: RevisionActors['checkLargeObjects'];
+  /** See {@link RevisionActors.readEntryClosure}. */
+  readEntryClosure: RevisionActors['readEntryClosure'];
+  /** The record device this host's chat segments sync under; see {@link RevisionActors.chatDevice}. */
+  chatDevice: () => Promise<string | undefined>;
+  /** Whether this host pulls the project's chats at all; see {@link RevisionActors.pullsChats}. */
+  pullsChats: () => Promise<boolean>;
+}>;
+
+/** Options for one project's running revision actor tree. @public */
+export type ProjectRevisionActorOptions = RevisionActorsOptions &
+  Pick<ActorOptions<AnyActorLogic>, 'inspect' | 'onRejectedEvent'> &
+  Readonly<{
+    /**
+     * The checkout that is the project directory itself.
+     *
+     * An override: the registry's own `kind === 'live'` record is the source,
+     * so a host that has no reason to pin one leaves this out.
+     */
+    liveCheckoutId?: string;
+    selectedCheckoutId?: string;
+    /**
+     * The least time between one checkout's published mints, in
+     * milliseconds; `checkoutMintFloorMilliseconds` when left out (D11). A
+     * host whose clock does not run, such as a test's stopped clock, passes 0.
+     */
+    mintFloor?: number;
+  }>;
+
+/**
+ * The project's actor tree, with every effect this module builds already
+ * provided.
+ *
+ * One composition, not one per host: the five machines are wired together here
+ * so a page, a daemon and the Electron utility differ only in the port and the
+ * checkout filesystems they pass. The actor is returned **unstarted**, so a
+ * caller can subscribe before the registry opens.
+ *
+ * @param options - The same dependencies {@link createRevisionActors} takes, plus the
+ *   tree's `inspect` and `onRejectedEvent`. Production passes neither; tests pass the
+ *   harness (MC-R4).
+ * @returns The root actor, ready to `start()`, the `settled` wait a caller
+ *   owes the project after it stops that actor, and the store reads a
+ *   turn-placement adapter needs (`turns`).
+ * @public
+ *
+ * @example <caption>Serve one project on a disk host</caption>
+ * ```typescript
+ * import { NodeFsProvider } from '@taucad/filesystem/backend/node';
+ * import { createProjectRevisionsActor } from '@taucad/revisions/revision-effects';
+ * import { createNativeGitRevisionPort } from '@taucad/revisions/node';
+ *
+ * const { actor } = createProjectRevisionsActor({
+ *   port: createNativeGitRevisionPort({ repositoryPath: '/srv/project' }),
+ *   projectId: 'project-1',
+ *   filesystem: () => new NodeFsProvider('/srv/project'),
+ * });
+ * actor.start();
+ * actor.send({ type: 'admitTurn', key: { chatId: 'chat-1', turnId: 'turn-1', runId: 'run-1', attempt: 0 } });
+ * ```
+ */
+export const createProjectRevisionsActor = (options: ProjectRevisionActorOptions): ProjectRevisions => {
+  const actors = createRevisionActors(options);
+  const actor = createActor(
+    projectRevisionsMachine.provide({
+      actors: {
+        checkouts: checkoutsMachine.provide({ actors: actors.checkouts }),
+        restore: restoreMachine.provide({ actors: actors.restore }),
+        checkout: checkoutMachine.provide({ actors: actors.checkout }),
+        turn: turnMachine.provide({ actors: actors.turn }),
+        remote: remoteMachine.provide({ actors: actors.remote }),
+        branch: branchMachine.provide({ actors: actors.branch }),
+        resolution: resolutionMachine.provide({ actors: actors.resolution }),
+        publish: publishMachine.provide({ actors: actors.publish }),
+        sync: syncMachine.provide({ actors: actors.sync }),
+      },
+    }),
+    {
+      input: {
+        projectId: options.projectId,
+        ...(options.liveCheckoutId === undefined ? {} : { liveCheckoutId: options.liveCheckoutId }),
+        ...(options.selectedCheckoutId === undefined ? {} : { selectedCheckoutId: options.selectedCheckoutId }),
+        ...(options.mintFloor === undefined ? {} : { mintFloor: options.mintFloor }),
+      },
+      ...(options.clock === undefined ? {} : { clock: options.clock }),
+      ...(options.inspect === undefined ? {} : { inspect: options.inspect }),
+      ...(options.onRejectedEvent === undefined ? {} : { onRejectedEvent: options.onRejectedEvent }),
+    },
+  );
+  const control = transferControls.get(actors);
+  if (control !== undefined) {
+    transferControls.set(actor, control);
+  }
+  /* RM-S14: a host hears of the placement after the base is minted, and of a refusal that followed the record. */
+  actor.on('turnPlaced', (event) => {
+    options.onPlacement?.({ runId: event.key.runId, status: 'leased', checkoutId: event.checkoutId ?? '' });
+  });
+  actor.on('turnRefused', (event) => {
+    options.onPlacement?.({
+      runId: event.runId,
+      status: 'refused',
+      turnId: event.turnId,
+      chatId: event.chatId,
+      reason: event.reason,
+    });
+  });
+  /* RM-R8 narrowed: the root's liveness mark lives as long as the root and every write it started (W8.r1 L-D). */
+  const releaseAfterWrites = async (): Promise<void> => {
+    try {
+      await actors.settled();
+    } finally {
+      actors.release();
+    }
+  };
+  const releaseSettled = (): void => {
+    // async-iife: bootstrap -- the stop is synchronous and nothing awaits it; `settled` never rejects.
+    void releaseAfterWrites();
+  };
+  actor.subscribe({ complete: releaseSettled, error: releaseSettled });
+  const recordEditorConflict = async (input: EditorConflictInput): Promise<EditorConflictOutcome> => {
+    const outcome = await actors.recordEditorConflict(input);
+    if (outcome.status === 'recorded') {
+      /* The registry re-reads, so the card exists without a reload; and the
+       * line is offered to the remote now rather than with the next save, so
+       * every device shows it (D14). */
+      actor.send({ type: 'mergeConflicted', branch: outcome.line, into: outcome.into, paths: [input.path] });
+      actor.send({ type: 'syncNow' });
+    }
+    return outcome;
+  };
+  return {
+    actor,
+    settled: actors.settled,
+    turns: actors.turns,
+    recordEditorConflict,
+    readConflict: actors.readConflict,
+    readContent: actors.readContent,
+    materialize: actors.materialize,
+    resolvePlaceholder: actors.resolvePlaceholder,
+    adoptLargeObjects: actors.adoptLargeObjects,
+    checkLargeObjects: actors.checkLargeObjects,
+    readEntryClosure: actors.readEntryClosure,
+    chatDevice: actors.chatDevice,
+    pullsChats: actors.pullsChats,
+  };
+};
+
+/**
+ * The waits before a fill check that threw runs again on its own, by failures in a row; the last repeats (L7). A
+ * check is a local scan, so the first wait is short; a transfer that fails has its own waits in the fill.
+ */
+const fillCheckRetryMilliseconds: readonly [number, ...number[]] = [500, 2000, 5000, 15_000, 30_000, 60_000];
+/* The stream tail is a zero-wait GET; do not let it hold the active pull. */
+const streamTailWaitMilliseconds = 2000;
+const nestedBoundMarginMilliseconds = 2000;
+const closeTransferMilliseconds = 10_000;
+
+/**
+ * How long a host waits for the scheduler before it lets a project go.
+ *
+ * Close allows ten seconds for active network work, then aborts it and waits
+ * two more seconds for the durable retry record. Failed or stalled persistence
+ * refuses close. This budget is independent of active background transfers.
+ *
+ * @public
+ */
+export const syncQuiesceMilliseconds = closeTransferMilliseconds + nestedBoundMarginMilliseconds;
+
+/* What the scheduler looks like when it owes this host nothing more. */
+const settledSyncStates = new Set<SyncFacet['state']>(['manual', 'noRemote', 'backedUp', 'queued', 'conflicted']);
+
+/** The resident root and immutable destination approved by one push gesture. @public */
+export type ExplicitPushInput = Readonly<{ actor: ProjectRevisionsActor; repositoryUrl: string }>;
+
+/**
+ * Request one manual push and wait for its correlated scheduler answer.
+ *
+ * @param input - The resident root and the exact remote this gesture approved.
+ * @returns Resolves only after a successful push; failures require another gesture.
+ * @public
+ */
+export const pushExplicitly = async (input: ExplicitPushInput): Promise<void> => {
+  const snapshot = input.actor.getSnapshot();
+  const scheduler = snapshot.children.sync;
+  const remote = snapshot.children.remote?.getSnapshot().context.remote;
+  if (
+    scheduler === undefined ||
+    remote?.provider !== 'github' ||
+    remote.url !== input.repositoryUrl ||
+    scheduler.getSnapshot().context.automaticPush ||
+    !scheduler.getSnapshot().matches('manual')
+  ) {
+    throw new RevisionPortError('INVALID_TRANSPORT', 'Wait for repository access to finish checking, then push again.');
+  }
+  const pushId = randomUuid();
+  let releaseAnswer: (() => void) | undefined;
+  let releaseState: (() => void) | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const cancelled = (): void => {
+        reject(
+          new RevisionPortError('INVALID_TRANSPORT', 'This push was cancelled. Review the repository and push again.'),
+        );
+      };
+      const answer = scheduler.on('pushSettled', (event) => {
+        if (event.pushId !== pushId) {
+          return;
+        }
+        if (event.outcome === 'backedUp') {
+          resolve();
+        } else {
+          reject(
+            new RevisionPortError(
+              'INVALID_TRANSPORT',
+              'GitHub did not accept this push. Check repository access and changes, then try again.',
+            ),
+          );
+        }
+      });
+      releaseAnswer = () => {
+        answer.unsubscribe();
+      };
+      const state = scheduler.subscribe({
+        next: (current) => {
+          if (current.matches('opening') || current.matches('reading') || current.matches('noRemote')) {
+            cancelled();
+          }
+        },
+        complete: cancelled,
+        error: cancelled,
+      });
+      releaseState = () => {
+        state.unsubscribe();
+      };
+      input.actor.send({ type: 'sync', event: { type: 'pushNow', pushId, repositoryUrl: input.repositoryUrl } });
+    });
+  } finally {
+    releaseAnswer?.();
+    releaseState?.();
+  }
+};
+
+/**
+ * Wait for the scheduler to finish pushing or to record what it could not push.
+ *
+ * The one quiesce seam, because both hosts need the same wait: a browser worker
+ * releasing its last port and a Node host holding `before-quit` are the same
+ * question — *has the close revision reached the remote, or at least the
+ * record?* — and two implementations of it would be two bounds to keep in step
+ * (W13 review 2 R2, P33).
+ *
+ * The bound is a failure unless the machine reached a state that proves either
+ * remote persistence or a durable local retry record. `checking` and `pending`
+ * are both "not yet", so both remain inside the wait.
+ *
+ * @param actor - The project's running revision root.
+ * @param timeoutMilliseconds - How long to wait. Defaults to {@link syncQuiesceMilliseconds}.
+ * @returns Once the push or its durable retry record is confirmed.
+ * @public
+ */
+export const awaitSyncSettled = async (
+  actor: ProjectRevisionsActor,
+  timeoutMilliseconds: number = syncQuiesceMilliseconds,
+): Promise<void> => {
+  const inspect = (): 'settled' | 'waiting' | Error => {
+    const snapshot = actor.getSnapshot();
+    const { sync } = selectRevisionStatus(snapshot);
+    if (snapshot.status !== 'active') {
+      return new Error('Revision backup stopped before it settled.');
+    }
+    const scheduler = snapshot.children.sync?.getSnapshot();
+    if (sync.state === 'failed') {
+      /* A terminal remote refusal stays visible after its durable retry record
+       * lands. Local persistence failure is different: closing would lose work. */
+      if (scheduler?.matches({ failed: 'recording' })) {
+        return 'waiting';
+      }
+      if (scheduler?.context.queueWriteError !== undefined) {
+        return new Error(scheduler.context.queueWriteError);
+      }
+      return scheduler !== undefined && (scheduler.matches({ failed: 'settled' }) || scheduler.matches('manual'))
+        ? 'settled'
+        : new Error(sync.error ?? 'Revision backup failed before its retry could be recorded.');
+    }
+    if (scheduler?.matches({ conflicted: 'offering' })) {
+      return 'waiting';
+    }
+    if (settledSyncStates.has(sync.state)) {
+      return scheduler?.context.queueWriteError === undefined
+        ? 'settled'
+        : new Error(scheduler.context.queueWriteError);
+    }
+    return 'waiting';
+  };
+  const initial = inspect();
+  if (initial instanceof Error) {
+    throw initial;
+  }
+  if (initial === 'settled') {
+    return;
+  }
+  const quiesced = Promise.withResolvers<void>();
+  const control = transferControls.get(actor);
+  actor.send({ type: 'sync', event: { type: 'quiesce', phase: 'hold' } });
+  const inspectCompletion = (): void => {
+    const outcome = inspect();
+    if (outcome instanceof Error) {
+      quiesced.reject(outcome);
+    } else if (outcome === 'settled') {
+      quiesced.resolve();
+    }
+  };
+  const subscription = actor.subscribe(inspectCompletion);
+  const cancel = setTimeout(
+    () => {
+      if (control === undefined) {
+        quiesced.reject(new Error('Revision backup cannot cancel transports owned by a directly composed root.'));
+        return;
+      }
+      actor.send({ type: 'sync', event: { type: 'quiesce', phase: 'cancel' } });
+      control.cancel();
+    },
+    Math.max(0, timeoutMilliseconds - nestedBoundMarginMilliseconds),
+  );
+  const bound = setTimeout(() => {
+    quiesced.reject(new Error('Revision backup did not settle before the close deadline.'));
+  }, timeoutMilliseconds);
+  inspectCompletion();
+  try {
+    await quiesced.promise;
+  } finally {
+    clearTimeout(bound);
+    clearTimeout(cancel);
+    subscription.unsubscribe();
+    control?.release();
+    actor.send({ type: 'sync', event: { type: 'quiesce', phase: 'release' } });
+  }
+};
+
+/**
+ * How long a close waits for its checkouts' cuts, before it waits for the scheduler.
+ *
+ * One value for both hosts (RV-W2b #1): a desktop host's close and a browser
+ * worker's release are the same question, and each is nested inside the quit
+ * that waits on it. After it, the bytes are still on disk and the next open's
+ * comparison finds them (D4).
+ *
+ * @public
+ */
+export const closeCutMilliseconds = 5000;
+
+/**
+ * End every turn that has not been placed on a checkout yet, before a close records (RV-W2b #5).
+ *
+ * An unplaced turn could land on any checkout, so {@link awaitCheckoutCuts}
+ * treats it as holding all of them, and a close that let it be would record
+ * nothing. A closing host is not going to run it: the admissions the root
+ * still buffers and the turns still preparing are released here, and the
+ * caller refuses the runs this returns, in its own refusal's words. A placed
+ * turn is left alone; it records its own checkout.
+ *
+ * @param actor - The project's running revision root.
+ * @returns The run ids whose admissions the caller must refuse.
+ * @public
+ */
+export const releaseUnplacedTurns = (actor: ProjectRevisionsActor): readonly string[] => {
+  /* The root's own facts, never a child's snapshot (RM-R7). */
+  const { pendingAdmissions, turnFacts } = actor.getSnapshot().context;
+  const unplaced = [
+    ...pendingAdmissions.map(({ key }) => key),
+    ...Object.values(turnFacts)
+      .filter((fact) => fact.checkoutId === undefined && !fact.placed && fact.abandoned !== true)
+      .map(({ key }) => key),
+  ];
+  for (const key of unplaced) {
+    actor.send({ type: 'turnAbandoned', key });
+  }
+  return unplaced.map((key) => key.runId);
+};
+
+/**
+ * What a close cut over every checkout came to (A7e, 22:19Z).
+ *
+ * - `recorded`: a checkout minted a revision, and every other one had nothing to save.
+ * - `nothingToRecord`: every checkout answered that its tree was unchanged.
+ * - `refused`: a checkout could not be cut. There was no checkout, a turn held one (and minting there would credit
+ *   the turn's work to the close), or one answered `nothingToSave` because another holder's lease or a git
+ *   operation was in the way. The bytes are still on disk for the next cut.
+ *
+ * A cut that failed or lost its compare-and-swap still rejects.
+ *
+ * @public
+ */
+export type CheckoutCutsOutcome = 'recorded' | 'nothingToRecord' | 'refused';
+
+/**
+ * Record every checkout no turn holds, and wait for each one's answer.
+ *
+ * The close ruling (D6, rule 7): closing or quitting saves every dirty
+ * checkout, live and linked, not only the one the workbench shows. A linked
+ * checkout a person edited and never saved would otherwise be recorded only by
+ * whichever host next opened it, if any does. Every checkout is asked rather
+ * than only those reading `dirty`, because a write the watcher has not yet
+ * delivered is still on disk; each checkout's I5 gate decides whether anything
+ * is minted, so a clean one costs one memoized capture.
+ *
+ * A checkout a turn holds is skipped: that turn is already recording its bytes,
+ * and minting here would credit the turn's work to `close` (W6-a3). A turn not
+ * yet placed holds every checkout, because it could land on any of them.
+ *
+ * Both hosts use this one seam, like {@link awaitSyncSettled}.
+ *
+ * @param actor - The project's running revision root.
+ * @param trigger - `close`, or the browser's `hidden` close preparation.
+ * @param timeoutMilliseconds - One bound for all the cuts. `hidden` defaults to {@link closeCutMilliseconds}, because
+ *   a frozen page answers nothing; `close` has none (B8, B3: each cut is answered by its request id, and the quit
+ *   itself is bounded by its owner, B9).
+ * @returns Once every cut has answered, what they came to ({@link CheckoutCutsOutcome}). Rejects with the first
+ *   refusal (a failed cut, a lost compare-and-swap) once all have answered, or at the bound.
+ * @public
+ */
+export const awaitCheckoutCuts = async (
+  actor: ProjectRevisionsActor,
+  trigger: 'hidden' | 'close',
+  timeoutMilliseconds: number | undefined = trigger === 'hidden' ? closeCutMilliseconds : undefined,
+): Promise<CheckoutCutsOutcome> => {
+  const { checkouts, checkoutRefs, turnFacts } = actor.getSnapshot().context;
+  const turnCheckouts = Object.values(turnFacts)
+    .filter((fact) => !fact.settled && fact.abandoned !== true)
+    .map((fact) => fact.checkoutId);
+  const ids = checkouts
+    .filter(
+      (checkout) =>
+        checkoutRefs[checkout.id] !== undefined &&
+        /* Another holder's lease is not skipped: the listing lags a retirement, so the cut reads the records itself
+         * and a live lease answers `nothingToSave{heldBy}` (RM-R16). */
+        !turnCheckouts.some((id) => id === undefined || id === checkout.id),
+    )
+    .map((checkout) => checkout.id);
+  /* A checkout skipped for a turn, or none to cut at all, leaves bytes no cut here records. */
+  const skipped =
+    ids.length === 0 || ids.length < checkouts.filter((checkout) => checkoutRefs[checkout.id] !== undefined).length;
+  /* What each checkout answered when it did not refuse: minted, unchanged, or held off. */
+  const outcomes = new Map<string, CheckoutCutsOutcome>();
+  /* Each answer settles to its refusal, or `undefined` when the checkout recorded or had nothing to record.
+   * Keyed by the request id each cut mints, which every answer echoes (RM-R1, RM-R2). */
+  const requests = new Map(ids.map((id) => [`${trigger}:${id}:${randomUuid()}`, id]));
+  const answers = new Map(
+    [...requests.keys()].map((requestId) => [requestId, Promise.withResolvers<string | undefined>()]),
+  );
+  const answer = (event: Readonly<{ requestId?: string }>, refusal?: string): void => {
+    if (event.requestId !== undefined) {
+      answers.get(event.requestId)?.resolve(refusal);
+    }
+  };
+  const subscriptions = [
+    actor.on('revisionMinted', (event) => {
+      if (event.requestId !== undefined && requests.has(event.requestId)) {
+        outcomes.set(event.requestId, 'recorded');
+      }
+      answer(event);
+    }),
+    actor.on('nothingToSave', (event) => {
+      if (event.requestId !== undefined && requests.has(event.requestId)) {
+        outcomes.set(
+          event.requestId,
+          event.heldBy === undefined && event.waitFor === undefined ? 'nothingToRecord' : 'refused',
+        );
+      }
+      answer(event);
+    }),
+    actor.on('cutFailed', (event) => {
+      answer(event, event.reason);
+    }),
+    /* Terminal for this request: the checkout re-reads and rests dirty, so the
+     * next host to open the project records these bytes (M3). */
+    actor.on('casLost', (event) => {
+      answer(event, 'Another writer moved this branch first; the files stay unrecorded.');
+    }),
+  ];
+  const deadline = Promise.withResolvers<never>();
+  const bound =
+    timeoutMilliseconds === undefined
+      ? undefined
+      : setTimeout(() => {
+          deadline.reject(new Error(`The ${trigger} revision was not recorded before the deadline.`));
+        }, timeoutMilliseconds);
+  try {
+    for (const [requestId, id] of requests) {
+      actor.send({ type: 'cut', requestId, trigger, checkoutId: id, leaseIds: [] });
+    }
+    const refusals = await Promise.race([
+      Promise.all([...answers.values()].map(async (pending) => pending.promise)),
+      deadline.promise,
+    ]);
+    const refused = refusals.find((refusal) => refusal !== undefined);
+    if (refused !== undefined) {
+      throw new Error(refused);
+    }
+    const answered = new Set(outcomes.values());
+    if (skipped || answered.has('refused')) {
+      return 'refused';
+    }
+    return answered.has('recorded') ? 'recorded' : 'nothingToRecord';
+  } finally {
+    clearTimeout(bound);
+    for (const subscription of subscriptions) {
+      subscription.unsubscribe();
+    }
+  }
+};

@@ -4,6 +4,7 @@
   "description": "Tau AI-SDK chat tools",
   "type": "module",
   "private": true,
+  "license": "Apache-2.0",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -15,29 +16,156 @@
       "import": "./src/constants/index.ts",
       "default": "./src/constants/index.ts"
     },
+    "./model-catalog": {
+      "types": "./src/model-catalog/index.ts",
+      "import": "./src/model-catalog/index.ts",
+      "default": "./src/model-catalog/index.ts"
+    },
     "./utils": {
       "types": "./src/utils/index.ts",
       "import": "./src/utils/index.ts",
       "default": "./src/utils/index.ts"
+    },
+    "./references": {
+      "types": "./src/references/index.ts",
+      "import": "./src/references/index.ts",
+      "default": "./src/references/index.ts"
+    },
+    "./prompts": {
+      "types": "./src/prompts/index.ts",
+      "import": "./src/prompts/index.ts",
+      "default": "./src/prompts/index.ts"
+    },
+    "./prompts/kernel-routing-digest": {
+      "types": "./src/prompts/kernel-routing-digest.ts",
+      "import": "./src/prompts/kernel-routing-digest.ts",
+      "default": "./src/prompts/kernel-routing-digest.ts"
     },
     "./rpc": {
       "types": "./src/rpc/index.ts",
       "import": "./src/rpc/index.ts",
       "default": "./src/rpc/index.ts"
     },
+    "./rpc/client-text-mutation": {
+      "types": "./src/rpc/client-text-mutation.ts",
+      "import": "./src/rpc/client-text-mutation.ts",
+      "default": "./src/rpc/client-text-mutation.ts"
+    },
     "./schemas": {
       "types": "./src/schemas/index.ts",
       "import": "./src/schemas/index.ts",
       "default": "./src/schemas/index.ts"
+    },
+    "./schemas/tools/test-model": {
+      "types": "./src/schemas/tools/test-model.tool.schema.ts",
+      "import": "./src/schemas/tools/test-model.tool.schema.ts",
+      "default": "./src/schemas/tools/test-model.tool.schema.ts"
+    },
+    "./schemas/tools/test-model-summary": {
+      "types": "./src/schemas/tools/test-model-summary.ts",
+      "import": "./src/schemas/tools/test-model-summary.ts",
+      "default": "./src/schemas/tools/test-model-summary.ts"
+    },
+    "./schemas/tools/evaluate-model": {
+      "types": "./src/schemas/tools/evaluate-model.tool.schema.ts",
+      "import": "./src/schemas/tools/evaluate-model.tool.schema.ts",
+      "default": "./src/schemas/tools/evaluate-model.tool.schema.ts"
+    },
+    "./schemas/tools/screenshot": {
+      "types": "./src/schemas/tools/screenshot.tool.schema.ts",
+      "import": "./src/schemas/tools/screenshot.tool.schema.ts",
+      "default": "./src/schemas/tools/screenshot.tool.schema.ts"
+    },
+    "./schemas/tools/pose-model": {
+      "types": "./src/schemas/tools/pose-model.tool.schema.ts",
+      "import": "./src/schemas/tools/pose-model.tool.schema.ts",
+      "default": "./src/schemas/tools/pose-model.tool.schema.ts"
+    },
+    "./schemas/tools/export-model": {
+      "types": "./src/schemas/tools/export-model.tool.schema.ts",
+      "import": "./src/schemas/tools/export-model.tool.schema.ts",
+      "default": "./src/schemas/tools/export-model.tool.schema.ts"
+    },
+    "./schemas/tools/shell": {
+      "types": "./src/schemas/tools/shell.tool.schema.ts",
+      "import": "./src/schemas/tools/shell.tool.schema.ts",
+      "default": "./src/schemas/tools/shell.tool.schema.ts"
+    },
+    "./schemas/tools/web-search": {
+      "types": "./src/schemas/tools/web-search.tool.schema.ts",
+      "import": "./src/schemas/tools/web-search.tool.schema.ts",
+      "default": "./src/schemas/tools/web-search.tool.schema.ts"
+    },
+    "./schemas/tools/web-browser": {
+      "types": "./src/schemas/tools/web-browser.tool.schema.ts",
+      "import": "./src/schemas/tools/web-browser.tool.schema.ts",
+      "default": "./src/schemas/tools/web-browser.tool.schema.ts"
+    },
+    "./schemas/rpc": {
+      "types": "./src/schemas/rpc.schema.ts",
+      "import": "./src/schemas/rpc.schema.ts",
+      "default": "./src/schemas/rpc.schema.ts"
+    },
+    "./schemas/tools/test-model-input-normalizer": {
+      "types": "./src/schemas/tools/test-model-input-normalizer.ts",
+      "import": "./src/schemas/tools/test-model-input-normalizer.ts",
+      "default": "./src/schemas/tools/test-model-input-normalizer.ts"
+    },
+    "./schemas/tools/project-path-input-normalizer": {
+      "types": "./src/schemas/tools/project-path-input-normalizer.ts",
+      "import": "./src/schemas/tools/project-path-input-normalizer.ts",
+      "default": "./src/schemas/tools/project-path-input-normalizer.ts"
+    },
+    "./schemas/questions": {
+      "types": "./src/schemas/questions.schema.ts",
+      "import": "./src/schemas/questions.schema.ts",
+      "default": "./src/schemas/questions.schema.ts"
+    },
+    "./schemas/provider-tool-schemas": {
+      "types": "./src/schemas/provider-tool-schemas.ts",
+      "import": "./src/schemas/provider-tool-schemas.ts",
+      "default": "./src/schemas/provider-tool-schemas.ts"
+    },
+    "./schemas/tools/machine": {
+      "types": "./src/schemas/tools/machine.tool.schema.ts",
+      "import": "./src/schemas/tools/machine.tool.schema.ts",
+      "default": "./src/schemas/tools/machine.tool.schema.ts"
+    },
+    "./schemas/tools/parameter": {
+      "types": "./src/schemas/tools/parameter.tool.schema.ts",
+      "import": "./src/schemas/tools/parameter.tool.schema.ts",
+      "default": "./src/schemas/tools/parameter.tool.schema.ts"
+    },
+    "./schemas/tools/arrange-workbench": {
+      "types": "./src/schemas/tools/arrange-workbench.tool.schema.ts",
+      "import": "./src/schemas/tools/arrange-workbench.tool.schema.ts",
+      "default": "./src/schemas/tools/arrange-workbench.tool.schema.ts"
+    },
+    "./schemas/tools/ask-questions": {
+      "types": "./src/schemas/tools/ask-questions.tool.schema.ts",
+      "import": "./src/schemas/tools/ask-questions.tool.schema.ts",
+      "default": "./src/schemas/tools/ask-questions.tool.schema.ts"
     }
   },
   "dependencies": {
-    "@taucad/runtime": "workspace:*",
-    "@taucad/testing": "workspace:*",
+    "@taucad/bundler-core": "workspace:*",
     "@taucad/types": "workspace:*",
-    "@taucad/utils": "workspace:*"
+    "@taucad/utils": "workspace:*",
+    "@taucad/workbench": "workspace:*",
+    "ai": "catalog:",
+    "diff": "^8.0.4",
+    "js-yaml": "catalog:",
+    "minimatch": "^10.2.5",
+    "safe-regex": "^2.1.1"
+  },
+  "devDependencies": {
+    "@taucad/runtime": "workspace:*",
+    "@types/js-yaml": "catalog:",
+    "zod": "catalog:",
+    "zod-latest": "npm:zod@4.6.7"
   },
   "imports": {
+    "#*.js": "./src/*.ts",
     "#*": "./src/*"
   }
 }

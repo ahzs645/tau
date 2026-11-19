@@ -1,96 +1,158 @@
-// oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Initial sentinel for queue chain
+import type { WorkerTimings } from '#worker-timings.js';
+
 const resolved: Promise<void> = Promise.resolve();
+
+/** One exact resource, optionally covering every key below a caller-defined prefix. @public */
+export type ResourceQueueClaim = Readonly<{
+  key: string;
+  descendantPrefix?: string;
+  /** A shared claim conflicts only with exclusive claims, as a Web Lock's `shared` mode does (D3). */
+  shared?: boolean;
+}>;
+
+type QueuedClaims = Readonly<{
+  claims: readonly ResourceQueueClaim[];
+  settled: PromiseWithResolvers<void>;
+}>;
+
+const covers = (claim: ResourceQueueClaim, key: string): boolean =>
+  claim.key === key || (claim.descendantPrefix !== undefined && key.startsWith(claim.descendantPrefix));
+
+const conflicts = (left: readonly ResourceQueueClaim[], right: readonly ResourceQueueClaim[]): boolean =>
+  left.some((leftClaim) =>
+    right.some(
+      (rightClaim) =>
+        (leftClaim.shared !== true || rightClaim.shared !== true) &&
+        (covers(leftClaim, rightClaim.key) || covers(rightClaim, leftClaim.key)),
+    ),
+  );
 
 /**
  * Per-resource write serialization queue (VS Code ResourceQueue pattern).
  *
- * Writes to the same file path are serialized (FIFO). Writes to different
- * file paths run in parallel. Auto-cleans empty queues on drain.
- *
- * Replaces both WriteCoordinator (global — too strict) and the legacy
- * ResourceWriteQueue (per-parent — ZenFS artifact, unnecessary with
- * path-keyed IDB).
+ * Exact writes to the same resource serialize in admission order while
+ * unrelated resources run concurrently. A subtree claim also conflicts with
+ * exact and subtree claims below its supplied descendant prefix.
  *
  * @public
  * @see {@link https://github.com/microsoft/vscode | VS Code's} `ResourceQueue` in `src/vs/base/common/async.ts`.
- * @see {@link https://github.com/microsoft/vscode | VS Code's} `writeQueue` in `src/vs/platform/files/common/fileService.ts`.
  */
 export class ResourceQueue {
-  private readonly _queues = new Map<string, Promise<void>>();
+  private readonly _operations = new Set<QueuedClaims>();
+  private readonly _timings: Pick<WorkerTimings, 'now' | 'record'> | undefined;
   private _totalDepth = 0;
-  private _drainResolvers: Array<() => void> = [];
+  private _drainWaiter: PromiseWithResolvers<void> | undefined;
 
   /**
-   * Queue an operation serialized by the exact file path.
+   * Create a queue.
    *
-   * Same-file writes execute in FIFO order. Different-file writes run
-   * in parallel. The queue for a given path is auto-cleaned once empty.
-   *
-   * @param path - Absolute file path (used as serialization key).
-   * @param operation - Async operation to execute.
-   * @returns The operation's return value.
+   * @param options - `timings` records each operation's wait for its claims
+   *   (`queue.wait`) and its run while holding them (`queue.held`).
    */
+  public constructor(options: Readonly<{ timings?: Pick<WorkerTimings, 'now' | 'record'> }> = {}) {
+    this._timings = options.timings;
+  }
+
+  /** Queue an operation serialized by one exact resource key. */
   public async queueFor<T>(path: string, operation: () => Promise<T>): Promise<T> {
-    this._totalDepth++;
-    const existingQueue = this._queues.get(path) ?? resolved;
+    return this.queueForClaims([{ key: path }], operation);
+  }
 
-    const { promise, resolve, reject } = Promise.withResolvers<T>();
-
-    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
-    const next = existingQueue
-      // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
-      .catch(() => undefined)
-      // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
-      .then(async () => {
-        try {
-          const result = await operation();
-          resolve(result);
-        } catch (error) {
-          reject(error);
-        } finally {
-          this._totalDepth--;
-          if (this._totalDepth === 0) {
-            for (const drainResolve of this._drainResolvers) {
-              drainResolve();
-            }
-            this._drainResolvers = [];
-          }
-        }
-      });
-
-    this._queues.set(path, next);
-
-    // async-iife: bootstrap — auto-cleanup runs in the background after the
-    // operation settles; the public promise above already surfaces errors.
-    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Intentional promise chaining for queue cleanup
-    void next.then(() => {
-      if (this._queues.get(path) === next) {
-        this._queues.delete(path);
-      }
-    });
-
-    return promise;
+  /** Queue one operation behind every supplied exact resource key. */
+  public async queueForMany<T>(paths: readonly string[], operation: () => Promise<T>): Promise<T> {
+    return this.queueForClaims(
+      [...new Set(paths)].sort().map((key) => ({ key })),
+      operation,
+    );
   }
 
   /**
-   * Total number of operations queued or in-flight across all paths.
-   * @returns The aggregate queue depth.
+   * Queue one operation behind every earlier conflicting exact or subtree claim.
+   *
+   * `descendantPrefix` is opaque and caller-owned so browser POSIX paths and
+   * native host paths can supply their own separators without path parsing here.
+   * An aborted `signal` withdraws a still-waiting operation with the signal's reason; a started one completes.
    */
+  public async queueForClaims<T>(
+    claims: readonly ResourceQueueClaim[],
+    operation: () => Promise<T>,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ): Promise<T> {
+    const ownedClaims = claims.map(({ key, descendantPrefix, shared }) => ({
+      key,
+      ...(descendantPrefix === undefined ? {} : { descendantPrefix }),
+      ...(shared === true ? { shared } : {}),
+    }));
+    this._totalDepth += 1;
+    const settled = Promise.withResolvers<void>();
+    const queued = { claims: ownedClaims, settled };
+    const blockers: Array<Promise<void>> = [];
+    // One linear scan keeps unrelated operations concurrent without a second lock index.
+    for (const candidate of this._operations) {
+      if (conflicts(candidate.claims, ownedClaims)) {
+        blockers.push(candidate.settled.promise);
+      }
+    }
+    this._operations.add(queued);
+    const timings = this._timings;
+    const queuedAt = timings?.now();
+
+    try {
+      const signal = options?.signal;
+      if (signal === undefined) {
+        await Promise.all(blockers);
+      } else {
+        signal.throwIfAborted();
+        const aborted = Promise.withResolvers<never>();
+        const abort = (): void => {
+          aborted.reject(signal.reason);
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        try {
+          await Promise.race([Promise.all(blockers), aborted.promise]);
+        } finally {
+          signal.removeEventListener('abort', abort);
+        }
+        signal.throwIfAborted();
+      }
+      if (timings === undefined || queuedAt === undefined) {
+        return await operation();
+      }
+      timings.record('queue.wait', queuedAt);
+      const startedAt = timings.now();
+      try {
+        return await operation();
+      } finally {
+        timings.record('queue.held', startedAt);
+      }
+    } finally {
+      this._operations.delete(queued);
+      settled.resolve();
+      this._totalDepth -= 1;
+      if (this._totalDepth === 0) {
+        this._resolveDrainWaiter();
+      }
+    }
+  }
+
+  /** Aggregate queued and in-flight operation count. */
   public get depth(): number {
     return this._totalDepth;
   }
 
-  /**
-   * Resolves when all queues are empty (no in-flight or pending operations).
-   * @returns A promise that settles once every per-path queue has drained.
-   */
-  public async whenDrained(): Promise<void> {
+  /** Resolve when every queued and in-flight operation has settled. */
+  // oxlint-disable-next-line @typescript-eslint/promise-function-async -- concurrent waiters must receive the same pending promise by identity.
+  public whenDrained(): Promise<void> {
     if (this._totalDepth === 0) {
-      return;
+      return resolved;
     }
+    this._drainWaiter ??= Promise.withResolvers<void>();
+    return this._drainWaiter.promise;
+  }
 
-    return new Promise<void>((resolve) => {
-      this._drainResolvers.push(resolve);
-    });
+  private _resolveDrainWaiter(): void {
+    const waiter = this._drainWaiter;
+    this._drainWaiter = undefined;
+    waiter?.resolve();
   }
 }

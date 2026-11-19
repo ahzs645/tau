@@ -1,0 +1,564 @@
+// @vitest-environment jsdom
+import { act, render, screen, within } from '@testing-library/react';
+import { userEvent } from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createActor, createAsyncLogic } from 'xstate';
+import type { Actor } from 'xstate';
+import { TooltipProvider } from '@taucad/ui/components/tooltip';
+import { GraphicsProvider } from '@taucad/viewer/hooks/use-graphics';
+import { KeyboardProvider } from '@taucad/ui/components/keyboard';
+import { graphicsMachine } from '@taucad/viewer/machines/graphics.machine';
+import { ChatViewerControls } from '#routes/w.$workspace.$project/chat-viewer-controls.js';
+
+const mocks = vi.hoisted(() => ({ isMobile: false, viewerControls: false }));
+vi.mock('#flags/use-feature.js', () => ({
+  useFeature: (flag: string) => (flag === 'viewerControls' ? mocks.viewerControls : false),
+}));
+vi.mock('@taucad/ui/hooks/use-mobile', () => ({ useIsMobile: () => mocks.isMobile }));
+const editorSnapshot = { context: { focusedChatId: 'chat-test' as string | undefined } };
+const editorRef = { getSnapshot: () => editorSnapshot, subscribe: () => ({ unsubscribe: () => undefined }) };
+vi.mock('#hooks/use-project.js', () => ({ useProject: () => ({ editorRef }) }));
+
+vi.mock('#components/geometry/cad/capture-view-control.js', () => ({
+  CaptureViewControl: () => <button type='button' aria-label='Capture view to chat' />,
+}));
+vi.mock('@taucad/viewer/cad/viewer-settings', () => ({
+  ViewerSettings: ({ side, align }: { readonly side?: string; readonly align?: string }) => (
+    <button type='button' aria-label='Viewer settings' data-side={side} data-align={align} />
+  ),
+}));
+
+type GraphicsActor = Actor<typeof graphicsMachine>;
+
+let activeActor: GraphicsActor | undefined;
+
+afterEach(() => {
+  activeActor?.stop();
+  activeActor = undefined;
+  mocks.isMobile = false;
+  mocks.viewerControls = false;
+  editorSnapshot.context.focusedChatId = 'chat-test';
+});
+
+const startGraphics = (): GraphicsActor => {
+  const actor = createActor(
+    graphicsMachine.provide({
+      actors: { probeWebGpu: createAsyncLogic({ run: async () => false }) },
+    }),
+    { input: {} },
+  ).start();
+  activeActor = actor;
+  actor.send({
+    type: 'sceneRadiusUpdated',
+    radius: 0.1,
+    centerMeters: [0, 0, 0],
+  });
+  // The model's first frame: framing holds its measurement, so Fit view fits it.
+  actor.send({
+    type: 'geometryBoundsMeasured',
+    key: 'model',
+    bounds: { min: [-0.1, -0.1, -0.1], max: [0.1, 0.1, 0.1] },
+    radius: 0.1,
+  });
+  return actor;
+};
+
+const showSvg = (actor: GraphicsActor): void => {
+  actor.send({
+    type: 'updateArtifact',
+    artifact: {
+      mimeType: 'image/svg+xml',
+      content: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+    },
+    hash: 'svg',
+  });
+};
+
+const renderBar = (
+  actor: GraphicsActor,
+  properties: {
+    shouldEnableCapture?: boolean;
+    leading?: React.ReactNode;
+    aboveControls?: React.ReactNode;
+    mobileAction?: React.ReactNode;
+  } = {},
+): void => {
+  render(
+    <KeyboardProvider>
+      <TooltipProvider>
+        <GraphicsProvider graphicsRef={actor}>
+          <ChatViewerControls {...properties} />
+        </GraphicsProvider>
+      </TooltipProvider>
+    </KeyboardProvider>,
+  );
+};
+
+const controlNames = (): string[] =>
+  within(screen.getByRole('group', { name: 'Viewer controls' }))
+    .getAllByRole('button')
+    .map((button) => button.getAttribute('aria-label') ?? button.textContent);
+
+const sectionRow = (): HTMLElement => screen.getByRole('group', { name: 'Section view options' });
+const measuringRow = (): HTMLElement => screen.getByRole('group', { name: 'Measuring options' });
+
+describe('ChatViewerControls', () => {
+  describe('with viewerControls (FL1)', () => {
+    it('should add no camera button group with the flag on, leaving Fit view to the bar', () => {
+      mocks.viewerControls = true;
+      renderBar(startGraphics());
+      expect(screen.queryByRole('group', { name: 'Camera' })).toBeNull();
+      expect(screen.getAllByRole('button', { name: 'Fit view' })).toHaveLength(1);
+    });
+  });
+
+  describe('at rest', () => {
+    it('should keep model tools available without mounting chat capture before chat discovery', () => {
+      editorSnapshot.context.focusedChatId = undefined;
+      renderBar(startGraphics());
+      expect(screen.getByRole('button', { name: 'Fit view' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Capture view to chat' })).not.toBeInTheDocument();
+    });
+    it('should hold the tools, the actions and Viewer settings, in that order, and no grid readout', () => {
+      renderBar(startGraphics());
+
+      expect(controlNames()).toEqual([
+        'Section view',
+        'Measure',
+        'Fit view',
+        'Enter fullscreen',
+        'Capture view to chat',
+        'Viewer settings',
+      ]);
+      expect(screen.getByRole('button', { name: 'Viewer settings' })).toMatchObject({
+        dataset: { side: 'top', align: 'end' },
+      });
+      expect(screen.queryByRole('group', { name: /options$/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+    });
+
+    it('should never shrink below its rows, so no row spills out of the bar in a narrow strip', () => {
+      renderBar(startGraphics());
+
+      const bar = screen.getByRole('group', { name: 'Viewer controls' }).closest('[data-slot="viewer-controls"]');
+      expect(bar).toHaveClass('max-w-full', 'min-w-min');
+      expect(bar).not.toHaveClass('min-w-0');
+      expect(screen.getByRole('button', { name: 'Fit view' }).parentElement).not.toHaveClass('flex-wrap');
+    });
+
+    it('should fit a phone sheet, wrapping its controls and scrolling its tool rows within the space it is given', () => {
+      mocks.isMobile = true;
+      const actor = startGraphics();
+      actor.send({ type: 'setMeasureActive', payload: true });
+      // This bar-only fixture acknowledges the listener owner before testing the ready layout.
+      actor.send({ type: 'setMeasureInputReady', ready: true });
+      renderBar(actor);
+
+      const bar = screen.getByRole('group', { name: 'Viewer controls' }).closest('[data-slot="viewer-controls"]');
+      expect(bar).toHaveClass('max-w-full', 'min-w-0', 'max-h-full', 'min-h-0');
+      expect(bar).not.toHaveClass('min-w-min');
+      expect(screen.getByRole('button', { name: 'Fit view' }).parentElement).toHaveClass('flex-wrap');
+      expect(measuringRow().closest('[data-slot="viewer-tool-rows"]')).toHaveClass('min-h-0', 'overflow-y-auto');
+    });
+
+    it('should put the mobile action in place of fullscreen on phones, after Fit view', () => {
+      mocks.isMobile = true;
+      renderBar(startGraphics(), { mobileAction: <button type='button' aria-label='View in your space' /> });
+
+      expect(controlNames()).toEqual([
+        'Section view',
+        'Measure',
+        'Fit view',
+        'View in your space',
+        'Capture view to chat',
+        'Viewer settings',
+      ]);
+    });
+
+    it('should offer neither fullscreen nor AR on a phone that cannot launch AR', () => {
+      mocks.isMobile = true;
+      renderBar(startGraphics());
+
+      expect(controlNames()).not.toContain('Enter fullscreen');
+      expect(controlNames()).not.toContain('View in your space');
+      expect(screen.getByRole('button', { name: 'Fit view' })).toBeInTheDocument();
+    });
+
+    it('should keep fullscreen and show the capability-gated host action after it on desktop (D12 tablets)', () => {
+      renderBar(startGraphics(), { mobileAction: <button type='button' aria-label='View in your space' /> });
+
+      const names = controlNames();
+      expect(names[names.indexOf('Enter fullscreen') + 1]).toBe('View in your space');
+    });
+
+    it('should hint the S, M and F shortcuts in the tooltips', async () => {
+      const user = userEvent.setup();
+      renderBar(startGraphics());
+
+      for (const [name, key] of [
+        ['Section view', 'S'],
+        ['Measure', 'M'],
+        ['Fit view', 'F'],
+      ] as const) {
+        // oxlint-disable-next-line no-await-in-loop -- one tooltip at a time.
+        await user.hover(screen.getByRole('button', { name }));
+        // oxlint-disable-next-line no-await-in-loop -- one tooltip at a time.
+        const tooltip = await screen.findByRole('tooltip', {
+          name: new RegExp(`^${name}\\s*${key}$`),
+        });
+        expect(tooltip).toBeInTheDocument();
+      }
+    });
+
+    it('should leave Capture out when capture is not enabled', () => {
+      renderBar(startGraphics(), { shouldEnableCapture: false });
+
+      expect(controlNames()).toEqual(['Section view', 'Measure', 'Fit view', 'Enter fullscreen', 'Viewer settings']);
+    });
+
+    it('should offer no Section or Measure toggle, and no rows, for 2D geometry', () => {
+      const actor = startGraphics();
+      actor.send({ type: 'setSectionViewActive', payload: true });
+      actor.send({ type: 'setMeasureActive', payload: true });
+      showSvg(actor);
+      renderBar(actor);
+
+      expect(controlNames()).toEqual(['Fit view', 'Enter fullscreen', 'Capture view to chat', 'Viewer settings']);
+      expect(screen.queryByRole('group', { name: /options$/ })).not.toBeInTheDocument();
+    });
+
+    it('should start the controls row with Section, with no divider before it', () => {
+      renderBar(startGraphics());
+
+      const controls = screen.getByRole('group', { name: 'Viewer controls' }).firstElementChild!;
+      expect(controlNames()[0]).toBe('Section view');
+      expect(controls.firstElementChild).not.toHaveAttribute('data-orientation', 'vertical');
+    });
+
+    it('should start the controls line with the leading group, divided from the controls', () => {
+      renderBar(startGraphics(), { leading: <button type='button'>View: Model</button> });
+
+      const row = screen.getByRole('group', { name: 'Viewer controls' });
+      const leading = row.firstElementChild!;
+      expect(leading).toContainElement(screen.getByRole('button', { name: 'View: Model' }));
+      expect(leading.nextElementSibling).toHaveAttribute('data-orientation', 'vertical');
+      // An empty group hides, and so does the hairline after it.
+      expect(leading).toHaveClass('empty:hidden');
+      expect(leading.nextElementSibling).toHaveClass('[[data-slot=viewer-leading]:empty+&]:hidden');
+    });
+  });
+
+  describe('rows', () => {
+    it('should unfold measurements above the Measuring options line inside the bar', async () => {
+      const actor = startGraphics();
+      actor.send({ type: 'setMeasureActive', payload: true });
+      actor.send({ type: 'setMeasureInputReady', ready: true });
+      actor.send({ type: 'startMeasurement', payload: [0, 0, 0] });
+      actor.send({ type: 'completeMeasurement', payload: [0.01, 0, 0] });
+      const user = userEvent.setup();
+      renderBar(actor);
+
+      const row = measuringRow();
+      const count = within(row).getByRole('button', { name: '1 measurement' });
+      expect(within(row).queryByRole('list', { name: 'Measurements' })).not.toBeInTheDocument();
+      await user.click(count);
+
+      const list = within(row).getByRole('list', { name: 'Measurements' });
+      expect(list.compareDocumentPosition(count)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(row.closest('[data-slot="viewer-controls"]')).toHaveClass('rounded-lg');
+    });
+
+    it('should stack the Section row and its editor above the Measuring row, above the controls', async () => {
+      const user = userEvent.setup();
+      const actor = startGraphics();
+      renderBar(actor);
+
+      await user.click(screen.getByRole('button', { name: 'Section view' }));
+      await user.click(screen.getByRole('button', { name: 'Measure' }));
+      act(() => {
+        actor.send({ type: 'setMeasureInputReady', ready: true });
+      });
+
+      const order = [
+        within(sectionRow()).getByRole('group', { name: 'XZ plane' }),
+        within(sectionRow()).getByRole('group', { name: 'Sections' }),
+        measuringRow(),
+        screen.getByRole('group', { name: 'Viewer controls' }),
+      ];
+      for (const [index, element] of order.slice(1).entries()) {
+        // None of these holds another, so each follows the last and nothing more.
+        expect(order[index]!.compareDocumentPosition(element)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      }
+      expect(screen.getByRole('button', { name: 'Done with section' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Done with measure' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Section view', pressed: true })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Measure', pressed: true })).toBeInTheDocument();
+    });
+
+    it('should put the issues list directly above the controls, below a running tool', () => {
+      const actor = startGraphics();
+      actor.send({ type: 'setSectionViewActive', payload: true });
+      renderBar(actor, { aboveControls: <div role='region' aria-label='Issues' /> });
+
+      const issues = screen.getByRole('region', { name: 'Issues' });
+      expect(sectionRow().compareDocumentPosition(issues)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(issues.nextElementSibling).toBe(screen.getByRole('group', { name: 'Viewer controls' }));
+    });
+
+    it('should end the Section row with its last cut', async () => {
+      const actor = startGraphics();
+      actor.send({ type: 'setSectionViewActive', payload: true });
+      const user = userEvent.setup();
+      renderBar(actor);
+
+      await user.click(
+        within(sectionRow()).getByRole('button', {
+          name: 'Remove plane XZ 0 mm',
+        }),
+      );
+
+      expect(screen.queryByRole('group', { name: 'Section view options' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Section view', pressed: false })).toHaveFocus();
+    });
+
+    it('should keep the section row free of model status text when the caps commit a section', () => {
+      const actor = startGraphics();
+      actor.send({ type: 'setSectionViewActive', payload: true });
+      renderBar(actor);
+
+      act(() => {
+        actor.send({ type: 'commitSectionCuts', payload: actor.getSnapshot().context.sectionCuts });
+      });
+
+      // Caps are never refused, so the row has nothing to say about the model.
+      expect(within(sectionRow()).queryByRole('status')).not.toBeInTheDocument();
+      expect(sectionRow()).not.toHaveTextContent(/unavailable/i);
+    });
+  });
+
+  describe('announcements', () => {
+    it('should say, politely, what each shortcut did', async () => {
+      const actor = startGraphics();
+      const user = userEvent.setup();
+      renderBar(actor);
+      const fitView = screen.getByRole('button', { name: 'Fit view' });
+      act(() => {
+        fitView.focus();
+      });
+      // The bar's own live region, the only one at rest.
+      const status = screen.getByRole('status');
+      const phrases: string[] = [];
+      const press = async (keys: string): Promise<void> => {
+        await user.keyboard(keys);
+        phrases.push(status.textContent);
+      };
+
+      await press('s');
+      // A second cut, open, so Delete leaves Section on.
+      act(() => {
+        actor.send({
+          type: 'addSectionCut',
+          payload: { kind: 'plane', plane: 'xy' },
+        });
+      });
+      for (const keys of ['m', 'g', 'g', 'p', 'p', 'f', 'f', '{Escape}', '{Delete}', '{Escape}']) {
+        // oxlint-disable-next-line no-await-in-loop -- each key is pressed in turn.
+        await press(keys);
+      }
+
+      expect(phrases).toEqual([
+        'Section on',
+        'Measure on',
+        'Grid hidden',
+        'Grid shown',
+        'Orthographic',
+        'Perspective',
+        'Fitted to view',
+        'Fitted to view',
+        'Measure off',
+        'Cut removed',
+        'Section off',
+      ]);
+      expect(fitView).toHaveFocus();
+    });
+  });
+
+  describe('focus', () => {
+    it('should move focus into a row when its toggle starts the tool', async () => {
+      const user = userEvent.setup();
+      const actor = startGraphics();
+      renderBar(actor);
+
+      await user.click(screen.getByRole('button', { name: 'Section view' }));
+
+      expect(within(sectionRow()).getByRole('radio', { name: 'XZ' })).toHaveFocus();
+
+      await user.click(screen.getByRole('button', { name: 'Measure' }));
+
+      expect(screen.getByRole('status', { name: 'Preparing measurement' })).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Measuring options' })).not.toBeInTheDocument();
+      const done = screen.getByRole('button', { name: 'Done with measure' });
+      expect(done).toHaveFocus();
+      act(() => {
+        actor.send({ type: 'setMeasureInputReady', ready: true });
+      });
+      expect(within(measuringRow()).getByRole('button', { name: 'Done with measure' })).toBe(done);
+      expect(done).toHaveFocus();
+      await user.tab({ shift: true });
+      expect(within(measuringRow()).getByRole('button', { name: /^Targets:/u })).toHaveFocus();
+    });
+
+    it('should move focus into the row when Enter starts the tool', async () => {
+      const user = userEvent.setup();
+      const actor = startGraphics();
+      renderBar(actor);
+
+      act(() => {
+        screen.getByRole('button', { name: 'Measure' }).focus();
+      });
+      await user.keyboard('{Enter}');
+
+      expect(screen.getByRole('status', { name: 'Preparing measurement' })).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Measuring options' })).not.toBeInTheDocument();
+      const done = screen.getByRole('button', { name: 'Done with measure' });
+      expect(done).toHaveFocus();
+      act(() => {
+        actor.send({ type: 'setMeasureInputReady', ready: true });
+      });
+      expect(within(measuringRow()).getByRole('button', { name: 'Done with measure' })).toBe(done);
+      expect(done).toHaveFocus();
+      await user.tab({ shift: true });
+      expect(within(measuringRow()).getByRole('button', { name: /^Targets:/u })).toHaveFocus();
+    });
+
+    it('should leave focus where it is when S or M starts a tool', async () => {
+      const user = userEvent.setup();
+      const actor = startGraphics();
+      renderBar(actor);
+      const fitView = screen.getByRole('button', { name: 'Fit view' });
+      act(() => {
+        fitView.focus();
+      });
+
+      await user.keyboard('s');
+      await user.keyboard('m');
+
+      expect(sectionRow()).toBeInTheDocument();
+      expect(screen.getByRole('status', { name: 'Preparing measurement' })).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Measuring options' })).not.toBeInTheDocument();
+      expect(fitView).toHaveFocus();
+      act(() => {
+        actor.send({ type: 'setMeasureInputReady', ready: true });
+      });
+      expect(measuringRow()).toBeInTheDocument();
+      expect(fitView).toHaveFocus();
+    });
+
+    it('should return focus to the toggle when Done ends a row', async () => {
+      const user = userEvent.setup();
+      renderBar(startGraphics());
+
+      await user.click(screen.getByRole('button', { name: 'Section view' }));
+      await user.click(within(sectionRow()).getByRole('button', { name: 'Done with section' }));
+
+      expect(screen.queryByRole('group', { name: 'Section view options' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Section view', pressed: false })).toHaveFocus();
+    });
+
+    it('should return focus to the toggle when Escape, S or M ends the row holding it', async () => {
+      const user = userEvent.setup();
+      renderBar(startGraphics());
+
+      await user.click(screen.getByRole('button', { name: 'Measure' }));
+      await user.keyboard('{Escape}');
+
+      expect(screen.queryByRole('group', { name: 'Measuring options' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Measure' })).toHaveFocus();
+
+      await user.click(screen.getByRole('button', { name: 'Section view' }));
+      act(() => {
+        within(sectionRow()).getByRole('button', { name: 'Plane XZ 0 mm' }).focus();
+      });
+      await user.keyboard('s');
+
+      expect(screen.queryByRole('group', { name: 'Section view options' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Section view' })).toHaveFocus();
+
+      await user.click(screen.getByRole('button', { name: 'Measure' }));
+      await user.keyboard('m');
+
+      expect(screen.getByRole('button', { name: 'Measure' })).toHaveFocus();
+    });
+
+    it('should keep focus in the bar through Enter and Escape in a field, so the next Escape stops Section', async () => {
+      const user = userEvent.setup();
+      renderBar(startGraphics());
+      await user.click(screen.getByRole('button', { name: 'Section view' }));
+
+      await user.click(within(sectionRow()).getByRole('spinbutton', { name: 'Offset in mm' }));
+      await user.keyboard('12{Enter}');
+
+      const chip = within(sectionRow()).getByRole('button', {
+        name: 'Plane XZ 12 mm',
+        expanded: true,
+      });
+      expect(chip).toHaveFocus();
+
+      await user.click(within(sectionRow()).getByRole('spinbutton', { name: 'Offset in mm' }));
+      await user.keyboard('30{Escape}');
+
+      expect(chip).toHaveAccessibleName('Plane XZ 12 mm');
+      expect(chip).toHaveFocus();
+
+      await user.keyboard('{Escape}');
+
+      expect(screen.queryByRole('group', { name: 'Section view options' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Section view', pressed: false })).toHaveFocus();
+    });
+
+    it('should remove the cut of the chip holding focus with Delete, rather than the open cut', async () => {
+      const actor = startGraphics();
+      actor.send({ type: 'setSectionViewActive', payload: true });
+      actor.send({
+        type: 'addSectionCut',
+        payload: { kind: 'plane', plane: 'xy' },
+      });
+      const user = userEvent.setup();
+      renderBar(actor);
+      expect(within(sectionRow()).getByRole('button', { name: 'Plane XY 0 mm' })).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      );
+      act(() => {
+        within(sectionRow()).getByRole('button', { name: 'Plane XZ 0 mm' }).focus();
+      });
+
+      await user.keyboard('{Delete}');
+
+      expect(actor.getSnapshot().context.sectionCuts.map((cut) => cut.kind === 'plane' && cut.plane)).toEqual(['xy']);
+    });
+
+    it('should move focus to the next chip when Delete removes the open cut from inside its editor', async () => {
+      const actor = startGraphics();
+      actor.send({ type: 'setSectionViewActive', payload: true });
+      actor.send({
+        type: 'addSectionCut',
+        payload: { kind: 'plane', plane: 'xy' },
+      });
+      actor.send({
+        type: 'selectSectionCut',
+        payload: actor.getSnapshot().context.sectionCuts[0]!.id,
+      });
+      const user = userEvent.setup();
+      renderBar(actor);
+      act(() => {
+        within(sectionRow()).getByRole('button', { name: 'Flip' }).focus();
+      });
+
+      await user.keyboard('{Delete}');
+
+      expect(actor.getSnapshot().context.sectionCuts).toMatchObject([{ plane: 'xy' }]);
+      expect(within(sectionRow()).getByRole('button', { name: 'Plane XY 0 mm' })).toHaveFocus();
+    });
+  });
+});

@@ -1,0 +1,305 @@
+/* eslint-disable @typescript-eslint/naming-convention -- environment variables keep their wire names. */
+/**
+ * The credential fence (X6) and the stdio wire, proved against the fake agent.
+ *
+ * SP-4's most expensive finding was that a leaked `CLAUDE_CODE_*` variable
+ * silently re-pointed the adapter at the *host's* auth channel — a failure that
+ * looks like a vendor billing error, not like a Tau defect. The allowlist below
+ * is the fix, and this is the test that keeps it honest.
+ */
+
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { ClientSideConnection } from '@agentclientprotocol/sdk';
+import type { Client } from '@agentclientprotocol/sdk';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { acpAgentProfiles, resolveAcpAdapters } from '#acp/registry.js';
+import { acpAdapterEnvironment, spawnAcpAdapter } from '#acp/spawn.js';
+import type { AcpAdapter, AcpWireFrame } from '#acp/index.js';
+
+const fakeAgent: AcpAdapter = {
+  id: 'codex',
+  displayName: 'Codex',
+  package: 'fixture',
+  version: '0.0.0',
+  configEnv: [],
+  modulePath: new URL('fixtures/fake-agent.ts', import.meta.url).pathname,
+};
+
+const roots: string[] = [];
+const spawned: Array<{ close(): void }> = [];
+
+afterEach(async () => {
+  for (const adapter of spawned.splice(0)) {
+    adapter.close();
+  }
+  await Promise.all(roots.splice(0).map(async (root) => rm(root, { recursive: true, force: true })));
+});
+
+const branch = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'tau-acp-spawn-'));
+  roots.push(root);
+  return root;
+};
+
+describe('acpAdapterEnvironment', () => {
+  it('tells an Electron host binary to run the adapter as Node, and adds nothing under plain Node', () => {
+    const base: NodeJS.ProcessEnv = { PATH: '/usr/bin' };
+    expect(acpAdapterEnvironment(base, { configEnv: [] })).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
+    Object.defineProperty(process.versions, 'electron', { value: '43.5.1', configurable: true });
+    try {
+      expect(acpAdapterEnvironment(base, { configEnv: [] })).toHaveProperty('ELECTRON_RUN_AS_NODE', '1');
+    } finally {
+      delete (process.versions as { electron?: string }).electron;
+    }
+  });
+
+  it('passes only allowlisted names and the adapter’s own config directory', () => {
+    const environment = acpAdapterEnvironment(
+      {
+        PATH: '/usr/bin',
+        HOME: '/home/tau',
+        XDG_CONFIG_HOME: '/home/tau/.config',
+        CODEX_HOME: '/home/tau/.codex',
+        GROK_HOME: '/home/tau/.grok',
+        CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/socket',
+        ANTHROPIC_API_KEY: 'sk-should-never-travel',
+        OPENAI_API_KEY: 'sk-should-never-travel',
+        XAI_API_KEY: 'sk-should-never-travel',
+        TAU_HOST_AGENT_TOKEN: 'admission-secret',
+        NODE_OPTIONS: '--import=./attacker.mjs',
+        AI_AGENT: 'yes',
+        BAGGAGE: 'trace',
+      },
+      { configEnv: ['GROK_HOME'] },
+    );
+
+    expect(environment).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/home/tau',
+      XDG_CONFIG_HOME: '/home/tau/.config',
+      GROK_HOME: '/home/tau/.grok',
+    });
+  });
+
+  it('passes the user’s own proxy and CA settings, and still no credential', () => {
+    /* Operator ruling 2026-09-03: without these an adapter behind a corporate
+     * proxy cannot reach its vendor at all, and a proxy URL is a network
+     * setting rather than a secret the X6 fence exists to hold back. */
+    const environment = acpAdapterEnvironment(
+      {
+        HTTP_PROXY: 'http://proxy.corp:3128',
+        HTTPS_PROXY: 'http://proxy.corp:3128',
+        NO_PROXY: 'localhost,127.0.0.1',
+        http_proxy: 'http://proxy.corp:3128',
+        https_proxy: 'http://proxy.corp:3128',
+        no_proxy: 'localhost',
+        SSL_CERT_FILE: '/etc/ssl/corp.pem',
+        SSL_CERT_DIR: '/etc/ssl/certs',
+        NODE_EXTRA_CA_CERTS: '/etc/ssl/corp-root.pem',
+        ANTHROPIC_AUTH_TOKEN: 'sk-should-never-travel',
+        TAU_HOST_AGENT_TOKEN: 'admission-secret',
+        AWS_SECRET_ACCESS_KEY: 'should-never-travel',
+      },
+      { configEnv: [] },
+    );
+
+    expect(Object.keys(environment).toSorted()).toEqual([
+      'HTTPS_PROXY',
+      'HTTP_PROXY',
+      'NODE_EXTRA_CA_CERTS',
+      'NO_PROXY',
+      'SSL_CERT_DIR',
+      'SSL_CERT_FILE',
+      'http_proxy',
+      'https_proxy',
+      'no_proxy',
+    ]);
+  });
+});
+
+describe('spawnAcpAdapter', () => {
+  it.each(['module', 'native'] as const)(
+    'drives a full ACP turn through a %s with a scrubbed environment',
+    async (transport) => {
+      const cwd = await branch();
+      const frames: AcpWireFrame[] = [];
+      const adapter = spawnAcpAdapter({
+        adapter:
+          transport === 'module'
+            ? fakeAgent
+            : {
+                id: 'grok',
+                displayName: 'Grok Build',
+                cli: process.execPath,
+                args: [new URL('fixtures/fake-agent.ts', import.meta.url).pathname],
+                configEnv: [],
+              },
+        cwd,
+        environment: { ...process.env, ANTHROPIC_API_KEY: 'sk-should-never-travel', TAU_HOST_AGENT_TOKEN: 'secret' },
+        onFrame: (frame) => frames.push(frame),
+      });
+      spawned.push(adapter);
+
+      const chunks: string[] = [];
+      const handler: Client = {
+        sessionUpdate: (params) => {
+          const { update } = params;
+          if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
+            chunks.push(update.content.text);
+          }
+        },
+        requestPermission: () => ({ outcome: { outcome: 'selected', optionId: 'allow' } }),
+      };
+      /* oxlint-disable-next-line typescript/no-deprecated -- the long-lived
+       * connection object is the shape SP-4 proved and the shape an always-on run
+       * needs; the replacement scopes the connection to one callback. */
+      const connection = new ClientSideConnection(() => handler, adapter.stream);
+
+      await connection.initialize({
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      });
+      const session = await connection.newSession({ cwd, mcpServers: [] });
+      const result = await connection.prompt({
+        sessionId: session.sessionId,
+        prompt: [{ type: 'text', text: 'write the file' }],
+      });
+
+      expect(result.stopReason).toBe('end_turn');
+      // Cwd confinement: the agent's own write landed in the branch, not the workspace.
+      await expect(readFile(join(cwd, 'hello.txt'), 'utf8')).resolves.toBe('write the file');
+
+      // Env scrub: the fake echoes the variable names it was actually handed.
+      const echoed = JSON.parse(chunks[0] ?? '{}') as { cwd?: string; env?: readonly string[] };
+      expect(echoed.cwd).toBe(cwd);
+      expect(echoed.env).not.toContain('ANTHROPIC_API_KEY');
+      expect(echoed.env).not.toContain('TAU_HOST_AGENT_TOKEN');
+      expect(echoed.env).toContain('PATH');
+
+      // Wire log: both directions were observed, and no credential is in them.
+      expect(frames.some((frame) => frame.direction === 'client->agent')).toBe(true);
+      expect(frames.some((frame) => frame.direction === 'agent->client')).toBe(true);
+      expect(frames.some((frame) => frame.frame.includes('sk-should-never-travel'))).toBe(false);
+    },
+    30_000,
+  );
+});
+
+describe.skipIf(process.platform === 'win32')('the pinned Claude adapter', () => {
+  it('starts the user’s own claude for a session, not the Agent SDK’s platform copy', async () => {
+    /* C2/P1: staged without its optional platform package, the adapter's SDK
+     * fails every `session/new` with "native binary not found" unless it is
+     * told which CLI to run. The stub records how it was started. */
+    const root = await branch();
+    const bin = join(root, 'bin');
+    const calls = join(root, 'calls.log');
+    await mkdir(bin);
+    await writeFile(join(bin, 'claude'), `#!/bin/sh\necho "$@" >> '${calls}'\necho '2.1.301 (stub)'\n`);
+    await chmod(join(bin, 'claude'), 0o755);
+    const environment = {
+      PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
+      HOME: root,
+      CLAUDE_CONFIG_DIR: root,
+    };
+    const { agents } = resolveAcpAdapters({
+      resolveFrom: new URL('../../../cli/src/commands/serve.ts', import.meta.url).href,
+      pins: acpAgentProfiles.filter((profile) => profile.id === 'claude'),
+      environment,
+    });
+    const [claude] = agents;
+    expect(claude?.executablePath).toBe(join(bin, 'claude'));
+    const adapter = spawnAcpAdapter({ adapter: claude ?? fakeAgent, cwd: root, environment });
+    spawned.push(adapter);
+    /* oxlint-disable-next-line typescript/no-deprecated -- the same long-lived connection the run uses. */
+    const connection = new ClientSideConnection(
+      () => ({ sessionUpdate: () => undefined, requestPermission: () => ({ outcome: { outcome: 'cancelled' } }) }),
+      adapter.stream,
+    );
+
+    await connection.initialize({
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+    });
+    /* The stub exits at once, so the session may fail; what matters is who ran. */
+    await connection.newSession({ cwd: root, mcpServers: [] }).catch(() => undefined);
+    await expect
+      .poll(async () => readFile(calls, 'utf8').catch(() => ''), { timeout: 20_000, interval: 100 })
+      .toContain('--output-format stream-json');
+    expect(adapter.stderr()).not.toContain('native binary not found');
+  }, 30_000);
+});
+
+describe.skipIf(process.platform === 'win32')('spawnAcpAdapter with a versioned fallback', () => {
+  /**
+   * A home holding one versioned tool that runs the fake agent, as a vendor app bundles its CLI.
+   *
+   * @param root - Home directory.
+   * @param version - Version directory to create.
+   * @returns The tool's absolute path.
+   */
+  const bundledTool = async (root: string, version: string): Promise<string> => {
+    const file = join(root, 'Vendor', version, 'bin', 'tool');
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, `#!/bin/sh\nexec '${process.execPath}' "$@"\n`);
+    await chmod(file, 0o755);
+    return file;
+  };
+
+  const versionedAdapter = (executablePath: string): AcpAdapter => ({
+    id: 'grok',
+    displayName: 'Grok Build',
+    cli: 'tool',
+    args: [new URL('fixtures/fake-agent.ts', import.meta.url).pathname],
+    configEnv: [],
+    fallbackExecutables: { [process.platform]: ['~/Vendor/*/bin/tool'] },
+    executablePath,
+    executableSource: 'fallback',
+  });
+
+  it('should locate a vanished * fallback again before it spawns', async () => {
+    const root = await branch();
+    const stale = await bundledTool(root, '1.0.0');
+    await rm(join(root, 'Vendor', '1.0.0'), { recursive: true });
+    const current = await bundledTool(root, '1.1.0');
+
+    const adapter = spawnAcpAdapter({
+      adapter: versionedAdapter(stale),
+      cwd: root,
+      environment: { PATH: '/usr/bin:/bin', HOME: root },
+    });
+    spawned.push(adapter);
+    /* oxlint-disable-next-line typescript/no-deprecated -- the same long-lived connection the run uses. */
+    const connection = new ClientSideConnection(
+      () => ({ sessionUpdate: () => undefined, requestPermission: () => ({ outcome: { outcome: 'cancelled' } }) }),
+      adapter.stream,
+    );
+
+    expect(adapter.child.spawnfile).toBe(current);
+    await expect(
+      connection.initialize({
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      }),
+    ).resolves.toMatchObject({ protocolVersion: 1 });
+  }, 30_000);
+
+  it('should throw CLI_NOT_FOUND, spawning nothing, when the fallback is gone and nothing replaces it', async () => {
+    const root = await branch();
+    const stale = await bundledTool(root, '1.0.0');
+    await rm(join(root, 'Vendor'), { recursive: true });
+
+    const spawnGone = (): unknown =>
+      spawnAcpAdapter({
+        adapter: versionedAdapter(stale),
+        cwd: root,
+        environment: { PATH: '/usr/bin:/bin', HOME: root },
+      });
+
+    expect(spawnGone).toThrow(/is gone\. The tool CLI was not found on PATH/u);
+    expect(spawnGone).toThrow(expect.objectContaining({ code: 'CLI_NOT_FOUND' }));
+  });
+});

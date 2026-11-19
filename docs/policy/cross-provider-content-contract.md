@@ -1,90 +1,117 @@
 ---
 title: 'Cross-Provider Content Contract Policy'
-description: 'Persistence and API rules for LangChain V1 standard assistant content blocks across model providers'
+description: 'Portable assistant history, provider-boundary projection, and lossless reasoning/tool metadata across supported model providers'
 status: active
 created: '2026-05-02'
-updated: '2026-05-31'
+updated: '2026-11-10'
 related:
   - docs/policy/interrupted-tool-call-contract.md
+  - docs/policy/chat-request-config-policy.md
   - docs/research/cross-provider-thinking-block-portability.md
+  - docs/research/provider-reasoning-replay-contract.md
   - docs/research/langchain-v1-tool-call-roundtrip-regression.md
   - docs/policy/testing-policy.md
+  - docs/research/project-chat-draft-persistence-blueprint.md
 ---
 
 # Cross-Provider Content Contract Policy
 
-Prescriptive rules for how the Tau API represents assistant reasoning and other structured content when users switch between LLM providers mid-thread.
+Tau stores portable agent events and projects them to a provider's native wire format only at the model boundary. CAD execution runs in `packages/agent-host`; `apps/libs/api-llm-gateway` authenticates and proxies model requests without becoming the owner of assistant-message conversion.
 
 ## Rationale
 
-Provider-native content blocks (for example Anthropic extended-thinking `thinking`, `redacted_thinking`, and cache-control `compaction` payloads) are valid only at that provider's HTTP boundary. LangGraph checkpoints serialize whatever shape the active `BaseChatModel` emitted. Without a single interchange format, replaying history to another provider causes hard failures (for example Google Gemini rejecting `type: "thinking"` during message formatting).
-
-LangChain 1.x defines **V1 standard content blocks** (`{ type: "reasoning", reasoning, signature? }`, tool-call blocks, multimodal blocks). With `outputVersion: "v1"`, models persist portable reasoning; each provider's formatter re-emits native shapes only when appropriate.
-
-This policy binds the API to that regime and names the one middleware repair surface for legacy checkpoints.
+Provider-native thinking blocks, signatures, response item IDs, and tool-call encodings cannot be replayed blindly to another provider. Earlier API middleware repaired LangChain checkpoints after persistence. That middleware and checkpoint architecture no longer serves CAD turns. The current contract preserves a provider-neutral transcript plus explicitly labeled native metadata, then lets the selected portable-host codec perform the final projection.
 
 ## Rules
 
-### 1. Prefer V1 standard outputs on every supported chat model
+### 1. Persist the portable event-log shape
 
-All chat model classes constructed in `apps/api/app/api/providers/provider.service.ts` MUST set `outputVersion: "v1"` once the provider's LangChain integration supports the V1 translator for that stack.
+Store assistant history as `ProviderMessage` and event-log records from `packages/agent-host/src/log/event-types.ts`. Preserve stable event IDs, roles, portable content, tool-call identity, and `ProviderMessageMetadata` when translating to or from the Pi runtime.
 
-**Why**: New turns land in Postgres checkpoints in a shape every other provider adapter understands.
+Do not persist an SDK model object, LangChain message instance, or provider HTTP body as the canonical thread record.
 
-### 2. `createCrossProviderContentNormalizerMiddleware` is the sole legacy repair site
+Persist user attachments by reference. The durable block is `{ type: 'file-ref', path, mimeType, byteLength?, filename? }` (`FileRefContentBlock`), where `path` is `attachments/<64 hex>.<jpg|png|webp|gif|pdf>` relative to the chat directory. Write `byteLength` only when the producer knows it; never fabricate one. Keep reading the legacy inline `{ type: 'image', mimeType, data }` block forever, and never rewrite existing rows into the new shape.
 
-Inbound `wrapModelCall` MUST normalize persisted foreign shapes before provider formatting:
+### 2. Keep provider-native metadata labeled and lossless
 
-- Anthropic-native `thinking` → V1 `reasoning` (preserve `signature` only when the **target** provider is Anthropic).
-- `redacted_thinking` and Anthropic `compaction` blocks → `{ type: "non_standard", value: <original> }`.
-- Strip non-portable `signature` / `thoughtSignature` fields from `reasoning` blocks when the target provider is not Anthropic.
-- **Target `vertexai`**: strip tool-call content blocks (`tool_use`, `tool_call`, `tool_call_chunk`, `input_json_delta`, `server_tool_use`) from `AIMessage.content`. Google reads `message.tool_calls` only; content blocks of those types throw `CrossProviderContentError` before the API is contacted.
-- **Target `anthropic`**: heal empty `tool_call` / `tool_use` block args from the matching `message.tool_calls` entry (streaming merge can leave `args: ''` while `tool_calls` holds the parsed object).
-- **Target `openai`**: (a) heal empty `tool_call` block args from `message.tool_calls` — the Responses v1 converter formats tool calls from the content block (`convertFunctionCall` reads `tool_call.args`), so empty args would emit an invalid `arguments: ""`; (b) drop `reasoning` blocks that lack a valid id (see Rule 6); (c) rewrite each V1 assistant `text` block into a `non_standard` block whose value is the native Responses item `{ type: "message", role: "assistant", content: [{ type: "output_text", text, annotations: [] }] }`, and set `response_metadata.model_provider = "openai"`. Tool-call content blocks are **kept** (the Responses v1 converter builds `function_call` items from them, never from `message.tool_calls`).
-  - The OpenAI Responses v1 converter (`convertStandardContentMessageToResponsesInput`) always emits `input_text` for `text` blocks regardless of role, which the API rejects for the assistant role. Its only verbatim passthrough is the `non_standard` branch, gated by `isResponsesMessage` (`model_provider === "openai"`). This rewrite keeps the load-bearing `output_version: "v1"` flag intact (no clearing) and routes the assistant text through that sanctioned passthrough. `model_provider` normalization to the active target is the documented gate enabling native-item passthrough; its only effect in the send path is to enable the `non_standard` branch. Because flipping it also un-gates foreign `non_standard` wrappers (Anthropic `redacted_thinking` / `compaction`, which are not valid Responses items), those are dropped here — matching the prior effective behaviour where the gate already discarded them for OpenAI targets.
+Preserve signed reasoning payloads, provider response item IDs, and other native replay metadata under their provider-labeled metadata channel. A cross-provider turn may omit native metadata that the target cannot consume, but must not erase it from the durable source record.
 
-**Why**: Checkpoints written before Rule 1 shipped, or emitted by providers still on v0 shapes, must not wedge a thread. Tool-call blocks are both cross-provider hazards (Anthropic `tool_use` replayed to Google) and intra-provider V1 round-trip hazards (empty args on Anthropic and OpenAI, `input_text` on OpenAI). The OpenAI rewrite is a deliberate, no-fork middleware band-aid: the upstream `input_text`-for-assistant bug is unfixed in the latest released `@langchain/openai` and on `main` (the roll-forward to a fixed version was blocked — see the research doc), so we repair at the one centralized site rather than forking the package or clearing `output_version`.
+Never fabricate, rewrite, or transplant a cryptographic signature between providers. The codec for the provider that issued the signature owns its replay.
 
-### 3. No provider-shape branching in UI or agent tools
+Persist assistant text and reasoning exactly as the provider wrote them. A signed reasoning block is bound to those bytes and to every byte before it, so a stored rewrite is an edit that every later request replays. Normalise for display in the renderer (`normalizeLatexDelimiters`), never in the log.
 
-Clients render AI SDK / `MyUIMessage` parts only. They MUST NOT attempt to rewrite LangChain provider-native blocks or heal cross-provider errors.
+### 3. Project only at the selected provider boundary
 
-**Why**: Correctness is owned by the API pipeline (normalizer + sanitizers + LangChain formatters). Duplicating logic in the UI guarantees drift.
+Select the honest provider wire in `packages/agent-host/src/transport/gateway-model-transport.ts` before network I/O:
 
-### 4. Signatures stay provider-symmetric
+- Anthropic uses the Anthropic codec;
+- OpenAI Responses uses the OpenAI Responses codec;
+- OpenAI-compatible providers use the compatible chat-completions codec only when the catalog declares that wire.
 
-Thinking signatures are opaque to other providers. The normalizer preserves them **only** when the active target model is Anthropic; otherwise they are omitted from `reasoning` blocks.
+Reject unsupported provider/wire combinations before fetch. Do not silently fall back to another provider contract.
 
-**Why**: Matches upstream `_formatStandardContent` gating and avoids leaking unusable cryptographic material across vendors.
+Materialisation and the pi `onPayload` document rewrite are the only seam where references become bytes, under this rule and Rule 4:
 
-### 5. Reasoning traces are dropped on cross-provider hops, not text-downgraded
+- `materializeAttachments` (`packages/agent-host/src/harness/session-record.ts`) turns each user `file-ref` into a transient copy before history hydration and before each new user turn enters the request, and before the ACP prompt is built (`packages/host/src/acp/run.ts`). An image becomes a base64 pi `image` block. A PDF becomes a standalone sentinel text block (`documentSentinel`) plus an entry in the request's `documents` side table; ACP receives it as a `resource` block with a base64 `blob`. Absent bytes omit the block and log a warning; they never throw.
+- `rewriteDocuments` (`packages/agent-host/src/transport/document-payload.ts`) runs in `onPayload` for every adapter call and replaces each standalone sentinel with the wire's native block at the same position: Anthropic `document`, OpenAI Responses `input_file`, OpenAI Completions `file`. On Anthropic, it carries over the prompt-cache `cache_control` marker.
+- **Sentinel invariant.** A sentinel never reaches a provider. A standalone sentinel without a side-table entry, or any sentinel sequence left after the rewrite, fails the request with `INVALID_REQUEST` before `fetch`. A sentinel embedded in larger text, such as compaction output that serialises history, becomes the neutral marker `[attached document: <filename>]`, or `[attached document]` when no name is known, and is never thrown.
+- Never patch `@earendil-works/pi-ai` for a wire need. Extend it on its `fetch` and `onPayload` seams. Vertex AI Gemini thought and signature mapping lives in `packages/agent-host/src/transport/vertex-completions-shim.ts`.
 
-When switching away from a provider that produced reasoning, downstream requests MUST NOT synthesize fake user-visible prose from reasoning payloads. Portable `reasoning` blocks may be ignored or mapped to provider-specific thought channels by the active formatter.
+### 4. Normalize prompt blocks without mutating durable history
 
-**Why**: Prevents accidental disclosure patterns and keeps telemetry/tool semantics honest.
+Provider projection may remove empty blocks or content scopes unsupported by the target. Perform that normalization, including attachment materialisation, on the outbound projection. Keep the event log unchanged so a later provider can still use the original portable or native metadata.
 
-### 6. Replayed OpenAI Responses items never carry an empty-string `id`
+For OpenAI-compatible providers that expose `reasoning_content`, preserve its round trip through the portable metadata channel. For Anthropic, preserve signed thinking and native tool blocks when the replay remains on the model that minted them and Rule 9 holds.
 
-Every item emitted to the OpenAI Responses API MUST carry either a valid `id`/`call_id` (matching `[A-Za-z0-9_-]+`) or none at all. An empty-string `id` is rejected (`400 Invalid 'input[n].id': ''`).
+### 5. Keep tool calls structurally paired
 
-The one place this leaks is `reasoning`: `convertResponsesMessageToAIMessage` persists an OpenAI reasoning item as a lossy V1 `{ type: "reasoning", reasoning }` block that **drops the real `rs_` id** (the full item is retained only in `additional_kwargs.reasoning`). On replay, `convertReasoningBlock` hardcodes `id: block.id ?? ""` with no hook to omit it, so an id-less block becomes a reasoning item with `id: ""`. Because a reasoning item is only validly replayable carrying its original id, the normalizer **drops `reasoning` blocks that lack a valid id** for the OpenAI target (reasoning blocks that do carry a valid id pass through unchanged). This is consistent with Rule 5: reasoning traces are dropped across turns, never fabricated or downgraded.
+Preserve each tool-call ID, name, JSON input, and result pairing across codec translation. Do not infer a different call from display text, position alone, or a provider-private block when the portable call record exists. Treat a provider-supplied tool-call ID as unique within one model invocation and preserve that ID across every streamed chunk for the same call. Never reuse one call ID for distinct calls.
 
-**Why**: An id-less reasoning content block carries no replayable reasoning state (no id, no encrypted content) — only summary text. Synthesizing a reasoning item from it (with an empty or omitted id) is either rejected by the API or a fabricated trace. Dropping it is the only honest, non-fork repair, and it keeps `output_version: "v1"` intact.
+Interrupted or incomplete pairs follow [Interrupted Tool-Call Contract Policy](interrupted-tool-call-contract.md).
 
-## Scope
+### 6. Keep the API gateway byte-transparent
 
-**In scope**: `apps/api` chat agent construction, LangChain middleware ordering, provider configuration.
+`apps/libs/api-llm-gateway` may authenticate, authorize, meter, select an allowed upstream, and validate the response media type. It must pass the selected provider request and SSE response without performing CAD transcript conversion or rewriting content blocks. Request-shape validation (`apps/api/app/api/billing/billable-model-request.ts`) admits exactly the content blocks the codecs emit. That includes the three document blocks, each strict, with base64 PDF data bounded to 16 MiB and an optional `cache_control` on the Anthropic block. Images are bounded to 4 MiB, other strings to 4,000,000 characters, and the serialized request to 32,000,000 bytes. The transport keeps the newest attachments within 24,000,000 base64 characters per request (`fitAttachmentBudget` in `packages/agent-host/src/transport/document-payload.ts`) and replaces older ones with `[attachment omitted: <name>]`, so a chat whose history holds more attachment bytes than one request can carry keeps working.
 
-**Out of scope**: UI persistence of `MyUIMessage` parts (already normalized by API responses), offline checkpoint migrations (normalizer handles reads), upstream LangChain releases.
+Strip SDK-only, browser-only, authentication, cookie, and hop-by-hop headers at the browser-host gateway boundary. Never forward user credentials to a model provider.
 
-## Verification
+### 7. Keep provider selection separate from execution placement
 
-- Unit: `apps/api/app/api/chat/middleware/cross-provider-content-normalizer.middleware.test.ts`
-- Hermetic replay: `apps/api/app/api/chat/cross-provider-tool-call-replay.test.ts` (opus-style `tool_use` history → `vertexai`; Anthropic empty-args heal; OpenAI same- and cross-provider replay asserted against the real `convertMessagesToResponsesInput` payload — assistant `output_text` not `input_text`, `output_version` preserved, healed `function_call.arguments`, and **no emitted item carries an empty `id`/`call_id`** for a reasoning + text + tool_calls turn)
-- Optional real-LLM: `apps/api/app/testing/cross-provider-thinking.integration.test.ts` (`describe.skip` in CI)
+Model provider and model identity select the model codec. The `execution` discriminator in the CAD request selects `tau`, `acp`, or `paseo` placement. Do not derive one from the other or use an HTTP API placement to revive the removed server-side CAD graph.
 
-## References
+### 8. Test exact replay obligations
 
-- Investigation: `docs/research/cross-provider-thinking-block-portability.md`
-- LangChain V1 standard content overview: [LangChain standard message content](https://blog.langchain.com/standard-message-content/)
-- Related persistence contract: `docs/policy/interrupted-tool-call-contract.md`
+Contract tests must cover same-provider replay, cross-provider replay, tool-call pairing, and provider metadata preservation. Include at least:
+
+- OpenAI-compatible `reasoning_content` round trips;
+- Anthropic signed thinking and native tool blocks;
+- rejection of unsupported wires before fetch;
+- preservation of the durable event log after target-specific projection;
+- each document wire shape, and a sentinel leak or missing side-table entry failing before fetch;
+- Rule 9 on every wire family: stale reasoning left out under a changed prefix, the durable rows byte-identical after projection.
+
+Use fixture structure assertions and captured wire requests; snapshots alone are insufficient for these invariants.
+
+### 9. Replay native reasoning only under the prefix that minted it
+
+A provider binds native reasoning (a thinking block, a reasoning item, a tool call's thought signature) to the request prefix it was produced under: the model, the system text, the tool definitions and every earlier message. Anthropic refuses a replayed block whose prefix changed; other providers drop it or ignore it.
+
+- **Stamp every generation request.** `stampPrefix` (`packages/agent-host/src/transport/prefix-stamp.ts`) computes a chained digest of that prefix, with native reasoning left out, and the reply's row persists it as `metadata.prefix`.
+- **One rule, in the transport, the same on every wire.** A same-model assistant row replays its native reasoning only when the chain at its position equals the digest the row recorded. Every other same-model row, and a row with no stamp, is sent without it. Another model's row stays under Rule 2.
+- **Leave stale reasoning out; do nothing else to it.** Never render it as text, and never change the durable row.
+- **Do not strip by cause.** Compaction, clearing, a mode change or a new feature that edits history adds no strip of its own. The digest sees the change, whatever made it.
+- **Move the epoch with the rules.** Bump `prefixCodecEpoch` when the digest's composition, the codec version or the replay rule changes, so rows stamped under other rules stop matching.
+- **Provider controls are catalog facts, read per model.** `support.reasoning.replayBinding` says the provider takes the control over a mismatched block: the transport asks it to drop and report in production and to refuse in every live suite. `support.reasoning.effortInTranscript` says the provider reads the reasoning level from the transcript. A client sends either form only for a row that declares it. These two are the only per-provider differences in the replay path.
+- **A provider-reported drop is a defect.** The rule leaves a stale block out before the provider sees it. A reported drop is recorded as an `unsanctioned` prefix break ([Context Engineering Policy](context-engineering-policy.md), cache rule 8).
+
+**Why**: A replay refused for a changed prefix fails the turn, and resuming repeats it. A rule keyed on the prefix itself needs no knowledge of what changed it, so a future edit cannot bring the failure back.
+
+## Ownership
+
+- Portable message and event schema: `packages/agent-host/src/log/event-types.ts`
+- Runtime hydration and extraction: `packages/agent-host/src/harness/session-record.ts`
+- Provider selection and codecs: `packages/agent-host/src/transport/gateway-model-transport.ts`
+- Prefix stamp and replay rule: `packages/agent-host/src/transport/prefix-stamp.ts`; stamp vocabulary: `packages/agent-host/src/log/prefix-stamp.ts`
+- Document rewrite and Vertex response shim: `packages/agent-host/src/transport/document-payload.ts`, `packages/agent-host/src/transport/vertex-completions-shim.ts`
+- Normalized model stream port: `packages/agent-host/src/waist/ports.ts`
+- Authenticated byte proxy: `apps/libs/api-llm-gateway`

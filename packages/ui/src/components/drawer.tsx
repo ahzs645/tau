@@ -1,0 +1,788 @@
+import { useResponsiveSurfaceContainer } from '#hooks/responsive-surface.js';
+import * as React from 'react';
+import { Drawer as DrawerPrimitive } from 'vaul';
+import { Button } from '#components/button.js';
+import { headingVariants } from '#components/heading.variants.js';
+import { cn } from '#utils/cn.js';
+
+const DrawerContext = React.createContext(false);
+
+type SnapPoint = number | string;
+type ActiveSnapPoint = React.ComponentProps<typeof DrawerPrimitive.Root>['activeSnapPoint'];
+type DrawerSnapState = {
+  readonly points: SnapPoint[];
+  readonly names: readonly string[] | undefined;
+  readonly active: ActiveSnapPoint;
+  readonly setActive: (point: ActiveSnapPoint) => void;
+  /** Whether only the grabber drags the sheet (vaul's `handleOnly`), so a grab strip widens its target. */
+  readonly isHandleOnly: boolean;
+};
+const DrawerSnapContext = React.createContext<DrawerSnapState | undefined>(undefined);
+
+type DrawerDetentNames = {
+  /**
+   * The spoken name of each detent, from the lowest, when its place alone does not say it: a drawer whose lowest
+   * detent is half the screen names it `Half`. One name per snap point.
+   */
+  readonly detentNames?: readonly string[];
+};
+
+function useDrawerSnapState(
+  properties: React.ComponentProps<typeof DrawerPrimitive.Root>,
+  names: readonly string[] | undefined,
+): DrawerSnapState {
+  const [localPoint, setLocalPoint] = React.useState<ActiveSnapPoint>(properties.snapPoints?.[0] ?? null);
+  const setActive = React.useCallback(
+    (point: ActiveSnapPoint) => {
+      setLocalPoint(point);
+      properties.setActiveSnapPoint?.(point ?? null);
+    },
+    [properties.setActiveSnapPoint],
+  );
+  return {
+    points: properties.snapPoints ?? [],
+    names,
+    isHandleOnly: properties.handleOnly === true,
+    active: properties.activeSnapPoint === undefined ? localPoint : properties.activeSnapPoint,
+    setActive,
+  };
+}
+
+/** A visual viewport shorter than the layout viewport by less than this is browser chrome, not a keyboard. CSS pixels. */
+const softKeyboardThreshold = 120;
+
+/** The slice of the layout viewport the user can see. CSS pixels, layout-viewport coordinates. */
+type VisibleFrame = { readonly top: number; readonly bottom: number };
+
+let visibleFrame: VisibleFrame | undefined;
+
+/* A software keyboard shrinks only the visual viewport, and iOS also pans it down to reveal the
+   focused field, so what the user sees is `offsetTop` to `offsetTop + height`. A pinch zoom shrinks
+   it too, so a scaled viewport never reads as a keyboard. */
+function readKeyboardFrame(): VisibleFrame | undefined {
+  const viewport = globalThis.visualViewport;
+  if (!viewport || viewport.scale > 1.01 || globalThis.innerHeight - viewport.height < softKeyboardThreshold) {
+    visibleFrame = undefined;
+    return visibleFrame;
+  }
+  const top = Math.round(viewport.offsetTop);
+  const bottom = Math.round(viewport.offsetTop + viewport.height);
+  if (visibleFrame?.top !== top || visibleFrame.bottom !== bottom) {
+    visibleFrame = { top, bottom };
+  }
+  return visibleFrame;
+}
+
+function subscribeKeyboardFrame(onChange: () => void): () => void {
+  const viewport = globalThis.visualViewport;
+  viewport?.addEventListener('resize', onChange);
+  viewport?.addEventListener('scroll', onChange);
+  return () => {
+    viewport?.removeEventListener('resize', onChange);
+    viewport?.removeEventListener('scroll', onChange);
+  };
+}
+
+const readNoKeyboard = (): undefined => undefined;
+
+const nonTextInputTypes = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+]);
+
+function isTextEntry(target: EventTarget): boolean {
+  if (target instanceof HTMLInputElement) {
+    return !nonTextInputTypes.has(target.type);
+  }
+  return target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
+}
+
+/**
+ * Reports whether the caller is rendered inside a {@link Drawer}.
+ *
+ * @public
+ * @example <caption>Adapt a component to a drawer context.</caption>
+ * ```typescript
+ * import { useIsInsideDrawer } from '@taucad/ui/components/drawer';
+ *
+ * const DrawerAware = () => useIsInsideDrawer() ? 'drawer' : 'page';
+ * ```
+ */
+function useIsInsideDrawer(): boolean {
+  return React.useContext(DrawerContext);
+}
+
+/**
+ * Owns the open state and gesture lifecycle for a drawer. `repositionInputs` defaults to `false`:
+ * {@link DrawerContent} keeps a focused field above the keyboard instead.
+ *
+ * @public
+ * @example <caption>Open a drawer by default.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { Drawer } from '@taucad/ui/components/drawer';
+ *
+ * createElement(Drawer, { defaultOpen: true });
+ * ```
+ */
+function Drawer({
+  repositionInputs = false,
+  detentNames,
+  ...properties
+}: React.ComponentProps<typeof DrawerPrimitive.Root> & DrawerDetentNames): React.JSX.Element {
+  const container = useResponsiveSurfaceContainer();
+  const snaps = useDrawerSnapState(properties, detentNames);
+  return (
+    // oxlint-disable-next-line react/jsx-boolean-value -- we want to explicitly set the value to true
+    <DrawerContext.Provider value={true}>
+      {/* DrawerContent keeps a focused field above the keyboard. Vaul's own repositioning moves the
+          drawer a second time on top of iOS's pan, and with snap points it counts the snap offset
+          twice, so it pushes the field off screen. */}
+      <DrawerSnapContext.Provider value={snaps}>
+        <DrawerPrimitive.Root
+          data-slot='drawer'
+          container={container}
+          repositionInputs={repositionInputs}
+          {...properties}
+          activeSnapPoint={snaps.active ?? null}
+          setActiveSnapPoint={snaps.setActive}
+        />
+      </DrawerSnapContext.Provider>
+    </DrawerContext.Provider>
+  );
+}
+
+/**
+ * Creates a drawer nested inside another drawer.
+ *
+ * @public
+ * @example <caption>Render a nested drawer root.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerNestedRoot } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerNestedRoot);
+ * ```
+ */
+function DrawerNestedRoot({
+  repositionInputs = false,
+  detentNames,
+  ...properties
+}: React.ComponentProps<typeof DrawerPrimitive.NestedRoot> & DrawerDetentNames): React.JSX.Element {
+  const container = useResponsiveSurfaceContainer();
+  const snaps = useDrawerSnapState(properties, detentNames);
+  return (
+    <DrawerSnapContext.Provider value={snaps}>
+      <DrawerPrimitive.NestedRoot
+        data-slot='drawer-nested-root'
+        container={container}
+        repositionInputs={repositionInputs}
+        {...properties}
+        activeSnapPoint={snaps.active ?? null}
+        setActiveSnapPoint={snaps.setActive}
+      />
+    </DrawerSnapContext.Provider>
+  );
+}
+
+/**
+ * Opens the nearest drawer when activated.
+ *
+ * @public
+ * @example <caption>Render a drawer trigger.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerTrigger } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerTrigger, null, 'Details');
+ * ```
+ */
+function DrawerTrigger({ ...properties }: React.ComponentProps<typeof DrawerPrimitive.Trigger>): React.JSX.Element {
+  return <DrawerPrimitive.Trigger data-slot='drawer-trigger' {...properties} />;
+}
+
+/**
+ * Portals drawer content into the document body.
+ *
+ * @public
+ * @example <caption>Render content through the drawer portal.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerPortal } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerPortal, null, createElement('div'));
+ * ```
+ */
+function DrawerPortal({ ...properties }: React.ComponentProps<typeof DrawerPrimitive.Portal>): React.JSX.Element {
+  return <DrawerPrimitive.Portal data-slot='drawer-portal' {...properties} />;
+}
+
+/**
+ * Closes the nearest drawer when activated.
+ *
+ * @public
+ * @example <caption>Render a drawer close control.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerClose } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerClose, null, 'Done');
+ * ```
+ */
+function DrawerClose({ ...properties }: React.ComponentProps<typeof DrawerPrimitive.Close>): React.JSX.Element {
+  return <DrawerPrimitive.Close data-slot='drawer-close' {...properties} />;
+}
+
+/**
+ * The spoken name of a detent: the drawer's own name for it when it gives one (`detentNames`), otherwise by its place:
+ * the lowest is the peek, the tallest is full, and the one between three is half. Names, not percentages, so the same
+ * detent reads the same at every viewport height.
+ *
+ * @param names - The drawer's names for its detents, from the lowest, if it names them.
+ * @param index - The detent's place, from the lowest.
+ * @param count - How many detents the drawer has.
+ * @returns The detent's name, such as Peek, Half or Full.
+ */
+function detentName(names: readonly string[] | undefined, index: number, count: number): string {
+  const named = names?.[index];
+  if (named !== undefined) {
+    return named;
+  }
+  if (index === 0) {
+    return 'Peek';
+  }
+  if (index === count - 1) {
+    return 'Full';
+  }
+  return count === 3 ? 'Half' : `Detent ${index + 1} of ${count}`;
+}
+
+/**
+ * Supplies Vaul's draggable drawer handle. For multiple snap points it implements the APG slider pattern:
+ * arrows step, Home/End select the extremes, and Enter/Space cycle without dismissing. The current detent is announced
+ * by name (Peek, Half, Full). A tap never changes the detent (`preventCycle`): the grabber's target reaches over a grab
+ * strip's title, and tapping a title never moves the sheet (W1). Dragging and the keys do.
+ *
+ * @public
+ * @example <caption>Render a drawer handle.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerHandle } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerHandle);
+ * ```
+ */
+function DrawerHandle({
+  onKeyDown,
+  preventCycle = true,
+  ...properties
+}: React.ComponentProps<typeof DrawerPrimitive.Handle>): React.JSX.Element {
+  const snaps = React.useContext(DrawerSnapContext);
+  const adjustable = snaps !== undefined && snaps.points.length > 1;
+  const index = adjustable ? Math.max(0, snaps.points.indexOf(snaps.active ?? snaps.points[0]!)) : 0;
+  return (
+    <DrawerPrimitive.Handle
+      data-slot='drawer-handle'
+      preventCycle={preventCycle}
+      {...(adjustable
+        ? {
+            role: 'slider',
+            tabIndex: 0,
+            'aria-hidden': false,
+            'aria-label': 'Drawer height',
+            'aria-orientation': 'vertical',
+            'aria-valuemin': 1,
+            'aria-valuemax': snaps.points.length,
+            'aria-valuenow': index + 1,
+            'aria-valuetext': detentName(snaps.names, index, snaps.points.length),
+          }
+        : {})}
+      {...properties}
+      onKeyDown={(event) => {
+        onKeyDown?.(event);
+        if (event.defaultPrevented || !adjustable) {
+          return;
+        }
+        const next =
+          event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? snaps.points.length - 1
+              : event.key === 'ArrowUp' || event.key === 'ArrowRight'
+                ? Math.min(index + 1, snaps.points.length - 1)
+                : event.key === 'ArrowDown' || event.key === 'ArrowLeft'
+                  ? Math.max(index - 1, 0)
+                  : event.key === 'Enter' || event.key === ' '
+                    ? (index + 1) % snaps.points.length
+                    : undefined;
+        if (next === undefined) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        snaps.setActive(snaps.points[next]);
+      }}
+    />
+  );
+}
+
+/**
+ * Marks the header row directly under a sheet's grabber as its grab strip (I3, D4). In a sheet only the grabber drags
+ * (`handleOnly`), the grabber's target then reaches down over the strip, so dragging anywhere on the strip moves the
+ * sheet, while the strip paints above that target and lets only its controls (buttons, links, fields) take a pointer:
+ * they stay ordinary controls, and a tap on them never starts a drag. The strip is as tall as a drawer bar
+ * (`--drawer-grab-strip-height`, 60px), the reach the target takes.
+ *
+ * @public
+ * @example <caption>Make a sheet's header its grab strip.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { drawerGrabStrip } from '@taucad/ui/components/drawer';
+ *
+ * createElement('div', { ...drawerGrabStrip, children: 'Parameters' });
+ * ```
+ */
+const drawerGrabStrip = {
+  'data-drawer-grab-strip': '',
+  className: cn(
+    'relative z-2 h-(--drawer-grab-strip-height) pointer-events-none',
+    '[&_:is(button,a,input,select,textarea,[role=button],[role=combobox],[tabindex])]:pointer-events-auto',
+  ),
+} as const;
+
+/**
+ * The grabber row: an 8px row whose bar sits 4px below the sheet's edge and ends where the row does, so no empty band
+ * separates it from the header below. A header's actions then keep the same space above them as below. The target
+ * starts 8px above the sheet's edge, so content docked above a sheet keeps 8px clear of it, and spans the row; in a
+ * sheet only the grabber drags, it also reaches down over a grab strip ({@link drawerGrabStrip}) under the row
+ * (`--drawer-handle-reach`), 76px in all, without a pixel of space of its own. It paints above the sheet's content
+ * (`z-1`) and under the strip (`z-2`), whose controls alone take a pointer there.
+ */
+function DrawerHandleIndicator({ className, ...properties }: React.ComponentProps<'div'>): React.JSX.Element {
+  return (
+    <div className='relative hidden h-(--drawer-handle-height) shrink-0 group-data-[vaul-drawer-direction=bottom]/drawer-content:block has-[:focus-visible]:focus-outline'>
+      <DrawerHandle className='absolute! inset-x-0! -top-2! bottom-[calc(-1*var(--drawer-handle-reach))]! z-1 m-0! h-auto! w-full! opacity-0! [&>[data-vaul-handle-hitarea]]:size-full!' />
+      <div
+        data-slot='drawer-handle-indicator'
+        className={cn(
+          'pointer-events-none absolute inset-x-0 bottom-0 mx-auto h-1 w-15 rounded-full bg-accent',
+          className,
+        )}
+        {...properties}
+      />
+    </div>
+  );
+}
+
+/**
+ * Dims the page behind an open drawer.
+ *
+ * @public
+ * @example <caption>Render the drawer overlay.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerOverlay } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerOverlay);
+ * ```
+ */
+function DrawerOverlay({
+  className,
+  ...properties
+}: React.ComponentProps<typeof DrawerPrimitive.Overlay>): React.JSX.Element {
+  return (
+    <DrawerPrimitive.Overlay
+      data-slot='drawer-overlay'
+      className={cn(
+        'fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0',
+        className,
+      )}
+      {...properties}
+    />
+  );
+}
+
+/**
+ * Renders the draggable drawer surface. While a field inside a bottom drawer has the software
+ * keyboard, the drawer fills the part of the screen the keyboard leaves visible, so the field
+ * stays in view, and it exposes that state as `data-keyboard="open"`.
+ *
+ * @public
+ * @example <caption>Render drawer content.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerContent } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerContent, null, 'Project details');
+ * ```
+ */
+function DrawerContent({
+  className,
+  overlayClassName,
+  children,
+  style,
+  onFocus,
+  onBlur,
+  ...properties
+}: React.ComponentProps<typeof DrawerPrimitive.Content> & {
+  /** Classes for the overlay behind the drawer, such as a z-index that matches the content's. */
+  readonly overlayClassName?: string;
+}): React.JSX.Element {
+  const keyboardFrame = React.useSyncExternalStore(subscribeKeyboardFrame, readKeyboardFrame, readNoKeyboard);
+  const isHandleOnly = React.useContext(DrawerSnapContext)?.isHandleOnly === true;
+  const [isEditing, setIsEditing] = React.useState(false);
+  const keyboard = isEditing ? keyboardFrame : undefined;
+
+  /* Fitting the drawer to the frame can leave the field below the fold of a scrolling panel. */
+  React.useEffect(() => {
+    if (keyboard && document.activeElement instanceof HTMLElement) {
+      document.activeElement.scrollIntoView({ block: 'nearest' });
+    }
+  }, [keyboard]);
+
+  const frameStyle: Record<`--${string}`, string> | undefined = keyboard
+    ? {
+        '--keyboard-frame-bottom': `${globalThis.innerHeight - keyboard.bottom}px`,
+        '--keyboard-frame-height': `${keyboard.bottom - keyboard.top}px`,
+      }
+    : undefined;
+
+  return (
+    <DrawerPortal data-slot='drawer-portal'>
+      <DrawerOverlay className={overlayClassName} />
+      <DrawerPrimitive.Content
+        data-slot='drawer-content'
+        data-keyboard={keyboard ? 'open' : undefined}
+        style={frameStyle ? { ...style, ...frameStyle } : style}
+        className={cn(
+          'group/drawer-content fixed z-50 flex h-auto flex-col bg-background [--drawer-handle-height:calc(var(--spacing)*2)]',
+          /* A touch past concentric with the header's close button (its 22px radius plus its 16px inset). The edge's
+             border runs down its sides too, so the hairline follows the rounded corners instead of tapering out. */
+          '[--drawer-radius:calc(var(--spacing)*11)]',
+          /* Every drawer's header row (`DrawerBar`) is 60px: a 44px action with 8px above and below. A grab strip is one. */
+          '[--drawer-bar-height:calc(var(--spacing)*15)] [--drawer-grab-strip-height:var(--drawer-bar-height)] [--drawer-handle-reach:0px]',
+          /* Only where nothing else drags the sheet does the grabber's target reach over a grab strip. */
+          isHandleOnly && 'has-[[data-drawer-grab-strip]]:[--drawer-handle-reach:var(--drawer-grab-strip-height)]',
+          'select-none',
+          /* A field is editable text even inside an unselectable drawer: WebKit inherits
+             user-select, and iOS will not place a caret in an editor under user-select: none. */
+          '[&_:is(input,textarea,[contenteditable=true])]:select-text',
+          /* While a field has the keyboard, a bottom drawer fills the visible frame above it, at
+             any snap point; the !s outrank the inline geometry vaul and callers set. */
+          'data-[keyboard=open]:data-[vaul-drawer-direction=bottom]:bottom-(--keyboard-frame-bottom)!',
+          'data-[keyboard=open]:data-[vaul-drawer-direction=bottom]:max-h-(--keyboard-frame-height)!',
+          'data-[keyboard=open]:data-[vaul-drawer-direction=bottom]:transform-none!',
+          /* A drawer is a touch surface: its list rows and their filter field take the touch row height. */
+          '[&_[data-slot=command-item]]:min-h-touch-row [&_[data-slot=command-input]]:h-touch-row',
+          'data-[vaul-drawer-direction=bottom]:pb-[env(safe-area-inset-bottom)]',
+          'data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:max-h-[80vh] data-[vaul-drawer-direction=top]:rounded-b-(--drawer-radius) data-[vaul-drawer-direction=top]:border-x data-[vaul-drawer-direction=top]:border-b',
+          'data-[vaul-drawer-direction=bottom]:inset-x-0 data-[vaul-drawer-direction=bottom]:bottom-0 data-[vaul-drawer-direction=bottom]:mt-24 data-[vaul-drawer-direction=bottom]:max-h-[80vh] data-[vaul-drawer-direction=bottom]:rounded-t-(--drawer-radius) data-[vaul-drawer-direction=bottom]:border-x data-[vaul-drawer-direction=bottom]:border-t',
+          'data-[vaul-drawer-direction=right]:inset-y-0 data-[vaul-drawer-direction=right]:right-0 data-[vaul-drawer-direction=right]:w-3/4 data-[vaul-drawer-direction=right]:border-l data-[vaul-drawer-direction=right]:sm:max-w-sm',
+          'data-[vaul-drawer-direction=left]:inset-y-0 data-[vaul-drawer-direction=left]:left-0 data-[vaul-drawer-direction=left]:w-3/4 data-[vaul-drawer-direction=left]:border-r data-[vaul-drawer-direction=left]:sm:max-w-sm',
+          className,
+        )}
+        onFocus={(event) => {
+          setIsEditing(isTextEntry(event.target));
+          onFocus?.(event);
+        }}
+        onBlur={(event) => {
+          setIsEditing(false);
+          onBlur?.(event);
+        }}
+        {...properties}
+      >
+        <DrawerHandleIndicator />
+        {children}
+      </DrawerPrimitive.Content>
+    </DrawerPortal>
+  );
+}
+
+/**
+ * Groups a drawer title and description.
+ *
+ * @public
+ * @example <caption>Render a drawer header.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerHeader } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerHeader, null, 'Project details');
+ * ```
+ */
+function DrawerHeader({ className, ...properties }: React.ComponentProps<'div'>): React.JSX.Element {
+  return <div data-slot='drawer-header' className={cn('flex flex-col gap-1.5 p-4', className)} {...properties} />;
+}
+
+/**
+ * The size and shape of every drawer header action (close, back, more): a 44px circle with a single border. Shared with
+ * header buttons that are not a {@link DrawerAction}, such as a phone pane header's buttons.
+ *
+ * @public
+ * @example <caption>Size a pane button as a drawer action.</caption>
+ * ```typescript
+ * import { drawerActionClass } from '@taucad/ui/components/drawer';
+ *
+ * const className = drawerActionClass;
+ * ```
+ */
+const drawerActionClass = 'size-11 min-h-11 min-w-11 shrink-0 rounded-full! border bg-background p-0 shadow-xs';
+
+/**
+ * The header row of every drawer: its title and its actions on one 60px row (`--drawer-bar-height`), inset 16px, so a
+ * menu, a switcher and a phone pane all share one header.
+ *
+ * @public
+ * @example <caption>Render a drawer's header row.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerBar } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerBar, null, 'Project details');
+ * ```
+ */
+function DrawerBar({ className, ...properties }: React.ComponentProps<'div'>): React.JSX.Element {
+  return (
+    <div
+      data-slot='drawer-bar'
+      className={cn('flex min-h-(--drawer-bar-height) shrink-0 items-center gap-2 px-4 py-2', className)}
+      {...properties}
+    />
+  );
+}
+
+/**
+ * The title type of a drawer's header row ({@link DrawerBar}).
+ *
+ * @public
+ * @example <caption>Style a drawer's title.</caption>
+ * ```typescript
+ * import { drawerBarTitleClass } from '@taucad/ui/components/drawer';
+ *
+ * const className = drawerBarTitleClass;
+ * ```
+ */
+const drawerBarTitleClass = 'min-w-0 flex-1 truncate text-base font-medium';
+
+/**
+ * A drawer header's icon action (close, back, more), sized and shaped by {@link drawerActionClass}.
+ *
+ * @public
+ * @example <caption>Render a drawer's close action.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerAction } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerAction, { 'aria-label': 'Close' });
+ * ```
+ */
+function DrawerAction({ className, ...properties }: React.ComponentProps<typeof Button>): React.JSX.Element {
+  return (
+    <Button
+      data-slot='drawer-action'
+      variant='outline'
+      size='icon-touch'
+      className={cn(drawerActionClass, className)}
+      {...properties}
+    />
+  );
+}
+
+/**
+ * Aligns actions at the bottom of a drawer.
+ *
+ * @public
+ * @example <caption>Render a drawer footer.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerFooter } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerFooter, null, 'Actions');
+ * ```
+ */
+function DrawerFooter({ className, ...properties }: React.ComponentProps<'div'>): React.JSX.Element {
+  return <div data-slot='drawer-footer' className={cn('mt-auto flex flex-col gap-2 p-4', className)} {...properties} />;
+}
+
+/**
+ * Provides the accessible name for a drawer.
+ *
+ * @public
+ * @example <caption>Name a drawer.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerTitle } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerTitle, null, 'Project details');
+ * ```
+ */
+function DrawerTitle({
+  className,
+  ...properties
+}: React.ComponentProps<typeof DrawerPrimitive.Title>): React.JSX.Element {
+  return (
+    <DrawerPrimitive.Title
+      data-slot='drawer-title'
+      className={cn(headingVariants({ variant: 'item' }), 'text-foreground', className)}
+      {...properties}
+    />
+  );
+}
+
+/**
+ * Provides supporting text for a drawer.
+ *
+ * @public
+ * @example <caption>Describe a drawer.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerDescription } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerDescription, null, 'Inspect project metadata.');
+ * ```
+ */
+function DrawerDescription({
+  className,
+  ...properties
+}: React.ComponentProps<typeof DrawerPrimitive.Description>): React.JSX.Element {
+  return (
+    <DrawerPrimitive.Description
+      data-slot='drawer-description'
+      className={cn('text-sm text-muted-foreground', className)}
+      {...properties}
+    />
+  );
+}
+
+/**
+ * The list every phone drawer of rows draws its rows in, so they all share one look: a hairline between rows, from
+ * where a row's text starts to its inline padding (`drawer-row-dividers`). A responsive combobox's options and a
+ * responsive menu's items use it; mark each row with {@link drawerRowAttributes}. Desktop popovers and menus never
+ * render it, so they keep their own style.
+ *
+ * @public
+ * @example <caption>List two rows in a drawer.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerList, drawerRowAttributes } from '@taucad/ui/components/drawer';
+ *
+ * createElement(
+ *   DrawerList,
+ *   null,
+ *   createElement('button', { ...drawerRowAttributes, className: 'relative' }, 'Rename'),
+ *   createElement('button', { ...drawerRowAttributes, className: 'relative' }, 'Delete'),
+ * );
+ * ```
+ */
+function DrawerList({ className, ...properties }: React.ComponentProps<'div'>): React.JSX.Element {
+  return <div data-slot='drawer-list' className={cn('drawer-row-dividers', className)} {...properties} />;
+}
+
+/**
+ * Marks an element as a row of a {@link DrawerList}, so a row after it draws its divider. The row must be positioned
+ * (`relative`); `--drawer-row-inset`, `--drawer-row-icon` and `--drawer-row-gap` set where the divider starts, or
+ * `--drawer-row-text-start` pins it.
+ *
+ * @public
+ * @example <caption>Mark a row.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { drawerRowAttributes } from '@taucad/ui/components/drawer';
+ *
+ * createElement('button', { ...drawerRowAttributes, className: 'relative' }, 'Rename');
+ * ```
+ */
+const drawerRowAttributes = { 'data-drawer-row': '' } as const;
+
+/**
+ * The shape of a drawer row, shared by every drawer of rows (a responsive menu, a chat switcher, a project sheet): a
+ * full-width touch row with 1rem inline padding, a 1rem icon and a 0.75rem gap, so its icon lines up with the header's
+ * title at 16px, its text at 44px, and its divider (see {@link DrawerList}) starts under that text.
+ *
+ * @public
+ * @example <caption>Shape a drawer row.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { drawerRowAttributes, drawerRowClass } from '@taucad/ui/components/drawer';
+ *
+ * createElement('button', { ...drawerRowAttributes, className: `relative flex ${drawerRowClass}` }, 'Rename');
+ * ```
+ */
+const drawerRowClass =
+  'min-h-touch-row w-full shrink-0 gap-3 rounded-none px-4 text-left text-sm [--drawer-row-gap:0.75rem] [--drawer-row-icon:1rem] [--drawer-row-inset:1rem] [&_svg:not([class*=size-])]:size-4';
+
+/**
+ * The list item around a {@link drawerRowClass} button, when the item, not the button, is the marked row: it is
+ * positioned and carries the row's geometry, so its divider and highlight land where the button's icon and text do.
+ *
+ * @public
+ * @example <caption>Mark a list item that wraps a row button.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { drawerListItemClass, drawerRowAttributes } from '@taucad/ui/components/drawer';
+ *
+ * createElement('li', { ...drawerRowAttributes, className: drawerListItemClass });
+ * ```
+ */
+const drawerListItemClass = 'relative [--drawer-row-gap:0.75rem] [--drawer-row-icon:1rem] [--drawer-row-inset:1rem]';
+
+/**
+ * A drawer hairline, never full width. `header` sits under a {@link DrawerBar}, lined up with its title and action
+ * (16px from each edge); `group` parts groups of {@link drawerRowClass} rows, from the rows' text to their right inset.
+ *
+ * @public
+ * @example <caption>Divide a drawer's header from its rows.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { DrawerDivider } from '@taucad/ui/components/drawer';
+ *
+ * createElement(DrawerDivider, { variant: 'header' });
+ * ```
+ */
+function DrawerDivider({
+  variant = 'header',
+  className,
+  ...properties
+}: React.ComponentProps<'div'> & { readonly variant?: 'header' | 'group' }): React.JSX.Element {
+  return (
+    <div
+      aria-hidden
+      data-slot='drawer-divider'
+      className={cn('h-px shrink-0 bg-border', variant === 'header' ? 'mx-4' : 'my-1 mr-4 ml-11', className)}
+      {...properties}
+    />
+  );
+}
+
+export {
+  drawerActionClass,
+  drawerBarTitleClass,
+  drawerGrabStrip,
+  DrawerAction,
+  DrawerBar,
+  Drawer,
+  DrawerNestedRoot,
+  DrawerPortal,
+  DrawerOverlay,
+  DrawerTrigger,
+  DrawerClose,
+  DrawerHandle,
+  DrawerContent,
+  DrawerHeader,
+  DrawerFooter,
+  DrawerTitle,
+  DrawerDescription,
+  DrawerList,
+  DrawerDivider,
+  drawerListItemClass,
+  drawerRowAttributes,
+  drawerRowClass,
+  useIsInsideDrawer,
+};

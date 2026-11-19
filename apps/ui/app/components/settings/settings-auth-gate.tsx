@@ -1,9 +1,10 @@
 import { useSession } from '@better-auth-ui/react';
 import { Lock } from 'lucide-react';
 import { NavLink } from 'react-router';
-import { Button } from '#components/ui/button.js';
+import { Button } from '@taucad/ui/components/button';
 import { useAuthLinks } from '#hooks/use-auth-links.js';
-import { Loader } from '#components/ui/loader.js';
+import { Loader } from '@taucad/ui/components/loader';
+import { SettingsPageSkeleton } from '@taucad/settings-ui/components/settings/settings-item';
 import { authClient } from '#lib/auth-client.js';
 
 /**
@@ -16,16 +17,12 @@ export function SettingsAuthGate({ children }: { readonly children: React.ReactN
   const { signIn } = useAuthLinks();
 
   if (isPending) {
-    return (
-      <div className='flex items-center justify-center py-16'>
-        <Loader className='size-6 text-muted-foreground' />
-      </div>
-    );
+    return <SettingsPageSkeleton label='Loading settings' />;
   }
 
   if (!session) {
     return (
-      <div className='flex flex-col items-center justify-center gap-4 py-16 text-center'>
+      <div className='flex flex-col items-center justify-center gap-4 rounded-xl border bg-card px-4 py-16 text-center'>
         <div className='flex size-12 items-center justify-center rounded-full bg-muted'>
           <Lock className='size-6 text-muted-foreground' />
         </div>
@@ -35,7 +32,7 @@ export function SettingsAuthGate({ children }: { readonly children: React.ReactN
         </div>
         <Button asChild>
           <NavLink to={signIn} tabIndex={-1}>
-            {({ isPending: isNavigating }) => (isNavigating ? <Loader /> : 'Sign In')}
+            {({ isPending: isNavigating }) => (isNavigating ? <Loader /> : 'Sign in')}
           </NavLink>
         </Button>
       </div>

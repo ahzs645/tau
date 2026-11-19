@@ -1,351 +1,202 @@
 ---
 title: 'Graphics Backend Policy'
-description: 'Dual WebGL/WebGPU Three.js stacks, TSL materials, snapshots, and e2e parity'
+description: 'Dual WebGL/WebGPU Three.js rendering, portable shaders, resource ownership, interaction, backend evidence, and kernel mesh resolution'
 status: active
 created: '2026-05-07'
-updated: '2026-05-27'
+updated: '2026-11-17'
 related:
+  - docs/policy/compatibility-policy.md
+  - docs/research/viewer-webgpu-selector-removal.md
   - docs/research/webgpu-migration-graphics-stack.md
   - docs/research/screenshot-viewport-shared-material-state-bleed.md
+  - docs/research/webgpu-gltf-edge-near-orthographic-occlusion.md
+  - docs/research/viewer-edge-end-bleed-blueprint.md
   - docs/policy/webgpu-rendering-pipeline.md
+  - docs/research/threejs-shader-foundation-and-testing-blueprint.md
+  - docs/research/viewer-section-view-performance.md
+  - docs/research/kernel-tessellation-policy-blueprint.md
 ---
 
 # Graphics Backend Policy
 
-Internal reference for how Tau ships and validates the WebGL/WebGPU rendering stack in `apps/ui` (R3F + Three.js r18x).
+Tau prefers native WebGPU for interactive CAD on supported devices and uses the shared node renderer on WebGL2 when WebGPU is unavailable or initialization fails. PBR remains the default material model; post-processing and AO are on by default and AO stays visible during motion. The viewer settings do not expose a post-processing switch. The visible, default-on `webGpu` feature flag selects the backend preference. Rollout qualification is owned by the [high-resolution rendering blueprint](../research/high-resolution-rendering-blueprint.md).
 
-## Rationale
-
-Users need predictable CAD rendering across browsers while moving the default toward WebGPU. Without policy, shaders drift silently (GLSL-only paths, missing snapshots, uncaught backend assumptions) and regressions slip past unit tests.
+Rules 15 to 17 govern the meshes kernels hand the viewer, captures and exports: how their resolution is named, bounded and reported. The [kernel tessellation blueprint](../research/kernel-tessellation-policy-blueprint.md) holds the rulings (R1, R2) and the measurements behind them.
 
 ## Rules
 
-### 1. Consume `resolvedGraphicsBackend`, never hardcode paths
+### 1. Resolve the backend once
 
-Interactive viewers must derive behavior from **`resolvedGraphicsBackend`**: **`'webgl' | 'webgpu'`**, after merging persisted preference, GPU probe, and optional **`?graphicsBackend=`** URL override (**`apps/ui/app/components/geometry/graphics/graphics-backend.ts`**). Avoid scattering raw **`new WebGLRenderer()`** calls except inside **`createTauRenderer`** (**`apps/ui/app/components/geometry/graphics/three/tau-renderer.ts`**) and other shared factories (`createTauR3fGlProp`, gizmo/`SharedRenderer` helpers) that already branch by backend + use-case.
+Resolve interactive viewers through `resolveViewerGraphicsBackend` in `apps/libs/ui-core/src/utils/graphics-backend-override.ts`: the `webGpu` feature flag prefers WebGPU when an adapter is available, otherwise WebGL. Keep persisted per-view preferences normalized to WebGL; the application flag owns the user-facing preference. The internal `?graphicsBackend=` override takes precedence for manual and e2e evidence.
 
-**Why**: Duplicate renderer construction bypasses tracking, fallback, post-processing wiring, and shared tuning (MSAA × log-depth × reversed-Z).
+If WebGPU initialization fails, mount the node WebGL2 pipeline on a fresh canvas. Do not mistake Three's node renderer with its WebGL2 backend for native WebGPU, and do not route arbitrary scene or shader errors through an initialization fallback. Dispose a partially allocated owned device; never call Three's normal renderer disposal before initialization completes.
 
-CORRECT:
+Record the initialized renderer's effective backend in validation evidence. API presence, adapter-probe success and requested preferences are not proof of the selected backend. The operator authorized node WebGL2 fallback and always-on post-processing on 2026-10-25, with broader qualification deferred in the [rollout register](../research/artifacts/high-resolution-rendering-audit/runs/2026-10-18-implementation/node-consolidation/default-rollout.md). Do not portray that product decision as completed cross-device qualification. Retain classic WebGL for explicit reference/offscreen consumers, not automatic interactive fallback. Attribute whole-pipeline comparisons to those pipelines, not to the graphics API or later fixes.
 
-```typescript
-const backend = useThreeGraphicsBackend();
-await createTauRenderer('viewport', backend, canvas);
+Key `ThreeCanvasInstance` by backend as `ThreeProvider` does. A backend switch must recreate renderer-owned state rather than reusing an incompatible canvas, material graph, controls instance, or post-processing pipeline.
+
+During consolidation, distinguish renderer family (classic or node) from the initialized execution backend (WebGPU or WebGL2). The node renderer class name and adapter availability alone cannot establish execution. Share definitions and contracts across node backends, never incompatible live GPU resources. Preserve one material, frame, depth and lifecycle contract; admit a small backend-specific implementation only when capability or measurements justify it. The destination is two qualified execution backends of one node architecture, not three permanent competing pipelines.
+
+### 2. Create renderers through the shared factory
+
+Use `createRenderer` in `graphics/three/renderer.ts`. The `viewport` preset with `nodePipeline: true` owns interactive antialiasing and backend depth/post-processing choices; the performance-first node candidate uses single-sample scene/frame targets while classic WebGL retains its existing MSAA; `offscreen` owns bitmap-transfer choices; `showcase` owns brand surfaces built on TSL node materials (the metal morph loader), always returning Three's node renderer so one graph serves WebGPU and its WebGL 2 backend. Await `WebGPURenderer.init()` before use, and call WebGL-only methods only after narrowing the renderer. A browser can give a canvas no WebGL 2 context at all (hardware acceleration off, a blocklisted GPU): `createRenderer` then rejects with `GraphicsContextUnavailableError` on every preset, never with three's null-context `TypeError`. Nothing falls back from it, so it is not a WebGPU initialization error: the viewport shows its failure screen with the error's message, a showcase start remembers it for the page (`showcase-backend.ts`) and keeps its stand-in, and Sentry groups it apart at warning level (`graphics-context-failure.lib.ts`). A caller that starts a renderer without awaiting it still handles the rejection.
+
+A showcase surface is not an interactive viewer: it may prefer WebGPU when an adapter exists because Three falls back to the WebGL 2 backend on its own, and it must pause while offscreen, hidden, or under reduced motion. An adapter is not a canvas that presents: Chromium on a software adapter destroys a WebGPU canvas's device at its first presented frame. A surface whose canvas is shown, or copied from, creates its renderer with `presented: true`, which runs the viewport's first-frame check and reports such a canvas as a canvas loss (`reportWebGpuCanvasLoss`); the surface then starts once more on a fresh canvas with the backend resolved again, which lands on WebGL (`showcase-backend.ts`). It scales its own cost to the device: tessellation, post-processing, thin-film shading and frame rate follow a quality tier, and a frame-time governor steps pixel ratio, bloom and frame rate down under load.
+
+The glass prism loader is the second showcase surface and shares the engine: the frame loop and governor (`showcase-frame-loop.ts`), the bloom and capture pipelines (`showcase-post.ts`, `showcase-capture.ts`), the studio prefilter, the radial morph sampler and the React lifecycle (`showcase-loader.tsx`). What it adds is a light sheet: the beam is ray-traced on the CPU through the body's cross-section each frame (`glass-prism-light-field.ts`, pure and unit-tested) and drawn as ribbons the GPU never has to trace. The body is image-based glass, transparent and premultiplied, so the page shows through it; on a dark page the traced light is added, on a light page it is printed, because light added to white is invisible. A new showcase surface reuses these modules rather than growing a loop, a governor or a capture path of its own.
+
+Inline spinners do not each get a renderer. A browser allows a page sixteen live WebGL 2 contexts and evicts the oldest without warning, and every spinner draws the same animation, so one page-level service owns a single inline-tier controller and copies each frame it draws into the plain 2D canvas each spinner holds (`metal-morph-spinner-service.ts`, `MetalMorphSpinner`). A product surface mounts `MetalMorphSpinner`, never a dedicated loader per row; `MetalMorphLoader` stays for a surface large enough to justify its own context, such as the showcase stage. The service holds the same playback gates as a dedicated loader and releases its renderer once the page has gone without spinners. It reads the renderer's drawing buffer once per frame into a 2D snapshot and fans that out, so the GPU surface is read once however many spinners there are; a paint that throws costs only that canvas its frame, never the others; and its diagnostics count the spinners that missed the latest frame, which a showcase or a test reads as the unison invariant.
+
+Do not instantiate a renderer in a consumer unless that file is an established shared factory with an explicit use case.
+
+### 3. Maintain portable shader paths
+
+Viewport-visible custom materials require a TSL/NodeMaterial WebGPU path alongside any WebGL GLSL material still in service. Keep one semantic parameter contract across both implementations.
+
+Inside a reusable `Fn`, call `.toVar()` without an explicit name; an immediately invoked one-use `Fn(...)()` may use a name. Reused declaration names collide when TSL inlines the function.
+
+Custom WebGL `ShaderMaterial` output must apply the same color-management transform as built-in materials. Do not calibrate source colors against a known broken color or blend path.
+
+### 4. Declare transparency and depth behavior explicitly
+
+When opacity is below one, set `transparent: true` on both backends. Library wrappers such as Drei lines do not supply a portable default.
+
+Highlights, ghosts, labels, contours, gizmos, and other overlays must state `depthTest` and `depthWrite` deliberately. Preserve opaque focused-surface depth writes; dimmed/ghost surfaces and overlay outlines must not occlude later geometry unless their contract explicitly requires it.
+
+Overlays retain the same CAD semantics on both backends; final appearance parity remains a qualification gate. The node candidate blends transparent lines and grid in linear light and performs one final shader output conversion. For Neutral tone mapping, its bounded composed color uses hardware-sRGB RGBA8 storage (automatic decode/encode around linear blending); HDR scene radiance stays RGBA16F. Both node backends compose AO once and apply surface FXAA from this composed storage into reused scene RGBA16F color, before analytic lines and overlays. Keep this as the sole AO-on surface-composition path; historical fused comparisons belong to source revisions and research artifacts. Other tone mappings retain a linear RGBA16F frame. Do not confuse storage encoding with shader output encoding or reduce depth precision when changing color storage. Do not add viewport-copy gamma compensation to that path. Keep the classic reference unchanged and measure coverage, blending and final encoding separately.
+
+### 5. Preserve depth ordering
+
+The native WebGPU viewport enables reversed floating-point depth. Node WebGL2 uses logarithmic perspective depth and linear orthographic depth; select the convention from the current camera without specializing a shared shader to its first camera. AO reconstruction, copied depth and cap crossings must consume the same convention. Keep the geometric clipping interval unchanged when adapting AO reconstruction.
+
+Register `reversedDepthTransparentSort` so transparent objects remain back-to-front under reversed clip-space Z.
+
+GLTF lines retain their geometric depth. Resolve coplanar separation on the owning triangle material with bounded polygon offset; never pull a line toward the camera in view, clip, or depth space. Size the slope term to half the drawn edge stroke in device pixels, plus half a pixel where the depth is evaluated at fragment centres: the off-spine fragments of a coplanar edge need nothing more, and any larger margin shows hidden edges that end on a face boundary as ticks past its contour. On WebGL the shader term is the whole separation; leave the rasterizer offset at zero, because the orthographic log-depth path writes `gl_FragCoord.z`, which can already carry it.
+
+### 6. Separate base capability from exact diagnostics
+
+Synchronous render decisions may use manifest and broad-phase capability data. Exact section intersections and overlap diagnostics remain asynchronous and may refine diagnostic output. Do not block ordinary rendering on exact analysis or present a broad-phase candidate as an exact result.
+
+Draw section caps with the stencil buffer (`graphics/three/utils/section-stencil-caps.ts`), never with per-frame CPU slicing, polygon booleans or triangulation. A cut is never refused: it commits as soon as it is made, and each source is capped as well as its surface allows.
+
+- **Exact**: a source whose welded edge census balances (every edge, once coincident vertices are welded, is used as often in each direction) and that is shown whole. Its meshes count their crossings of the cut in the stencil (nonzero), a polygon on the cut plane fills where the count is non-zero, and a stencil overlap bit marks the pixels where two owners' solids hold the cut, so overlap equals what the exact boolean would find. The cap's main-thread cost follows the cut pieces and the sources' meshes, never their triangles. Slivers with three distinct indices are faces like any other.
+- **Per loop**: any other source (an open or non-manifold surface, or one shown in part). A worker slices its shown triangles when a face's plane changes, and fans over the closed loops it finds count into the stencil **even-odd**; the same cap polygon, stripes, overlap and outline then draw. Open chains are outlined in `sectionCapOpenChainColor` (`--destructive`) at the outline's width, open regions stay unfilled, and the source's materials draw both sides while it is cut, so its inside shows through them. The last landed slice stays drawn until the next lands. Overlapping shells inside one such source cancel, as even-odd does.
+- **Pending**: a source whose census has not landed is cut and outlined, uncapped, until it does.
+
+Node cap outlines and their padded clipping masks use analytic triangle-plane world-position differentials. Do not derive those footprints from neighboring fragment values: cross-primitive derivatives reproduced unstable contour coverage under unchanged inputs. The cap owner caches an outline-only triangle stream with constant geometric normals per source revision; original surface geometry and stencil draws remain unchanged. This one-time preprocessing may visit triangles, but ordinary camera/transform updates must reuse the buffers and preserve mesh-level batching. Invalidate changed source attributes/indices, retire unused derived buffers and dispose them with the cap owner. Keep geometric depth and hidden-line semantics unchanged; qualify coverage under primitive regrouping and subpixel motion on both node backends. This requirement does not prohibit appropriate derivatives elsewhere.
+
+The grade is diagnostics, never interface text: it is published on the section helper's `userData`, in Tau debug, and as `renderer.section-cap-graded` spans. A census above `maxSynchronousBvhTriangles` runs in the section worker and never falls back to the main thread; a worker failure caps that source per loop. Stencil operations live only in the cap owners that `section-view-cleanup.ratchet.test.ts` names. On node WebGL2, the post owner shares one D24S8 attachment between the scene and composed frame; initialize or resize both targets before the authoritative scene write, clear depth/stencil for that write, and preserve them during the color-only composite. Native WebGPU retains separate scene depth and frame depth/stencil with composite depth installation. The owner retires both targets together; no independent consumer owns the shared attachment. Caps draw into the composed frame after its scene color/depth are ready. Classic caps draw on the canvas after its depth bridge. Caps are not tone-mapped or ambient-occluded. Later grid/highlight draws retain cap depth, and node output encoding occurs only after all overlays.
+
+### 7. Preserve one viewport lifecycle
+
+Keep one camera, controls, gizmo, and renderer lifecycle per canvas. Camera replacement, fit-to-view, controls listeners, and gizmo synchronization must use the owning graphics state and clean up the prior instance.
+
+Interactive viewers use `frameloop="demand"`. Call `invalidate()` after every visible user-state change and while damping or animation still needs frames.
+
+### 8. Treat cloned render state as explicit ownership
+
+`scene.clone()` is shallow for materials. Clone-and-render code may dispose only resources it allocated. Allocators return an explicit material set; teardown passes that set to the current disposal helper. Never infer ownership by traversing `isMesh`, because line objects can share live viewport materials.
+
+A TSL graph or `onBeforeCompile` material that depends on renderer flags must not be shared between renderers with different reversed-depth, log-depth, sample-count, or output-color-space settings. Allocate a fresh secondary-renderer material.
+
+### 9. Bound geometry and material caches
+
+Factory-produced derived geometry uses a bounded module-scope LRU keyed by stable parameters. Eviction disposes the entry; callers treat returned geometry as non-owned and immutable.
+
+Resources allocated with `useMemo` require matching effect cleanup. Dispose only resources marked as internally owned; never dispose caller-supplied resources.
+
+### 10. Keep picking local and clipping-aware
+
+Answer pointer hover and click on the model from the GPU pick in `graphics/three/utils/model-gpu-pick.ts`. Its pass draws what the viewport draws (transforms, visibility, layers, face side and the section clip) into an ID and world-position target, only when its inputs changed and the camera is still, and reads it back asynchronously. A pick is answered synchronously from the read-back copy; while the copy is stale the pick is pending: hover stays as it is, a click is neither a selection nor a miss, and the pointer is resolved again once through R3F `events.update()` when the pass lands.
+
+Rays the pick cannot answer (not through a camera pixel, or a renderer that cannot read the pass back) and exact consumers such as measurement and section topology use `raycastFirstVisibleMeshHit` in `graphics/three/utils/bvh-raycast.ts`. Pass the active clipping state so a clipped first triangle cannot hide a farther visible hit. A tree above `maxSynchronousBvhTriangles` is built in the BVH worker on demand; until it lands its mesh is pending, never a miss.
+
+Do not patch `Mesh.prototype.raycast`. Section handles and the plane picker may use the stock raycaster only on their own subtrees.
+
+Coalesce high-frequency pointer work through `createRafCoalescer`, with the latest event winning once per animation frame.
+
+### 11. Model gesture state explicitly
+
+Send measurement and overlay pointer events to their owning XState machine. Use the view camera's `input.dragging` state, entered only by a pose the person made while the controls adapter's gesture is held, to discard camera drags. Do not infer orbiting from camera position or quaternion deltas.
+
+### 12. Validate behavior, not only graph shape
+
+Shader graph snapshots and source fingerprints are supplementary. Pair them with focused runtime assertions. For user-visible parity, use the backend e2e harness and remote-canvas screenshots with deterministic pixel characteristics. Where a headless adapter cannot present frames, read an offscreen render target back through the renderer so the backend still yields pixel evidence; keep presented-canvas screenshots wherever the canvas does present.
+
+The render tier (`@taucad/viewer/graphics/three/render-tier`) drops ambient occlusion, FXAA and speculative camera preparation on a software rasterizer, and shrinks the environment cubemap. A test that asserts one of those passes declares it: it runs under the tier's test-only override with the features it asserts (`HardwareComposition` in `packages/viewer/src/test/hardware-composition.test-utils.tsx` for the composition) and asserts the tier the canvas resolved, so it never passes or fails on whichever adapter it got. Override only what the row asserts: SwiftShader filters a hardware-size environment for minutes. Frame-time claims are hardware claims and run on a real GPU.
+
+Test backend construction, WebGPU initialization, reversed-depth transparent ordering, alpha/depth state, clone ownership, cross-renderer material isolation, demand-frame invalidation, cache eviction, clipping-aware picking, and gesture cancellation.
+
+Apply [shader/pipeline policy rules 14–15](webgpu-shader-and-pipeline-policy.md) to optimization acceptance: distinguish functional correctness, appearance investigation, measured benefit and rollout qualification. Backend parity does not require byte-identical antialiasing from different rasterization algorithms. Preserve CAD semantics and qualify boundary/temporal appearance explicitly.
+
+### 13. Change pointer-rate scene objects in place
+
+Pointer-rate updates change existing scene objects in place. A drag, scrub or hover step writes positions, draw ranges and uniforms into the materials, textures and geometry already in the scene, and rebuilds an object only when its structure changes, such as a handle's kind or selection. It never rebuilds and disposes materials, textures or geometry per step: three r184 `WebGLPrograms.releaseProgram` deletes a program when its last material is disposed, so the next frame links it again, and new textures and geometry upload again. Building the replacement before disposing the old one does not help, because a material takes its program only at its first render. When a transparent object's geometry is written in place, park vertices past its draw range inside the drawn shape: three sorts transparent objects by their bounding-sphere centre.
+
+The one exception is a reused fat line that must grow. WebGL caps an instanced geometry's draws at the instance count its buffer held at its first draw until the geometry is disposed, so a `LineSegmentsGeometry` that must grow past its first-draw segment count is recreated. While its segments fit, it is written in place.
+
+### 14. Return early from unchanged per-frame work
+
+Per-frame work returns early when its inputs are unchanged. A `useFrame` callback or render-loop task derives a key from everything that changes its output, including a result that lands later such as a worker response, and does nothing while the key matches the last one it applied. Key a plane, matrix or other object that changes in place by its values, not its identity. A demand frame loop still renders for orbit, damping and every other `invalidate()`, so per-frame work without a key repeats on each of those frames.
+
+### 15. Name mesh resolution with one tessellation vocabulary
+
+A kernel view or export option `tessellation` is a quality preset or the kernel's explicit object, never both (ruling R1). The TypeScript type is the union, the Zod schema is a union of the preset enum and a strict object, and the JSON Schema is a `oneOf`; a value carrying a preset and a tolerance together is a type error and a `VALIDATION_ERROR` naming both forms. The OCCT kernels (replicad, opencascade, build123d) share `occtTessellationSchema` in `@taucad/occt-core`.
+
+| Preset       | Linear tolerance (D = bounding-box diagonal) | Angular tolerance | Use                                                       |
+| ------------ | -------------------------------------------- | ----------------- | --------------------------------------------------------- |
+| `low`        | D / 500                                      | 30°               | First look, thumbnails, large assemblies                  |
+| `medium`     | D / 2000                                     | 20°               | Viewer preview, `evaluate_model` and `screenshot` default |
+| `high`       | D / 8000                                     | 12°               | `export_model` default, GeoSpec evidence                  |
+| `extra-high` | D / 32000                                    | 6°                | Explicit request only                                     |
+
+Preset linear tolerances are clamped to 0.001–50 mm. The explicit object is absolute: `linearTolerance` is millimetres and `angularTolerance` degrees in every kernel, and OCCT always meshes in absolute mode, so a plugin that needs another representation converts inside itself. An explicit object that omits a field takes the kernel's absolute default for it (0.02 mm and 20° to view, 0.01 mm and 20° to export).
+
+Precedence replaces and never merges: a per-call option wins whole over the stored viewer record, which wins whole over the kernel default. No level combines its fields with another level's, and an explicit object never rides beside a preset. Model-declared hints are not implemented; until they are, models keep tessellation out of their parameters.
+
+The kernel-settings pane renders such a union as two modes, Preset (one segmented control of the presets) and Custom (the explicit fields in their `x-tau-unit` units). Switching modes replaces the stored value; it carries nothing across.
+
+**Why**: agents and people need a one-word choice that means the same in every kernel, manufacturing exports need exact values, and a merged form would have two sources of truth.
+
+CORRECT (`options` on `evaluate_model`, `screenshot` or `export_model`):
+
+```text
+{ "tessellation": "low" }
+{ "tessellation": { "linearTolerance": 0.01, "angularTolerance": 12 } }
 ```
 
-INCORRECT:
+INCORRECT (a `VALIDATION_ERROR`):
 
-```typescript
-const gl = new WebGLRenderer(); // bypasses Tau dual-stack contract
+```json
+{ "tessellation": { "quality": "high", "linearTolerance": 0.01 } }
 ```
 
-### 2. New GPU materials: TSL + NodeMaterials for WebGPU path
+### 16. Mesh at the requested resolution and report what was delivered
 
-Materials that compile custom shader logic for the viewport must expose a **WebGPU path** implemented with **Three.js Shading Language (TSL)** and **`three/webgpu` `*NodeMaterial`**, alongside any legacy **`ShaderMaterial` / LineMaterial`** needed for WebGL until that path is retired. Cap planes, infinite grid, fat edges, viewport gizmo overlay lines, splash morphing points, and similar features follow this pattern.
+No lane has a triangle budget. A preview, capture or export meshes once at the requested tessellation (a preset or explicit values) on every device, and is never coarsened or refused for its triangle count. The fallback `gltfEdgeDetection` middleware draws edges at any size. A host may still refuse a load against its own admission limits, such as GeoSpec's subject size, with `RESOURCE_LIMIT`; that limit belongs to the consumer, not the mesher.
 
-**Why**: WebGPURenderer expects node-based pipelines; raw GLSL is not portable to WGSL without a documented port.
+Every render reports its effective resolution on the result's `tessellation`: triangles, vertices and elapsed time. Tolerance-meshed kernels add the requested form and the `linearTolerance` and `angularTolerance` the mesh was produced at. Voxel kernels add `voxelSize`, `activeVoxels` and `memoryBytes`. A kernel that changes its mesh output reports it here and moves its kernel version, so the geometry cache does not serve meshes from before the change. `TESSELLATION_DOWNGRADED` stays declared for stored results and telemetry, and no kernel emits it.
 
-### 3. Explicit `.toVar` names only outside reusable `Fn` bodies
+**Why**: a coarsened preview showed a different part from the one the author asked for, and a refused export blocked a legitimate print. The cost of a fine mesh is the author's to choose, and the report shows it to them: the triangle count, the elapsed time and the resolution. The viewer's cost scales with triangles, so a coarser preset or explicit tolerance is how an author lightens a heavy preview (kernel budget program D1 to D3, 2026-11-05).
 
-Inside a **`Fn(...)`** arrow/function value that **is not** wrapped in **`Fn(...)()` immediate invocation**, pass **`.toVar()`** with **no string** argument. Pattern **`colorNode = Fn(() => { ... })()`** (and **`vertexNode = Fn(() => { ... })()`**) **is** invoked exactly once and may retain explicit **`toVar('label')`** names for legibility where useful.
+### 17. Keep a voxel model's grid; lighten only its display mesh
 
-**Why**: TSL inlines reusable `Fn` bodies at each call site. Named **`.toVar('x')`** registers into **`NodeBuilder.declarations`**, so a second inlined copy emits **`Declaration name 'x' already in use`** and auto-renames while warning.
+In voxel kernels (PicoVoxel, PicoGK) the voxel size is the model (ruling R2). No lane of the harness changes `voxelSize`; it is a model parameter, never a tessellation option, and iteration goes through per-call `parameters`. Choose it from the thinnest feature, about one third of the thinnest wall or strut: field evaluation time scales with 1/h³, and memory and triangles with 1/h².
 
-### 4. Shader graph snapshots are mandatory for new nodal materials
+A voxel view lightens its display mesh in the kernel, through OpenVDB mesh adaptivity: an unset view `meshAdaptivity` resolves to 0.25 (Balanced) where the kernel can mesh adaptively (PicoVoxel's default `fast` lane, a PicoGK runtime that meshes adaptively), and the tessellation report carries `adaptivity` when the delivered mesh is adaptive. Exports and GeoSpec subjects mesh uniformly unless the caller asks otherwise. No host middleware simplifies a delivered mesh (display simplification was removed on 2026-11-02); a heavy voxel preview is delivered as produced, and `meshAdaptivity` or a coarser per-call `voxelSize` lightens it.
 
-For each **`NodeMaterial` factory**, add **`// @vitest-environment node`** tests that **`await expect(serialiseStrippedTslGraph(material.toJSON())).toMatchFileSnapshot(...)`** with golden files under a co-located **`__shader-snapshots__/`** directory. Use **`apps/ui/app/components/geometry/graphics/three/utils/tsl-node-graph-snapshot.ts`** so snapshots strip **`uuid`**, substitute UUID-shaped node cross-references with a stable placeholder, and sort keys recursively.
+**Why**: coarsening the grid changes the part (thin walls vanish, volumes move, tests flip), while adaptive meshing changes only the picture. Meshing coarser at the source is cheaper than simplifying a finished mesh, which delayed the first preview more than it saved downstream.
 
-**Why**: Deterministic graphs catch regressions without a GPU in CI.
+## Ownership
 
-### 5. Playwright parity for viewport-visible differences
-
-Structural parity between WebGL and WebGPU for parity-sensitive visuals is enforced with **`apps/ui-e2e/src/graphics-backend.spec.ts`** loading **`/e2e/graphics-backend`** with **`?graphicsBackend=`** and named **`toHaveScreenshot`** assets. Prefer **`maxDiffPixelRatio: 0.02`** for general scenes and **`0.05`** where algorithms differ materially (e.g. N8AO vs GTAO-family nodes).
-
-**Why**: WGSL/driver variance is real; named screenshots isolate failures per backend and scene.
-
-### 6. Offscreen and screenshot paths honor backend semantics
-
-Shared doc previews (**`apps/ui/app/components/docs/shared-renderer.tsx`**) probe **`offscreenWebGpuCanvasContextAvailable()`** before choosing WebGPU; otherwise WebGL OffscreenCanvas — both instantiated via **`createTauRenderer('offscreen', backend, canvas)`**.
-
-Headless/screenshot clones use **`createTauRenderer('screenshot', ...)`**. Both paths must **`await` WebGPU initializer `init`** where applicable and only call **`forceContextLoss`** on WebGL.
-
-Matcap substitution for screenshots respects **`ResolvedGraphicsBackend`** (**`apps/ui/app/machines/screenshot-capability.machine.ts`** and **`applyMatcapToClonedScene`**).
-
-**Why**: Prevents flashing wrong API or losing pixels when the queue has not flushed.
-
-### 7. Theming and frame loop conventions
-
-For interactive Tau viewers, **`ThreeProvider` / CAD `<Canvas>`** must use **`frameloop='demand'`**. Call **`invalidate()`** after user gestures and \*\*`invalidate()` again when damping/animations finish so edits always settle.
-
-Reserve **`frameloop='always'` for marketing/auth/splashback canvases only** — continuous RAF is opt-in noise and heat outside those routes. Always-on canvases beyond those surfaces **require an adjacent comment explaining why continuous RAF is unavoidable**.
-
-**Why**: Matches R3F best practice for heavyweight WebGPU graphs; aligns `useFrame`/demand-render ownership with post-processing overlays.
-
-#### 7a. Anti-aliasing under `frameloop='demand'`: hardware MSAA only
-
-Interactive viewports must rely on **hardware MSAA** (`antialias: true` on the renderer constructor — `createTauRenderer('viewport', …)` for both backends). **Temporal anti-aliasing (TRAA) is banned in the viewport post-processing graph** because it requires continuous frames to converge — under `frameloop='demand'` the scene stops at one un-jittered frame, surfacing as edge graininess. The WebGPU pre-pass therefore omits a velocity MRT (no TRAA → no velocity consumer); only depth + normals are emitted for GTAO.
-
-Marketing/auth canvases that opt into `frameloop='always'` (per §7) MAY use TRAA, but each call site must justify it next to the `frameloop='always'` comment.
-
-**Why**: TRAA's upstream `TRAANode.js` documents that "MSAA must be disabled when TRAA is in use." Once TRAA is dropped from the on-demand viewport, MSAA is the unconditional baseline so static frames are AA-clean from the very first render.
-
-### 8. `createTauRenderer` captures use-case divergence
-
-Prefer **`apps/ui/app/components/geometry/graphics/three/tau-renderer.ts#createTauRenderer(useCase, backend, canvas)`** over ad-hoc `new WebGLRenderer` / `WebGPURenderer` literals for:
-
-- **`viewport`** — CAD `<Canvas>`
-- **`gizmo`** — small viewport overlay cubees
-- **`offscreen`** — docs `SharedRenderer` transfers
-- **`screenshot`** — headless framebuffer readback (**`preserveDrawingBuffer`** on WebGL)
-
-**Why**: Presets document MSAA/log-depth/stencil defaults per surface (`apps/ui/app/components/geometry/graphics/three/tau-renderer.ts` JSDoc is binding).
-
-### 9. Color management for custom WebGL `ShaderMaterial`s
-
-Any custom **`THREE.ShaderMaterial`** that assigns **`gl_FragColor`** manually must **`#include <colorspace_fragment>`** after computing the final **`gl_FragColor`** (and after any **`discard`** threshold that should skip the encode for culled fragments). **`WebGLProgram`** injects **`linearToOutputTexel`** for every program, but **`ShaderMaterial`** fragments do **not** auto-append the **`colorspace_fragment`** chunk — only **`ShaderLib/*`** builtins do — so omission skips the linear-to-sRGB encode applied automatically on WebGPU via **`NodeMaterial`** / **`ColorSpaceNode`**. Symptom: same **`THREE.Color`** looks correct on one backend and washes out on the other (e.g. infinite grid nearly invisible in light mode on WebGPU while WebGL looked fine). Guard: **`apps/ui/app/components/geometry/graphics/three/materials/infinite-grid-material.test.ts`**.
-
-**Why**: Dual-stack parity is defined in **perceptual** display space, not raw linear framebuffer bytes.
-
-### 10. Shallow clone implies shallow dispose: explicit ownership only
-
-Any surface that performs **`scene.clone()`** for offscreen rendering, screenshot capture, WebXR previews, exporter pipelines, or any other transient render must dispose **only** the materials it allocated itself — never materials inferred from inheritance or scene traversal. Allocator functions return a **`Set<Material>`** of every material they created; the caller composes those sets and passes them to **`disposeCloneOwnedMaterials(materials)`** at teardown. Inheritance-based ownership inference (e.g. walking **`isMesh`** nodes) is banned because **`LineSegments2 extends Mesh`** — disposing such a "mesh" frees the live viewport's shared **`Line2NodeMaterial`** and three's per-renderer **`RenderObject.onMaterialDispose`** listener fan-out purges the viewport's pipeline state, producing the "viewport edges grainy after a screenshot" regression on the next interaction.
-
-The pattern is concretely:
-
-```typescript
-const cloneOwnedMaterials = new Set<THREE.Material>();
-for (const material of applyMatcapToClonedScene(scene, texture, { backend })) {
-  cloneOwnedMaterials.add(material);
-}
-for (const material of applyEdgeMaterialsToClonedScene(scene, { backend, resolution })) {
-  cloneOwnedMaterials.add(material);
-}
-// ... renderer.render(scene, camera) N times ...
-disposeCloneOwnedMaterials(cloneOwnedMaterials);
-```
-
-CORRECT (explicit set, never traverses by `isMesh`):
-
-```typescript
-const allocated = applyMatcapToClonedScene(scene, texture, { backend });
-disposeCloneOwnedMaterials(allocated);
-```
-
-INCORRECT (inheritance-based traversal disposes shared `Line2NodeMaterial`):
-
-```typescript
-scene.traverse((child) => {
-  if (child.isMesh) child.material.dispose(); // <- LineSegments2 also matches!
-});
-```
-
-**Why**: Three's `Material.dispose()` dispatches a `'dispose'` event consumed by every `RenderObject` that has bound the material across all renderers (see `RenderObject.onMaterialDispose`). Disposing a material shared with the live viewport silently invalidates the viewport's pipeline cache. Guards: **`apps/ui/app/machines/screenshot-capability.utils.test.ts`** (`R2 (WebGL/WebGPU): does NOT dispose the viewport's shared … material when only matcap was applied`).
-
-### 11. Cross-renderer flag-set divergence: never share TSL-graph-establishing materials
-
-A material whose TSL graph (or `onBeforeCompile` GLSL replacement) branches on any of `renderer.reversedDepthBuffer`, `renderer.logarithmicDepthBuffer`, `renderer.samples`, or `renderer.outputColorSpace` **must not be shared by reference between renderer instances that disagree on those flags**. Three's `NodeMaterial.setup()` runs exactly once per material lifetime — the first renderer to consume the material bakes the TSL graph against its own flag set, and every subsequent renderer compiles its WGSL pipeline from the already-established graph. The screenshot/offscreen renderer's distinct `reversedDepthBuffer` / `logarithmicDepthBuffer` / `RenderPipeline+PassNode` configuration cannot legally consume a TSL graph established by the viewport renderer.
-
-Affected materials in the workspace today:
-
-| Material                                                                                                           | Branches on                                                                                                                                  |
-| ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Line2NodeMaterial` (Tau subclass at `apps/ui/app/components/geometry/graphics/three/materials/line2.material.ts`) | `reversedDepthBuffer`, `logarithmicDepthBuffer` (via `setupDepth(builder)`); `clip-distances` feature (via `setupHardwareClipping(builder)`) |
-| Future flag-aware nodal materials                                                                                  | Same — must self-document the per-flag dispatch in their `setup*` overrides                                                                  |
-
-Surfaces that consume such materials in a renderer with different flags than the live viewport (today: `screenshot`, `offscreen`) must allocate their own **fresh** material instance per render, mirroring the matcap pattern in §6 and §10. Tau's screenshot path uses `applyEdgeMaterialsToClonedScene` for this purpose; new clone-and-render surfaces follow the same shape.
-
-CORRECT (fresh allocation, screenshot renderer compiles its own pipeline against its own flags):
-
-```typescript
-const edgeMaterials = applyEdgeMaterialsToClonedScene(screenshotScene, {
-  backend: screenshotBackend,
-  resolution: new THREE.Vector2(width, height),
-});
-```
-
-INCORRECT (shares the viewport-baked TSL graph; depth encoder, sample-count contract, and color-attachment expectations are wrong for the screenshot renderer):
-
-```typescript
-// LineSegments2.material reference reaches the screenshot renderer unchanged
-screenshotRenderer.render(screenshotScene, screenshotCamera);
-```
-
-**Why**: Sharing a TSL-graph-baked material across renderers with divergent flags causes the secondary renderer to inherit the primary's depth-encoder choice, color-attachment expectations, and PassNode-level filtering assumptions — the canonical reason for grainy fat-line edges in WebGPU screenshot output documented in `docs/research/screenshot-viewport-shared-material-state-bleed.md`. Guards: **`apps/ui/app/machines/screenshot-capability.utils.test.ts`** (`R6 (WebGL/WebGPU): applyEdgeMaterialsToClonedScene replaces the LineSegments2's material with a fresh allocation`).
-
-### 7b. Interactive overlay tools must `invalidate()` after every user-driven state change
-
-When the viewport runs with `frameloop="demand"`, React state updates inside overlay tools (measure, section pickers, gizmos) do not schedule a frame by themselves. Every pointer-driven dispatch that changes visible overlay geometry **must** call `useThree((s) => s.invalidate)` immediately after the state commit.
-
-CORRECT:
-
-```typescript
-dispatchSnapState({ type: 'pointerFrame', payload: next });
-invalidate();
-```
-
-INCORRECT:
-
-```typescript
-setHoveredSnapPoints(points); // no invalidate — canvas stays stale under demand frameloop
-```
-
-### 12. Factory-produced derived geometry uses module-scope LRU caching with `dispose()` on evict
-
-`FontGeometry`, `RoundedRectangleGeometry`, and similar CPU-heavy factories **must** consult a bounded module-scope LRU (`createGeometryLru`) keyed by stable parameter tuples. Returned `BufferGeometry` instances are **non-owned** — callers must never call `.dispose()` or mutate them in place. Eviction calls `.dispose()` on the evicted entry.
-
-Guards: **`geometry-lru.test.ts`**, **`font-geometry.test.ts`**, **`rounded-rectangle-geometry.test.ts`**.
-
-### 13. `useMemo`-allocated geometry/materials require `useEffect` dispose cleanup with caller-vs-internal discriminator
-
-When a component allocates `THREE.Material` or `BufferGeometry` in `useMemo`, a matching `useEffect` teardown **must** call `.dispose()` only when the bundle is marked `ownsMaterials: true` (or equivalent). Caller-supplied materials are never disposed by the component.
-
-Guards: **`measurement-line-materials.test.ts`**.
-
-### 14. Interactive raycasting routes through `bvhRaycastFirst`; `Mesh.prototype.raycast` monkey-patch banned
-
-Pointer-event-rate picking (measure tool, future overlays) **must** use **`bvhRaycastFirst(raycaster, meshes)`** in **`apps/ui/app/components/geometry/graphics/three/utils/bvh-raycast.ts`**, which consults `getOrBuildBvh` per mesh. Patching `Mesh.prototype.raycast` with `acceleratedRaycast` is forbidden — it affects every mesh in the process globally.
-
-Exempt: transform-controls gizmo picking may continue using stock `raycaster.intersectObject` on the gizmo subtree only.
-
-Guards: **`bvh-raycast.test.ts`**.
-
-### 15. High-frequency pointer events are rAF-coalesced; camera-drag suppression delegated to §16
-
-`mousemove` handlers that run BVH raycasts and snap detection **must** schedule work through **`createRafCoalescer`** so at most one pipeline pass runs per animation frame (latest event wins). Camera-orbit suppression during drags is **not** implemented via quaternion/position delta heuristics — see §16.
-
-Guards: **`raf-coalesce.test.ts`**, **`measure-tool-pointer-pipeline.test.tsx`**.
-
-### 16. Tool overlays model pointer lifecycle as a state machine; `cameraInteracting` from drei `OrbitControls` `'start'`/`'end'`
-
-Measure and future overlay tools **must** dispatch pointer lifecycle events into a dedicated XState machine (`measureInputMachine` today). `graphics.machine` exposes `cameraInteracting: boolean`, flipped by `controlsInteractionStart` / `controlsInteractionEnd` forwarded from `controlsListenerMachine` (drei `OrbitControls` `'start'`/`'end'`). Handlers gate on `cameraInteracting` and the input machine sets `discardGesture` when interaction starts mid-pointer-hold.
-
-Quaternion-delta or camera-position-delta heuristics to distinguish orbit drags from clicks are **banned**.
-
-Guards: **`measure-input.machine.test.ts`**, **`graphics.machine.test.ts`**.
-
-## Color & Blending Parity
-
-Dual-stack visuals must look the same when fed the same source `THREE.Color`. Eight seams between source color and on-screen pixel ("S1-S8" below) determine whether parity holds; misaligning any of them produces backend-specific drift even when shader logic is identical. The §9 rule covers only S3 (manual `gl_FragColor` color-space encode). The rules in this section close the remaining alpha-blend and source-color seams.
-
-### CB-1. `transparent` is declared once for both backends
-
-Any material rendered on **both** backends with non-1.0 alpha **must** set `transparent: true` on **both** the WebGL material/component and the WebGPU `*NodeMaterial` — even when the WebGL component appears to "just work." Drei's `<Line>` (and other library components) silently default their underlying `LineMaterial.transparent` to `false` unless 4-channel vertex colors are supplied; `THREE.WebGLRenderer` then skips `gl.BLEND` entirely and writes the opaque source color while WebGPU's `Line2NodeMaterial` correctly blends, surfacing as backend-specific brightness divergence on alpha-using overlays (axes helper, gizmo lines).
-
-CORRECT:
-
-```typescript
-<Line color={axisColor} opacity={0.6} transparent points={...} />
-<AxesWebGpuFatLine color={axisColor} opacity={0.6} {...} /> // sets `transparent: true` internally
-```
-
-INCORRECT:
-
-```typescript
-<Line color={axisColor} opacity={0.6} points={...} />        // <- transparent silently false on WebGL
-```
-
-Guard: **`apps/ui/app/components/geometry/graphics/three/react/axes-helper.test.tsx`** (`passes 'transparent: true' to every Drei <Line>`).
-
-### CB-2. No historical-bug calibration
-
-Source colors (hex literals, RGB strings, `THREE.Color` constructors, JSON theme tokens) **must not** be pinned to perceptual values produced by a known-broken pipeline state — e.g. pre-`<colorspace_fragment>` WebGL, pre-`transparent: true` drei lines, or any other regression that happens to read out at a particular sRGB value on canvas. Pinning to a bug freezes the bug into the design contract: as soon as the bug is fixed (or another backend is added), every value in the table is wrong.
-
-Hard rule: every overlay color/opacity constant used in the 3D viewport lives in **`apps/ui/app/components/geometry/graphics/three/overlay-colors.constants.ts`** as the single tuning point, with JSDoc that documents the per-backend perceptual outcome under linear blending. Re-tuning **must** happen visually against `/e2e/graphics-backend` with both backends side-by-side, not by matching an earlier on-canvas readout.
-
-### CB-3. Known limitation: residual gamma-vs-linear canvas blend delta
-
-After CB-1 and CB-2, an irreducible ~10-15 sRGB unit perceptual delta per channel remains between WebGL and WebGPU for any overlay that blends below 1.0 alpha **and does not use the CB-4 in-shader gamma blend**. Cause: WebGL renders directly to the sRGB-encoded canvas drawing buffer and blends in **gamma space**; WebGPU renders into a linear-float offscreen `frameBufferTarget` (RGBA16F, `LinearSRGBColorSpace`, `HalfFloatType`), blends in **linear space**, and only sRGB-encodes during the deferred `_renderOutput` pass. Two materials with the same source color, the same alpha, and the same destination pixel produce different blended pixels because one math operates in roughly perceptual space and the other in physically correct linear space.
-
-For most overlays this is a **deferred limitation**, not a defect to band-aid. The architecturally complete fix — routing the entire overlay scene through a shared post-processing render target so the canvas composite happens in the same color space on both backends — remains future work with a separate research entry. The **fat-line material** is exempted by CB-4 below.
-
-Empirical caveat: the residual is well within the ~10-15 sRGB-unit budget for desaturated tints (grid lines, light-mode axes against white), but for **fully saturated overlay tints against dark backgrounds** the per-channel divergence approaches 40+ sRGB units. Saturated tints that must reach perceptual parity therefore belong on the CB-4 path, not the deferred CB-3 path.
-
-### CB-4. Fat-line materials blend in sRGB space inside the shader
-
-`Line2NodeMaterial` (Tau subclass — [`apps/ui/app/components/geometry/graphics/three/materials/line2.material.ts`](../../apps/ui/app/components/geometry/graphics/three/materials/line2.material.ts)) closes seam **S7** for fat-line overlays without re-platforming the overlay scene. When constructed with `transparent: true`, its `setup()` builds an explicit `outputNode` that:
-
-1. Transfers `colorNode.rgb` and the Tau-owned non-mip viewport singleton (`tauOpaqueViewportTexture()`, an alias around `viewportTexture()` with `generateMipmaps: false`, exported from the same module) from working linear-sRGB to sRGB space via `sRGBTransferOETF` (`three/tsl`).
-2. Performs the `color · α + viewport · (1 - α)` alpha mix in sRGB space.
-3. Returns the mixed result back to linear-sRGB via `sRGBTransferEOTF` before assigning to `outputNode.rgb`.
-
-The viewport sample uses the Tau singleton rather than upstream `viewportOpaqueMipTexture` because the blend samples exclusively at level 0 — the mip pyramid that the upstream singleton (`viewportMipTexture()`) regenerates every frame is never read, and on WebGPU the per-frame `generateMipmaps` triggers a mid-pass split plus a `Load` restart inside `WebGPUBackend.copyFramebufferToTexture` alongside ~10 blit passes at 1080p. The non-mip singleton produces identical sampled colour at level 0 for a cheaper per-frame update path. See [`docs/research/webgpu-axes-hover-pipeline-stall.md`](../research/webgpu-axes-hover-pipeline-stall.md) for the measurement.
-
-The net effect is a gamma-space blend math that matches WebGL's sRGB-encoded framebuffer blend characteristic, while still producing linear values that downstream pipeline stages (post-processing, sRGB canvas encode) expect.
-
-Scope:
-
-- **Applies to**: every consumer of Tau's `Line2NodeMaterial` constructed with `transparent: true` — currently the scene `<AxesHelper>` (via `AxesWebGpuFatLine`) and the viewport gizmo cube axes (via `createViewportGizmoCubeAxes`'s WebGPU branch).
-- **Does not apply to**: `createWebGpuGltfFatLineMaterial` (opaque — depends on standard `colorNode` output), the WebGPU infinite grid material, or any other overlay material that does not extend Tau's `Line2NodeMaterial` with `transparent: true`. Those surfaces remain on the CB-3 deferred path.
-
-Guards: [`apps/ui/app/components/geometry/graphics/three/materials/line2.material.test.ts`](../../apps/ui/app/components/geometry/graphics/three/materials/line2.material.test.ts) (`Line2NodeMaterial.outputNode` describe block — fingerprint match against an sRGB-wrapped reference, fingerprint mismatch against a linear-only reference, and an opaque-material negative case). [`apps/ui/app/components/geometry/graphics/three/controls/viewport-gizmo-cube-axes.test.ts`](../../apps/ui/app/components/geometry/graphics/three/controls/viewport-gizmo-cube-axes.test.ts) (gizmo WebGPU branch uses the Tau subclass; WebGL branch sets `transparent: true`).
-
-Why not back-port to WebGL: the WebGL fat-line path already blends in gamma space because the canvas drawing buffer is sRGB-encoded. Wrapping the same colors in sRGB transfer functions on WebGL would double-encode and produce **dim**, washed-out lines — strictly a WebGPU-only correction.
-
-### S1-S8 invariant reference table
-
-The eight seams a `THREE.Color` traverses on its way to a canvas pixel. Misaligning any single seam fragments parity even if shaders are identical:
-
-| Seam | Stage                           | WebGL                                                         | WebGPU                                                                                                                   | Aligned by                                        |
-| ---- | ------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| S1   | Source declaration              | `THREE.Color` (sRGB hex / `rgb()`)                            | `THREE.Color` (sRGB hex / `rgb()`)                                                                                       | `overlay-colors.constants.ts` (CB-2)              |
-| S2   | Color → linear (uniform upload) | `Color.convertSRGBToLinear()` on upload                       | `Color.convertSRGBToLinear()` on upload                                                                                  | three.js core, no action                          |
-| S3   | Linear → output texel (shader)  | `<colorspace_fragment>` chunk ↔ `linearToOutputTexel`         | `ColorSpaceNode` injected by `NodeMaterial.setupOutput`                                                                  | §9 (custom `ShaderMaterial`)                      |
-| S4   | Material `transparent` flag     | Drei components default to `false` for non-vertex-color lines | `*NodeMaterial` constructors set `true` explicitly                                                                       | CB-1                                              |
-| S5   | Renderer alpha mode             | sRGB-encoded canvas (drawing buffer)                          | `'premultiplied'` `GPUCanvasConfiguration.alphaMode`                                                                     | three.js / browser, deferred (CB-3)               |
-| S6   | Framebuffer color space         | `outputColorSpace = SRGBColorSpace` (canvas direct)           | `LinearSRGBColorSpace` offscreen `frameBufferTarget`, encoded on composite                                               | three.js / browser, deferred (CB-3)               |
-| S7   | Blend math space                | **Gamma** (sRGB-encoded canvas blend)                         | **Linear** (linear-float offscreen blend); **gamma** for transparent `Line2NodeMaterial` (CB-4 in-shader OETF/EOTF wrap) | **CB-4 for fat lines**; otherwise deferred (CB-3) |
-| S8   | Composite to canvas             | Direct draw, no extra pass                                    | Deferred `_renderOutput` quad pass with sRGB encode                                                                      | deferred (CB-3)                                   |
-
-S1-S4 are unconditional rules (pixels match within ~10-15 sRGB/channel once aligned). S5, S6, S8 remain the deferred limitation captured in CB-3. S7 is closed by CB-4 for transparent `Line2NodeMaterial` consumers and stays deferred for every other overlay material.
-
-## Anti-Patterns
-
-- **`RawShaderMaterial` / handwritten GLSL-only** additions without a staged WebGPU analogue and policy approval.
-- **Custom `ShaderMaterial` skipping `#include <colorspace_fragment>`** when writing **`gl_FragColor`** — breaks WebGL/WebGPU brightness parity (§9).
-- **Drei `<Line>`** (or any third-party material wrapper) **without explicit `transparent`** when `opacity < 1` — opacity is silently dropped on WebGL, brightness diverges from WebGPU (CB-1).
-- **Pinning overlay color hex/RGB constants** to perceptual readouts produced by a known-broken pipeline state — locks the bug into the design contract (CB-2).
-- **Backend-specific color overrides** introduced to compensate for the residual gamma-vs-linear blend delta — band-aid that breaks as soon as either backend is touched. The delta is deferred work for non-line overlays (CB-3); for fat lines the architecturally correct fix is the in-shader sRGB blend (CB-4), not per-backend hex values.
-- **Stock `three/webgpu` `Line2NodeMaterial`** imported for any line drawn into the viewport canvas — bypasses Tau's renderer-aware depth encoder, hardware-clipping override, and the CB-4 in-shader gamma blend. Always import from `#components/geometry/graphics/three/materials/line2.material.js`.
-- **Snapshot tests** that omit **`await`** on **`toMatchFileSnapshot`** (Vitest forwards will fail later).
-- **E2e** that asserts only DOM structure for GPU-heavy regressions without an opt-in screenshot in **`graphics-backend.spec.ts`**.
-- **Named `.toVar('…')` inside reusable `Fn` bodies** invoked more than once per shader stage — see §3.
-- **Disposing materials inferred from `isMesh` / scene traversal** in any clone-and-render surface — `LineSegments2 extends Mesh` and shared viewport materials are silently freed (§10).
-- **Sharing a TSL-graph-baked or `onBeforeCompile`-hooked material across renderer instances** with differing `reversedDepthBuffer`, `logarithmicDepthBuffer`, `samples`, or `outputColorSpace` — the secondary renderer inherits the primary's flag-baked graph (§11).
-- **Skipping `invalidate()`** after overlay tool state updates under `frameloop="demand"` — stale canvas until an unrelated interaction (§7b).
-- **Per-call `FontLoader` / `JSON.parse` / `ExtrudeGeometry`** for label text without module-scope LRU — multi-ms stalls on every preview frame (§12).
-- **`Mesh.prototype.raycast = acceleratedRaycast`** global monkey-patch — use `bvhRaycastFirst` instead (§14).
-- **Camera quaternion/position delta heuristics** to detect orbit drags — use `cameraInteracting` from OrbitControls events (§16).
-- **Three separate `setState` calls** per pointer frame for related snap UI state — batch via `useReducer` + rAF coalescing (§15).
-
-## Summary Checklist
-
-- [ ] New material: WebGL sibling + WebGPU **`NodeMaterial`**, factory branches on **`resolvedGraphicsBackend`**
-- [ ] **`__shader-snapshots__`** + node env Vitest **`await`** snapshot
-- [ ] If user-visible parity matters: harness query + Playwright **`toHaveScreenshot`** with explicit **`name`**
-- [ ] Renderer construction routed through **`createTauRenderer`** unless a sanctioned exception lands in **`tau-renderer.ts`**
-- [ ] Custom WebGL **`ShaderMaterial`**: **`#include <colorspace_fragment>`** on manual **`gl_FragColor`** writes (§9)
-- [ ] Dual-stack alpha overlay: **`transparent: true`** declared on **both** backends (CB-1)
-- [ ] Overlay color/opacity constants live in **`overlay-colors.constants.ts`**, not pinned to a known-broken backend baseline (CB-2)
-- [ ] Saturated transparent fat-line overlay: routed through Tau **`Line2NodeMaterial`** (NOT stock `three/webgpu`) so CB-4's in-shader sRGB blend closes S7
-- [ ] Clone-and-render surface (screenshot, offscreen, exporter): allocator returns **`Set<Material>`**, teardown calls **`disposeCloneOwnedMaterials(set)`** — never traverses by **`isMesh`** (§10)
-- [ ] Material that branches on **`reversedDepthBuffer`** / **`logarithmicDepthBuffer`** / **`samples`** / **`outputColorSpace`**: fresh-allocated per renderer instance via the §10 allocator pattern, never reference-shared (§11)
-- [ ] Interactive overlay under demand frameloop: **`invalidate()`** after every user-driven state change (§7b)
-- [ ] Derived label/background geometry: module-scope LRU + dispose-on-evict; callers treat outputs as non-owned (§12)
-- [ ] Internal `useMemo` materials/geometries: `useEffect` dispose with caller-vs-internal discriminator (§13)
-- [ ] Pointer-rate picking: **`bvhRaycastFirst`** only — no `Mesh.prototype.raycast` patch (§14)
-- [ ] High-frequency pointer pipeline: **`createRafCoalescer`** + batched reducer state (§15)
-- [ ] Overlay pointer lifecycle: XState input machine + **`cameraInteracting`** from OrbitControls — no quaternion heuristics (§16)
-- [ ] Scene-composition changes bump **`pickableMeshesVersion`** on `graphics.machine` for tool mesh caches (measure tool)
-
-## References
-
-- Research: **`docs/research/webgpu-migration-graphics-stack.md`**
-- Research: **`docs/research/measure-tool-performance-audit.md`**
-- Research: **`docs/research/screenshot-viewport-shared-material-state-bleed.md`** (§10 + §11 root cause and architectural fix)
-- E2e harness route: **`apps/ui/app/routes/e2e.graphics-backend/route.tsx`**
-- Stability helper: **`apps/ui/app/components/geometry/graphics/three/utils/tsl-node-graph-snapshot.ts`**
-- Overlay color tuning point: **`apps/ui/app/components/geometry/graphics/three/overlay-colors.constants.ts`**
-- Infinite grid color contract: **`apps/ui/app/components/geometry/graphics/three/materials/infinite-grid-material.test.ts`**, **`apps/ui/app/components/geometry/graphics/three/grid-colors.test.ts`**
-- Axes `transparent` parity guard: **`apps/ui/app/components/geometry/graphics/three/react/axes-helper.test.tsx`**
-- Clone-ownership guard (§10): **`apps/ui/app/machines/screenshot-capability.utils.test.ts`** (`R2`, `R6`)
-- Renderer-aware fat-line depth dispatch: **`apps/ui/app/components/geometry/graphics/three/materials/line2.material.ts`** (§11 reference subclass)
+- Backend resolution: `packages/viewer/src/graphics/graphics-backend.ts`
+- Canvas lifecycle: `packages/viewer/src/graphics/three/three-context.tsx`
+- Renderer presets: `packages/viewer/src/graphics/three/renderer.ts`
+- Transparent ordering: `packages/viewer/src/graphics/three/reversed-depth-transparent-sort.ts`
+- Materials: `packages/viewer/src/graphics/three/materials`
+- Picking and scheduling: `packages/viewer/src/graphics/three/utils`
+- Graphics state: `packages/viewer/src/machines/graphics.machine.ts`
+- Tessellation vocabulary and presets: `packages/core/occt/src/occt-schemas.ts`, `packages/core/occt/src/occt-tessellation.ts`
+- Kernel-settings pane: `packages/viewer/src/cad/kernel-settings.tsx`
+- Voxel view adaptivity: `packages/plugins/picovoxel/src/picovoxel-meshing.ts`, `packages/plugins/picogk/src/picogk-render.schemas.ts`
+- Tessellation report on `evaluate_model`: `libs/chat/src/schemas/tools/evaluate-model.tool.schema.ts`

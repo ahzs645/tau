@@ -1,148 +1,124 @@
-@import 'tailwindcss';
+@import 'tailwindcss' source(none);
 
-/* Fumadocs preset: base styles, animations, layout, typography, and Tailwind source directives */
-@import 'fumadocs-ui/css/preset.css';
+/* Keep typography and code styles without safelisting unused documentation layouts. */
+@import 'fumadocs-ui/css/lib/base.css';
+@import 'fumadocs-ui/css/lib/shiki.css';
+@plugin '@fumadocs/tailwind/typography';
+@source inline('prose prose-sm prose-no-margin');
 
 @import 'tw-animate-css';
+@import '@taucad/ui/styles/tokens.css';
+@import '@taucad/ui/styles/base.css';
+@import 'streamdown/styles.css';
+@import '@taucad/workbench-panes/styles/panes.css';
+@import '../components/layout/application-shell.css';
+@import './client-facts.css';
+@import './scroll-shadows.css';
+@import './syntax-highlight.css';
+@import './shiny-text.css';
+
+/*
+ * Keep source discovery explicit. The web and desktop Vite roots differ, and
+ * an automatic scan also walks generated build output and workspace package
+ * symlinks below those roots. Naming the source owners outright gives both
+ * builds the same bounded candidate set.
+ */
+@source '..';
 @source '../components/auth';
 @source '../../../../node_modules/streamdown/dist';
-@source '../../content/docs/**/*.{json,mdx}';
-/* Workspace component library (parameters panel): its Tailwind classes must be scanned here. */
-@source '../../../../packages/react/src';
+@source '../../../../node_modules/@streamdown/code/dist';
+@source '../../../../node_modules/@streamdown/math/dist';
+@source '../../../../node_modules/@streamdown/mermaid/dist';
+@source '../../../libs/ui-kit/src';
+@source '../../../libs/chat-ui/src';
+@source '../../../libs/project-workspace/src';
+@source '../../../libs/files-ui/src';
+@source '../../../libs/editor-ui/src';
+@source '../../../libs/revisions-ui/src';
+@source '../../../libs/settings-ui/src';
+@source '../../../libs/publish-ui/src';
+@source '../../../libs/billing-ui/src';
+@source '../../../libs/ui-core/src';
+@source '../../../../packages/ui/src';
+@source '../../../../packages/viewer/src';
+@source '../../../../packages/workbench-panes/src';
+
+/*
+ * Vendor cursor adapters. Dockview and lazy runtime styles are unlayered, so
+ * these declarations need `!important`. All action cursors still resolve
+ * through the one shared preference token.
+ */
+@layer base {
+  .dockview-theme-tau
+    :where(
+      .dv-default-tab-action,
+      .dv-tabs-overflow-dropdown-default,
+      .dv-tab,
+      .dv-pinned-tab,
+      .dv-tab-group-chip,
+      .dv-tabs-overflow-group-header,
+      .dv-edge-peek-pin,
+      .dv-edge-peek-close,
+      .dv-default-header,
+      .dv-pane-header.dv-pane-draggable,
+      .dv-context-menu-item:not(.dv-context-menu-item--disabled),
+      .dv-context-menu-color-swatch
+    ) {
+    cursor: var(--cursor-action) !important;
+  }
+
+  .dockview-theme-tau :where(.dv-pinned-tab, .dv-default-header, .dv-pane-header.dv-pane-draggable):hover {
+    background-color: var(--dv-icon-hover-background-color);
+  }
+
+  .dockview-theme-tau .dv-tab-group-chip:hover {
+    filter: brightness(1.08);
+  }
+
+  :where([data-sonner-toast] [data-button], [data-sonner-toast] [data-close-button]) {
+    cursor: var(--cursor-action) !important;
+  }
+
+  :where(
+    #profiler-toggle,
+    .builtin-tab-btn,
+    .mini-panel-content .list-item.actionable,
+    #floating-btn,
+    #maximize-btn,
+    #hide-panel-btn,
+    .list-item-row.collapsible,
+    .list-item-row.actionable,
+    .console-copy-button,
+    .param-control button,
+    .custom-checkbox,
+    .detached-reattach-btn,
+    .panel-action-btn
+  ):not(:any-link) {
+    cursor: var(--cursor-action) !important;
+  }
+
+  .param-control input[type='range']::-webkit-slider-thumb,
+  .param-control input[type='range']::-moz-range-thumb {
+    cursor: var(--cursor-action) !important;
+  }
+
+  :where(#profiler-panel, .detached-tab-content) .custom-checkbox:hover .checkmark {
+    background-color: color-mix(in srgb, var(--accent-color) 15%, transparent);
+  }
+}
 
 /* Typography is provided by fumadocs-ui/css/preset.css (forked @tailwindcss/typography with fd-* color support) */
 
 :root {
-  /* Radius */
-  --radius-4xl: calc(var(--radius-3xl) + 0.5rem);
-  --radius-3xl: calc(var(--radius-2xl) + 0.5rem);
-  --radius-2xl: calc(var(--radius-xl) + 0.25rem);
-  --radius-xl: calc(var(--radius-lg) + 0.25rem);
-  --radius-lg: calc(var(--radius-md) + 0.125rem);
-  --radius-md: calc(var(--radius-sm) + 0.125rem);
-  --radius-sm: calc(var(--radius-xs) + 0.125rem);
-  --radius-xs: 0.4375rem;
-
-  /* Base color hues */
-  --hue-primary: 180deg;
-  --hue-secondary: calc(var(--hue-primary) - 10deg);
-  --hue-neutral: calc(var(--hue-primary) - 10deg);
-  --hue-destructive: 15deg;
-  --hue-success: 150deg;
-  --hue-warning: 70deg;
-  --hue-feature: 280deg;
-  --hue-information: 250deg;
-  --hue-highlighted: 330deg;
-  --hue-stable: 185deg;
-  --hue-alert: 90deg;
-  --hue-verified: 210deg;
-  --hue-highlighter: calc(var(--hue-primary) - 86deg); /* Results in ~180deg - true teal */
-
-  /* Lightness levels - will be flipped in dark mode */
-  --l-base: 1;
-  /* Base lightness level, typically used for the lightest backgrounds */
-  --l-surface: 0.96;
-  /* Slightly darker than base, used for surfaces like cards */
-  --l-subtle: 0.9;
-  /* Subtle lightness, for less prominent elements */
-  --l-element: 0.85;
-  /* Lightness for UI elements like buttons */
-  --l-medium: 0.55;
-  /* Medium lightness, for emphasized elements */
-  --l-emphasized: 0.45;
-  /* Emphasized lightness, for important elements */
-  --l-high: 0.25;
-  /* High contrast lightness, for high emphasis elements */
-  --l-intense: 0.15;
-  /* Intense lightness, for very high contrast elements */
-  --l-deepest: 0.08;
-  /* Deepest lightness, typically used for the darkest elements */
-
-  --l-primary: 0.5719;
-  --c-primary: 0.1898;
-
-  --l-secondary: 0.95;
-  --c-secondary: 0.01;
-
-  --l-highlighter: 0.9;
-  --c-highlighter: 0.12;
-
-  /* Base colors */
-  --background: oklch(var(--l-base) 0.005 var(--hue-neutral));
-  --foreground: oklch(var(--l-deepest) 0.02 var(--hue-neutral));
-
-  --muted: oklch(var(--l-surface) 0.01 var(--hue-neutral));
-  --muted-foreground: oklch(var(--l-emphasized) 0.02 var(--hue-neutral));
-
-  /* Primary colors with consistent chroma */
-  --primary: oklch(var(--l-primary) var(--c-primary) var(--hue-primary));
-  --primary-foreground: oklch(var(--l-base) 0.01 var(--hue-neutral));
-
-  /* Secondary colors */
-  --secondary: oklch(var(--l-secondary) var(--c-secondary) var(--hue-secondary));
-  --secondary-foreground: oklch(var(--l-deepest) 0.01 var(--hue-neutral));
-
-  /* Neutral scale using consistent chroma */
-  --neutral: oklch(var(--l-medium) 0.05 var(--hue-neutral));
-  --neutral-foreground: oklch(var(--l-base) 0 var(--hue-neutral));
-
-  /* Semantic colors */
-  --accent: oklch(var(--l-subtle) 0.015 var(--hue-neutral));
-  --border: oklch(var(--l-subtle) 0.01 var(--hue-neutral));
-
-  --destructive: oklch(var(--l-medium) 0.25 var(--hue-destructive));
-  --success: oklch(var(--l-medium) 0.18 var(--hue-success));
-  --warning: oklch(var(--l-medium) 0.18 var(--hue-warning));
-  --feature: oklch(var(--l-medium) 0.22 var(--hue-feature));
-  --information: oklch(var(--l-medium) 0.22 var(--hue-information));
-  --highlighted: oklch(var(--l-medium) 0.25 var(--hue-highlighted));
-  --stable: oklch(var(--l-medium) 0.18 var(--hue-stable));
-  --alert: oklch(var(--l-medium) 0.18 var(--hue-alert));
-  --verified: oklch(var(--l-medium) 0.25 var(--hue-verified));
-
-  --input: oklch(var(--l-subtle) 0.01 var(--hue-neutral));
-  --ring: oklch(var(--l-medium) 0.2 var(--hue-primary));
-
-  /* Component specific */
-  --popover: oklch(var(--l-base) 0 var(--hue-neutral));
-  --popover-foreground: oklch(var(--l-deepest) 0.02 var(--hue-neutral));
-
-  /* Menu opaque colors (pre-blended equivalents of transparent overlays over popover) */
-  --menu-ring: color-mix(in oklch, black 10%, var(--popover));
-  --menu-highlight: color-mix(in oklch, var(--neutral) 20%, var(--popover));
-  --menu-highlight-destructive: color-mix(in oklch, var(--destructive) 10%, var(--popover));
-
-  --card: oklch(var(--l-base) 0 var(--hue-neutral));
-  --card-foreground: oklch(var(--l-deepest) 0.02 var(--hue-neutral));
-
-  /* Sidebar specific */
-  --sidebar-background: oklch(var(--l-surface) 0.005 var(--hue-neutral));
-  --sidebar-foreground: oklch(var(--l-high) 0.02 var(--hue-neutral));
-  --sidebar-primary: oklch(var(--l-deepest) 0.02 var(--hue-neutral));
-  --sidebar-primary-foreground: oklch(var(--l-surface) 0.01 var(--hue-neutral));
-  --sidebar-accent: oklch(var(--l-subtle) 0.02 var(--hue-neutral));
-  --sidebar-accent-foreground: oklch(var(--l-deepest) 0.02 var(--hue-neutral));
-  --sidebar-border: oklch(var(--l-subtle) 0.02 var(--hue-neutral));
-  --sidebar-ring: oklch(var(--l-medium) 0.2 var(--hue-primary));
-
-  /* Scrollbar specific */
+  /* macOS hiddenInset traffic lights end near 65px; leave one control gap after them.
+     Shared by the application shell and standalone window headers. */
+  --desktop-titlebar-inset: calc(var(--spacing) * 20);
+  --chat-streaming-fade-duration: 150ms;
+  --chat-streaming-fade-easing: cubic-bezier(0.37, 0.55, 0.86, 0.88);
   --scrollbar-thumb: var(--border);
   --scrollbar-track: transparent;
   --scrollbar-thickness: 9px;
   --scrollbar-padding: 1.5px;
-
-  /* Highlighter specific */
-  --highlighter: oklch(var(--l-highlighter) var(--c-highlighter) var(--hue-highlighter) / 0.5);
-  --highlighter-foreground: oklch(var(--l-deepest) 0.01 var(--hue-neutral) / 0.7);
-
-  /* Chart colors */
-  --chart-1: oklch(0.55 0.18 250deg); /* Blue - Input */
-  --chart-2: oklch(0.55 0.18 290deg); /* Purple - Output */
-  --chart-3: oklch(0.55 0.15 180deg); /* Teal - Cache */
-  --chart-4: oklch(0.55 0.18 150deg); /* Green */
-  --chart-5: oklch(0.55 0.2 30deg); /* Orange */
-
-  /* Diagram colors — softened primary tint */
   --diagram-node: oklch(0.96 0.015 var(--hue-primary));
   --diagram-node-border: oklch(0.8 0.05 var(--hue-primary));
   --diagram-node-text: var(--foreground);
@@ -153,50 +129,35 @@
   --diagram-note: oklch(0.96 0.012 calc(var(--hue-primary) + 60deg));
   --diagram-note-border: oklch(0.78 0.04 calc(var(--hue-primary) + 60deg));
   --diagram-accent: var(--muted-foreground);
+  /* The running viewer tool's glyph (Section, Measure): 3:1 on accent and sidebar at every primary hue. Its per-theme
+     values below are a recorded exception in docs/policy/color-policy.md (Separate Dark Mode Authoring). */
+  --viewer-tool-active: oklch(0.53 0.12 var(--hue-primary));
+}
+
+@keyframes chat-streaming-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+[data-chat-streaming-fade] {
+  animation: chat-streaming-fade var(--chat-streaming-fade-duration) var(--chat-streaming-fade-easing) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-chat-streaming-fade] {
+    animation-delay: 0ms;
+    animation-duration: 0.01ms;
+    opacity: 1;
+  }
 }
 
 .dark,
 :root[class~='dark'] {
-  /* Invert lightness levels for dark mode */
-  --l-base: 0.21;
-  --l-surface: 0.28;
-  --l-subtle: 0.33;
-  --l-element: 0.35;
-  --l-medium: 0.55;
-  --l-emphasized: 0.58;
-  --l-high: 0.78;
-  --l-intense: 0.88;
-  --l-deepest: 0.95;
-  --l-secondary: 0.8;
-  --l-highlighter: 0.8;
-
-  --background: oklch(calc(var(--l-base) * 0.85) 0 var(--hue-neutral));
-  --neutral: oklch(calc(var(--l-medium) * 0.85) 0 var(--hue-neutral));
-  --muted: oklch(calc(var(--l-surface) * 0.85) 0 var(--hue-neutral));
-  --input: oklch(calc(var(--l-subtle) * 0.85) 0 var(--hue-neutral));
-  --border: oklch(calc(var(--l-subtle) * 0.85) 0.005 var(--hue-neutral));
-  --accent: oklch(calc(var(--l-subtle) * 0.85) 0.015 var(--hue-neutral));
-  --sidebar-background: oklch(calc(var(--l-surface) * 0.85) 0 var(--hue-neutral));
-  --sidebar-border: oklch(calc(var(--l-subtle) * 0.85) 0.005 var(--hue-neutral));
-  --sidebar-accent: oklch(calc(var(--l-subtle) * 0.85) 0.02 var(--hue-neutral));
-  --menu-ring: color-mix(in oklch, white 25%, var(--popover));
-  --menu-highlight: color-mix(in oklch, var(--neutral) 30%, var(--popover));
-  --menu-highlight-destructive: color-mix(in oklch, var(--destructive) 20%, var(--popover));
-
-  --primary-foreground: oklch(var(--l-deepest) 0.01 var(--hue-neutral));
-  --secondary-foreground: oklch(var(--l-base) 0.01 var(--hue-neutral));
-
-  --highlighter: oklch(var(--l-highlighter) var(--c-highlighter) var(--hue-highlighter) / 0.5);
-  --highlighter-foreground: oklch(var(--l-deepest) 0.01 var(--hue-neutral) / 0.85);
-
-  /* Chart colors - lighter for dark mode */
-  --chart-1: oklch(0.7 0.16 250deg); /* Blue - Input */
-  --chart-2: oklch(0.7 0.16 290deg); /* Purple - Output */
-  --chart-3: oklch(0.7 0.14 180deg); /* Teal - Cache */
-  --chart-4: oklch(0.7 0.16 150deg); /* Green */
-  --chart-5: oklch(0.7 0.18 30deg); /* Orange */
-
-  /* Diagram colors - dark mode */
   --diagram-node: oklch(0.28 0.02 var(--hue-primary));
   --diagram-node-border: oklch(0.4 0.03 var(--hue-primary));
   --diagram-cluster: oklch(0.22 0.01 var(--hue-primary));
@@ -204,106 +165,125 @@
   --diagram-line: oklch(0.5 0.03 var(--hue-primary));
   --diagram-note: oklch(0.26 0.015 calc(var(--hue-primary) + 60deg));
   --diagram-note-border: oklch(0.38 0.025 calc(var(--hue-primary) + 60deg));
+  --viewer-tool-active: oklch(0.75 0.1 var(--hue-primary));
+}
+
+.black,
+:root[class~='black'] {
+  --diagram-node: oklch(0.13 0.012 var(--hue-primary));
+  --diagram-node-border: oklch(0.27 0.025 var(--hue-primary));
+  --diagram-cluster: oklch(0.055 0.006 var(--hue-primary));
+  --diagram-cluster-border: oklch(0.2 0.015 var(--hue-primary));
+  --diagram-note: oklch(0.11 0.01 calc(var(--hue-primary) + 60deg));
+  --diagram-note-border: oklch(0.25 0.02 calc(var(--hue-primary) + 60deg));
+}
+
+.high-contrast,
+:root[class~='high-contrast'] {
+  --scrollbar-thumb: oklch(0.65 0 none);
+  --diagram-node: oklch(0.18 0.012 var(--hue-primary));
+  --diagram-node-border: oklch(0.72 0.05 var(--hue-primary));
+  --diagram-cluster: oklch(0.11 0.006 var(--hue-primary));
+  --diagram-cluster-border: oklch(0.62 0.03 var(--hue-primary));
+  --diagram-line: oklch(0.82 0.04 var(--hue-primary));
+  --diagram-note: oklch(0.2 0.012 calc(var(--hue-primary) + 60deg));
+  --diagram-note-border: oklch(0.72 0.04 calc(var(--hue-primary) + 60deg));
+  --viewer-tool-active: oklch(0.85 0.06 var(--hue-primary));
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --scrollbar-thumb: oklch(0.48 0 none);
+    --diagram-node: oklch(0.92 0.012 var(--hue-primary));
+    --diagram-node-border: oklch(0.48 0.05 var(--hue-primary));
+    --diagram-cluster: oklch(0.96 0.006 var(--hue-primary));
+    --diagram-cluster-border: oklch(0.5 0.03 var(--hue-primary));
+    --diagram-line: oklch(0.38 0.04 var(--hue-primary));
+    --diagram-note: oklch(0.9 0.012 calc(var(--hue-primary) + 60deg));
+    --diagram-note-border: oklch(0.46 0.04 calc(var(--hue-primary) + 60deg));
+    --viewer-tool-active: oklch(0.41 0.12 var(--hue-primary));
+  }
+
+  .dark,
+  :root[class~='dark'] {
+    --scrollbar-thumb: oklch(0.65 0 none);
+    --diagram-node: oklch(0.18 0.012 var(--hue-primary));
+    --diagram-node-border: oklch(0.72 0.05 var(--hue-primary));
+    --diagram-cluster: oklch(0.11 0.006 var(--hue-primary));
+    --diagram-cluster-border: oklch(0.62 0.03 var(--hue-primary));
+    --diagram-line: oklch(0.82 0.04 var(--hue-primary));
+    --diagram-note: oklch(0.2 0.012 calc(var(--hue-primary) + 60deg));
+    --diagram-note-border: oklch(0.72 0.04 calc(var(--hue-primary) + 60deg));
+    --viewer-tool-active: oklch(0.85 0.06 var(--hue-primary));
+  }
+}
+
+/* Fumadocs emits all four palettes; these selectors choose the contrast pair. */
+.high-contrast .shiki:not(.not-fumadocs-codeblock *) code span {
+  color: var(--shiki-high-contrast-dark);
+  font-style: var(--shiki-high-contrast-dark-font-style);
+}
+
+.high-contrast code.shiki:not(.not-fumadocs-code *) span {
+  color: var(--shiki-high-contrast-dark);
+  font-style: var(--shiki-high-contrast-dark-font-style);
+}
+
+@media (prefers-contrast: more) {
+  .shiki:not(.not-fumadocs-codeblock *) code span {
+    color: var(--shiki-high-contrast-light);
+    font-style: var(--shiki-high-contrast-light-font-style);
+  }
+
+  code.shiki:not(.not-fumadocs-code *) span {
+    color: var(--shiki-high-contrast-light);
+    font-style: var(--shiki-high-contrast-light-font-style);
+  }
+
+  .dark .shiki:not(.not-fumadocs-codeblock *) code span {
+    color: var(--shiki-high-contrast-dark);
+    font-style: var(--shiki-high-contrast-dark-font-style);
+  }
+
+  .dark code.shiki:not(.not-fumadocs-code *) span {
+    color: var(--shiki-high-contrast-dark);
+    font-style: var(--shiki-high-contrast-dark-font-style);
+  }
 }
 
 /* Dark variant is provided by fumadocs-ui/css/preset.css: @variant dark (&:where(.dark, .dark *)) */
 
-@utility rounded-* {
-  /* 
-   * Extend rounded utility to apply the squircle shape for rounding.
-   * Squircle shape for rounding - https://developer.mozilla.org/en-US/docs/Web/CSS/superellipse
-   */
-  @supports (corner-shape: superellipse(1.15)) {
-    /* Full rounded corners preserve perfect circles. */
-    &:not(.rounded-full) {
-      /* 1.15 applies a subtle squircle shape to the rounded corners without being overwhelming.*/
-      corner-shape: superellipse(1.15);
-    }
-  }
-}
+/*
+ * Inside a closed desktop sidebar's shell. The shell's own attribute decides once React renders; before hydration the
+ * client-facts head script's `data-sidebar-closed` on `<html>` decides, so a closed sidebar paints closed
+ * (`#lib/client-facts`). The writer keeps that attribute equal to the stored state.
+ */
+@custom-variant sidebar-closed (&:where([data-slot='application-shell'][data-sidebar-open='false'] *, :root[data-sidebar-closed] [data-slot='application-shell'] *));
 
 @theme inline {
-  /* Shadows */
-  --shadow-*: initial;
-  --shadow-xs: 0px 1px 2px 0px rgba(10, 13, 20, 0.03);
-  --shadow-sm: 0px 1px 2px 0px #1018280f, 0px 1px 3px 0px #1018281a;
-  --shadow-md: 0px 16px 32px -12px rgba(14, 18, 27, 0.1);
-  --shadow: 0px 16px 32px -12px #0e121b1a;
-  --shadow-menu: 0 0 0 1px var(--menu-ring), 0 6px 20px -4px rgba(0, 0, 0, 0.25);
-
-  /* Fonts */
-  --font-sans: 'Geist Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, monospace;
-
-  /* Colors */
-  --color-*: initial;
-  --color-black: black;
-  --color-white: white;
-  --color-transparent: transparent;
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-
-  --color-blue: oklch(63.82% 0.1949 265.76);
-  --color-purple: oklch(60.29% 0.1875 289.06);
-  --color-yellow: oklch(86.76% 0.6 93.18);
-
-  --color-neutral: var(--neutral);
-  --color-neutral-foreground: var(--neutral-foreground);
-
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-
-  /* Semantic colors */
-  --color-accent: var(--accent);
-  --color-border: var(--border);
-
-  --color-destructive: var(--destructive);
-
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-
-  --color-success: var(--success);
-  --color-warning: var(--warning);
-  --color-feature: var(--feature);
-  --color-information: var(--information);
-  --color-highlighted: var(--highlighted);
-  --color-stable: var(--stable);
-  --color-verified: var(--verified);
-  --color-alert: var(--alert);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-
-  /* Sidebar specific */
-  --color-sidebar: var(--sidebar-background);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-
-  /* Card specific */
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-menu-highlight: var(--menu-highlight);
-  --color-menu-highlight-destructive: var(--menu-highlight-destructive);
-
-  /* Highlighter specific */
-  --color-highlighter: var(--highlighter);
-  --color-highlighter-foreground: var(--highlighter-foreground);
+  --color-viewer-tool-active: var(--viewer-tool-active);
 
   --animate-pulse-subtle: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-gradient: gradient 5s ease infinite;
   --animate-bounce-subtle: gentle-bounce 2s infinite;
-  --animate-shiny-text: shiny-text 1.2s linear infinite;
+  /* Dictation waveform scroll: the bar row glides one bar pitch (a 0.75 bar plus a 0.75 gap) left over each 100ms
+     microphone batch. Each batch swaps to the other, identical glide, which restarts it as the levels shift one slot,
+     so even a silent row visibly travels. Transform only, per DESIGN Motion; the waveform is hidden under reduced
+     motion. */
+  --animate-dictation-scroll: dictation-scroll 100ms linear forwards;
+  --animate-dictation-scroll-alternate: dictation-scroll-alternate 100ms linear forwards;
 
-  /* Fumadocs Docs */
+  @keyframes dictation-scroll {
+    to {
+      transform: translateX(calc(var(--spacing) * -1.5));
+    }
+  }
+
+  @keyframes dictation-scroll-alternate {
+    to {
+      transform: translateX(calc(var(--spacing) * -1.5));
+    }
+  }
   --color-fd-primary: var(--primary);
   --color-fd-primary-foreground: var(--primary-foreground);
   --color-fd-secondary: var(--secondary);
@@ -323,7 +303,7 @@
 
   --color-fd-info: var(--color-information);
   --color-fd-warning: var(--color-warning);
-  --color-fd-error: var(--color-destructive);
+  --color-fd-error: var(--color-feature);
   --color-fd-success: var(--color-success);
   --color-fd-diff-remove: rgba(200, 10, 100, 0.12);
   --color-fd-diff-remove-symbol: rgb(230, 10, 100);
@@ -357,13 +337,11 @@
     100% {
       transform: translateY(0);
       animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
-      /* slow down at the bottom */
     }
 
     50% {
       transform: translateY(6px);
       animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
-      /* speed up on the way up */
     }
   }
 
@@ -374,16 +352,6 @@
 
     100% {
       width: 100%;
-    }
-  }
-
-  @keyframes shiny-text {
-    0% {
-      background-position: 75% 0;
-    }
-
-    100% {
-      background-position: -175% 0;
     }
   }
 
@@ -405,53 +373,14 @@
 
 /* END ANIMATION UTILITIES */
 
-/*
-  The default border color has changed to `currentColor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
-
-  If we ever want to remove these styles, we need to add an explicit border
-  color utility to any element that depends on these defaults.
-*/
+/* The document base every Tau surface shares (border colour, focus fallback, body type, selection): @taucad/ui owns
+   it so the agent plugin viewer page draws the same. The app only adds its scrolling behaviour. */
 @layer base {
-  *,
-  ::after,
-  ::before,
-  ::backdrop,
-  ::file-selector-button {
-    border-color: var(--border, currentColor);
-  }
-
-  button:not(:disabled),
-  [role='button']:not(:disabled) {
-    cursor: pointer;
-  }
-}
-
-@layer base {
-  * {
-    @apply border-border focus-visible:outline-primary;
-  }
-
   html,
   body {
-    @apply scroll-smooth bg-background font-sans text-foreground antialiased;
+    @apply scroll-smooth;
     overflow: hidden;
     overscroll-behavior: none;
-  }
-}
-
-/*
- * iOS Safari auto-zooms the page when a focused form control renders text under
- * 16px. Bumping controls to 16px on touch devices stops the tap-to-zoom jump
- * without the pinch-zoom/a11y cost of a `maximum-scale=1` viewport. Deliberately
- * unlayered: it must outrank Tailwind text-* utilities (utilities layer).
- */
-@media (pointer: coarse) {
-  input,
-  select,
-  textarea {
-    font-size: max(16px, 1em);
   }
 }
 
@@ -504,160 +433,6 @@
       background-clip: padding-box;
     }
   }
-
-  ::selection {
-    @apply bg-highlighter text-highlighter-foreground;
-  }
 }
 
 /* END SCROLLBAR STYLES */
-
-/* START SCROLL SHADOWS */
-/*
- * Content-fading scroll indicators using CSS mask-image.
- * Fades content itself at scroll edges — works on any background color.
- *
- * Enhanced with animation-timeline: scroll() for scroll-aware fading
- * (Chrome/Edge 115+, Safari 26+). Browsers without support degrade
- * gracefully to no fade (initial-value: black = fully opaque mask).
- *
- * Usage: scroll-shadows-x, scroll-shadows-y, or scroll-shadows (both)
- * Override --scroll-fade-size to control the fade distance.
- *
- * --scroll-fade-end controls the alpha of the mask at the fading edge.
- * Dark mode keeps the original `transparent` so content fades fully into
- * the dark background (reads as a depth shadow). Light mode uses a
- * partially-opaque value so the edge stays visibly dimmed instead of
- * washing all the way out to the surface color (the "whitened" look).
- */
-
-:root {
-  --scroll-fade-end: oklch(0 0 0 / 0.45);
-}
-
-.dark,
-:root[class~='dark'] {
-  --scroll-fade-end: transparent;
-}
-
-@property --scroll-fade-top {
-  syntax: '<color>';
-  inherits: false;
-  initial-value: black;
-}
-
-@property --scroll-fade-bottom {
-  syntax: '<color>';
-  inherits: false;
-  initial-value: black;
-}
-
-@property --scroll-fade-left {
-  syntax: '<color>';
-  inherits: false;
-  initial-value: black;
-}
-
-@property --scroll-fade-right {
-  syntax: '<color>';
-  inherits: false;
-  initial-value: black;
-}
-
-@keyframes scroll-fade-y {
-  0% {
-    --scroll-fade-top: black;
-    --scroll-fade-bottom: var(--scroll-fade-end);
-  }
-  3%,
-  97% {
-    --scroll-fade-top: var(--scroll-fade-end);
-    --scroll-fade-bottom: var(--scroll-fade-end);
-  }
-  100% {
-    --scroll-fade-top: var(--scroll-fade-end);
-    --scroll-fade-bottom: black;
-  }
-}
-
-@keyframes scroll-fade-x {
-  0% {
-    --scroll-fade-left: black;
-    --scroll-fade-right: var(--scroll-fade-end);
-  }
-  3%,
-  97% {
-    --scroll-fade-left: var(--scroll-fade-end);
-    --scroll-fade-right: var(--scroll-fade-end);
-  }
-  100% {
-    --scroll-fade-left: var(--scroll-fade-end);
-    --scroll-fade-right: black;
-  }
-}
-
-@utility scroll-shadows-x {
-  --scroll-fade-size: 14px;
-  overflow: auto;
-  mask-image: linear-gradient(
-    to right,
-    var(--scroll-fade-left),
-    black var(--scroll-fade-size),
-    black calc(100% - var(--scroll-fade-size)),
-    var(--scroll-fade-right)
-  );
-  animation: scroll-fade-x linear;
-  animation-timeline: scroll(self x);
-}
-
-@utility scroll-shadows-y {
-  --scroll-fade-size: 14px;
-  overflow: auto;
-  mask-image: linear-gradient(
-    to bottom,
-    var(--scroll-fade-top),
-    black var(--scroll-fade-size),
-    black calc(100% - var(--scroll-fade-size)),
-    var(--scroll-fade-bottom)
-  );
-  animation: scroll-fade-y linear;
-  animation-timeline: scroll(self y);
-}
-
-@utility scroll-shadows {
-  --scroll-fade-size: 14px;
-  overflow: auto;
-  mask-image:
-    linear-gradient(
-      to bottom,
-      var(--scroll-fade-top),
-      black var(--scroll-fade-size),
-      black calc(100% - var(--scroll-fade-size)),
-      var(--scroll-fade-bottom)
-    ),
-    linear-gradient(
-      to right,
-      var(--scroll-fade-left),
-      black var(--scroll-fade-size),
-      black calc(100% - var(--scroll-fade-size)),
-      var(--scroll-fade-right)
-    );
-  mask-composite: intersect;
-  animation:
-    scroll-fade-y linear,
-    scroll-fade-x linear;
-  animation-timeline: scroll(self y), scroll(self x);
-}
-
-/*
- * Static bottom-only fade. Unlike `scroll-shadows-y`, this utility does NOT
- * require the host to be scrollable — it composes with `overflow: hidden`
- * so callers can apply it conditionally (e.g. when JS detects content
- * overflowing a fixed-height clipped viewport).
- */
-@utility scroll-shadow-bottom {
-  --scroll-fade-size: 14px;
-  mask-image: linear-gradient(to bottom, black, black calc(100% - var(--scroll-fade-size)), var(--scroll-fade-end));
-}
-
-/* END SCROLL SHADOWS */

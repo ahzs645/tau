@@ -3,13 +3,10 @@
   "compilerOptions": {
     "outDir": "./out-tsc/spec",
     "types": ["node", "vitest/importMeta", "vitest"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2024"],
-    "target": "ESNext",
-    "paths": {
-      "#*": ["./src/*"]
-    }
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["DOM", "DOM.Iterable", "ES2024"],
+    "target": "ESNext"
   },
   "include": [
     "vitest.config.ts",

@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { fromMemoryFs } from '#filesystem/runtime-filesystem.js';
+import { createFileSystemBridgePort } from '@taucad/fs-bridge';
 import { extractInlineFileSystem, wrapAsRuntimeFileSystem } from '#transport/_internal/runtime-filesystem-handle.js';
 
 describe('extractInlineFileSystem (R2)', () => {
@@ -13,7 +14,7 @@ describe('extractInlineFileSystem (R2)', () => {
   });
 
   it('should return the underlying RuntimeFileSystemBase for inline fs created via fromMemoryFs', async () => {
-    const pathA = '/a.txt';
+    const pathA = 'a.txt';
     const opaque = fromMemoryFs({ [pathA]: 'x' });
     const base = extractInlineFileSystem(opaque);
     expect(base).toBeDefined();
@@ -21,23 +22,20 @@ describe('extractInlineFileSystem (R2)', () => {
   });
 
   it('should throw a TypeError with expected message for channel bridged opaque fs', async () => {
-    const pair = new MessageChannel();
+    const connection = createFileSystemBridgePort(extractInlineFileSystem(fromMemoryFs())!);
     const channelFs = wrapAsRuntimeFileSystem({
       kind: 'channel',
-      port: pair.port2,
-      dispose(): void {
-        pair.port2.close();
-      },
+      create: () => connection,
     });
 
     expect(() => extractInlineFileSystem(channelFs)).toThrow(TypeError);
+    connection.dispose();
     try {
       extractInlineFileSystem(channelFs);
       expect.fail('should have thrown');
     } catch (error) {
       expect((error as Error).message).toBe(`extractInlineFileSystem: expected inline fs, received 'channel'`);
     }
-    pair.port1.close();
   });
 });
 
@@ -55,7 +53,7 @@ describe('extractInlineFileSystem (R2)', () => {
  */
 describe('extractInlineFileSystem — per-binding-fresh contract', () => {
   it('should produce isolated RuntimeFileSystemBase instances seeded from the same fromMemoryFs() value', async () => {
-    const seedPath = '/seed.ts';
+    const seedPath = 'seed.ts';
     const opaque = fromMemoryFs({ [seedPath]: 'export default 1;' });
 
     const fsA = extractInlineFileSystem(opaque);
@@ -74,7 +72,7 @@ describe('extractInlineFileSystem — per-binding-fresh contract', () => {
 
     /* Mutations on A are invisible to B and vice versa — the structural
      * fix that closes the docs Replicad-reference cross-contamination. */
-    const sharedKey = '/main.ts';
+    const sharedKey = 'main.ts';
     await fsA!.writeFile(sharedKey, 'A');
     await fsB!.writeFile(sharedKey, 'B');
     await expect(fsA!.readFile(sharedKey, 'utf8')).resolves.toBe('A');
@@ -82,8 +80,8 @@ describe('extractInlineFileSystem — per-binding-fresh contract', () => {
   });
 
   it('should defensively snapshot seed files at fromMemoryFs() call time, not at create() call time', async () => {
-    const seedKey = '/seed.ts';
-    const extraKey = '/extra.ts';
+    const seedKey = 'seed.ts';
+    const extraKey = 'extra.ts';
     const seeds: Record<string, string> = { [seedKey]: 'initial' };
     const opaque = fromMemoryFs(seeds);
 
@@ -97,13 +95,24 @@ describe('extractInlineFileSystem — per-binding-fresh contract', () => {
     await expect(fs.exists(extraKey)).resolves.toBe(false);
   });
 
+  it('should defensively copy Uint8Array seed contents at fromMemoryFs() call time', async () => {
+    const seedKey = 'seed.bin';
+    const bytes = new Uint8Array([1, 2, 3]);
+    const opaque = fromMemoryFs({ [seedKey]: bytes });
+
+    bytes[0] = 9;
+
+    const fs = extractInlineFileSystem(opaque)!;
+    await expect(fs.readFile(seedKey)).resolves.toEqual(new Uint8Array([1, 2, 3]));
+  });
+
   it('should produce an isolated base even when the spec has no seed files', async () => {
     const opaque = fromMemoryFs();
 
     const fsA = extractInlineFileSystem(opaque)!;
     const fsB = extractInlineFileSystem(opaque)!;
 
-    await fsA.writeFile('/a.ts', 'A');
-    await expect(fsB.exists('/a.ts')).resolves.toBe(false);
+    await fsA.writeFile('a.ts', 'A');
+    await expect(fsB.exists('a.ts')).resolves.toBe(false);
   });
 });

@@ -1,5 +1,0 @@
-// Generated from BelfrySCAD/BOSL2 v2.0.744.
-// Run scripts/update-bosl2-library.mjs to refresh.
-
-export const bosl2Version = 'v2.0.744';
-export const bosl2LibraryUrl = new URL('bosl2-library.generated.json.gz', import.meta.url).href;

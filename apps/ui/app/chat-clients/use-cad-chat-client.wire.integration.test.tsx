@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { mock } from 'vitest-mock-extended';
 import type { Chat } from '@ai-sdk/react';
-import { chatTurnRequestSchema } from '@taucad/chat/schemas';
+import { commandPayloads } from '@taucad/agent-host/wire';
 import type { ChatSnapshot, ContextPayload, MyUIMessage } from '@taucad/chat';
 import { resolveKernel } from '@taucad/types/constants';
 import { useChatComposer } from '#hooks/active-chat-provider.js';
@@ -14,14 +14,41 @@ import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 import { useContextPayload } from '#hooks/use-context-payload.js';
 import { useActiveChatInstance } from '#chat-clients/_internal/use-active-chat-instance.js';
 import { useCadChatClient } from '#chat-clients/use-cad-chat-client.js';
+import { ChatTurnHost } from '#chat-clients/chat-turn-host.js';
+import { chatTurnAdmit, resetChatTurnServices } from '#chat-clients/_internal/chat-host-binding.js';
+import type * as CadAgentConfigModuleShape from '#hooks/use-cad-agent-config.js';
 
+type CadAgentConfigModule = typeof CadAgentConfigModuleShape;
+
+/* The routing plan the turn reads at admission (adaptive app deployment mode C6): every kernel allowed here. */
+vi.mock('#cloud/kernel-commerce.js', () => ({ useKernelRoutingPlan: () => () => true }));
 vi.mock('#hooks/use-chat.js', () => ({
   useChatSelector: vi.fn(),
   useChatActions: vi.fn(),
 }));
 vi.mock('#hooks/use-cookie.js', () => ({ useCookie: vi.fn() }));
 vi.mock('#hooks/use-chat-snapshot.js', () => ({ useChatSnapshot: vi.fn() }));
-vi.mock('#hooks/use-context-payload.js', () => ({ useContextPayload: vi.fn() }));
+vi.mock('#hooks/use-context-payload.js', () => ({
+  useContextPayload: vi.fn(),
+  awaitContextPayload: vi.fn(async () => undefined),
+}));
+vi.mock('#hooks/use-models.js', () => ({
+  useModels: () => ({
+    ensureModelCatalog: async () => ({ status: 'loaded', models: [] }),
+    resolveModel: () => ({
+      id: 'openai-gpt-5.5',
+      isResolved: true,
+      provider: { id: 'openai', name: 'OpenAI' },
+      model: { id: 'openai-gpt-5.5', provider: { id: 'openai' }, details: { contextWindow: 128_000 } },
+    }),
+  }),
+}));
+// The assembler itself stays real — only the asynchronous capability probe,
+// which needs a mounted project filesystem this scope does not have, is stubbed.
+vi.mock('#hooks/use-cad-agent-config.js', async (importOriginal) => ({
+  ...(await importOriginal<CadAgentConfigModule>()),
+  awaitAgentHostAvailability: async () => ({ status: 'available', durability: 'exclusive-append' }),
+}));
 vi.mock('#chat-clients/_internal/use-active-chat-instance.js', () => ({
   useActiveChatInstance: vi.fn(),
 }));
@@ -34,24 +61,59 @@ vi.mock('#hooks/active-chat-provider.js', () => ({
   useActiveChatSession: () => ({ activeChatId: 'chat_integration' }),
 }));
 vi.mock('#hooks/chat-session-store-provider.js', () => ({
-  useChatSessionStore: () => ({ setLatestAgentBody: vi.fn() }),
+  useChatSessionStore: () => ({
+    get: () => undefined,
+    getProjection: () => undefined,
+    requestTurn: vi.fn(),
+    startPendingSeed: vi.fn(),
+    refreshMessageQueue: vi.fn(),
+    captureMessageQueueIntent: vi.fn(() => ({})),
+    subscribeProjection: vi.fn(() => vi.fn()),
+    setTurnPlacement: vi.fn(),
+  }),
 }));
+vi.mock('#hooks/use-project.js', () => ({ useProject: () => ({ projectId: 'proj_integration' }) }));
+/* The turn-start pre-flight (R9) is proved in `use-credit-preflight.test.tsx` and
+ * `use-cad-chat-client.test.tsx`; this scope funds every turn. */
+vi.mock('#hooks/use-credit-preflight.js', () => ({ useCreditPreflight: () => () => undefined }));
+/* ChatTurnHost composes a registration only once the project's revision root is connected (W8 TS-S5). */
+vi.mock('#hooks/use-revision-status.js', () => ({ useRevisionClient: () => ({}) }));
+/* ChatTurnHost reads the telemetry consent through the session and react-query; this scope has neither. */
+vi.mock('#hooks/use-telemetry-consent.js', () => ({ useTelemetryConsent: () => ({ consent: 'unknown' }) }));
 
 const noop = (): void => undefined;
+const contextPayloadMock = useContextPayload as unknown as ReturnType<typeof vi.fn>;
+
+/** Mount the client beside the chat's one turn host, which owns the admission. */
+const renderClient = (): ReturnType<typeof renderHook<ReturnType<typeof useCadChatClient>, unknown>> =>
+  renderHook(() => useCadChatClient(), {
+    wrapper: ({ children }) => (
+      <>
+        <ChatTurnHost />
+        {children}
+      </>
+    ),
+  });
+
+/** The host command this chat's admission composes for a fresh turn. */
+const admittedCommand = async () => {
+  const admit = chatTurnAdmit('chat_integration');
+  expect(admit).toBeDefined();
+  const turn = await admit!({ kind: 'regenerate' });
+  const { command } = turn.request;
+  if (command?.type !== 'start') {
+    throw new Error('Expected a host Start command.');
+  }
+  return command;
+};
 
 /**
- * Integration scope for the CAD chat client wire body.
+ * Integration scope for the CAD host admission command.
  *
  * Wires the **real** `useCadAgentConfig` assembler hook (with the producer
  * hooks at realistic mocked values) into the **real** `useCadChatClient`,
- * intercepts the `body` the client hands to `useChatActions`'s
- * `sendMessage` / `regenerate` / `retryMessage` verbs (this is the same
- * `body` the chat-session-store dispatcher forwards to `Chat.sendMessage` /
- * `Chat.regenerate`), and asserts the composed wire body parses cleanly
- * through the **shared** `chatTurnRequestSchema` from `@taucad/chat/schemas`.
- *
- * That same schema is what the API uses to validate `POST /v1/chat`, so a
- * green test here proves the client/server contract holds end-to-end.
+ * Asserts the focused turn owner composes one Start command accepted by the
+ * portable host wire schema, including optional CAD context.
  *
  * @public
  */
@@ -63,26 +125,15 @@ const defaultMessages: readonly MyUIMessage[] = [
   },
 ];
 
-const buildWireBody = (
-  capturedBody: Record<string, unknown> | undefined,
-  overrides: Partial<{ id: string; messages: readonly MyUIMessage[] }> = {},
-): unknown => ({
-  id: overrides.id ?? 'chat_integration',
-  messages: overrides.messages ?? defaultMessages,
-  ...capturedBody,
-});
-
 type ActionsMock = {
   sendMessage: ReturnType<typeof vi.fn>;
   regenerate: ReturnType<typeof vi.fn>;
-  retryMessage: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
 };
 
 const buildActions = (): ActionsMock => ({
   sendMessage: vi.fn(),
   regenerate: vi.fn(),
-  retryMessage: vi.fn(),
   stop: vi.fn(),
 });
 
@@ -91,12 +142,28 @@ const installActions = (actions: ActionsMock): void => {
 };
 
 beforeEach(() => {
+  resetChatTurnServices();
   vi.clearAllMocks();
   vi.mocked(useChatComposer).mockReturnValue({
     draftActorRef: { send: vi.fn() },
-    model: { modelId: 'openai-gpt-5.5', model: undefined, setActiveModel: noop },
-    kernel: { kernelId: 'replicad', kernel: resolveKernel('replicad'), setActiveKernel: noop },
+    model: {
+      modelId: 'openai-gpt-5.5',
+      model: { id: 'openai-gpt-5.5', provider: { id: 'openai', name: 'OpenAI' } },
+      setActiveModel: noop,
+    },
+    execution: {
+      execution: { kind: 'tau', model: 'openai-gpt-5.5' },
+      setActiveExecution: noop,
+    },
+    kernel: {
+      kernelId: 'replicad',
+      kernel: resolveKernel('replicad'),
+      setActiveKernel: noop,
+      preference: 'replicad',
+      setActivePreference: noop,
+    },
     status: 'ready',
+    agentActivity: 'ready',
     stop: noop,
     contextUsage: undefined,
     session: undefined,
@@ -108,123 +175,74 @@ beforeEach(() => {
   );
   vi.mocked(useCookie).mockReturnValue([true, noop, noop] as unknown as ReturnType<typeof useCookie>);
   vi.mocked(useChatSnapshot).mockReturnValue(undefined);
-  vi.mocked(useContextPayload).mockReturnValue(undefined);
+  contextPayloadMock.mockReturnValue(undefined);
 });
 
-describe('useCadChatClient wire integration', () => {
-  it('should produce a body the API schema accepts when submit fires with minimal producer-hook state', () => {
+describe('useCadChatClient host admission integration', () => {
+  it('should produce a host Start payload accepted by the wire schema', async () => {
     const chat = mock<Chat<MyUIMessage>>();
+    chat.messages = [...defaultMessages];
     vi.mocked(useActiveChatInstance).mockReturnValue(chat);
     const actions = buildActions();
     installActions(actions);
 
-    const { result } = renderHook(() => useCadChatClient());
+    const { result } = renderClient();
 
-    act(() => {
-      result.current.submit({ text: 'design a vase' });
+    await act(async () => {
+      void result.current.submit({ text: 'design a vase' });
     });
 
-    const [, options] = actions.sendMessage.mock.calls[0]! as [unknown, { body?: Record<string, unknown> } | undefined];
-    const wireBody = buildWireBody(options?.body);
-
-    expect(() => chatTurnRequestSchema.parse(wireBody)).not.toThrow();
-    const parsed = chatTurnRequestSchema.parse(wireBody);
-    expect(parsed.agent).toMatchObject({
-      profile: 'cad',
-      model: 'openai-gpt-5.5',
-      kernel: 'replicad',
-      mode: 'agent',
-      toolChoice: 'auto',
-      testingEnabled: true,
+    const command = await admittedCommand();
+    expect(commandPayloads.start.safeParse(command.payload).success).toBe(true);
+    expect(command.payload.config).toMatchObject({
+      model: { id: 'openai-gpt-5.5', providerKind: 'openai' },
     });
+    expect(command.commandId).toBe(command.payload.runId);
   });
 
-  it('should produce a body the API schema accepts when snapshot and contextPayload are present', () => {
+  it('should include snapshot and contextPayload in the host Start config', async () => {
     const snapshot: ChatSnapshot = { activeFile: { path: 'src/main.ts', name: 'main.ts' } };
-    // eslint-disable-next-line @typescript-eslint/naming-convention -- `AGENTS.md` is a filesystem key, not a JS identifier
     const contextPayload: ContextPayload = { memory: { 'AGENTS.md': 'shared rules' } };
     vi.mocked(useChatSnapshot).mockReturnValue(snapshot);
-    vi.mocked(useContextPayload).mockReturnValue(contextPayload);
+    contextPayloadMock.mockReturnValue(contextPayload);
 
     const chat = mock<Chat<MyUIMessage>>();
+    chat.messages = [...defaultMessages];
     vi.mocked(useActiveChatInstance).mockReturnValue(chat);
     const actions = buildActions();
     installActions(actions);
 
-    const { result } = renderHook(() => useCadChatClient());
+    const { result } = renderClient();
 
-    act(() => {
-      result.current.submit({ text: 'iterate' });
+    await act(async () => {
+      void result.current.submit({ text: 'iterate' });
     });
 
-    const [, options] = actions.sendMessage.mock.calls[0]! as [unknown, { body?: Record<string, unknown> } | undefined];
-    const wireBody = buildWireBody(options?.body);
-
-    const parsed = chatTurnRequestSchema.parse(wireBody);
-    expect(parsed.agent).toMatchObject({ snapshot, contextPayload });
+    const command = await admittedCommand();
+    expect(commandPayloads.start.safeParse(command.payload).success).toBe(true);
+    expect(command.payload.config).toMatchObject({ snapshot, contextPayload });
   });
 
-  it('should produce a body the API schema accepts when retry fires for a specific message id', () => {
+  it('should reject a Start payload without its user message', async () => {
     const chat = mock<Chat<MyUIMessage>>();
+    chat.messages = [...defaultMessages];
     vi.mocked(useActiveChatInstance).mockReturnValue(chat);
     const actions = buildActions();
     installActions(actions);
 
-    const { result } = renderHook(() => useCadChatClient());
+    const { result } = renderClient();
 
-    act(() => {
-      result.current.retry('msg_target');
+    await act(async () => {
+      void result.current.submit({ text: 'guard rail' });
     });
 
-    const [messageId, options] = actions.retryMessage.mock.calls[0]! as [
-      string,
-      { body?: Record<string, unknown> } | undefined,
-    ];
-    const wireBody = buildWireBody(options?.body);
-
-    expect(() => chatTurnRequestSchema.parse(wireBody)).not.toThrow();
-    expect(messageId).toBe('msg_target');
-  });
-
-  it('should produce a body the API schema accepts when regenerateTail fires', () => {
-    const chat = mock<Chat<MyUIMessage>>();
-    vi.mocked(useActiveChatInstance).mockReturnValue(chat);
-    const actions = buildActions();
-    installActions(actions);
-
-    const { result } = renderHook(() => useCadChatClient());
-
-    act(() => {
-      result.current.regenerateTail();
-    });
-
-    const [options] = actions.regenerate.mock.calls[0]! as [{ body?: Record<string, unknown> } | undefined];
-    const wireBody = buildWireBody(options?.body);
-
-    expect(() => chatTurnRequestSchema.parse(wireBody)).not.toThrow();
-  });
-
-  it('should produce a body the API schema rejects with a missing-agent path when the agent block is removed', () => {
-    const chat = mock<Chat<MyUIMessage>>();
-    vi.mocked(useActiveChatInstance).mockReturnValue(chat);
-    const actions = buildActions();
-    installActions(actions);
-
-    const { result } = renderHook(() => useCadChatClient());
-
-    act(() => {
-      result.current.submit({ text: 'guard rail' });
-    });
-
-    const [, options] = actions.sendMessage.mock.calls[0]! as [unknown, { body?: Record<string, unknown> } | undefined];
-    const goodBody = buildWireBody(options?.body) as Record<string, unknown>;
-    const badBody = { ...goodBody };
-    delete badBody['agent'];
-
-    const verdict = chatTurnRequestSchema.safeParse(badBody);
+    const command = await admittedCommand();
+    const badPayload: Record<string, unknown> = { ...command.payload };
+    delete badPayload['message'];
+    const verdict = commandPayloads.start.safeParse(badPayload);
     expect(verdict.success).toBe(false);
     if (!verdict.success) {
-      expect(verdict.error.issues.some((issue) => issue.path[0] === 'agent')).toBe(true);
+      expect(verdict.error.issues.some((issue) => issue.path.join('.') === 'message')).toBe(true);
     }
   });
 });

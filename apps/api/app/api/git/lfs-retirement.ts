@@ -1,0 +1,317 @@
+import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
+import type { Database } from '@taucad/api-database/owner-lock';
+import { withOwnerLock } from '@taucad/api-database/owner-lock';
+import { assertActiveProjectLocked, assertProjectActive } from '@taucad/api-database/project-lifecycle';
+import { project, projectGit, projectGitLfsObject, projectDeletion } from '@taucad/api-database/schema';
+import type { ObjectStorageService } from '@taucad/api-object-storage';
+import { statfs } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { hydrateAdmittedLease } from '@taucad/api-git-core/admission/admitted-lease';
+import { LeaseAdmission } from '@taucad/api-git-core/admission/lease-admission';
+import { repositoryLocator } from '@taucad/api-git-core/store/locator';
+import type { RepositoryStore } from '@taucad/api-git-core/store/port';
+import { lfsObjectLocations } from '@taucad/api-git-core/lfs-keys';
+import { referencedLfsOids } from '@taucad/api-git-core/lfs-references';
+
+/**
+ * How long an object stays after the last tree that reached it (charter D16,
+ * revisions Rule 15). A client that still holds the object restarts this clock
+ * through its batch answer, so the window is measured from the last evidence
+ * of the object anywhere, not from the last push.
+ */
+export const lfsRetirementWindowMilliseconds = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long a reservation whose bytes never arrived keeps holding quota. It is
+ * shorter than the retirement window because nothing was ever stored under it:
+ * the upload URL expired long before, and the row is the only cost.
+ */
+export const abandonedReservationWindowMilliseconds = 24 * 60 * 60 * 1000;
+
+export type LfsRetirementDependencies = {
+  readonly database: Database;
+  /** The repository store the lease is hydrated from. */
+  readonly store: RepositoryStore;
+  readonly storage: ObjectStorageService;
+  /** Where leases are built; defaults to the OS temp directory. */
+  readonly leaseParentDirectory?: string;
+  /**
+   * Admits each lease by its real bytes against the lease disk (DC3). Defaults
+   * to one over `statfs` of the lease root; a refusal skips the project for
+   * this pass, and the next pass retries it.
+   */
+  readonly admission?: LeaseAdmission;
+};
+
+/** Leases built since boot share one admission, so two passes never overcommit one disk. */
+let defaultAdmission: LeaseAdmission | undefined;
+
+const admissionFor = (dependencies: LfsRetirementDependencies): LeaseAdmission => {
+  if (dependencies.admission !== undefined) {
+    return dependencies.admission;
+  }
+  const root = dependencies.leaseParentDirectory ?? tmpdir();
+  defaultAdmission ??= new LeaseAdmission({
+    readFreeBytes: async () => {
+      const { bavail, bsize } = await statfs(root);
+      return bavail * bsize;
+    },
+  });
+  return defaultAdmission;
+};
+
+type Candidate = { readonly oid: string; readonly size: number };
+
+/**
+ * Rows whose window has passed, in the one shape every selector uses: both
+ * entry points here and `revisions-maintenance retire-lfs --dry-run`, so the
+ * rule that authorizes a delete is spelled once.
+ *
+ * @param now - The pass's clock.
+ * @param window - How long an unreachable object is kept.
+ * @returns The predicate, for a `where` on `project_git_lfs_object`. Drizzle's
+ *   `or` types the result as optional; both operands here are always present.
+ */
+export const dueCondition = (now: Date, window: number): SQL | undefined =>
+  or(
+    lte(projectGitLfsObject.unreachableAt, new Date(now.getTime() - window)),
+    and(
+      isNull(projectGitLfsObject.finalizedAt),
+      lte(
+        sql`coalesce(${projectGitLfsObject.lastRequestedAt}, ${projectGitLfsObject.createdAt})`,
+        new Date(now.getTime() - abandonedReservationWindowMilliseconds).toISOString(),
+      ),
+    ),
+  );
+
+/**
+ * Retires one project's due LFS objects, rechecking the repository for every batch (D18).
+ *
+ * The mark alone never authorizes a delete: the candidates are selected from
+ * the marks, a **read-only lease** is hydrated and walked, and only the objects
+ * that walk still misses are removed. An object the repository reached again
+ * has its stale mark cleared instead, which is the same answer a "present"
+ * batch gives.
+ *
+ * The owner lock is taken for the deletes alone and never across the hydrate,
+ * so a push waiting on the same owner is never behind a store round trip. The
+ * bytes go before the row: a worker killed between them leaves a row whose
+ * object is gone, which the next pass finishes, while the opposite order would
+ * leave bytes nothing remembers.
+ *
+ * @param dependencies - The database, the store, the storage driver and the lease root.
+ * @param args - The owner, the project, the clock and the retention window.
+ * @yields A bounded batch of removed object IDs.
+ */
+export const retireLfsObjects = async function* (
+  dependencies: LfsRetirementDependencies,
+  args: {
+    readonly ownerId: string;
+    readonly projectId: string;
+    readonly now: Date;
+    readonly window?: number;
+  },
+): AsyncGenerator<{ retired: readonly string[] }> {
+  const window = args.window ?? lfsRetirementWindowMilliseconds;
+
+  await assertProjectActive(dependencies.database, args.projectId);
+  const [row] = await dependencies.database
+    .select({ storageAccountId: project.storageAccountId })
+    .from(project)
+    .where(and(eq(project.id, args.projectId), eq(project.ownerId, args.ownerId)))
+    .limit(1);
+  if (
+    row === undefined ||
+    (row.storageAccountId !== null && row.storageAccountId !== dependencies.storage.account.id)
+  ) {
+    throw new Error('LFS retirement project storage account unavailable');
+  }
+  const locator = repositoryLocator({
+    ownerId: args.ownerId,
+    projectId: args.projectId,
+    ...(row.storageAccountId === null ? {} : { accountId: row.storageAccountId }),
+  });
+  let cursor: string | undefined;
+  for (;;) {
+    // oxlint-disable-next-line no-await-in-loop -- stable OID pages bound parameters and memory
+    const candidates: readonly Candidate[] = await dependencies.database
+      .select({ oid: projectGitLfsObject.oid, size: projectGitLfsObject.sizeBytes })
+      .from(projectGitLfsObject)
+      .where(
+        and(
+          eq(projectGitLfsObject.projectId, args.projectId),
+          dueCondition(args.now, window),
+          cursor === undefined ? undefined : gt(projectGitLfsObject.oid, cursor),
+        ),
+      )
+      .orderBy(asc(projectGitLfsObject.oid))
+      .limit(500);
+    if (candidates.length === 0) {
+      return;
+    }
+    cursor = candidates.at(-1)!.oid;
+    // oxlint-disable-next-line no-await-in-loop -- refresh and dispose one bounded batch before the next
+    const admitted = await hydrateAdmittedLease({
+      store: dependencies.store,
+      locator,
+      ownerId: args.ownerId,
+      admission: admissionFor(dependencies),
+      ...(dependencies.leaseParentDirectory === undefined
+        ? {}
+        : { parentDirectory: dependencies.leaseParentDirectory }),
+    });
+    let referenced: ReadonlySet<string>;
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- refresh and dispose one bounded batch before the next
+      referenced = await referencedLfsOids(admitted.lease.directory);
+    } finally {
+      // oxlint-disable-next-line no-await-in-loop -- refresh and dispose one bounded batch before the next
+      await admitted.release();
+    }
+
+    const unreferenced = candidates.filter((candidate) => !referenced.has(candidate.oid));
+    const returned = candidates.filter((candidate) => referenced.has(candidate.oid)).map((candidate) => candidate.oid);
+
+    // oxlint-disable-next-line no-await-in-loop -- release the owner lock between bounded deletion batches
+    yield await withOwnerLock(dependencies.database, args.ownerId, async (transaction) => {
+      await assertActiveProjectLocked(transaction, args.projectId);
+      if (returned.length > 0) {
+        await transaction
+          .update(projectGitLfsObject)
+          .set({ unreachableAt: null })
+          .where(and(eq(projectGitLfsObject.projectId, args.projectId), inArray(projectGitLfsObject.oid, returned)));
+      }
+      if (unreferenced.length === 0) {
+        return { retired: [] };
+      }
+
+      // Re-read under the lock: a batch answer of "present" between the select
+      // and here cleared the mark, and that object is no longer due.
+      const held = await transaction
+        .select({
+          oid: projectGitLfsObject.oid,
+          size: projectGitLfsObject.sizeBytes,
+          unreachableAt: projectGitLfsObject.unreachableAt,
+          finalizedAt: projectGitLfsObject.finalizedAt,
+          createdAt: projectGitLfsObject.createdAt,
+          lastRequestedAt: projectGitLfsObject.lastRequestedAt,
+        })
+        .from(projectGitLfsObject)
+        .where(
+          and(
+            eq(projectGitLfsObject.projectId, args.projectId),
+            inArray(
+              projectGitLfsObject.oid,
+              unreferenced.map((candidate) => candidate.oid),
+            ),
+          ),
+        )
+        .for('update');
+      /* The same rule `dueCondition` spells in SQL, re-applied to what the lock
+       is actually holding, so the condition that authorizes a delete is visible
+       in the code that deletes. */
+      const due = held.filter(
+        (row) =>
+          (row.unreachableAt !== null && row.unreachableAt.getTime() <= args.now.getTime() - window) ||
+          (row.finalizedAt === null &&
+            (row.lastRequestedAt ?? row.createdAt).getTime() <=
+              args.now.getTime() - abandonedReservationWindowMilliseconds),
+      );
+      if (due.length === 0) {
+        return { retired: [] };
+      }
+
+      for (const row of due) {
+        // Both keys: a project whose objects predate D24 still has its bytes at
+        // the legacy key, and deleting a key that was never written is not an
+        // error on either store.
+        for (const location of lfsObjectLocations(args.ownerId, args.projectId, row.oid)) {
+          // oxlint-disable-next-line no-await-in-loop -- the lock is held; these run in order, briefly
+          await dependencies.storage.deleteBlob(location);
+        }
+      }
+
+      const retired = due.map((row) => row.oid);
+      await transaction
+        .delete(projectGitLfsObject)
+        .where(and(eq(projectGitLfsObject.projectId, args.projectId), inArray(projectGitLfsObject.oid, retired)));
+      const released = due.reduce((total, row) => total + row.size, 0);
+      await transaction
+        .update(projectGit)
+        .set({ lfsBytes: sql`greatest(0, ${projectGit.lfsBytes} - ${released})`, updatedAt: args.now })
+        .where(eq(projectGit.projectId, args.projectId));
+
+      return { retired };
+    });
+  }
+};
+
+export type LfsRetirementOutcome = {
+  readonly projectId: string;
+  readonly retired: readonly string[];
+  /** Why this project was skipped, when it was. */
+  readonly error?: string;
+};
+
+/**
+ * The runnable pass: every project holding a due candidate, retired in turn.
+ *
+ * The projects come from bounded keyset queries over the marks. Each candidate
+ * batch gets a fresh lease; projects without due candidates cost no lease —
+ * no job enumerates every repository. One project's failure (a tombstoned
+ * tenant mid-purge, a store outage) is recorded and the pass continues; the
+ * marks it left behind make the next run pick it up again.
+ *
+ * @param dependencies - The database, the store, the storage driver and the lease root.
+ * @param args - The clock and the retention window.
+ * @yields Bounded retirement batches or a project failure, without retaining the whole pass.
+ */
+export const retireDueLfsObjects = async function* (
+  dependencies: LfsRetirementDependencies,
+  args: { readonly now: Date; readonly window?: number },
+): AsyncGenerator<LfsRetirementOutcome> {
+  const window = args.window ?? lfsRetirementWindowMilliseconds;
+  let cursor: string | undefined;
+  for (;;) {
+    // oxlint-disable-next-line no-await-in-loop -- bounded keyset pages, including projects that fail
+    const projects = await dependencies.database
+      .selectDistinct({ projectId: projectGitLfsObject.projectId, ownerId: project.ownerId })
+      .from(projectGitLfsObject)
+      .innerJoin(project, eq(project.id, projectGitLfsObject.projectId))
+      .leftJoin(projectDeletion, eq(projectDeletion.projectId, project.id))
+      .where(
+        and(
+          dueCondition(args.now, window),
+          isNull(projectDeletion.projectId),
+          cursor === undefined ? undefined : gt(projectGitLfsObject.projectId, cursor),
+        ),
+      )
+      .orderBy(asc(projectGitLfsObject.projectId))
+      .limit(500);
+    if (projects.length === 0) {
+      return;
+    }
+    cursor = projects.at(-1)!.projectId;
+
+    for (const row of projects) {
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- one lease at a time bounds the pass's disk
+        for await (const { retired } of retireLfsObjects(dependencies, {
+          ownerId: row.ownerId,
+          projectId: row.projectId,
+          now: args.now,
+          window,
+        })) {
+          yield { projectId: row.projectId, retired };
+        }
+      } catch (error) {
+        yield {
+          projectId: row.projectId,
+          retired: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+  }
+};

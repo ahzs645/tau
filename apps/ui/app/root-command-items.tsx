@@ -1,35 +1,20 @@
-import { Code2, Cog, History, List, LogIn, LogOut, MessageCircle } from 'lucide-react';
-import { useMemo } from 'react';
+import { Code2, Cog, List, LogIn, LogOut, MessageCircle, Sparkles } from 'lucide-react';
 import { useSession } from '@better-auth-ui/react';
 import { authClient } from '#lib/auth-client.js';
-import { useLocation } from 'react-router';
 import type { UIMatch } from 'react-router';
 import { useCommandPaletteItems } from '#components/layout/command-palette.js';
 import type { CommandPaletteItem } from '#components/layout/command-palette.js';
-import { useProjects } from '#hooks/use-projects.js';
 import { useAuthLinks } from '#hooks/use-auth-links.js';
-import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
+import { useSettingsDialog } from '#hooks/use-settings-dialog.js';
 import { useFeature } from '#flags/use-feature.js';
+import { setupEntryCopy } from '#components/onboarding/setup-copy.js';
+import { setupHref } from '#components/onboarding/setup-entry.js';
 
 export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
   const { data: authData } = useSession(authClient);
-  const { projects } = useProjects();
   const { signIn, signOut } = useAuthLinks();
-  const location = useLocation();
-  const isProjectCreationEnabled = useFeature('enableProjectCreation');
-
-  // Extract current project ID from pathname (e.g., /projects/abc123)
-  const currentProjectId = location.pathname.startsWith('/projects/') ? location.pathname.split('/')[2] : undefined;
-
-  // Filter out current project, sort by most recent, and take first 5
-  const recentProjects = useMemo(
-    () =>
-      projects
-        .filter((project) => project.id !== currentProjectId)
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .slice(0, 5),
-    [projects, currentProjectId],
-  );
+  const { open: openSettings } = useSettingsDialog();
+  const isOnboardingEnabled = useFeature('onboarding');
 
   useCommandPaletteItems(
     match.id,
@@ -40,8 +25,6 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         group: 'Projects',
         icon: <MessageCircle />,
         link: '/',
-        shortcut: '⌃N',
-        visible: isProjectCreationEnabled,
       },
       {
         id: 'new-project-from-code',
@@ -49,31 +32,32 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         group: 'Projects',
         icon: <Code2 />,
         link: '/projects/new',
-        visible: isProjectCreationEnabled,
+        shortcut: '⌃N',
       },
       {
         id: 'all-projects',
         label: 'All projects',
         group: 'Projects',
         icon: <List />,
-        link: '/projects/library',
+        link: '/projects',
       },
-      ...recentProjects.map((project) => ({
-        id: `recent-project-${project.id}`,
-        label: project.name,
-        group: 'Recent',
-        icon: <History />,
-        link: `/projects/${project.id}`,
-      })),
       {
         id: 'open-settings',
         label: 'Settings',
         group: 'Settings',
         icon: <Cog />,
         action() {
-          openSettingsDialog();
+          openSettings();
         },
         shortcut: '⌘,',
+      },
+      {
+        id: 'set-up-tau',
+        label: setupEntryCopy.setUpTau,
+        group: 'Settings',
+        icon: <Sparkles />,
+        link: setupHref('palette'),
+        visible: isOnboardingEnabled,
       },
       {
         id: 'sign-in',
@@ -92,7 +76,7 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         visible: Boolean(authData),
       },
     ],
-    [authData, isProjectCreationEnabled, recentProjects, signIn, signOut],
+    [authData, isOnboardingEnabled, signIn, signOut],
   );
 
   return undefined;

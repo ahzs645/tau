@@ -1,80 +1,78 @@
 {
   "name": "@taucad/units",
-  "version": "0.1.0-beta.0",
-  "description": "Units of measurement and conversions",
+  "version": "0.1.0-beta.9",
+  "description": "Portable checked units, quantities, parsing, and formatting",
   "type": "module",
+  "sideEffects": false,
   "private": false,
   "repository": {
     "type": "git",
     "url": "git+https://github.com/taucad/tau.git",
     "directory": "packages/units"
   },
-  "main": "./dist/cjs/types/index.cjs",
-  "types": "./dist/cjs/types/index.d.cts",
-  "module": "./dist/esm/types/index.js",
+  "homepage": "https://github.com/taucad/tau/tree/main/packages/units#readme",
+  "bugs": {
+    "url": "https://github.com/taucad/tau/issues"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "files": [
     "dist",
-    "README.md"
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "NOTICE"
   ],
   "keywords": [
-    "units",
-    "measurement",
-    "conversion"
+    "cad",
+    "typescript",
+    "ucum",
+    "units-of-measure"
   ],
   "author": "Richard Fontein",
-  "license": "MIT",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "exports": {
-    ".": "./src/types/index.ts",
-    "./constants": "./src/constants/index.ts",
-    "./converter": "./src/converter/index.ts",
-    "./parser": "./src/parser/index.ts"
+    ".": "./src/index.ts",
+    "./input": "./src/input.ts",
+    "./quantity": "./src/quantity.ts",
+    "./unit": "./src/unit.ts",
+    "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public",
     "exports": {
       ".": {
-        "require": {
-          "types": "./dist/cjs/types/index.d.cts",
-          "default": "./dist/cjs/types/index.cjs"
-        },
-        "import": {
-          "types": "./dist/esm/types/index.d.ts",
-          "default": "./dist/esm/types/index.js"
-        }
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
       },
-      "./constants": {
-        "require": {
-          "types": "./dist/cjs/constants/index.d.cts",
-          "default": "./dist/cjs/constants/index.cjs"
-        },
-        "import": {
-          "types": "./dist/esm/constants/index.d.ts",
-          "default": "./dist/esm/constants/index.js"
-        }
+      "./input": {
+        "types": "./dist/input.d.mts",
+        "import": "./dist/input.mjs",
+        "default": "./dist/input.mjs"
       },
-      "./converter": {
-        "require": {
-          "types": "./dist/cjs/converter/index.d.cts",
-          "default": "./dist/cjs/converter/index.cjs"
-        },
-        "import": {
-          "types": "./dist/esm/converter/index.d.ts",
-          "default": "./dist/esm/converter/index.js"
-        }
+      "./quantity": {
+        "types": "./dist/quantity.d.mts",
+        "import": "./dist/quantity.mjs",
+        "default": "./dist/quantity.mjs"
       },
-      "./parser": {
-        "require": {
-          "types": "./dist/cjs/parser/index.d.cts",
-          "default": "./dist/cjs/parser/index.cjs"
-        },
-        "import": {
-          "types": "./dist/esm/parser/index.d.ts",
-          "default": "./dist/esm/parser/index.js"
-        }
-      }
-    }
+      "./unit": {
+        "types": "./dist/unit.d.mts",
+        "import": "./dist/unit.mjs",
+        "default": "./dist/unit.mjs"
+      },
+      "./package.json": "./package.json"
+    },
+    "imports": {}
   },
   "imports": {
+    "#*.js": "./src/*.ts",
     "#*": "./src/*"
+  },
+  "dependencies": {
+    "@lhncbc/ucum-lhc": "catalog:"
   }
 }

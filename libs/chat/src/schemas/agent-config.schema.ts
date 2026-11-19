@@ -1,7 +1,9 @@
 // oxlint-disable-next-line eslint-plugin-import/no-named-as-default -- standard zod default import
 import z from 'zod';
-import { kernelProviders } from '@taucad/types/constants';
+import { kernelPreferences } from '@taucad/types/constants';
 import { chatModes } from '#constants/chat-mode.constants.js';
+import { personGoals, personLanguages } from '#constants/person.constants.js';
+import { reasoningLevels } from '#constants/model.constants.js';
 import { toolModes, toolNames } from '#constants/tool.constants.js';
 import { contextPayloadSchema } from '#schemas/context-payload.schema.js';
 import { snapshotSchema } from '#schemas/metadata.schema.js';
@@ -14,10 +16,117 @@ import { snapshotSchema } from '#schemas/metadata.schema.js';
 export const toolChoiceSchema = z.union([z.enum(toolModes), z.array(z.enum(toolNames))]);
 
 /**
+ * Which host runs a Tau turn.
+ *
+ * Two literals are reserved: `origin` is the daemon that *served this page*
+ * (rung 1, discovered same-origin at `/.well-known/tau-host`), and `desktop`
+ * is the Electron services utility's in-process launcher. A host id prefixed
+ * `loopback:` is a daemon on this computer handed to one tab (rung 5).
+ * Anything else is a paired device id from `GET /v1/agents` (rung 2).
+ *
+ * Absent, `origin`, `desktop` and `loopback:` ids are **device-relative**: each
+ * names a host only on the device that chose it. A turn's execution carries
+ * whichever one the sending device placed it on. A persisted chat record
+ * (`chat.json`), which syncs to every device, is different: it keeps only a
+ * paired device id, and absent there means "local placement on whichever
+ * device reads it" — the in-process launcher on Tau Desktop, the page's own
+ * worker on the web. A device keeps its own non-default placement for a chat
+ * outside the chat record. Records written before this rule may still carry
+ * a device-relative id; they parse unchanged and read as absent.
+ *
+ * @public
+ */
+export type TauAgentHostId = 'origin' | 'desktop' | (string & {});
+
+/**
+ * Tau-owned LangGraph/model execution for one CAD turn.
+ *
+ * The same shape is a chat's persisted `activeExecution`, where it records the
+ * chat's intent (model, effort and any paired-device placement) and never a
+ * device-relative host; see {@link TauAgentHostId}.
+ *
+ * @public
+ */
+export const tauAgentExecutionSchema = z
+  .object({
+    kind: z.literal('tau'),
+    model: z.string().min(1),
+    /**
+     * See {@link TauAgentHostId}. On a turn, absent is the sending page's own
+     * worker; in a persisted chat record, absent is local placement on the
+     * reading device, and only a paired device id is kept.
+     */
+    hostId: z.string().min(1).optional(),
+    /**
+     * The chat's chosen reasoning level. Absent means the model's catalog
+     * default. It survives a model change and is clamped to the model's
+     * offered levels where it is read, so a turn never admits one its
+     * provider refuses and a detour through a smaller model does not lose it.
+     */
+    effort: z.enum(reasoningLevels).optional(),
+  })
+  .strict()
+  .meta({ id: 'TauAgentExecution' });
+
+/**
+ * An external ACP agent (Claude Code, Codex) running on a Tau Host.
+ *
+ * `hostId` is **required**, unlike Tau's own execution: there is no browser
+ * placement for an external agent — the adapter is a local process spawned by a
+ * daemon, so a turn that names no host has nowhere to run.
+ *
+ * SP-4 proved ACP session modes are advisory against a CLI whose own config
+ * disables approvals, so confinement is the host's filesystem placement — but
+ * *which* placement is a user choice like any other turn's: the revision mode
+ * rides `ChatExecutionTarget`, not the execution (V18).
+ *
+ * @public
+ */
+export const acpAgentExecutionSchema = z
+  .object({
+    kind: z.literal('acp'),
+    /**
+     * See {@link TauAgentHostId}; `origin`, `desktop`, or a paired device id.
+     * Kept as written in a persisted chat record, device-relative or not: the
+     * adapter is a process on that machine, so a device that cannot reach it
+     * refuses the turn rather than moving the chat.
+     */
+    hostId: z.string().min(1),
+    /** Registry agent id the daemon advertised, e.g. `claude` or `codex`. */
+    agentId: z.string().min(1).max(64),
+    /** Adapter-specific model id; absent takes the adapter's own default. */
+    model: z.string().min(1).max(128).optional(),
+    /** Exact ACP session configuration ids and values selected in the composer. */
+    config: z.record(z.string().min(1), z.union([z.string(), z.boolean()])).optional(),
+  })
+  .strict()
+  .meta({ id: 'AcpAgentExecution' });
+
+/** Execution substrate for a CAD turn. This is deliberately separate from Tau's model-provider catalog. @public */
+export const cadAgentExecutionSchema = z
+  .discriminatedUnion('kind', [tauAgentExecutionSchema, acpAgentExecutionSchema])
+  .meta({ id: 'CadAgentExecution' });
+
+/**
+ * What the person told setup about themselves, as Tau's own agent is told it: the goals they make and the languages
+ * they read. The prompt renders it as background after the kernel guidance;
+ * it never asks for a kernel. Only the app's own agent receives it: an external agent's context, the CLI and the MCP
+ * plugin carry none.
+ *
+ * @public
+ */
+export const agentPersonSchema = z
+  .strictObject({
+    makes: z.array(z.enum(personGoals)).max(personGoals.length),
+    reads: z.array(z.enum(personLanguages)).max(personLanguages.length),
+  })
+  .meta({ id: 'AgentPerson' });
+
+/**
  * Per-request configuration for the CAD agent profile.
  *
  * This is the single source of truth for "what does the CAD agent need to know
- * about this turn" — model selection, kernel target, mode, tool whitelist, the
+ * about this turn" — execution substrate, kernel target, mode, tool whitelist, the
  * testing-tools flag, and the editor snapshot / client-assembled context payload.
  *
  * `snapshot` and `contextPayload` are truly optional: callers that omit them
@@ -32,14 +141,22 @@ export const toolChoiceSchema = z.union([z.enum(toolModes), z.array(z.enum(toolN
 export const cadAgentConfigSchema = z
   .object({
     profile: z.literal('cad'),
-    model: z.string(),
-    kernel: z.enum(kernelProviders),
+    execution: cadAgentExecutionSchema,
+    /**
+     * The chat's kernel preference: `auto`, which lets the working agent choose under the routing rubric, or one
+     * kernel (automatic kernel selection blueprint D2). The owner and the host profile ride the snapshot's `kernel`
+     * object, so preference and facts are frozen with the turn.
+     */
+    kernel: z.enum(kernelPreferences),
     mode: z.enum(chatModes),
     toolChoice: toolChoiceSchema,
     testingEnabled: z.boolean(),
     snapshot: snapshotSchema.optional(),
     contextPayload: contextPayloadSchema.optional(),
+    /** Absent when the person has said nothing the agent can use, has turned the switch off, or the surface is off. */
+    person: agentPersonSchema.optional(),
   })
+  .strict()
   .meta({ id: 'CadAgentConfig' });
 
 /**
@@ -90,6 +207,18 @@ export type CadAgentConfig = z.infer<typeof cadAgentConfigSchema>;
  * @public
  */
 export type CadAgentConfigInput = z.input<typeof cadAgentConfigSchema>;
+
+/** What the agent is told about the person. @public */
+export type AgentPerson = z.infer<typeof agentPersonSchema>;
+
+/** Parsed execution-substrate selection for a CAD turn. @public */
+export type CadAgentExecution = z.infer<typeof cadAgentExecutionSchema>;
+
+/** Tau-owned execution selection. @public */
+export type TauAgentExecution = z.infer<typeof tauAgentExecutionSchema>;
+
+/** External ACP agent execution selection. @public */
+export type AcpAgentExecution = z.infer<typeof acpAgentExecutionSchema>;
 
 /** Parsed shape of the project-name agent config. @public */
 export type ProjectNameAgentConfig = z.infer<typeof projectNameAgentConfigSchema>;

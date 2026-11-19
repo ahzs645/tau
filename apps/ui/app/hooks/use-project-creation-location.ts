@@ -1,0 +1,394 @@
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { directoryPicker, webAccessDirectoryPicker } from '@taucad/files-ui/constants/browser.constants';
+import {
+  checkHandlePermission,
+  getProjectCreationLocation,
+  getWorkspace,
+  isNodeWorkspace,
+  isNodeWorkspaceConnected,
+  listWorkspaces,
+  requestHandlePermission,
+  subscribeProjectRootConfigurationChanges,
+} from '@taucad/files-ui/filesystem/handle-store';
+import type { Workspace } from '@taucad/files-ui/filesystem/handle-store';
+import { useFileManager } from '#hooks/use-file-manager.js';
+import { homeProjectCreationLocation } from '@taucad/ui-core/types/project-creation-location.types';
+import type {
+  HomeProjectCreationLocation,
+  ProjectCreationLocation,
+  WorkspaceProjectCreationLocation,
+} from '@taucad/ui-core/types/project-creation-location.types';
+import {
+  projectCreationLocationsEqual,
+  projectLocationDescriptor,
+} from '@taucad/files-ui/utils/project-creation-location.utils';
+import { useWorkspaceTelemetry } from '#utils/workspace-telemetry.utils.js';
+import { toast } from '@taucad/ui/components/sonner';
+import {
+  isWorkspaceIdentityConflictError,
+  workspaceIdentityConflictCopy,
+} from '@taucad/ui-core/filesystem/workspace-errors';
+import { useProjectManager } from '#hooks/use-project-manager.js';
+import { useRootStatuses } from '@taucad/files-ui/components/filesystem/folder-status';
+
+export type HomeLocationOption = {
+  readonly location: HomeProjectCreationLocation;
+  readonly status: 'ready';
+  readonly label: string;
+  readonly detail: string;
+};
+
+export type WorkspaceLocationOption = {
+  readonly location: WorkspaceProjectCreationLocation;
+  readonly status: 'connected' | 'permission' | 'disconnected';
+  readonly label: string;
+  readonly detail: string;
+};
+
+export type ProjectCreationLocationOption = HomeLocationOption | WorkspaceLocationOption;
+
+export type SelectedWorkspaceRecovery =
+  | { readonly kind: 'grant'; readonly run: () => Promise<void> }
+  | { readonly kind: 'reconnect'; readonly run: () => Promise<void> };
+
+type ReadyCapableState = {
+  readonly phase: 'ready';
+  readonly hasWebAccessCapability: true;
+  readonly shouldShowPicker: true;
+  readonly value: ProjectCreationLocation;
+  readonly selectedOption: ProjectCreationLocationOption;
+  readonly options: readonly ProjectCreationLocationOption[];
+  readonly canCreate: boolean;
+  readonly select: (value: ProjectCreationLocation) => void;
+  readonly connectWorkspace: () => Promise<void>;
+  readonly selectedWorkspaceRecovery: SelectedWorkspaceRecovery | undefined;
+  readonly refresh: () => Promise<void>;
+};
+
+export type ProjectCreationLocationState =
+  | {
+      readonly phase: 'ready';
+      readonly hasWebAccessCapability: false;
+      readonly shouldShowPicker: false;
+      readonly value: HomeProjectCreationLocation;
+      readonly options: readonly [HomeLocationOption];
+      readonly canCreate: true;
+    }
+  | {
+      readonly phase: 'loading';
+      readonly hasWebAccessCapability: true;
+      readonly shouldShowPicker: true;
+      readonly options: readonly never[];
+      readonly canCreate: false;
+    }
+  | ReadyCapableState;
+
+const homeOption: HomeLocationOption = {
+  location: homeProjectCreationLocation,
+  status: 'ready',
+  ...projectLocationDescriptor(homeProjectCreationLocation),
+};
+
+const homeOnlyState: ProjectCreationLocationState = {
+  phase: 'ready',
+  hasWebAccessCapability: false,
+  shouldShowPicker: false,
+  value: homeProjectCreationLocation,
+  options: [homeOption],
+  canCreate: true,
+};
+
+const loadingState: ProjectCreationLocationState = {
+  phase: 'loading',
+  hasWebAccessCapability: true,
+  shouldShowPicker: true,
+  options: [],
+  canCreate: false,
+};
+
+/** The Home fallback's notice shows once per page load, however many composers mount (B9). */
+let hasShownUnavailableFallback = false;
+
+const isAbortError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError';
+
+const probeWorkspaceOption = async (workspace: Workspace): Promise<WorkspaceLocationOption> => {
+  // Native connection state follows the shell grant, not retained metadata.
+  if (isNodeWorkspace(workspace)) {
+    return {
+      location: { kind: 'workspace', workspaceId: workspace.workspaceId },
+      status: (await isNodeWorkspaceConnected(workspace)) ? 'connected' : 'disconnected',
+      ...projectLocationDescriptor({ kind: 'workspace', workspaceName: workspace.name }),
+    };
+  }
+  const entry = await getWorkspace(workspace.workspaceId);
+  const status = entry
+    ? (await checkHandlePermission(entry.handle)) === 'granted'
+      ? 'connected'
+      : 'permission'
+    : 'disconnected';
+  return {
+    location: { kind: 'workspace', workspaceId: workspace.workspaceId },
+    status,
+    ...projectLocationDescriptor({ kind: 'workspace', workspaceName: workspace.name }),
+  };
+};
+
+/** Product-level creation-location state shared by every direct-create surface. */
+export const useProjectCreationLocation = (): ProjectCreationLocationState => {
+  const fileManager = useFileManager();
+  const projectManager = useProjectManager();
+  const telemetry = useWorkspaceTelemetry();
+  // Keep the server and first browser render identical; host capability resolves after hydration.
+  const [state, setState] = useState<ProjectCreationLocationState>(loadingState);
+  const hasFolderCapability = useSyncExternalStore(
+    () => () => undefined,
+    () => directoryPicker().available,
+    () => undefined,
+  );
+  const mountedRef = useRef(true);
+  const generationRef = useRef(0);
+  const selectedRef = useRef<ProjectCreationLocation | undefined>(undefined);
+  const loadRef = useRef<(restorePreference: boolean) => Promise<void>>(async () => undefined);
+  /* The chosen folder is not available, so creation falls back to Home without saving that (R4); the stored choice
+   * applies again when the folder is back. The selection follows the stored choice, read against the published root
+   * statuses, until the person picks or connects a location here. */
+  const rootStatuses = useRootStatuses(fileManager.fileManagerRef);
+  const rootStatusesRef = useRef(rootStatuses);
+  const isStoredChoiceRef = useRef(false);
+
+  const grantWorkspace = useCallback(
+    async (workspaceId: string): Promise<void> => {
+      const entry = await getWorkspace(workspaceId);
+      if (!entry || !(await requestHandlePermission(entry.handle))) {
+        telemetry.workspaceOpenFailed({ workspaceId, reason: entry ? 'permission' : 'disconnected' });
+        toast.error(entry ? 'Folder access was not granted.' : 'This folder is disconnected.');
+        await loadRef.current(false);
+        return;
+      }
+      telemetry.workspaceConnected({ workspaceId });
+      await fileManager.workspace.syncProjectRoots();
+      await projectManager.refreshWorkspaceCatalog();
+      await loadRef.current(false);
+    },
+    [fileManager.workspace, projectManager, telemetry],
+  );
+
+  const reconnectWorkspace = useCallback(
+    async (workspaceId: string): Promise<void> => {
+      const workspaces = await listWorkspaces();
+      const workspace = workspaces.find((entry) => entry.workspaceId === workspaceId);
+      if (workspace && isNodeWorkspace(workspace)) {
+        try {
+          await projectManager.connectWorkspace();
+          await loadRef.current(false);
+        } catch {
+          toast.error('Couldn’t reconnect the folder. Try again.');
+        }
+        return;
+      }
+      const picker = webAccessDirectoryPicker();
+      if (!picker) {
+        // Reconnecting rebinds a retained handle, which this host cannot
+        // produce. Silently reporting an abort would blame the user for a
+        // no-op they never triggered.
+        telemetry.workspaceOpenFailed({ workspaceId, reason: 'unsupported' });
+        toast.error('This folder cannot be reconnected here.');
+        return;
+      }
+      try {
+        const handle = await picker.pick({
+          id: `tau-workspace-${workspaceId}`,
+          mode: 'readwrite',
+        });
+        if (handle === undefined) {
+          telemetry.workspaceOpenFailed({ workspaceId, reason: 'aborted' });
+          return;
+        }
+        await fileManager.workspace.replaceWorkspaceHandle(workspaceId, handle);
+        await projectManager.refreshWorkspaceCatalog();
+        telemetry.workspaceConnected({ workspaceId });
+        await loadRef.current(false);
+      } catch (error) {
+        if (isAbortError(error)) {
+          telemetry.workspaceOpenFailed({ workspaceId, reason: 'aborted' });
+          return;
+        }
+        telemetry.workspaceOpenFailed({ workspaceId, reason: 'unknown', error });
+        toast.error(
+          isWorkspaceIdentityConflictError(error)
+            ? workspaceIdentityConflictCopy
+            : 'Couldn’t reconnect the folder. Try again.',
+        );
+      }
+    },
+    [fileManager.workspace, projectManager, telemetry],
+  );
+
+  const getSelectedWorkspaceRecovery = useCallback(
+    (option: ProjectCreationLocationOption): SelectedWorkspaceRecovery | undefined => {
+      if (option.location.kind !== 'workspace') {
+        return undefined;
+      }
+      const { workspaceId } = option.location;
+      if (option.status === 'permission') {
+        return {
+          kind: 'grant',
+          run: async () => {
+            await grantWorkspace(workspaceId);
+          },
+        };
+      }
+      if (option.status === 'disconnected') {
+        return {
+          kind: 'reconnect',
+          run: async () => {
+            await reconnectWorkspace(workspaceId);
+          },
+        };
+      }
+      return undefined;
+    },
+    [grantWorkspace, reconnectWorkspace],
+  );
+
+  const select = useCallback(
+    (value: ProjectCreationLocation): void => {
+      selectedRef.current = value;
+      isStoredChoiceRef.current = false;
+      setState((current) => {
+        if (current.phase !== 'ready' || !current.hasWebAccessCapability) {
+          return current;
+        }
+        const selectedOption = current.options.find((option) => projectCreationLocationsEqual(option.location, value));
+        if (!selectedOption) {
+          return current;
+        }
+        return {
+          ...current,
+          value,
+          selectedOption,
+          selectedWorkspaceRecovery: getSelectedWorkspaceRecovery(selectedOption),
+          canCreate: selectedOption.status === 'ready' || selectedOption.status === 'connected',
+        };
+      });
+    },
+    [getSelectedWorkspaceRecovery],
+  );
+
+  const load = useCallback(
+    async (restorePreference: boolean): Promise<void> => {
+      const generation = ++generationRef.current;
+      const [workspaces, preferred] = await Promise.all([
+        listWorkspaces(),
+        restorePreference
+          ? getProjectCreationLocation({ webAccessSupported: true, rootStatuses: rootStatusesRef.current }).then(
+              ({ location, repaired }) => {
+                if (repaired === 'workspace-unavailable' && !hasShownUnavailableFallback) {
+                  hasShownUnavailableFallback = true;
+                  toast.info(
+                    'Your chosen folder can’t be found right now, so new projects go to Home. Tau uses that folder again when it is back.',
+                  );
+                }
+                return location;
+              },
+            )
+          : Promise.resolve(selectedRef.current ?? homeProjectCreationLocation),
+      ]);
+      const workspaceOptions = await Promise.all(
+        [...workspaces]
+          .sort((left, right) => right.lastConnectedAt - left.lastConnectedAt)
+          .map(async (workspace) => probeWorkspaceOption(workspace)),
+      );
+      if (!mountedRef.current || generation !== generationRef.current) {
+        return;
+      }
+      const options = [homeOption, ...workspaceOptions] as const;
+      /* Checked after the reads: a location picked here while they ran wins over the stored choice. */
+      const followsStoredChoice = restorePreference && (selectedRef.current === undefined || isStoredChoiceRef.current);
+      if (followsStoredChoice) {
+        isStoredChoiceRef.current = true;
+      }
+      const value = followsStoredChoice ? preferred : (selectedRef.current ?? preferred);
+      const selectedOption =
+        options.find((option) => projectCreationLocationsEqual(option.location, value)) ?? homeOption;
+      selectedRef.current = selectedOption.location;
+      setState({
+        phase: 'ready',
+        hasWebAccessCapability: true,
+        shouldShowPicker: true,
+        value: selectedOption.location,
+        selectedOption,
+        options,
+        canCreate: selectedOption.status === 'ready' || selectedOption.status === 'connected',
+        select,
+        connectWorkspace: async () => undefined,
+        selectedWorkspaceRecovery: getSelectedWorkspaceRecovery(selectedOption),
+        refresh: async () => undefined,
+      });
+    },
+    [getSelectedWorkspaceRecovery, select],
+  );
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+
+  const connectWorkspace = useCallback(async (): Promise<void> => {
+    try {
+      const connected = await projectManager.connectWorkspace();
+      if (connected === undefined) {
+        telemetry.workspaceOpenFailed({ workspaceId: undefined, reason: 'aborted' });
+        return;
+      }
+      if (connected.minted) {
+        telemetry.workspaceCreated({ workspaceId: connected.workspace.workspaceId });
+      } else {
+        telemetry.workspaceConnected({ workspaceId: connected.workspace.workspaceId });
+      }
+      selectedRef.current = { kind: 'workspace', workspaceId: connected.workspace.workspaceId };
+      isStoredChoiceRef.current = false;
+      await loadRef.current(false);
+    } catch (error) {
+      telemetry.workspaceOpenFailed({ workspaceId: undefined, reason: 'unknown', error });
+      toast.error('Couldn’t connect the folder. Try again.');
+    }
+  }, [projectManager, telemetry]);
+
+  const refresh = useCallback(async (): Promise<void> => loadRef.current(false), []);
+
+  /* Keep the statuses a preference read repairs against current. While the selection is the stored choice, a changed
+   * root status may mean its folder is gone or back, and the first read usually comes before the file service has
+   * published any status at all: read the choice again, unless the person picked another location meanwhile. */
+  useEffect(() => {
+    rootStatusesRef.current = rootStatuses;
+    if (!isStoredChoiceRef.current) {
+      return;
+    }
+    void loadRef.current(true);
+  }, [rootStatuses]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    if (directoryPicker().available) {
+      void loadRef.current(true);
+    } else {
+      void getProjectCreationLocation({ webAccessSupported: false });
+    }
+    const stop = subscribeProjectRootConfigurationChanges(() => {
+      void loadRef.current(false);
+    });
+    return () => {
+      stop();
+      mountedRef.current = false;
+      generationRef.current += 1;
+    };
+  }, []);
+
+  if (hasFolderCapability === false) {
+    return homeOnlyState;
+  }
+  if (state.phase === 'ready' && state.hasWebAccessCapability) {
+    return { ...state, connectWorkspace, refresh };
+  }
+  return state;
+};

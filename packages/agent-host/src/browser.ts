@@ -1,0 +1,853 @@
+import { watchByChangeSets } from '@taucad/filesystem';
+import type { ChangeSetWatchSource } from '@taucad/filesystem';
+import { EventLogError } from '#log/event-log-error.js';
+import { createEventLogAppender } from '#log/event-log-appender.js';
+import type { EventLogAppender, EventLogStorage } from '#log/event-log-appender.js';
+import { parseEventLogBytes } from '#log/serialization.js';
+import type { AgentLogEvent, StorageDurabilityClass } from '#log/event-types.js';
+import type { ChatLogSegment } from '#log/segments.js';
+import { chatAttachmentPath } from '#harness/session-record.js';
+import type { AttachmentReader } from '#harness/session-record.js';
+import type { HostClock } from '#harness/session.js';
+import { createBrowserLeadership } from '#browser/leadership.js';
+import { chatLeadershipNames } from '#launchers/leadership/names.js';
+import {
+  chatRecordFileName,
+  chatSegmentsDirectoryName,
+  createChatSegmentsReader,
+  createChatStore,
+  readOrAbsent,
+  isPurgedChatRecord,
+  requireChatPathSegment,
+} from '#launchers/chat-store.js';
+import type { ChatStore, ChatWriterOpen } from '#launchers/chat-store.js';
+
+type SyncAccessHandle = {
+  getSize(): number;
+  read(buffer: Uint8Array<ArrayBuffer>, options?: { at?: number }): number;
+  write(buffer: Uint8Array<ArrayBuffer>, options?: { at?: number }): number;
+  truncate(size: number): void;
+  flush(): void;
+  close(): void;
+};
+
+type SyncAccessCapableFileHandle = FileSystemFileHandle & {
+  createSyncAccessHandle?: () => Promise<SyncAccessHandle>;
+};
+
+/** A read-only open: no handle, lock or writer is kept between reads (W6 RH-A18). */
+type BrowserEventLogReader = Pick<EventLogAppender, 'read' | 'close'>;
+
+/** Browser OPFS event-log options. @public */
+export type OpfsEventLogOptions = {
+  /** Exact OPFS file handle for `.tau/chats/<chatId>/events.jsonl`. */
+  readonly fileHandle: FileSystemFileHandle;
+  /** `read` takes no sync handle; `write` holds the exclusive sync handle for the log's life. */
+  readonly access: 'read' | 'write';
+};
+
+/** Provider or bridge-proxy event-log options. @public */
+export type ProviderEventLogOptions = {
+  readonly filePath: string;
+  /** `read` creates nothing and takes no lock; `write` fences every append inside a per-append Web Lock. */
+  readonly access: 'read' | 'write';
+  /**
+   * The per-append Web Lock's name, unique per chat log across projects, such as `tau-log-append:<projectId>:<chatId>`.
+   * Defaults to one derived from `filePath`, which serializes same-path logs of different projects needlessly.
+   */
+  readonly lockName?: string | undefined;
+  readonly fileSystem: {
+    exists(path: string): Promise<boolean>;
+    /** A file's bytes, rejecting `ENOENT` (or `ENOTDIR`) when it does not exist. */
+    readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+    writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
+    appendFile?(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
+    /**
+     * Append only while the file is still `fence.expectedLength` bytes, refusing with `EAPPENDSTALE` (or `EFENCED`)
+     * and writing nothing otherwise (D23). When present the log's appends use it, so the Web Lock is no longer the
+     * only thing between two writers: a writer in another browser profile, device or process is fenced by the
+     * authority itself.
+     */
+    appendFileFenced?(
+      path: string,
+      data: Uint8Array<ArrayBuffer> | string,
+      fence: { readonly expectedLength: number },
+    ): Promise<void>;
+    unlink(path: string): Promise<void>;
+    /** Current durable byte size; omission retains the full-read compatibility fallback. */
+    stat?(path: string): Promise<{ readonly size: number; readonly mtimeMs?: number }>;
+    /**
+     * The entry names of a directory, rejecting `ENOENT` when it does not exist. A chat store lists the chat's
+     * `events/` directory with it to read the other devices' segments (XD1); without it the history is this
+     * device's alone.
+     */
+    readdir?(path: string): Promise<readonly string[]>;
+  };
+};
+
+const readAll = (handle: SyncAccessHandle): Uint8Array<ArrayBuffer> => {
+  const bytes = new Uint8Array(handle.getSize());
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const read = handle.read(bytes.subarray(offset), { at: offset });
+    if (read <= 0) {
+      throw new EventLogError(
+        'STORAGE_SHORT_READ',
+        `OPFS stopped after reading ${offset} of ${bytes.byteLength} bytes.`,
+      );
+    }
+    offset += read;
+  }
+  return bytes;
+};
+
+const appendAll = (handle: SyncAccessHandle, bytes: Uint8Array<ArrayBuffer>): void => {
+  const start = handle.getSize();
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const written = handle.write(bytes.subarray(offset), { at: start + offset });
+    if (written <= 0) {
+      throw new EventLogError(
+        'STORAGE_SHORT_WRITE',
+        `OPFS stopped after writing ${offset} of ${bytes.byteLength} bytes for one event-log line.`,
+      );
+    }
+    offset += written;
+  }
+  handle.flush();
+};
+
+const readerOf = (read: () => Promise<Uint8Array<ArrayBuffer>>): BrowserEventLogReader => {
+  let closed = false;
+  return {
+    read: async (): Promise<readonly AgentLogEvent[]> => {
+      if (closed) {
+        throw new EventLogError('LOG_CLOSED', 'The event log reader is closed.');
+      }
+      return parseEventLogBytes(await read()).events;
+    },
+    close: async () => {
+      closed = true;
+    },
+  };
+};
+
+/**
+ * Open an OPFS positional-append event log in a dedicated browser worker.
+ *
+ * A write open holds the exclusive sync access handle for the log's life: every JSONL line is written at
+ * `getSize()` and flushed before its append resolves, and every append is fenced on the log's length (`LOG_FENCED`,
+ * D5). While another worker holds the handle the open is refused `WRITER_LOCKED`, whose recovery is to wait (CL-Q1).
+ * A read open reads the file without a handle. OPFS is unavailable on null origins, so tests must use a real origin.
+ *
+ * @param options - Exact OPFS file handle owned by the elected worker leader, and the access mode.
+ * @returns A reader, or an initialized, leader-epoch-idempotent event-log appender.
+ * @public
+ */
+export function createOpfsEventLog(
+  options: OpfsEventLogOptions & { readonly access: 'read' },
+): Promise<BrowserEventLogReader>;
+export function createOpfsEventLog(
+  options: OpfsEventLogOptions & { readonly access: 'write' },
+): Promise<EventLogAppender>;
+/** Implements both access overloads of {@link createOpfsEventLog}. @public */
+export async function createOpfsEventLog(
+  options: OpfsEventLogOptions,
+): Promise<BrowserEventLogReader | EventLogAppender> {
+  if (options.access === 'read') {
+    refuseNullOrigin();
+    return readerOf(async () => {
+      const file = await options.fileHandle.getFile();
+      return new Uint8Array(await file.arrayBuffer());
+    });
+  }
+  return openOpfsWriter(options.fileHandle);
+}
+
+/** OPFS has no storage for a null origin: every open, read or write, is refused before it touches a handle. */
+const refuseNullOrigin = (): void => {
+  if (location.origin === 'null') {
+    throw new EventLogError(
+      'STORAGE_NOT_WRITABLE',
+      'OPFS is unavailable on a null origin. Run the dedicated worker from a real secure or localhost origin.',
+    );
+  }
+};
+
+/**
+ * The write half of {@link createOpfsEventLog}.
+ *
+ * @param fileHandle - The log's file handle.
+ * @param segments - Reads the chat's other devices' segments, for the merged history (XD1); none for a bare log.
+ * @returns The appender.
+ */
+const openOpfsWriter = async (
+  fileHandle: FileSystemFileHandle,
+  segments?: () => Promise<readonly ChatLogSegment[]>,
+  open?: ChatWriterOpen,
+): Promise<EventLogAppender> => {
+  refuseNullOrigin();
+  const acquire = (fileHandle as SyncAccessCapableFileHandle).createSyncAccessHandle;
+  if (typeof acquire !== 'function') {
+    throw new EventLogError(
+      'STORAGE_NOT_WRITABLE',
+      'FileSystemSyncAccessHandle is unavailable. Open the OPFS file from a dedicated worker on a supported origin.',
+    );
+  }
+
+  let handle: SyncAccessHandle;
+  try {
+    handle = await acquire.call(fileHandle);
+  } catch (error) {
+    throw new EventLogError(
+      'WRITER_LOCKED',
+      "Another worker holds this chat log's exclusive OPFS handle. Wait until it closes the log, then open it again.",
+      { cause: error },
+    );
+  }
+
+  const storage: EventLogStorage = {
+    read: async () => readAll(handle),
+    append: async (bytes) => {
+      appendAll(handle, bytes);
+    },
+    truncate: async (size) => {
+      handle.truncate(size);
+      handle.flush();
+    },
+    size: async () => handle.getSize(),
+    // The exclusive handle is held for the log's life, so every section is already exclusive.
+    exclusive: async (section) => section(),
+    ...(segments === undefined ? {} : { segments }),
+    close: async () => {
+      handle.close();
+    },
+  };
+
+  try {
+    return await createEventLogAppender(storage, { segmentReadMilliseconds: open?.segmentReadMilliseconds });
+  } catch (error) {
+    handle.close();
+    throw error;
+  }
+};
+
+/**
+ * Open an event log through Tau's abstract filesystem provider or bridge proxy.
+ *
+ * A write open fences every append inside a per-append Web Lock, exclusive and never stolen (EQ2): the log's length
+ * is checked against this writer's view and the line appended in one section, so a writer whose view is stale is
+ * refused `LOG_FENCED` without writing, and a frozen holder holds nothing between appends. The adjacent `.lock`
+ * marker is kept as a courtesy for builds that honour only it until the desktop support window ends (CL-S11).
+ * A read open creates nothing and takes no lock.
+ *
+ * @param options - The log's provider path, the provider, the access mode and the lock's name.
+ * @returns A reader, or an initialized, leader-epoch-idempotent event-log appender.
+ * @public
+ */
+export function createProviderEventLog(
+  options: ProviderEventLogOptions & { readonly access: 'read' },
+): Promise<BrowserEventLogReader>;
+export function createProviderEventLog(
+  options: ProviderEventLogOptions & { readonly access: 'write' },
+): Promise<EventLogAppender>;
+/** Implements both access overloads of {@link createProviderEventLog}. @public */
+export async function createProviderEventLog(
+  options: ProviderEventLogOptions,
+): Promise<BrowserEventLogReader | EventLogAppender> {
+  const { filePath, fileSystem } = options;
+  if (options.access === 'read') {
+    return readerOf(async () =>
+      (await fileSystem.exists(filePath)) ? fileSystem.readFile(filePath) : new Uint8Array(),
+    );
+  }
+  return openProviderWriter(options);
+}
+
+/**
+ * The write half of {@link createProviderEventLog}.
+ *
+ * @param options - The log's options.
+ * @param segments - Reads the chat's other devices' segments, for the merged history (XD1); none for a bare log.
+ * @returns The appender.
+ */
+const openProviderWriter = async (
+  options: ProviderEventLogOptions,
+  segments?: () => Promise<readonly ChatLogSegment[]>,
+  open?: ChatWriterOpen,
+): Promise<EventLogAppender> => {
+  const { filePath, fileSystem } = options;
+  const readBytes = async (): Promise<Uint8Array<ArrayBuffer>> =>
+    (await fileSystem.exists(filePath)) ? fileSystem.readFile(filePath) : new Uint8Array();
+  const { appendFile } = fileSystem;
+  if (!appendFile) {
+    throw new EventLogError('STORAGE_NOT_WRITABLE', 'The selected filesystem provider cannot append event-log data.');
+  }
+  const lockName = options.lockName ?? `tau-log-append:${filePath}`;
+
+  const lockPath = `${filePath}.lock`;
+  if (await fileSystem.exists(lockPath)) {
+    throw new EventLogError('WRITER_LOCKED', `Event log "${filePath}" already has an active provider writer.`);
+  }
+  await appendFile.call(fileSystem, lockPath, `${Date.now()}\n`);
+
+  const releaseWriterLock = async (): Promise<void> => {
+    await fileSystem.unlink(lockPath).catch(() => undefined);
+  };
+  const storage: EventLogStorage = {
+    read: readBytes,
+    append: async (bytes, expectedLength) =>
+      fileSystem.appendFileFenced === undefined || expectedLength === undefined
+        ? appendFile.call(fileSystem, filePath, bytes)
+        : fileSystem.appendFileFenced(filePath, bytes, { expectedLength }),
+    fencesAppends: fileSystem.appendFileFenced !== undefined,
+    truncate: async (size) => {
+      if (!(await fileSystem.exists(filePath))) {
+        if (size === 0) {
+          return;
+        }
+        throw new EventLogError('STORAGE_SHORT_READ', `Event log "${filePath}" disappeared before rollback.`);
+      }
+      const bytes = await fileSystem.readFile(filePath);
+      await fileSystem.writeFile(filePath, bytes.slice(0, size));
+    },
+    size: async () => {
+      if (fileSystem.stat) {
+        try {
+          const stat = await fileSystem.stat(filePath);
+          return stat.size;
+        } catch (error) {
+          if (
+            error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+          ) {
+            return 0;
+          }
+          throw error;
+        }
+      }
+      const bytes = await readBytes();
+      return bytes.byteLength;
+    },
+    exclusive: async (section) => navigator.locks.request(lockName, { mode: 'exclusive' }, section),
+    ...(segments === undefined ? {} : { segments }),
+    close: releaseWriterLock,
+  };
+
+  try {
+    return await createEventLogAppender(storage, { segmentReadMilliseconds: open?.segmentReadMilliseconds });
+  } catch (error) {
+    await releaseWriterLock();
+    throw error;
+  }
+};
+
+/**
+ * Read chat attachments through Tau's abstract filesystem provider or bridge proxy (D15).
+ *
+ * Given `writeFile`, the reader also writes them, so a screenshot capture is
+ * stored beside the chat instead of inline in its log (D-UI-04).
+ *
+ * @param fileSystem - The project-root filesystem that also holds `.tau/chats`.
+ * @returns A reader answering `undefined` for bytes not on this device.
+ * @public
+ */
+export const createProviderAttachmentReader = (
+  fileSystem: Pick<ProviderEventLogOptions['fileSystem'], 'exists' | 'readFile'> &
+    Partial<Pick<ProviderEventLogOptions['fileSystem'], 'writeFile'>>,
+): AttachmentReader => {
+  const writeFile = fileSystem.writeFile?.bind(fileSystem);
+  return {
+    read: async (chatId, path) => {
+      // Bridge paths are root-relative, like the event log's.
+      const filePath = chatAttachmentPath(chatId, path);
+      return (await fileSystem.exists(filePath)) ? fileSystem.readFile(filePath) : undefined;
+    },
+    ...(writeFile === undefined
+      ? {}
+      : {
+          write: async (chatId: string, path: string, bytes: Uint8Array<ArrayBuffer>) => {
+            const filePath = chatAttachmentPath(chatId, path);
+            // Content-addressed: a present path already holds these bytes.
+            if (!(await fileSystem.exists(filePath))) {
+              await writeFile(filePath, bytes);
+            }
+          },
+        }),
+  };
+};
+
+// ── the browser chat store (W6 RH-S7) ─────────────────────────────────────────────────────────────
+
+/** Options for {@link createBrowserChatStore}. @public */
+export type BrowserChatStoreOptions = Readonly<{
+  projectId: string;
+  /** This worker's id among the origin's tabs (RH-R5). */
+  tabId: string;
+  /** The composition root's build identity: a tab on another build never runs this build's command (RH-R7). */
+  build: string;
+  /**
+   * Where the project's chat logs and their attachments live: the project's own OPFS directory, whose logs take the
+   * exclusive sync handle (`exclusive-append`), or the project's root filesystem, a provider or bridge proxy whose
+   * appends are fenced one at a time.
+   */
+  log:
+    | Readonly<{ kind: 'opfs'; directory: FileSystemDirectoryHandle }>
+    | Readonly<{
+        kind: 'provider';
+        fileSystem: ProviderEventLogOptions['fileSystem'];
+        /** The provider's durability class, stamped on each admission; `stream-append` when absent. */
+        durability?: StorageDurabilityClass | undefined;
+      }>;
+  /**
+   * Rooted observation of a project-relative log path. Resolve only once delivery is acknowledged; report lost
+   * delivery through onError, and release registration on abort. Notifications never substitute for fresh bytes.
+   */
+  observeLog?:
+    | ((
+        input: Readonly<{
+          path: string;
+          signal: AbortSignal;
+          onChange: () => void;
+          onError: (error: unknown) => void;
+        }>,
+      ) => Promise<() => void>)
+    | undefined;
+  /**
+   * The page's visibility, relayed to the worker: a hidden page never queues for a chat's lock (RH-R16), and a page
+   * shown again re-arms the heartbeat bounds it may have been frozen through.
+   */
+  visibility?:
+    | Readonly<{ visible: () => boolean; subscribe: (listener: (visible: boolean) => void) => () => void }>
+    | undefined;
+  /** The clock leadership's timers run on, and whose `now` measures a frozen tab's late timers; the worker's when absent. */
+  clock?: (HostClock & Readonly<{ now: () => number }>) | undefined;
+  /** Leadership's bounds in milliseconds, for tests; the substrate's values (`timeouts.json`) when absent. */
+  delays?:
+    | Partial<
+        Readonly<{
+          heartbeatInterval: number;
+          heartbeatTimeout: number;
+          recoveryDelay: number;
+          claimBound: number;
+          queuedWriteBound: number;
+        }>
+      >
+    | undefined;
+}>;
+
+const logName = 'events.jsonl';
+
+/** The observation {@link BrowserChatStoreOptions.observeLog} takes. @public */
+export type RootedLogObserver = NonNullable<BrowserChatStoreOptions['observeLog']>;
+
+/**
+ * Observe chat logs on a rooted project filesystem on the connection's one
+ * event channel (D14), or in the change-set form (D6, D23): a peer's append
+ * storm on a log arrives once per committed changeset, not once per append,
+ * and every log observed over one connection shares that connection's channel.
+ * A source that refuses a form with `ENOTSUP` steps down to the next, as far
+ * as its per-path watch. The observation resolves once
+ * the authority acknowledges it, reports a closed or failed watch through
+ * `onError`, and releases on abort.
+ *
+ * @param projectRoot - The rooted project filesystem (a bridge proxy or a rooted view).
+ * @returns The `observeLog` for {@link createBrowserChatStore}.
+ * @public
+ */
+export const createRootedLogObserver =
+  (projectRoot: ChangeSetWatchSource): RootedLogObserver =>
+  async ({ path, signal, onChange, onError }) => {
+    let released = false;
+    const subscription = watchByChangeSets(projectRoot, { paths: [path] }, onChange);
+    const release = (): void => {
+      if (!released) {
+        released = true;
+        signal.removeEventListener('abort', release);
+        subscription.unsubscribe();
+      }
+    };
+    signal.addEventListener('abort', release, { once: true });
+    // async-iife: bootstrap
+    // The observation owns its closure monitor until release; stale callbacks are fenced.
+    void (async () => {
+      try {
+        await subscription.closed;
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- Release may run while the observation closure is awaited.
+        if (!released && !signal.aborted) {
+          onError(new Error(`Chat log observation closed for ${path}.`));
+        }
+      } catch (error) {
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- Release may run while the observation closure is awaited.
+        if (!released && !signal.aborted) {
+          onError(error);
+        }
+      }
+    })();
+    try {
+      await subscription.ready;
+      signal.throwIfAborted();
+      return release;
+    } catch (error) {
+      release();
+      throw error;
+    }
+  };
+
+/**
+ * Chat logs for one project in a browser worker. A read never creates the chat, takes a lock or keeps a handle
+ * (RH-R1); a write opens only under the chat's Web Lock, which M2 holds while the chat needs a writer (EQ4).
+ *
+ * @param options - The project, this worker, and where the logs live.
+ * @returns The opaque store `createAgentLauncher` takes.
+ * @public
+ *
+ * @example <caption>One launcher per project in the resident worker</caption>
+ * ```typescript
+ * import { createBrowserChatStore } from '@taucad/agent-host/browser';
+ * import type { ProviderEventLogOptions } from '@taucad/agent-host/browser';
+ *
+ * declare const fileSystem: ProviderEventLogOptions['fileSystem'];
+ * const chats = createBrowserChatStore({
+ *   projectId: 'project-1',
+ *   tabId: 'tab-1',
+ *   build: '1.0.0',
+ *   log: { kind: 'provider', fileSystem },
+ * });
+ * ```
+ */
+export const createBrowserChatStore = (options: BrowserChatStoreOptions): ChatStore => {
+  const { log } = options;
+  const logPath = (chatId: string): string => `.tau/chats/${requireChatPathSegment(chatId)}/${logName}`;
+  const segmentsPath = (chatId: string): string =>
+    `.tau/chats/${requireChatPathSegment(chatId)}/${chatSegmentsDirectoryName}`;
+  const recordPath = (chatId: string): string => `.tau/chats/${requireChatPathSegment(chatId)}/${chatRecordFileName}`;
+  const decoder = new TextDecoder();
+
+  /**
+   * A directory under the OPFS project directory, by its root-relative segments, each opened inside the one before.
+   *
+   * @param directory - The OPFS project directory.
+   * @param segments - The directory's path segments.
+   * @param create - Whether a missing directory is created.
+   * @returns The directory handle.
+   */
+  const opfsDirectory = async (
+    directory: FileSystemDirectoryHandle,
+    segments: readonly string[],
+    create: boolean,
+  ): Promise<FileSystemDirectoryHandle> => {
+    let parent = directory;
+    for (const segment of segments) {
+      // oxlint-disable-next-line no-await-in-loop -- each directory opens inside the one before it.
+      parent = await parent.getDirectoryHandle(segment, { create });
+    }
+    return parent;
+  };
+
+  /** A file under the OPFS project directory, by its root-relative path; `undefined` when it is not there. */
+  const opfsFile = async (
+    directory: FileSystemDirectoryHandle,
+    path: string,
+    create: boolean,
+  ): Promise<FileSystemFileHandle | undefined> => {
+    const segments = path.split('/');
+    const name = segments.pop()!;
+    try {
+      const parent = await opfsDirectory(directory, segments, create);
+      return await parent.getFileHandle(name, { create });
+    } catch (error) {
+      if (!create && (error as { readonly name?: unknown }).name === 'NotFoundError') {
+        return undefined;
+      }
+      throw error;
+    }
+  };
+
+  /**
+   * The entry names of a directory under the OPFS project directory.
+   *
+   * @param directory - The OPFS project directory.
+   * @param path - The directory's root-relative path.
+   * @returns Its entry names; none when it is not there.
+   */
+  const opfsNames = async (directory: FileSystemDirectoryHandle, path: string): Promise<string[]> => {
+    let parent: FileSystemDirectoryHandle;
+    try {
+      parent = await opfsDirectory(directory, path.split('/'), false);
+    } catch (error) {
+      const { name } = error as { readonly name?: unknown };
+      if (name === 'NotFoundError' || name === 'TypeMismatchError') {
+        return [];
+      }
+      throw error;
+    }
+    const names: string[] = [];
+    // ponytail: `keys()` is in DOM.AsyncIterable, which this package's lib set does not load.
+    for await (const name of (parent as unknown as { keys(): AsyncIterable<string> }).keys()) {
+      names.push(name);
+    }
+    return names;
+  };
+
+  if (log.kind === 'opfs') {
+    const { directory } = log;
+    const bytesOf = async (path: string): Promise<Uint8Array<ArrayBuffer> | undefined> => {
+      const file = await opfsFile(directory, path, false);
+      if (file === undefined) {
+        return undefined;
+      }
+      const blob = await file.getFile();
+      return new Uint8Array(await blob.arrayBuffer());
+    };
+    return createChatStore({
+      platform: 'browser',
+      observeBytes:
+        options.observeLog === undefined
+          ? undefined
+          : async (chatId, input) => options.observeLog!({ ...input, path: logPath(chatId) }),
+      durability: 'exclusive-append',
+      attachments: {
+        read: async (chatId, path) => bytesOf(chatAttachmentPath(chatId, path)),
+        write: async (chatId, path, bytes) => {
+          const filePath = chatAttachmentPath(chatId, path);
+          const file = (await opfsFile(directory, filePath, true)) as SyncAccessCapableFileHandle;
+          const present = await file.getFile();
+          // Content-addressed: a whole file at the path already holds these bytes; a torn one is rewritten.
+          if (present.size === bytes.byteLength) {
+            return;
+          }
+          // The sync handle, not `createWritable`, which a Safari worker lacks.
+          const handle = await file.createSyncAccessHandle!();
+          try {
+            handle.truncate(0);
+            handle.write(bytes, { at: 0 });
+            handle.flush();
+          } finally {
+            handle.close();
+          }
+        },
+      },
+      readBytes: async (chatId) => (await bytesOf(logPath(chatId))) ?? new Uint8Array(),
+      purged: async (chatId) => {
+        const record = await bytesOf(recordPath(chatId));
+        return isPurgedChatRecord(record === undefined ? undefined : decoder.decode(record));
+      },
+      /* The writer appends to this device's file only; its history also reads the other devices' segments (XD1). */
+      openWriter: async (chatId, open) =>
+        openOpfsWriter(
+          (await opfsFile(directory, logPath(chatId), true))!,
+          createChatSegmentsReader({
+            list: async () => opfsNames(directory, segmentsPath(chatId)),
+            /* `getFile` reads the metadata, not the bytes. */
+            stat: async (name) => {
+              const file = await opfsFile(directory, `${segmentsPath(chatId)}/${name}`, false);
+              const blob = await file?.getFile();
+              return blob === undefined || blob.lastModified <= 0
+                ? undefined
+                : { size: blob.size, modifiedAt: blob.lastModified };
+            },
+            read: async (name) => bytesOf(`${segmentsPath(chatId)}/${name}`),
+          }),
+          open,
+        ),
+      /* OPFS's exclusive handle cannot be stolen from a frozen holder (RH-R12). */
+      leadership: leadershipOf(options, false),
+    });
+  }
+
+  const { fileSystem } = log;
+  return createChatStore({
+    platform: 'browser',
+    observeBytes:
+      options.observeLog === undefined
+        ? undefined
+        : async (chatId, input) => options.observeLog!({ ...input, path: logPath(chatId) }),
+    durability: log.durability ?? 'stream-append',
+    attachments: createProviderAttachmentReader(fileSystem),
+    readBytes: async (chatId) => {
+      const filePath = logPath(chatId);
+      return (await fileSystem.exists(filePath)) ? fileSystem.readFile(filePath) : new Uint8Array();
+    },
+    purged: async (chatId) => {
+      const filePath = recordPath(chatId);
+      return isPurgedChatRecord(
+        (await fileSystem.exists(filePath)) ? decoder.decode(await fileSystem.readFile(filePath)) : undefined,
+      );
+    },
+    openWriter: async (chatId, open) => {
+      const filePath = logPath(chatId);
+      /* This open runs under the chat's Web Lock (M2), so a surviving marker is a dead or stolen holder's; the
+       * per-append fence refuses that holder's appends whatever the marker says (EQ2, RH-R12). */
+      await fileSystem.unlink(`${filePath}.lock`).catch(() => undefined);
+      const { readdir, stat } = fileSystem;
+      const directory = segmentsPath(chatId);
+      return openProviderWriter(
+        {
+          fileSystem,
+          filePath,
+          access: 'write',
+          lockName: `tau-log-append:${options.projectId}/${requireChatPathSegment(chatId)}`,
+        },
+        /* The writer appends to this device's file only; its history also reads the other devices' segments (XD1). */
+        readdir === undefined
+          ? undefined
+          : createChatSegmentsReader({
+              list: async () => readOrAbsent(async () => readdir.call(fileSystem, directory), []),
+              ...(stat === undefined
+                ? {}
+                : {
+                    stat: async (name: string) =>
+                      readOrAbsent(async () => {
+                        const { size, mtimeMs } = await stat.call(fileSystem, `${directory}/${name}`);
+                        /* Size alone cannot tell a rewrite of the same length: with no modification time, read the bytes. */
+                        return mtimeMs !== undefined && mtimeMs > 0 ? { size, modifiedAt: mtimeMs } : undefined;
+                      }, undefined),
+                  }),
+              /* One round trip: a segment that went away is the read's `ENOENT`. */
+              read: async (name) => readOrAbsent(async () => fileSystem.readFile(`${directory}/${name}`), undefined),
+            }),
+        open,
+      );
+    },
+    /* The provider leg fences each append, so a steal from a silent holder can serve (RH-R12). */
+    leadership: leadershipOf(options, true),
+  });
+};
+
+const leadershipOf = (
+  options: BrowserChatStoreOptions,
+  canSteal: boolean,
+): ReturnType<typeof createBrowserLeadership> =>
+  createBrowserLeadership({
+    projectId: options.projectId,
+    sender: options.tabId,
+    build: options.build,
+    canSteal,
+    visibility: options.visibility,
+    clock: options.clock,
+    delays: options.delays,
+  });
+
+/*
+ * A headless hold on chats' logs (W30, row L7): the same Web Lock a tab's leadership takes before it opens a chat's
+ * writer (M2, `chatLeadershipNames`), taken by a reader that serves nothing. While it is held no tab can open a writer
+ * for the chat, so a run cannot start or append, and the reader can trust the log it reads to stay as it read it.
+ *
+ * A peer may still steal the lock (RH-R12: a silent holder is stolen from). A stolen lease is reported as lost, so the
+ * caller checks it before an irreversible step instead of assuming it held throughout.
+ */
+
+/**
+ * How long a lease waits for a chat's lock by default: a session that just closed releases its locks in that time.
+ *
+ * @public
+ */
+export const chatLogLeaseWaitMilliseconds = 5000;
+
+/** A held lease on every chat it named. @public */
+export type ChatLogLease = Readonly<{
+  status: 'held';
+  /** Whether a peer stole any of the chats' locks since the lease was granted. */
+  lost: () => boolean;
+  /** Release every lock the lease holds. Idempotent. */
+  release: () => void;
+}>;
+
+/** A lease that was not granted: another process leads `chatId` and did not let go within the wait. @public */
+export type ChatLogLeaseRefusal = Readonly<{ status: 'led-elsewhere'; chatId: string }>;
+
+/**
+ * Take one lock, waiting at most `waitMilliseconds` for its grant.
+ *
+ * @param lock - The lock's name.
+ * @param waitMilliseconds - How long to wait for the grant.
+ * @param onStolen - Called when a peer steals the lock after it was granted.
+ * @returns The release of a granted lock, or `undefined` when the wait passed first.
+ */
+const takeLeaseLock = async (
+  lock: string,
+  waitMilliseconds: number,
+  onStolen: () => void,
+): Promise<(() => void) | undefined> => {
+  let letGo = (): void => undefined;
+  const held = new Promise<void>((resolve) => {
+    letGo = resolve;
+  });
+  return new Promise<(() => void) | undefined>((resolve) => {
+    const grant = { granted: false };
+    // async-iife: bootstrap -- a grant is held for as long as its callback runs; the outcome resolves the caller.
+    void (async (): Promise<void> => {
+      try {
+        await navigator.locks.request(lock, { signal: AbortSignal.timeout(waitMilliseconds) }, async () => {
+          grant.granted = true;
+          resolve(letGo);
+          await held;
+        });
+      } catch {
+        /* Before the grant: the wait passed. After it: a peer stole the lock. */
+        if (grant.granted) {
+          onStolen();
+        } else {
+          resolve(undefined);
+        }
+      }
+    })();
+  });
+};
+
+/**
+ * Take every named chat's leadership lock, in a fixed order, so no tab can open a writer for any of them.
+ *
+ * @param input - The project, its chats, and how long to wait for each lock.
+ * @returns The lease, or which chat another process kept leading past the wait. A refusal holds nothing.
+ * @public
+ *
+ * @example <caption>Read a closed project's chat logs with no writer appending meanwhile</caption>
+ * ```typescript
+ * import { leaseChatLogs } from '@taucad/agent-host/browser';
+ *
+ * const lease = await leaseChatLogs({ projectId: 'proj_1', chatIds: ['chat_1'] });
+ * if (lease.status === 'held') {
+ *   try {
+ *     // Read the logs here.
+ *   } finally {
+ *     lease.release();
+ *   }
+ * }
+ * ```
+ */
+export const leaseChatLogs = async ({
+  projectId,
+  chatIds,
+  waitMilliseconds = chatLogLeaseWaitMilliseconds,
+}: Readonly<{
+  projectId: string;
+  chatIds: readonly string[];
+  waitMilliseconds?: number;
+}>): Promise<ChatLogLease | ChatLogLeaseRefusal> => {
+  const releases: Array<() => void> = [];
+  const state = { lost: false, released: false };
+  const release = (): void => {
+    state.released = true;
+    for (const releaseOne of releases.splice(0)) {
+      releaseOne();
+    }
+  };
+  const onStolen = (): void => {
+    state.lost ||= !state.released;
+  };
+  /* One order for every lease, so two leases over shared chats never wait on each other. */
+  for (const chatId of [...new Set(chatIds)].toSorted()) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- one lock at a time, in order.
+    const letGo = await takeLeaseLock(chatLeadershipNames(projectId, chatId).lock, waitMilliseconds, onStolen);
+    if (letGo === undefined) {
+      release();
+      return { status: 'led-elsewhere', chatId };
+    }
+    releases.push(letGo);
+  }
+  return { status: 'held', lost: () => state.lost, release };
+};

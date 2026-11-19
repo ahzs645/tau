@@ -1,0 +1,525 @@
+import { z } from 'zod';
+import { llmGatewayProviders, promptCacheOutcomes } from '#llm-gateway-vocabulary.js';
+
+/**
+ * Canonical entry name constants used in `performance.measure()` and ingest payloads.
+ * @public
+ */
+/* eslint-disable @typescript-eslint/naming-convention -- OTEL constant enum uses UPPER_SNAKE_CASE */
+export const IngestEntryName = {
+  AGENT_SESSION: 'agent.session',
+  AGENT_TURN: 'agent.turn',
+  SYNC_ATTEMPT: 'observability.syncAttempt',
+  LFS_FETCH: 'observability.lfsFetch',
+  PROJECT_OPEN: 'observability.projectOpen',
+  KERNEL_AUTO_RESOLVED: 'kernel.autoResolved',
+  KERNEL_OVERRIDE: 'kernel.override',
+  KERNEL_FIRST_OUTCOME: 'kernel.firstOutcome',
+} as const;
+/* eslint-enable @typescript-eslint/naming-convention -- end OTEL constants block */
+
+/**
+ * Entry names the API no longer records: the old kernel instruments' entries, superseded by `runtime.operation`. The
+ * ingest body still admits them by name, so a stale client's batch is not refused for one retired entry, and the API
+ * drops them unrecorded.
+ * @public
+ */
+export const retiredIngestEntryNames = ['observability.createGeometry', 'observability.exportGeometry'] as const;
+
+/** A retired entry as the ingest body admits it: its name only; anything else it carries is stripped, never read. @public */
+export const retiredIngestEntrySchema = z.object({ name: z.enum(retiredIngestEntryNames) });
+
+/* Agent usage (W36-C). Every string is a bounded label: ids and codes are shape-checked, the rest are enums. */
+
+/** A descriptor's agent id: `tau`, `claude`, `codex`, … @public */
+export const agentIdSchema = z.string().regex(/^[a-z][\d_a-z-]{0,31}$/);
+
+/**
+ * The agent ids recorded as themselves: Tau's own and the ACP registry's pinned adapters
+ * (`packages/host/src/acp/registry.ts`). Any other id is recorded as `other`, so a custom agent never mints a series.
+ * @public
+ */
+export const knownAgentIds: ReadonlySet<string> = new Set(['tau', 'claude', 'codex', 'grok']);
+
+/** Where an agent turn ran. @public */
+export const agentPlacements = ['browser', 'desktop', 'daemon', 'cloud'] as const;
+
+/** ACP's `ToolKind` taxonomy; Tau's own tools are mapped onto it (`tauToolKinds`). @public */
+export const agentToolKinds = [
+  'read',
+  'edit',
+  'delete',
+  'move',
+  'search',
+  'execute',
+  'think',
+  'fetch',
+  'switch_mode',
+  'other',
+] as const;
+
+/**
+ * Tau's own tool names, the keys of `tauToolKinds` in `@taucad/agent-host`. Copied rather than imported so this
+ * dependency-light library never depends on the agent host; `scripts/src/telemetry-vocabulary-contract.test.ts` pins the copy to the source.
+ * @public
+ */
+export const tauToolNames = [
+  'read_file',
+  'list_directory',
+  'grep',
+  'glob_search',
+  'web_search',
+  'web_browser',
+  'create_file',
+  'edit_file',
+  'arrange_workbench',
+  'delete_file',
+  'evaluate_model',
+  'get_parameters',
+  'apply_parameter_operation',
+  'test_model',
+  'export_model',
+  'screenshot',
+  'history',
+  'use_skill',
+  'update_todos',
+  'ask_questions',
+  'install_packages',
+  'list_machines',
+  'get_machine',
+  'machine_action',
+  'stop_machine',
+  'get_print_profiles',
+  'request_job',
+  'check_job',
+  'shell',
+] as const;
+
+/**
+ * Kernel ids, the `id`s of `kernelConfigurations` in `@taucad/types`. Copied and pinned like {@link tauToolNames}.
+ * @public
+ */
+export const kernelIds = [
+  'picogk',
+  'picovoxel',
+  'build123d',
+  'smlibpy',
+  'openscad',
+  'replicad',
+  'manifold',
+  'zoo',
+  'jscad',
+  'opencascadejs',
+  'smlib',
+  'tscircuit',
+] as const;
+
+/**
+ * Built-in skill slugs: the `agent/skills.json` bundles under `packages/` that `@taucad/skills` ships as
+ * `systemSkillBundles`. Copied and pinned like {@link tauToolNames}; a user-authored skill reports as `custom`.
+ * @public
+ */
+export const builtInSkillSlugs = [
+  'cad-build123d',
+  'cad-jscad',
+  'cad-manifold',
+  'cad-opencascadejs',
+  'cad-openscad',
+  'cad-picogk',
+  'cad-picovoxel',
+  'cad-replicad',
+  'cad-smlib',
+  'cad-smlibpy',
+  'cad-tscircuit',
+  'cad-zoo',
+  'geospec-authoring',
+  'workbench',
+] as const;
+
+/** Why a skill-reference lookup ended as it did. @public */
+export const lookupOutcomes = ['ok', 'zero_match', 'not_found', 'tool_error'] as const;
+
+/** How a model evaluation ended, classified on the device from issue type, code and message patterns. @public */
+export const evaluationClasses = ['ok', 'api_misuse', 'compile', 'runtime', 'timeout', 'kernel', 'other'] as const;
+
+/** The agent-loop safeguard that fired: a detector family, or the output-limit recovery (R9). @public */
+export const agentSafeguardPatterns = [
+  'identical_error',
+  'identical_call',
+  'per_target_edit',
+  'ping_pong',
+  'empty_result',
+  'same_error_different_args',
+  'output_limit',
+] as const;
+
+/** Where a compaction ran, how deep it went and what it produced (R9). @public */
+export const agentCompactionLanes = ['start_of_turn', 'between_turn', 'overflow'] as const;
+/** @public */
+export const agentCompactionTiers = ['tool_result_clearing', 'summarization'] as const;
+/** @public */
+export const agentCompactionOutcomes = ['cleared', 'generated', 'placeholder'] as const;
+
+/**
+ * Why a request did not reproduce the previous request's prompt prefix, so the provider's cache restarted there
+ * (provider reasoning replay contract, P1). `unsanctioned` is a change no cause explains: a defect.
+ * @public
+ */
+export const agentPrefixBreakCauses = [
+  'compaction',
+  'clearing',
+  'attachment-eviction',
+  'model',
+  'definitions',
+  'instructions',
+  'tools',
+  'settings',
+  'unsanctioned',
+] as const;
+
+/** A GeoSpec `test_model` run status. @public */
+export const geospecRunStatuses = ['passed', 'failed', 'inconclusive', 'unsupported', 'not-run'] as const;
+
+/** A refusal or failure code, e.g. `CLI_NOT_FOUND`, `MODEL_STREAM_STALLED`. @public */
+export const agentErrorCodeSchema = z.string().regex(/^[A-Z][\dA-Z_]{0,63}$/);
+
+/**
+ * A non-negative number clamped to `max`: an outlier degrades to the ceiling instead of dropping the whole entry.
+ *
+ * @param max - The ceiling.
+ * @returns The clamping schema.
+ */
+const clamped = (max: number) =>
+  z
+    .number()
+    .nonnegative()
+    .transform((value) => Math.min(value, max));
+
+/**
+ * A non-negative integer clamped to `max`, like {@link clamped}.
+ *
+ * @param max - The ceiling.
+ * @returns The clamping schema.
+ */
+const clampedInt = (max: number) =>
+  z
+    .number()
+    .int()
+    .nonnegative()
+    .transform((value) => Math.min(value, max));
+
+/** Milliseconds; a day bounds any one turn. */
+const agentDurationSchema = clamped(86_400_000);
+
+/** Token counts are per turn; one turn never legitimately reports more than this. */
+const tokenCountSchema = clamped(100_000_000);
+
+const agentSessionEntrySchema = z.object({
+  name: z.literal(IngestEntryName.AGENT_SESSION),
+  duration: agentDurationSchema,
+  detail: z.object({
+    agentId: agentIdSchema,
+    placement: z.enum(agentPlacements),
+    /** The refusal's code rides the refused turn entry, so `tau.agent.errors` counts it once. */
+    outcome: z.enum(['started', 'ended', 'refused']),
+  }),
+});
+
+/**
+ * What a turn did with its context: counts and bounded vocabularies only, never paths, patterns, names or messages.
+ * Present only when the person allows usage metrics.
+ */
+const agentTurnContextSchema = z.object({
+  kernelId: z.enum(kernelIds),
+  skillsActivated: z.array(z.enum([...builtInSkillSlugs, 'custom'])).max(8),
+  /** Tool calls before the first model-file write; absent when the turn wrote no model file. */
+  callsBeforeFirstModelWrite: clampedInt(1000).optional(),
+  /** Admission to the first model-file write. Milliseconds. */
+  timeToFirstModelWrite: agentDurationSchema.optional(),
+  referenceLookups: z
+    .array(z.object({ outcome: z.enum(lookupOutcomes), count: clampedInt(1000) }))
+    .max(lookupOutcomes.length),
+  /** UTF-8 bytes of skill-reference output read by Tau's own tools; absent for ACP agents. */
+  referenceBytesRead: clampedInt(10_000_000).optional(),
+  evaluations: z
+    .array(z.object({ class: z.enum(evaluationClasses), count: clampedInt(100) }))
+    .max(evaluationClasses.length),
+  /** Model-file writes that followed a non-`ok` evaluation. */
+  correctionsAfterError: clampedInt(100),
+  geospec: z
+    .object({
+      runs: clampedInt(100),
+      /** Passed assertions across the turn's runs. */
+      passed: clampedInt(10_000),
+      /** Failed assertions across the turn's runs. */
+      failed: clampedInt(10_000),
+      runStatuses: z
+        .array(z.object({ status: z.enum(geospecRunStatuses), count: clampedInt(100) }))
+        .max(geospecRunStatuses.length),
+    })
+    .optional(),
+});
+
+/** One settled turn: `duration` is admission to terminal, in milliseconds. */
+const agentTurnEntrySchema = z.object({
+  name: z.literal(IngestEntryName.AGENT_TURN),
+  duration: agentDurationSchema,
+  detail: z.object({
+    agentId: agentIdSchema,
+    placement: z.enum(agentPlacements),
+    outcome: z.enum(['completed', 'cancelled', 'error', 'refused']),
+    errorCode: agentErrorCodeSchema.optional(),
+    /** Admission to the first content update, in milliseconds. */
+    timeToFirstUpdate: agentDurationSchema.optional(),
+    toolCalls: z
+      .array(
+        z.object({
+          kind: z.enum(agentToolKinds),
+          /** Tau's own tools only; ACP rows and turns without usage-metrics consent omit it. */
+          tool: z.enum(tauToolNames).optional(),
+          status: z.enum(['completed', 'failed']),
+          count: z
+            .number()
+            .int()
+            .positive()
+            .transform((value) => Math.min(value, 10_000)),
+        }),
+      )
+      .max((agentToolKinds.length + tauToolNames.length) * 2)
+      .optional(),
+    /** Present only when the agent reported usage; never estimated. */
+    tokens: z
+      .object({
+        input: tokenCountSchema,
+        output: tokenCountSchema,
+        cacheRead: tokenCountSchema,
+        cacheWrite: tokenCountSchema,
+      })
+      .optional(),
+    /** Safeguard interventions the turn's rows recorded (R9). */
+    safeguards: z
+      .array(
+        z.object({
+          pattern: z.enum(agentSafeguardPatterns),
+          action: z.enum(['nudge', 'terminate']),
+          count: clampedInt(1000),
+        }),
+      )
+      .max(agentSafeguardPatterns.length * 2)
+      .optional(),
+    /** Compaction decisions the turn's rows recorded (R9). */
+    compactions: z
+      .array(
+        z.object({
+          lane: z.enum(agentCompactionLanes),
+          tier: z.enum(agentCompactionTiers),
+          outcome: z.enum(agentCompactionOutcomes),
+          count: clampedInt(1000),
+        }),
+      )
+      .max(agentCompactionLanes.length * agentCompactionTiers.length * agentCompactionOutcomes.length)
+      .optional(),
+    /** Prompt-prefix breaks the turn's replies recorded, and the native reasoning blocks they left out. */
+    prefixBreaks: z
+      .array(
+        z.object({
+          cause: z.enum(agentPrefixBreakCauses),
+          provider: z.enum(llmGatewayProviders),
+          /** How much of the breaking request's prompt came from the cache; absent from a client older than the field. */
+          outcome: z.enum(promptCacheOutcomes).optional(),
+          count: clampedInt(1000),
+          reasoningOmitted: clampedInt(100_000),
+        }),
+      )
+      .max(agentPrefixBreakCauses.length * llmGatewayProviders.length * promptCacheOutcomes.length)
+      .optional(),
+    context: agentTurnContextSchema.optional(),
+  }),
+});
+
+/** One Tau Sync push or pull a client's `sync.machine` settled; `duration` is the attempt's own time. */
+const syncAttemptEntrySchema = z.object({
+  name: z.literal(IngestEntryName.SYNC_ATTEMPT),
+  duration: z.number().nonnegative(),
+  detail: z.object({
+    direction: z.enum(['push', 'pull']),
+    outcome: z.enum(['ok', 'retry', 'quota_refused', 'offline', 'error']),
+    placement: z.enum(['browser', 'desktop', 'daemon']),
+    /** First unsynced change (or the push request) to the server's ack, on an acknowledged push only. */
+    lagMilliseconds: z.number().nonnegative().optional(),
+    /** What dated the lag: the first unsynced change, the oldest queued entry, or the push request itself. */
+    lagSince: z.enum(['change', 'queue', 'request']).optional(),
+    /** `.git/sync-pending` depth when the push started. */
+    pending: z.number().int().nonnegative().optional(),
+  }),
+});
+
+/**
+ * Which kind of host served LFS downloads, read by the client from each action's host (files service
+ * blueprint §4, §8): the files service, a presigned R2 URL, the API's third-party relay, or anything else.
+ * @public
+ */
+export const lfsTransports = ['files', 'r2_presigned', 'relay', 'other'] as const;
+
+/**
+ * The file-manager worker's timed spans (`@taucad/filesystem`'s `workerTimingSpans`, pinned to this copy by the UI
+ * worker's tests): where a hosted open's time went inside the worker, which page resource timing cannot see.
+ * @public
+ */
+export const workerTimingSpanNames = [
+  'lfs.store',
+  'fence.wait',
+  'fence.held',
+  'queue.wait',
+  'queue.held',
+  'fill.flush',
+  'capture.tree',
+  'apply.hold',
+  'records.project',
+] as const;
+
+/** Total milliseconds per worker span over the entry's window; a span that never ran is absent. */
+const workerSpanTotalsSchema = z.strictObject({
+  'lfs.store': z.number().nonnegative().optional(),
+  'fence.wait': z.number().nonnegative().optional(),
+  'fence.held': z.number().nonnegative().optional(),
+  'queue.wait': z.number().nonnegative().optional(),
+  'queue.held': z.number().nonnegative().optional(),
+  'fill.flush': z.number().nonnegative().optional(),
+  'capture.tree': z.number().nonnegative().optional(),
+  'apply.hold': z.number().nonnegative().optional(),
+  'records.project': z.number().nonnegative().optional(),
+});
+
+/** One client tree read that fetched large objects from the remote; `duration` is its large-object phase. */
+const lfsFetchEntrySchema = z.object({
+  name: z.literal(IngestEntryName.LFS_FETCH),
+  duration: z.number().nonnegative(),
+  detail: z.object({
+    placement: z.enum(['browser', 'desktop', 'daemon']),
+    networkObjects: z.number().int().nonnegative(),
+    networkBytes: z.number().int().nonnegative(),
+    localObjects: z.number().int().nonnegative(),
+    localBytes: z.number().int().nonnegative(),
+    /** The transport that served most of the fetched objects; absent from clients older than the files service. */
+    transport: z.enum(lfsTransports).optional(),
+    /** Worker span totals over the phase; absent from older clients. */
+    spans: workerSpanTotalsSchema.optional(),
+  }),
+});
+
+/**
+ * One phase of a hosted project's open in the browser; `duration` runs from the project's root opening.
+ * Two words only: no project, path or object id.
+ */
+const projectOpenEntrySchema = z.object({
+  name: z.literal(IngestEntryName.PROJECT_OPEN),
+  duration: z.number().nonnegative(),
+  detail: z.object({
+    phase: z.enum(['first_view', 'fully_fetched']),
+    cache: z.enum(['cold', 'warm']),
+    /** On a cold open, the transport of its latest network fetch; absent on a warm open and from older clients. */
+    transport: z.enum(lfsTransports).optional(),
+    /** Worker span totals from the root opening to this phase; absent from older clients. */
+    spans: workerSpanTotalsSchema.optional(),
+  }),
+});
+
+/*
+ * Automatic kernel selection (blueprint D10): three categorical events, none carrying request text, a path or a
+ * project. The kernel is the runtime's binding of the project's main entry, so an ACP turn is observed without
+ * reading its transcript. They ride the anonymous telemetry the agent turn entry already rides.
+ */
+
+/** Where a kernel-selection event was observed: the web app or the desktop app. @public */
+export const kernelHostProfiles = ['web', 'desktop'] as const;
+
+/** A Tau model id as the chat stores it, `provider/model`; anything else is not sent. @public */
+export const kernelSelectionModelSchema = z.string().regex(/^[a-z][\da-z-]{0,23}\/[\da-z][\d.:_a-z-]{0,63}$/u);
+
+/** The routing rubric version, `kernelRoutingRubricVersion` in `@taucad/types`. */
+const rubricVersionSchema = z.number().int().positive().max(999);
+
+/** Turns in one chat; a longer chat reads as the ceiling. */
+const chatTurnCountSchema = clampedInt(1000);
+
+/** One settled turn that Auto ran: the kernel it ended bound to, absent when the project is still entry-less. */
+const kernelAutoResolvedEntrySchema = z.object({
+  name: z.literal(IngestEntryName.KERNEL_AUTO_RESOLVED),
+  duration: z.number().nonnegative(),
+  detail: z.strictObject({
+    hostProfile: z.enum(kernelHostProfiles),
+    agentId: agentIdSchema,
+    kernel: z.enum(kernelIds).optional(),
+    /** The project's main already bound a kernel when the turn was admitted. */
+    hadOwner: z.boolean(),
+    /** Tau's own model only; an ACP agent's model is its own and is not reported. */
+    model: kernelSelectionModelSchema.optional(),
+    rubricVersion: rubricVersionSchema,
+  }),
+});
+
+/** The person picked a kernel in a chat that was on Auto. */
+const kernelOverrideEntrySchema = z.object({
+  name: z.literal(IngestEntryName.KERNEL_OVERRIDE),
+  duration: z.number().nonnegative(),
+  detail: z.strictObject({
+    hostProfile: z.enum(kernelHostProfiles),
+    /** The kernel Auto had bound; absent when nothing was bound yet. */
+    resolved: z.enum(kernelIds).optional(),
+    manual: z.enum(kernelIds),
+    /** The chat's turns before the pick. */
+    turnsSince: chatTurnCountSchema,
+    rubricVersion: rubricVersionSchema,
+  }),
+});
+
+/**
+ * How an entry-less project's Auto chat first came out: `ready` once a turn left it with a main that binds a kernel,
+ * `failed` when its first turn evaluated but bound nothing, `none` when its first turn wrote no model at all.
+ */
+const kernelFirstOutcomeEntrySchema = z.object({
+  name: z.literal(IngestEntryName.KERNEL_FIRST_OUTCOME),
+  duration: z.number().nonnegative(),
+  detail: z.strictObject({
+    hostProfile: z.enum(kernelHostProfiles),
+    kernel: z.enum(kernelIds).optional(),
+    outcome: z.enum(['ready', 'failed', 'none']),
+    /** The chat's turns up to and including the one that rendered; 1 for a first-turn outcome. */
+    turnsToFirstRender: chatTurnCountSchema,
+    rubricVersion: rubricVersionSchema,
+  }),
+});
+
+/**
+ * Discriminated union of all client metric entry shapes.
+ * Used for validating individual entries in the ingest payload.
+ * @public
+ */
+export const clientMetricEntrySchema = z.discriminatedUnion('name', [
+  agentSessionEntrySchema,
+  agentTurnEntrySchema,
+  syncAttemptEntrySchema,
+  lfsFetchEntrySchema,
+  projectOpenEntrySchema,
+  kernelAutoResolvedEntrySchema,
+  kernelOverrideEntrySchema,
+  kernelFirstOutcomeEntrySchema,
+]);
+
+/**
+ * Schema for the full ingest payload sent from client workers to the API.
+ * @public
+ */
+export const ingestPayloadSchema = z.object({
+  entries: z.array(clientMetricEntrySchema).min(1),
+});
+
+/** Inferred type of a single client metric entry. @public */
+export type ClientMetricEntry = z.infer<typeof clientMetricEntrySchema>;
+
+/** Inferred type of an `agent.turn` entry's optional `detail.context`. @public */
+export type AgentTurnContext = z.infer<typeof agentTurnContextSchema>;
+
+/** Inferred type of the full ingest payload. @public */
+export type IngestPayload = z.infer<typeof ingestPayloadSchema>;

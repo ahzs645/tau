@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Desk tray",
+    "parameters": {
+      "width": 140,
+      "depth": 85,
+      "height": 16,
+      "wall": 3,
+      "radius": 8,
+      "style": "open"
+    }
+  },
+  {
+    "name": "Solid block",
+    "parameters": {
+      "width": 70,
+      "depth": 45,
+      "height": 18,
+      "wall": 3,
+      "radius": 5,
+      "style": "solid"
+    }
+  }
+]

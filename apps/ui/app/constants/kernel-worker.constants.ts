@@ -1,79 +1,97 @@
-import { replicad, opencascade, zoo, jscad, manifold, tau } from '@taucad/runtime/kernels';
-import { openscad } from '@taucad/openscad';
-import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
-import { esbuild } from '@taucad/runtime/bundler';
-import { converterTranscoder } from '@taucad/runtime/transcoder';
-import { createRuntimeClientOptions } from '@taucad/runtime';
+import type { ComputeBinding } from '@taucad/runtime';
 import { webWorkerTransport } from '@taucad/runtime/transport/web';
-import { observability } from '@taucad/telemetry/middleware';
-import { parameterFileResolver } from '#middleware/parameter-file-resolver.factory.js';
-import { ENV } from '#environment.config.js';
-import { isGithubPagesBuild } from '#lib/deploy-target.js';
+import type { RuntimeKernels } from '@taucad/runtime/worker';
 import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
-
-// The static Pages gallery has no telemetry backend to report to.
-const shouldReportWorkerTelemetry = (): boolean => !isGithubPagesBuild;
+import type { runtime } from '#runtime/ui-runtime.definition.js';
+import { reportWorkerFailures } from '#lib/worker-error-reporting.js';
+import { pageProjectOpenPerformance } from '@taucad/ui-core/lib/project-open-performance';
 
 /**
- * Default kernel array for the editor.
- *
- * Order defines selection priority — the first kernel that can handle
- * a file wins. Consumers that only need id/extension metadata for Monaco
- * prefetch import `kernel-monaco-extensions.constants.ts` instead — it
- * mirrors these plugins without pulling `@taucad/runtime` into the SSR graph.
+ * Mark a kernel worker's construction as `tau.load.kernel.worker` (progressive loading PL5): the worker script and
+ * the wasm it fetches start here, so a harness places the kernel's first request against the route's useful mark.
  */
-export const defaultKernels = [
-  openscad(),
-  zoo({ baseUrl: `${ENV.TAU_WEBSOCKET_URL}/v1/kernels/zoo` }),
-  replicad({ wasm: 'auto', withBrepEdges: true }),
-  opencascade(),
-  manifold(),
-  jscad(),
-  tau(),
-];
+const markKernelWorkerStart = (): void => {
+  const now = performance.now();
+  pageProjectOpenPerformance().record('kernel.worker', { start: now, end: now, outcome: 'ok' });
+};
+
+export type DefaultKernelId = RuntimeKernels<typeof runtime>[number]['id'];
+
+// SB4: each kernel worker's own failures are reported once, tagged `worker: kernel`.
+const createDefaultRuntimeWorker = (): Worker => {
+  markKernelWorkerStart();
+  return reportWorkerFailures(
+    new Worker(new URL('../runtime/runtime.worker.ts', import.meta.url), {
+      name: 'tau-ui-runtime-worker',
+      type: 'module',
+    }),
+    'kernel',
+  );
+};
+
+const createDebugRuntimeWorker = (): Worker => {
+  markKernelWorkerStart();
+  return reportWorkerFailures(
+    new Worker(new URL('../runtime/runtime-debug.worker.ts', import.meta.url), {
+      name: 'tau-ui-runtime-debug-worker',
+      type: 'module',
+    }),
+    'kernel',
+  );
+};
+
+/**
+ * Size the worker's compute caches by the device memory class (geometry cache result-path T5).
+ *
+ * A phone's Memory engine retains 32 MiB and its Durable read cache 16 MiB, so the editor, agent
+ * and GeoSpec runtimes it can carry at once stay within the budget iOS allows a tab (D-RT-02).
+ * An omitted binding is the library's Memory default.
+ *
+ * @param compute - The binding the host selected.
+ * @param memoryConstrained - The page's device memory class.
+ * @returns The binding the worker sizes its caches from.
+ */
+export const sizeComputeBinding = (
+  compute: ComputeBinding | undefined,
+  memoryConstrained: boolean | undefined,
+): ComputeBinding | undefined =>
+  memoryConstrained === true && compute?.mode !== 'off'
+    ? { ...(compute ?? { mode: 'memory' }), memoryConstrained: true }
+    : compute;
 
 /**
  * Build the editor's default {@link RuntimeClientOptions} with a
  * web-worker transport configured for the supplied filesystem and
- * file-content pool.
+ * project-rooted filesystem.
  *
  * Wire topology — `webWorkerTransport`: the kernel runs in a dedicated
- * `Worker` spawned from the runtime package's bundled
- * `@taucad/runtime/worker/web` entry (defaulted inside the transport
- * client — the consumer no longer wires the URL). Cooperative abort
- * is SAB-backed (`Atomics.notify`); geometry transports as pooled SAB
- * delivery (declared via `sharedMemory.geometry`); the filesystem
- * bridges through a `MessagePort` to the FM worker.
+ * `Worker` spawned from the UI app's worker-owned runtime entry.
+ * Cooperative abort
+ * is SAB-backed (`Atomics.notify`); geometry is **transferred**, not pooled;
+ * the filesystem bridges through a `MessagePort` to the FM worker.
  *
- * The filesystem handle and the file-pool `SharedArrayBuffer` are
- * owned by the file-manager machine and only available after it
+ * No `sharedMemory.geometry` (W33): the pool tier copies a result twice — into the arena in the
+ * worker and out of it on the main thread — where a transfer copies once in the worker and hands
+ * the buffer over for nothing. Measured on this host: at 2.5 MB (100k triangles) the pool costs
+ * 0.28 ms in the worker plus 0.27 ms of main thread; at 27 MB (1M triangles) 1.73 plus 2.73. The
+ * transfer tier pays 0.11 / 1.26 ms in the worker and nothing on the main thread, so it is cheaper
+ * on both sides and keeps the GLB to one main-thread copy (`GLTFLoader`'s own). The pool also keys
+ * entries by the render's dependency hash and never re-stores an existing key, so two results that
+ * share a hash would deliver the first one's bytes.
+ *
+ * The filesystem handle is owned by the file-manager machine and only available after it
  * reaches `ready`. They are passed in here so the transport client
  * is constructed with everything it needs up-front, preserving the
  * runtime invariant that `client.connect()` takes no arguments.
  */
-const createKernelOptions = ({ fileSystem, filePoolBuffer }: Parameters<KernelOptionsFactory>[0]) =>
-  createRuntimeClientOptions({
-    transport: webWorkerTransport({
-      fileSystem,
-      filePoolBuffer,
-      sharedMemory: {
-        geometry: { bytes: 100 * 1024 * 1024 },
-      },
-    }),
-    kernels: defaultKernels,
-    middleware: [
-      observability(shouldReportWorkerTelemetry() ? { reportUrl: `${ENV.TAU_API_URL}/v1/telemetry/ingest` } : {}),
-      parameterFileResolver(),
-      parameterCache(),
-      geometryCache(),
-      gltfCoordinateTransform(),
-      gltfEdgeDetection(),
-    ],
-    bundlers: [esbuild()],
-    transcoders: [converterTranscoder()],
-  });
-
-export const createDefaultKernelOptions: KernelOptionsFactory = (deps) => createKernelOptions(deps);
+export const createDefaultKernelOptions: KernelOptionsFactory = ({ fileSystem, runtimeConfig, compute }) => ({
+  config: runtimeConfig,
+  transport: webWorkerTransport({
+    createWorker: createDefaultRuntimeWorker,
+    fileSystem,
+    compute: sizeComputeBinding(compute, runtimeConfig.memoryConstrained),
+  }),
+});
 
 /**
  * Debug kernel options for the editor.
@@ -83,13 +101,13 @@ export const createDefaultKernelOptions: KernelOptionsFactory = (deps) => create
  * resolution. Adds ~50ms to init — only use where rich error feedback
  * matters.
  */
-export const createDebugKernelOptions: KernelOptionsFactory = (deps) =>
-  createRuntimeClientOptions(createDefaultKernelOptions(deps), {
-    kernels: [
-      replicad({
-        wasm: 'auto',
-        withBrepEdges: true,
-        withSourceMapping: true,
-      }),
-    ],
-  });
+export const createDebugKernelOptions: KernelOptionsFactory = (deps) => ({
+  ...createDefaultKernelOptions(deps),
+  config: deps.runtimeConfig,
+  transport: webWorkerTransport({
+    createWorker: createDebugRuntimeWorker,
+    devtoolsTelemetry: true,
+    fileSystem: deps.fileSystem,
+    compute: sizeComputeBinding(deps.compute, deps.runtimeConfig.memoryConstrained),
+  }),
+});

@@ -1,0 +1,1552 @@
+/* oxlint-disable new-cap, typescript/consistent-type-imports -- NestJS decorators are factories and constructor injection needs the runtime class */
+/* eslint-disable @typescript-eslint/naming-convention -- decorators are not constructors; git-lfs wire fields are snake_case */
+import { spawn } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  ForbiddenException,
+  Injectable,
+  Module,
+  NotFoundException,
+  UnauthorizedException,
+  VersioningType,
+} from '@nestjs/common';
+import type { CanActivate, ExecutionContext, MiddlewareConsumer, NestModule, OnModuleInit } from '@nestjs/common';
+import { APP_FILTER, APP_PIPE, HttpAdapterHost } from '@nestjs/core';
+import { ConfigModule } from '@nestjs/config';
+import { Test } from '@nestjs/testing';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { FastifyInstance } from 'fastify';
+import { ZodValidationPipe } from 'nestjs-zod';
+import { AuthGuard } from '@taucad/api-auth';
+import { getEnvironment } from '@taucad/api-core';
+import { corsBaseConfiguration } from '@taucad/api-core/constants/cors';
+import { DatabaseService } from '@taucad/api-database';
+import { project, projectDeletion } from '@taucad/api-database/schema';
+import { PublicationRateLimiterService, RedisService } from '@taucad/api-redis';
+import { HttpExceptionFilter } from '#filters/http-exception.filter.js';
+import { ObjectStorageService } from '@taucad/api-object-storage';
+import { StorageModule } from '@taucad/api-object-storage/module';
+import { assertDestructiveTestBucketAllowed } from '@taucad/api-object-storage/testing/destructive-test-bucket-guard';
+import { ProjectAccessService } from '@taucad/api-projects/collaboration/project-access.service';
+import { DurableEventsService } from '#api/durable-events/durable-events.service.js';
+import type { ProjectRole } from '@taucad/api-projects/collaboration/project-access.service';
+import { commercialEntitlementsKey } from '@taucad/api-projects/entitlements/commercial-entitlements';
+import {
+  authorshipRefusals,
+  pktLine,
+  repositoryStoreKey,
+  versionNumberRefusals,
+  versionNumberTakenMarker,
+} from '@taucad/api-git-core/git.constants';
+import { GitBasicAuthMiddleware, registerGitContentTypeParsers } from '#api/git/git-transport.js';
+import { GitController } from '#api/git/git.controller.js';
+import { GitLfsService } from '#api/git/git-lfs.service.js';
+import { tenantLfsObjectKey } from '@taucad/api-git-core/lfs-keys';
+import { GitProxyController } from '#api/git/git-proxy.controller.js';
+import { GitPushesController } from '#api/git/pushes.controller.js';
+import type { PushPage } from '#api/git/pushes.js';
+import { GitRepositoryService } from '#api/git/git.service.js';
+import { gitExecutorKey } from '@taucad/api-git-core/forwarding/git-executor';
+import type { StorageGitService } from '@taucad/api-git-core/worker/storage-git.service';
+import { startStorageHop } from '@taucad/api-git-core/testing/storage-hop';
+import type { StorageHop } from '@taucad/api-git-core/testing/storage-hop';
+import { RepositoryStoreError } from '@taucad/api-git-core/store/errors';
+import { S3RepositoryStore } from '@taucad/api-git-core/store/s3-repository-store';
+import { livePackBound } from '@taucad/api-git-core/store/limits';
+import { hydrateLease } from '@taucad/api-git-core/store/lease';
+import { repositoryLocator } from '@taucad/api-git-core/store/locator';
+import type { RepositoryStore, StoredObject } from '@taucad/api-git-core/store/port';
+import { ShutdownService } from '@taucad/api-lifecycle/shutdown';
+import { createGitTestListener } from '#api/git/git-test-listener.js';
+
+/**
+ * The Tau Hosted Remote end to end over the repository store (W4).
+ *
+ * Stock `git` talks to a real Nest application, which hydrates a real lease
+ * from real object storage (local MinIO) on every request and commits the
+ * manifest before it answers. Nothing here is a filesystem repository: between
+ * two requests the only state that exists is in the store.
+ */
+
+const suffix = randomBytes(5).toString('hex');
+const projectId = `proj-w4-${suffix}`;
+const ownerId = `user-owner-${suffix}`;
+
+/** The four callers D27's roles are proved with. */
+const callers = {
+  owner: { id: ownerId, token: 'owner-token', role: 'owner' as ProjectRole | undefined },
+  writer: { id: `user-writer-${suffix}`, token: 'writer-token', role: 'write' as ProjectRole | undefined },
+  reader: { id: `user-reader-${suffix}`, token: 'reader-token', role: 'read' as ProjectRole | undefined },
+  stranger: { id: `user-stranger-${suffix}`, token: 'stranger-token', role: undefined },
+};
+
+const roleRank: Record<ProjectRole, number> = { read: 0, write: 1, owner: 2 };
+
+let configuredApiUrl = '';
+
+/** Mutable fixture state the stubs read. */
+const state = {
+  tier: 'pro' as 'free' | 'pro' | 'enterprise',
+  storageBytes: 0,
+  lfsBytes: 0,
+  generation: 0,
+  derivedGeneration: 0,
+  /**
+   * `project.origin` (B4). Stock git writes this suite's commits, as on a
+   * project linked to GitHub; the authorship rows set `local-mirror`, the
+   * origin every project Tau registers carries.
+   */
+  origin: 'github' as 'github' | 'local-mirror',
+};
+
+/** What one request cost the plan lookups, so the read path's cost is a fact. */
+const queries = { entitlements: 0, usage: 0 };
+/** Every committed manifest announced on the project's `revision` stream (D13), in order. */
+const announced: Array<{
+  readonly generation: number;
+  readonly refs: readonly string[];
+  readonly heads: Readonly<Record<string, string>>;
+}> = [];
+
+const runGit = async (
+  args: readonly string[],
+  cwd: string,
+  environment: Readonly<Record<string, string>> = {},
+): Promise<{ code: number | undefined; stdout: string; stderr: string }> =>
+  new Promise((resolve) => {
+    const child = spawn('git', [...args], {
+      cwd,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_SYSTEM: '/dev/null',
+        GIT_AUTHOR_NAME: 'Tau Test',
+        GIT_AUTHOR_EMAIL: 'test@tau.new',
+        GIT_COMMITTER_NAME: 'Tau Test',
+        GIT_COMMITTER_EMAIL: 'test@tau.new',
+        ...environment,
+      } as unknown as NodeJS.ProcessEnv,
+    });
+    const stdout: Array<Uint8Array<ArrayBuffer>> = [];
+    const stderr: Array<Uint8Array<ArrayBuffer>> = [];
+    child.stdout.on('data', (chunk: Uint8Array<ArrayBuffer>) => stdout.push(chunk));
+    child.stderr.on('data', (chunk: Uint8Array<ArrayBuffer>) => stderr.push(chunk));
+    child.on('close', (code) => {
+      resolve({
+        code: code ?? undefined,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+      });
+    });
+  });
+
+/** Runs one git command and fails the test with git's own stderr if it refused. */
+const gitOk = async (
+  args: readonly string[],
+  cwd: string,
+): Promise<{ code: number | undefined; stdout: string; stderr: string }> => {
+  const outcome = await runGit(args, cwd);
+  expect(outcome.code, `git ${args.join(' ')}: ${outcome.stderr}`).toBe(0);
+  return outcome;
+};
+
+@Injectable()
+class GitTestAuthGuard implements CanActivate {
+  public canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest<{
+      headers: Record<string, string | string[] | undefined>;
+      user?: unknown;
+    }>();
+    const { authorization } = request.headers;
+    const caller = Object.values(callers).find((candidate) => authorization === `Bearer ${candidate.token}`);
+    if (caller !== undefined) {
+      request.user = { id: caller.id, name: caller.id, email: `${caller.id}@test.com` };
+      return true;
+    }
+    /* The deployed `AuthGuard` raises rather than returning `false`, and the
+       difference is 401 versus Nest's default 403 (review C8). */
+    throw new UnauthorizedException({ code: 'UNAUTHORIZED', message: 'Authentication required' });
+  }
+}
+
+/**
+ * Delegates every port member to `inner` and lets one test replace
+ * `commitManifest`, which is how a rate-limited or lost conditional write is
+ * reproduced against the real adapter rather than a fake one, or
+ * `listObjects`, which only a compacting commit's sweep calls.
+ */
+const storeControl: {
+  commitManifest: RepositoryStore['commitManifest'] | undefined;
+  listObjects: RepositoryStore['listObjects'] | undefined;
+} = {
+  commitManifest: undefined,
+  listObjects: undefined,
+};
+
+const wrapStore = (inner: RepositoryStore): RepositoryStore => ({
+  capabilities: inner.capabilities,
+  readManifest: async (locator) => inner.readManifest(locator),
+  commitManifest: async (locator, next, expected) =>
+    (storeControl.commitManifest ?? inner.commitManifest.bind(inner))(locator, next, expected),
+  // oxlint-disable-next-line max-params -- the port's own signature
+  putObject: async (locator, key, body, options) => inner.putObject(locator, key, body, options),
+  getObject: async (locator, key, range) => inner.getObject(locator, key, range),
+  listObjects: (locator, prefix) => (storeControl.listObjects ?? inner.listObjects.bind(inner))(locator, prefix),
+  deleteObjects: async (locator, keys) => inner.deleteObjects(locator, keys),
+});
+
+const lfsRows = new Map<string, { size: number; finalized: boolean }>();
+
+describe('Tau Hosted Remote (git server) over the repository store', () => {
+  let app: NestFastifyApplication;
+  let baseUrl: string;
+  let remoteUrl: string;
+  let workspace: string;
+  let repositories: GitRepositoryService;
+  /** DC1: tau-storage, behind the real hop; the git knobs live on it now. */
+  let hop: StorageHop;
+  let worker: StorageGitService;
+  let storage: ObjectStorageService;
+  const cleanup: Array<() => Promise<void>> = [];
+
+  const remoteFor = (token: string): string =>
+    `http://tau:${token}@${new URL(configuredApiUrl).host}/v1/git/${projectId}.git`;
+
+  const advertised = async (token = callers.owner.token): Promise<string> => {
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-upload-pack`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return response.text();
+  };
+
+  /** The stop signal the service reads; a test swaps in an aborted one and back. */
+  let stopping = new AbortController();
+  let failGenerationWrites = false;
+
+  beforeAll(async () => {
+    workspace = await mkdtemp(path.join(tmpdir(), 'tau-git-work-'));
+    cleanup.push(async () => rm(workspace, { recursive: true, force: true }));
+    const listener = await createGitTestListener();
+    cleanup.push(listener.close);
+    configuredApiUrl = listener.origin;
+    process.env.TAU_API_URL = configuredApiUrl;
+
+    /* One statement shape per reader, because the derivation path and the plan
+       lookups ask different questions of the same two tables. */
+    const rows = (): unknown[] => [
+      {
+        storageBytes: state.storageBytes,
+        lfsBytes: state.lfsBytes,
+        generation: state.generation,
+        derivedGeneration: state.derivedGeneration,
+      },
+    ];
+    /* oxlint-disable typescript/promise-function-async -- a Drizzle builder is
+       both awaitable and chainable; an `async` member would return a promise of
+       the builder rather than being one. */
+    const selectBuilder = (): unknown => ({
+      from: (table: unknown) => ({
+        leftJoin: () => ({ where: () => Object.assign(Promise.resolve(rows()), { limit: async () => rows() }) }),
+        where: () =>
+          Object.assign(Promise.resolve([] as unknown[]), {
+            limit: async () =>
+              table === projectDeletion
+                ? []
+                : table === project
+                  ? [{ storageAccountId: null, origin: state.origin }]
+                  : rows(),
+          }),
+      }),
+    });
+    /* oxlint-enable typescript/promise-function-async -- end of the builder stub */
+    const insert = () => ({
+      values: (values: Record<string, unknown>) => ({
+        onConflictDoUpdate: async (change: { set: Record<string, unknown> }): Promise<void> => {
+          if (failGenerationWrites) {
+            throw new Error('database unavailable');
+          }
+          const merged = { ...values, ...change.set };
+          if (typeof merged['storageBytes'] === 'number') {
+            state.storageBytes = merged['storageBytes'];
+          }
+          if (typeof merged['generation'] === 'number') {
+            state.generation = merged['generation'];
+          }
+          if (typeof merged['derivedGeneration'] === 'number') {
+            state.derivedGeneration = merged['derivedGeneration'];
+          }
+        },
+      }),
+    });
+    const databaseStub = {
+      database: {
+        select: selectBuilder,
+        insert,
+        transaction: async (run: (transaction: unknown) => Promise<unknown>): Promise<unknown> =>
+          run({
+            select: selectBuilder,
+            insert,
+            execute: async (): Promise<void> => undefined,
+            update: () => ({
+              set: () => ({
+                where: () => ({
+                  returning: async (): Promise<unknown[]> =>
+                    [...lfsRows].filter(([, row]) => row.finalized).map(([oid]) => ({ oid })),
+                }),
+              }),
+            }),
+          }),
+      },
+    };
+
+    const projectAccessStub = {
+      authorize: async (project: string, userId: string, need: ProjectRole) => {
+        const caller = Object.values(callers).find((candidate) => candidate.id === userId);
+        if (caller?.role === undefined) {
+          throw new NotFoundException({ code: 'PROJECT_NOT_FOUND', message: 'Project not found' });
+        }
+        if (roleRank[caller.role] < roleRank[need]) {
+          throw new ForbiddenException({
+            code: 'PROJECT_ROLE_INSUFFICIENT',
+            message: `This project needs ${need} access.`,
+          });
+        }
+        /* Every collaborator's bytes land in the *owner's* tenant prefix (D27),
+           which is why one locator answers for all four callers. */
+        return { projectId: project, ownerId, role: caller.role };
+      },
+      invalidate: () => undefined,
+      /* Q2: ids, names and roles only. The guard's users carry an address; the directory never does. */
+      directory: async (_project: string, alsoNamed: readonly string[] = []) => {
+        const members = Object.entries(callers).flatMap(([label, caller]) =>
+          caller.role === undefined ? [] : [{ accountId: caller.id, name: `Member ${label}`, role: caller.role }],
+        );
+        return [
+          ...members,
+          ...alsoNamed
+            .filter((accountId) => !members.some((member) => member.accountId === accountId))
+            .map((accountId) => ({ accountId })),
+        ];
+      },
+    };
+
+    @Module({
+      imports: [ConfigModule.forRoot({ validate: getEnvironment, isGlobal: true }), StorageModule],
+      controllers: [GitController, GitProxyController, GitPushesController],
+      providers: [
+        GitRepositoryService,
+        GitLfsService,
+        PublicationRateLimiterService,
+        S3RepositoryStore,
+        {
+          provide: repositoryStoreKey,
+          useFactory: (inner: S3RepositoryStore) => wrapStore(inner),
+          inject: [S3RepositoryStore],
+        },
+        {
+          provide: gitExecutorKey,
+          useFactory: async (store: RepositoryStore) => {
+            hop = await startStorageHop({ store, post: async (receipt) => repositories.applyReceipt(receipt) });
+            cleanup.push(async () => hop.close());
+            worker = hop.worker;
+            return hop.forwarder;
+          },
+          inject: [repositoryStoreKey],
+        },
+        { provide: DatabaseService, useValue: databaseStub },
+        {
+          provide: RedisService,
+          useValue: { client: { get: async () => undefined, set: async () => 'OK', eval: async () => 1 } },
+        },
+        { provide: ProjectAccessService, useValue: projectAccessStub },
+        {
+          provide: DurableEventsService,
+          useValue: {
+            appendRevision: async (entry: (typeof announced)[number]) => {
+              announced.push({ generation: entry.generation, refs: entry.refs, heads: entry.heads });
+            },
+          },
+        },
+        {
+          provide: ShutdownService,
+          useValue: {
+            get signal() {
+              return stopping.signal;
+            },
+            track: () => undefined,
+          },
+        },
+        {
+          provide: commercialEntitlementsKey,
+          useValue: {
+            getEntitlements: async () => {
+              queries.entitlements += 1;
+              return { tier: state.tier, canSyncFiles: state.tier !== 'free' };
+            },
+          },
+        },
+        { provide: APP_PIPE, useClass: ZodValidationPipe },
+        { provide: APP_FILTER, useClass: HttpExceptionFilter },
+      ],
+    })
+    class GitTestModule implements NestModule, OnModuleInit {
+      public constructor(private readonly adapterHost: HttpAdapterHost) {}
+
+      public onModuleInit(): void {
+        registerGitContentTypeParsers(this.adapterHost.httpAdapter.getInstance<FastifyInstance>());
+      }
+
+      public configure(consumer: MiddlewareConsumer): void {
+        consumer.apply(GitBasicAuthMiddleware).forRoutes(GitController);
+      }
+    }
+
+    const moduleRef = await Test.createTestingModule({ imports: [GitTestModule] })
+      .overrideGuard(AuthGuard)
+      .useClass(GitTestAuthGuard)
+      .compile();
+
+    let closeApplication = async (): Promise<void> => moduleRef.close();
+    cleanup.push(async () => closeApplication());
+    app = moduleRef.createNestApplication<NestFastifyApplication>(listener.adapter);
+    closeApplication = async () => app.close();
+    app.enableCors({ ...corsBaseConfiguration, origin: true });
+    app.enableVersioning({ type: VersioningType.URI });
+    await app.init();
+    await app.getHttpAdapter().getInstance().ready();
+
+    storage = app.get(ObjectStorageService);
+    assertDestructiveTestBucketAllowed(storage.bucketFor('private'), 'the Tau Hosted Remote HTTP suite');
+    cleanup.push(async () => {
+      await storage.deleteEntirePrefixForPurgeJob({
+        namespace: 'tenants',
+        keyPrefix: `${ownerId}/`,
+        tier: 'private',
+      });
+    });
+
+    repositories = app.get(GitRepositoryService);
+    vi.spyOn(repositories, 'readOwnerUsage').mockImplementation(async () => {
+      queries.usage += 1;
+      return { storageBytes: state.storageBytes, lfsBytes: state.lfsBytes, retainedBytes: 0 };
+    });
+    vi.spyOn(repositories, 'readLfsObjects').mockImplementation(async (_project, oids) =>
+      oids.flatMap((oid) => {
+        const row = lfsRows.get(oid);
+        return row === undefined ? [] : [{ oid, size: row.size, finalized: row.finalized }];
+      }),
+    );
+    vi.spyOn(repositories, 'reserveLfsObjects').mockImplementation(async ({ access, objects }) => {
+      const novel = objects.filter((object) => !lfsRows.has(object.oid));
+      const incoming = novel.reduce((total, object) => total + object.size, 0);
+      const remainingBytes = Math.max(0, access.storageLimitBytes - state.storageBytes - state.lfsBytes);
+      if (incoming > remainingBytes) {
+        return { status: 'quota', shortfallBytes: incoming - remainingBytes, remainingBytes, files: novel };
+      }
+      for (const object of novel) {
+        lfsRows.set(object.oid, { size: object.size, finalized: false });
+        state.lfsBytes += object.size;
+      }
+      return {
+        status: 'reserved',
+        objects: objects.map((object) => ({ ...object, finalized: lfsRows.get(object.oid)?.finalized ?? false })),
+      };
+    });
+    vi.spyOn(repositories, 'finalizeLfsObject').mockImplementation(async ({ oid, size, verifyContent }) => {
+      const row = lfsRows.get(oid);
+      if (row === undefined || row.size !== size) {
+        return 'unreserved';
+      }
+      if (!(await verifyContent())) {
+        return 'invalid';
+      }
+      if (row.finalized) {
+        return 'already-finalized';
+      }
+      row.finalized = true;
+      return 'finalized';
+    });
+
+    baseUrl = configuredApiUrl;
+    remoteUrl = remoteFor(callers.owner.token);
+  }, 120_000);
+
+  /* A push past the pack bound compacts after its reply and reports that
+     generation in a posted receipt, so each test starts once the one before has
+     nothing left running. */
+  afterEach(async () => {
+    await worker.settled();
+    await repositories.settled();
+  });
+
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    for (const close of cleanup.reverse()) {
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- release dependent fixtures in reverse acquisition order, even after a failure.
+        await close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Failed to clean up the git HTTP suite');
+    }
+  }, 60_000);
+
+  it('serves a stock `git clone`, `git push` and `git fetch` with nothing on disk between them', async () => {
+    const clone = path.join(workspace, 'clone');
+    await gitOk(['clone', remoteUrl, clone], workspace);
+
+    await writeFile(path.join(clone, 'part.ts'), 'export const width = 10;\n', 'utf8');
+    await gitOk(['add', '.'], clone);
+    await gitOk(['commit', '-m', 'first revision'], clone);
+
+    const pushed = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    expect(pushed.code, pushed.stderr).toBe(0);
+
+    /* D19: the generation is recorded and everything derived from it caught up
+       *before* the response — no background work, no poll. Accounting is the
+       manifest's live pack bytes, so a push that stored bytes is a row above
+       zero. */
+    expect(state.generation).toBe(1);
+    expect(state.derivedGeneration).toBe(1);
+    expect(state.storageBytes).toBeGreaterThan(0);
+    /* D13: the push is announced once, by generation, ref name and the head it
+       moved to (W13e) — the head is what lets the pusher skip its own echo. */
+    const pushedHead = await gitOk(['rev-parse', 'HEAD'], clone);
+    expect(announced).toEqual([
+      { generation: 1, refs: ['refs/heads/main'], heads: { 'refs/heads/main': pushedHead.stdout.trim() } },
+    ]);
+
+    const second = path.join(workspace, 'second');
+    await gitOk(['clone', remoteUrl, second], workspace);
+    const log = await gitOk(['log', '--oneline'], second);
+    expect(log.stdout).toContain('first revision');
+  }, 120_000);
+
+  it('advertises refs/heads/main on info/refs?service=git-upload-pack', async () => {
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-upload-pack`, {
+      headers: { Authorization: `Bearer ${callers.owner.token}` },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('application/x-git-upload-pack-advertisement');
+    const body = await response.text();
+    expect(body.startsWith('001e# service=git-upload-pack\n0000')).toBe(true);
+    expect(body).toContain('refs/heads/main');
+  });
+
+  /** D12: the dumb layout is gone, and an unnamed service is now a refusal. */
+  it('refuses info/refs without a service instead of answering a dumb-HTTP layout', async () => {
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs`, {
+      headers: { Authorization: `Bearer ${callers.owner.token}` },
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('smart HTTP');
+
+    const objects = await fetch(`${baseUrl}/v1/git/${projectId}.git/objects/info/packs`, {
+      headers: { Authorization: `Bearer ${callers.owner.token}` },
+    });
+    expect(objects.status).toBe(404);
+  });
+
+  /**
+   * NI13: the hook's own sentence reaches the client, byte for byte, and the
+   * A39 two-set rule holds — the refused record ref does not stop the branch,
+   * because they are two pushes.
+   */
+  it('relays the pre-receive refusal verbatim and keeps the pushes that were allowed', async () => {
+    const clone = path.join(workspace, 'clone');
+    await gitOk(['update-ref', 'refs/tau/chats/chat_1', 'HEAD'], clone);
+    await gitOk(['update-ref', 'refs/tau/owners/owner_1', 'HEAD'], clone);
+
+    const refusedOwners = await runGit(['push', 'origin', 'refs/tau/owners/owner_1'], clone);
+    expect(refusedOwners.code).not.toBe(0);
+    expect(refusedOwners.stderr).toContain(
+      'Tau: refused refs/tau/owners/owner_1 — host-local refs never leave a host.',
+    );
+
+    const chatPush = await runGit(['push', 'origin', 'refs/tau/chats/chat_1'], clone);
+    expect(chatPush.code, chatPush.stderr).toBe(0);
+
+    await writeFile(path.join(clone, 'part.ts'), 'export const width = 12;\n', 'utf8');
+    await gitOk(['commit', '-am', 'second revision'], clone);
+    const branchPush = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    expect(branchPush.code, branchPush.stderr).toBe(0);
+
+    const references = await advertised();
+    expect(references).toContain('refs/tau/chats/chat_1');
+    expect(references).not.toContain('refs/tau/owners/owner_1');
+  }, 120_000);
+
+  /**
+   * DB1: `info/refs` is answered from the manifest, and what reaches the client
+   * is what stock git writes over a lease of that manifest. This remote hands
+   * git no `GIT_PROTOCOL`, so a client asking for protocol v2 is answered v0,
+   * exactly as before, and falls back.
+   */
+  it('serves info/refs byte-identically to stock git over a lease of the same manifest, v2 request included', async () => {
+    const clone = path.join(workspace, 'clone');
+    await gitOk(['tag', '-a', 'db1-annotated', '-m', 'DB1'], clone);
+    await gitOk(['tag', 'db1-light'], clone);
+    await gitOk(['push', 'origin', 'refs/tags/db1-annotated', 'refs/tags/db1-light'], clone);
+
+    const lease = await hydrateLease({
+      store: app.get<RepositoryStore>(repositoryStoreKey),
+      locator: repositoryLocator({ ownerId, projectId }),
+      parentDirectory: workspace,
+    });
+    try {
+      for (const service of ['git-upload-pack', 'git-receive-pack'] as const) {
+        // oxlint-disable-next-line no-await-in-loop -- one service at a time against its own stock answer
+        const stock = await gitOk(
+          [service.replace('git-', ''), '--stateless-rpc', '--advertise-refs', '.'],
+          lease.directory,
+        );
+        /* The annotated tag is peeled on the fetch side only, so the case covers both shapes. */
+        expect(stock.stdout.includes('refs/tags/db1-annotated^{}')).toBe(service === 'git-upload-pack');
+        for (const headers of [{}, { 'Git-Protocol': 'version=2' }] as ReadonlyArray<Record<string, string>>) {
+          // oxlint-disable-next-line no-await-in-loop -- as above
+          const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=${service}`, {
+            headers: { Authorization: `Bearer ${callers.owner.token}`, ...headers },
+          });
+          expect(response.status).toBe(200);
+          expect(response.headers.get('content-type')).toBe(`application/x-${service}-advertisement`);
+          // oxlint-disable-next-line no-await-in-loop -- as above
+          const body = Buffer.from(await response.arrayBuffer()).toString('utf8');
+          const prefix = `${pktLine(`# service=${service}\n`)}0000`;
+          expect(body.startsWith(prefix)).toBe(true);
+          expect(body.slice(prefix.length), `${service} ${JSON.stringify(headers)}`).toStrictEqual(stock.stdout);
+        }
+      }
+    } finally {
+      await lease.dispose();
+    }
+  }, 120_000);
+
+  it('rejects a mixed stock push atomically, without accepting its ordinary branch', async () => {
+    const clone = path.join(workspace, 'clone');
+    await writeFile(path.join(clone, 'part.ts'), 'export const width = 13;\n', 'utf8');
+    await gitOk(['commit', '-am', 'mixed push probe'], clone);
+    /* A branch named bare `conflicts` stays refused (D14 keeps the name for conflict lines). */
+    await gitOk(['update-ref', 'refs/heads/conflicts', 'HEAD'], clone);
+
+    const pushed = await runGit(['push', 'origin', 'HEAD:refs/heads/atomic-probe', 'refs/heads/conflicts'], clone);
+    expect(pushed.code).not.toBe(0);
+    expect(pushed.stderr).toContain('refs/heads/conflicts');
+
+    expect(await advertised()).not.toContain('atomic-probe');
+  }, 120_000);
+
+  /**
+   * D4: a manifest race the committer lost is a 503 the client retries, never a
+   * refusal and never a silent success. The race is injected at W2's own
+   * `before-manifest-commit` fault point, which is the instant a second writer
+   * would have won.
+   */
+  it('answers a lost manifest race with 503 and succeeds on the retry', async () => {
+    const clone = path.join(workspace, 'clone');
+    await writeFile(path.join(clone, 'part.ts'), 'export const width = 14;\n', 'utf8');
+    await gitOk(['commit', '-am', 'raced revision'], clone);
+
+    worker.faults = (point) => {
+      if (point === 'before-manifest-commit') {
+        throw new RepositoryStoreError('lost', 'another writer committed first');
+      }
+    };
+    const raced = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    worker.faults = undefined;
+
+    expect(raced.code, `the lost race was accepted: ${raced.stderr}`).not.toBe(0);
+    expect(raced.stderr).toMatch(/503|committed first/u);
+    expect(await advertised()).not.toContain('raced revision');
+
+    const retried = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    expect(retried.code, retried.stderr).toBe(0);
+  }, 120_000);
+
+  it('refuses a push that has not started to commit once the process begins to stop, and takes the retry', async () => {
+    const clone = path.join(workspace, 'clone');
+    await writeFile(path.join(clone, 'part.ts'), 'export const width = 15;\n', 'utf8');
+    await gitOk(['commit', '-am', 'revision during a stop'], clone);
+
+    stopping.abort();
+    const refused = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    stopping = new AbortController();
+
+    expect(refused.code, `the push was accepted by a stopping server: ${refused.stderr}`).not.toBe(0);
+    expect(refused.stderr).toMatch(/503|restarting/u);
+    expect(await advertised()).not.toContain('revision during a stop');
+
+    const retried = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    expect(retried.code, retried.stderr).toBe(0);
+  }, 120_000);
+
+  it('answers a committed push as pushed when its database writes fail, and repairs them on the next request', async () => {
+    const clone = path.join(workspace, 'clone');
+    await writeFile(path.join(clone, 'part.ts'), 'export const width = 16;\n', 'utf8');
+    await gitOk(['commit', '-am', 'revision with the database down'], clone);
+    const before = state.generation;
+
+    failGenerationWrites = true;
+    const pushed = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    /* A compaction this push left owed reports its generation after the reply; it fails the same way. */
+    await worker.settled();
+    await repositories.settled();
+    failGenerationWrites = false;
+
+    expect(pushed.code, pushed.stderr).toBe(0);
+    expect(state.generation).toBe(before);
+    /* DB1, W6 G8: the advertisement holds no lease, so the repair waits for the RPC after it. */
+    await advertised();
+    expect(state.generation).toBe(before);
+    await gitOk(['clone', '--quiet', remoteUrl, path.join(workspace, 'repair-after-database-down')], workspace);
+    expect(state.generation).toBeGreaterThan(before);
+  }, 120_000);
+
+  /**
+   * W0b: R2 answers a same-key burst with `429` and `retry-after: 5`, which the
+   * AWS SDK surfaces under an unrelated error *name* — so the classification is
+   * the HTTP status alone. W2 retries the conditional write twice; a caller that
+   * exhausts them is a lost race for the client's purposes, which is 503 and a
+   * retry rather than a 500.
+   */
+  it('retries a rate-limited manifest write and answers 503 once the retries are spent', async () => {
+    const clone = path.join(workspace, 'clone');
+    await writeFile(path.join(clone, 'part.ts'), 'export const width = 15;\n', 'utf8');
+    await gitOk(['commit', '-am', 'rate limited revision'], clone);
+
+    const attempts = { count: 0 };
+    storeControl.commitManifest = async () => {
+      attempts.count += 1;
+      throw Object.assign(new Error('Reduce your concurrent request rate for the same object'), {
+        name: 'ServiceUnavailable',
+        $metadata: { httpStatusCode: 429 },
+      });
+    };
+    const refused = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    storeControl.commitManifest = undefined;
+
+    expect(attempts.count, 'the conditional write must be retried, not abandoned on the first 429').toBe(3);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toMatch(/503|committed first/u);
+
+    const retried = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    expect(retried.code, retried.stderr).toBe(0);
+  }, 120_000);
+
+  /**
+   * D19, end to end: a worker killed *after* its manifest commit leaves a
+   * durable ref and a row that never heard about it. Nothing sweeps that up in
+   * the background — the next request through the repository notices
+   * `derived_generation` trails the manifest it is holding and re-derives. A
+   * read is enough, because the repair keys off the lease's own manifest rather
+   * than off anything the row claims (review F1).
+   */
+  it('repairs the derived row on the next request after a worker dies past its commit', async () => {
+    const clone = path.join(workspace, 'clone');
+    await writeFile(path.join(clone, 'part.ts'), 'export const width = 16;\n', 'utf8');
+    await gitOk(['commit', '-am', 'the revision that outlived its worker'], clone);
+
+    const before = { generation: state.generation, derivedGeneration: state.derivedGeneration };
+    worker.faults = (point) => {
+      if (point === 'after-manifest-commit') {
+        throw new Error('the worker died here');
+      }
+    };
+    const killed = await runGit(['push', 'origin', 'HEAD:refs/heads/outlived'], clone);
+    worker.faults = undefined;
+    await worker.settled();
+    await repositories.settled();
+
+    expect(killed.code, 'the client must not be told a push succeeded when its worker died').not.toBe(0);
+    expect(state.generation, 'a killed worker must not have recorded its generation').toBe(before.generation);
+    expect(state.derivedGeneration).toBe(before.derivedGeneration);
+
+    /* The commit is durable all the same, and the advertisement proves it from
+       the manifest. It holds no lease, so it repairs nothing (DB1, W6 G8); the
+       plain read after it is the request that repairs the row, and both columns
+       agree afterwards. */
+    expect(await advertised()).toContain('refs/heads/outlived');
+    expect(state.derivedGeneration).toBe(before.derivedGeneration);
+    await gitOk(['clone', '--quiet', remoteUrl, path.join(workspace, 'repair-after-worker-death')], workspace);
+    expect(state.derivedGeneration).toBeGreaterThan(before.derivedGeneration);
+    expect(state.generation).toBe(state.derivedGeneration);
+  }, 120_000);
+
+  /**
+   * D20, over the wire: the ceiling is enforced in `pre-receive`, so the client
+   * sees the hook's sentence *and the files it brings*. The figure is lowered
+   * for the suite rather than pushing a gigabyte; the mechanism under test is
+   * the refusal, not the number.
+   */
+  it('refuses a push past the repository ceiling with the file list, and writes no ref', async () => {
+    const clone = path.join(workspace, 'ceiling');
+    await gitOk(['clone', remoteUrl, clone], workspace);
+    await writeFile(path.join(clone, 'huge.bin'), Buffer.alloc(96 * 1024, 3));
+    await gitOk(['add', '.'], clone);
+    await gitOk(['commit', '-m', 'over the ceiling'], clone);
+
+    const ceiling = worker.repositoryByteCeiling;
+    worker.repositoryByteCeiling = 1024;
+    const refused = await runGit(['push', 'origin', 'HEAD:refs/heads/ceiling-probe'], clone);
+    worker.repositoryByteCeiling = ceiling;
+
+    expect(refused.code, refused.stderr).not.toBe(0);
+    expect(refused.stderr).toContain('Tau: repository size limit exceeded');
+    expect(refused.stderr).toContain('huge.bin');
+    expect(refused.stderr).toContain('nothing was written');
+    expect(await advertised()).not.toContain('ceiling-probe');
+  }, 120_000);
+
+  /** D27: a collaborator pushes into the owner's storage, under the owner's plan. */
+  it('lets a write collaborator push, and refuses a read collaborator', async () => {
+    const clone = path.join(workspace, 'collaborator');
+    await gitOk(['clone', remoteFor(callers.writer.token), clone], workspace);
+    await writeFile(path.join(clone, 'collaborator.ts'), 'export const shared = true;\n', 'utf8');
+    await gitOk(['add', '.'], clone);
+    await gitOk(['commit', '-m', 'collaborator revision'], clone);
+    const pushed = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+    expect(pushed.code, pushed.stderr).toBe(0);
+
+    /* A reader clones and fetches, and is refused the moment it asks for the
+       push service — which is where git asks, before it sends a byte. */
+    const readOnly = path.join(workspace, 'read-only');
+    await gitOk(['clone', remoteFor(callers.reader.token), readOnly], workspace);
+    const refused = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-receive-pack`, {
+      headers: { Authorization: `Bearer ${callers.reader.token}` },
+    });
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain('write access');
+  }, 120_000);
+
+  /**
+   * A3, Q1–Q3: who pushed what, from the server's own record. Chats are left
+   * out, no email is ever in the body, and the account behind a push that
+   * brought an anonymous commit reaches the owner only.
+   */
+  it('reads the push records to members, hiding an anonymous pusher from all but the owner', async () => {
+    const clone = path.join(workspace, 'push-records');
+    await gitOk(['clone', remoteFor(callers.writer.token), clone], workspace);
+    await writeFile(path.join(clone, 'attributed.ts'), 'export const attributed = 1;\n', 'utf8');
+    await gitOk(['add', '.'], clone);
+    await gitOk(['commit', '-m', 'attributed save'], clone);
+    const attributed = await runGit(
+      ['push', 'origin', 'HEAD:refs/heads/push-attributed', 'HEAD:refs/tau/chats/chat_push_records'],
+      clone,
+    );
+    expect(attributed.code, attributed.stderr).toBe(0);
+    const attributedHead = await gitOk(['rev-parse', 'HEAD'], clone);
+    const attributedTip = attributedHead.stdout.trim();
+
+    await writeFile(path.join(clone, 'anonymous.ts'), 'export const anonymous = 1;\n', 'utf8');
+    await gitOk(['add', '.'], clone);
+    const committed = await runGit(['commit', '-m', 'anonymous save'], clone, {
+      GIT_AUTHOR_NAME: 'Anonymous',
+      GIT_AUTHOR_EMAIL: 'anon:3fa9c1d2@users.noreply.tau.new',
+    });
+    expect(committed.code, committed.stderr).toBe(0);
+    const anonymous = await runGit(['push', 'origin', 'HEAD:refs/heads/push-anonymous'], clone);
+    expect(anonymous.code, anonymous.stderr).toBe(0);
+    const anonymousHead = await gitOk(['rev-parse', 'HEAD'], clone);
+    const anonymousTip = anonymousHead.stdout.trim();
+
+    const read = async (token: string, query = ''): Promise<{ status: number; body: string }> => {
+      const response = await fetch(`${baseUrl}/v1/projects/${projectId}/git/pushes${query}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return { status: response.status, body: await response.text() };
+    };
+    const entryFor = (page: PushPage, ref: string): PushPage['pushes'][number] | undefined =>
+      page.pushes.find((entry) => entry.tips.some((tip) => tip.ref === ref));
+
+    const owner = await read(callers.owner.token);
+    expect(owner.status).toBe(200);
+    expect(owner.body).not.toContain('@');
+    const ownerPage = JSON.parse(owner.body) as PushPage;
+    const generations = ownerPage.pushes.map((entry) => entry.generation);
+    expect(generations).toStrictEqual(generations.toSorted((left, right) => left - right));
+    expect(ownerPage.pushes.flatMap((entry) => entry.tips).every((tip) => tip.ref.startsWith('refs/heads/'))).toBe(
+      true,
+    );
+    expect(entryFor(ownerPage, 'refs/heads/push-attributed')).toMatchObject({
+      pusher: { kind: 'account', accountId: callers.writer.id, name: 'Member writer' },
+      viaDevice: false,
+      tips: [{ ref: 'refs/heads/push-attributed', tip: attributedTip }],
+    });
+    expect(entryFor(ownerPage, 'refs/heads/push-attributed')).not.toHaveProperty('anonymous');
+    expect(entryFor(ownerPage, 'refs/heads/push-anonymous')).toMatchObject({
+      pusher: { kind: 'account', accountId: callers.writer.id },
+      anonymous: true,
+      tips: [{ ref: 'refs/heads/push-anonymous', tip: anonymousTip }],
+    });
+    expect(ownerPage.members.map((member) => member.accountId)).toContain(callers.writer.id);
+
+    for (const member of [callers.reader, callers.writer]) {
+      // oxlint-disable-next-line no-await-in-loop -- two members, read one after the other
+      const answer = await read(member.token);
+      expect(answer.status).toBe(200);
+      expect(answer.body).not.toContain('@');
+      const page = JSON.parse(answer.body) as PushPage;
+      const hidden = entryFor(page, 'refs/heads/push-anonymous');
+      expect(hidden).toStrictEqual({
+        generation: entryFor(ownerPage, 'refs/heads/push-anonymous')?.generation,
+        pushedAt: entryFor(ownerPage, 'refs/heads/push-anonymous')?.pushedAt,
+        pusher: { kind: 'anonymous' },
+        viaDevice: false,
+        tips: [{ ref: 'refs/heads/push-anonymous', tip: anonymousTip }],
+      });
+      expect(entryFor(page, 'refs/heads/push-attributed')?.pusher).toMatchObject({ accountId: callers.writer.id });
+    }
+
+    /* Paging by generation: after the attributed push, only what followed it. */
+    const attributedGeneration = entryFor(ownerPage, 'refs/heads/push-attributed')?.generation ?? 0;
+    const laterAnswer = await read(callers.owner.token, `?after=${String(attributedGeneration)}`);
+    const later = JSON.parse(laterAnswer.body) as PushPage;
+    expect(later.pushes.every((entry) => entry.generation > attributedGeneration)).toBe(true);
+    expect(entryFor(later, 'refs/heads/push-anonymous')).toBeDefined();
+    expect(entryFor(later, 'refs/heads/push-attributed')).toBeUndefined();
+    expect(later.next).toBeUndefined();
+    const invalid = await read(callers.owner.token, '?after=-1');
+    expect(invalid.status).toBe(400);
+
+    /* A caller with no relation is told the project does not exist (D27), and learns nothing else. */
+    const stranger = await read(callers.stranger.token);
+    expect(stranger.status).toBe(404);
+    expect(stranger.body).not.toContain(callers.writer.id);
+    expect(stranger.body).not.toContain('refs/heads');
+  }, 120_000);
+
+  /**
+   * B4 (A3, Q11; Revisions Policy rule 19): every commit new to the project's
+   * history names the pushing account, whatever its Tau record's version, on a
+   * project Tau registered. The records are the shape the client writes today.
+   * No refusal repeats an id, a name or an address the commit recorded.
+   */
+  it('refuses a revision that does not name its pusher, and one that carries an email, each with its own reason', async () => {
+    state.origin = 'local-mirror';
+    try {
+      const clone = path.join(workspace, 'authorship');
+      await gitOk(['clone', remoteFor(callers.writer.token), clone], workspace);
+      const cloned = await gitOk(['rev-parse', 'HEAD'], clone);
+      const base = cloned.stdout.trim();
+      let file = 0;
+      /** One revision on the base, recorded as `actor`, authored at `email` and committed by Tau or at `committer`. */
+      const revise = async (
+        email: string,
+        record?: Readonly<Record<string, unknown>>,
+        committer?: string,
+      ): Promise<void> => {
+        await gitOk(['reset', '--quiet', '--hard', base], clone);
+        file += 1;
+        await writeFile(
+          path.join(clone, `authorship-${String(file)}.ts`),
+          `export const n = ${String(file)};\n`,
+          'utf8',
+        );
+        await gitOk(['add', '.'], clone);
+        const message =
+          record === undefined
+            ? ['-m', 'Edited outside Tau']
+            : [
+                '-m',
+                'Saved',
+                '-m',
+                `Tau-Metadata: ${JSON.stringify({
+                  version: 2,
+                  parents: [base],
+                  provenance: { source: 'user', capture: 'save', via: 'cloud', createdAt: Date.now(), ...record },
+                  summary: { generated: 'Saved' },
+                })}`,
+              ];
+        const committed = await runGit(['commit', ...message], clone, {
+          GIT_AUTHOR_NAME: 'Someone',
+          GIT_AUTHOR_EMAIL: email,
+          GIT_COMMITTER_NAME: committer === undefined ? 'Tau' : 'Someone',
+          GIT_COMMITTER_EMAIL: committer ?? 'noreply@tau.new',
+        });
+        expect(committed.code, committed.stderr).toBe(0);
+      };
+      const push = async (branch: string) => runGit(['push', 'origin', `HEAD:refs/heads/${branch}`], clone);
+      const noreply = (id: string): string => `${id}@users.noreply.tau.new`;
+
+      /* B pushing a revision signed as A. */
+      await revise(noreply(callers.owner.id), {
+        actor: { kind: 'user', id: callers.owner.id, name: 'Member owner', email: `${callers.owner.id}@test.com` },
+      });
+      const forged = await push('authorship-forged');
+      expect(forged.code).not.toBe(0);
+      expect(forged.stderr).toContain(authorshipRefusals.GIT_PUSH_ACTOR_NOT_PUSHER);
+      expect(forged.stderr).not.toContain(callers.owner.id);
+      expect(forged.stderr).not.toContain('Member owner');
+      expect(await advertised()).not.toContain('authorship-forged');
+
+      /* An agent working for A, pushed by B. */
+      await revise(noreply(callers.owner.id), {
+        source: 'agent',
+        actor: { kind: 'agent', id: 'agent', runId: 'run_b4', onBehalfOf: { kind: 'user', id: callers.owner.id } },
+      });
+      const forgedAgent = await push('authorship-forged-agent');
+      expect(forgedAgent.code).not.toBe(0);
+      expect(forgedAgent.stderr).toContain(authorshipRefusals.GIT_PUSH_ACTOR_NOT_PUSHER);
+
+      /* A Tau-written revision carrying an environment email (Q11). */
+      await revise('writer@example.com', {
+        actor: { kind: 'user', id: callers.writer.id, email: 'writer@example.com' },
+      });
+      const leaked = await push('authorship-email');
+      expect(leaked.code).not.toBe(0);
+      expect(leaked.stderr).toContain(authorshipRefusals.GIT_PUSH_AUTHOR_ADDRESS);
+      expect(leaked.stderr).not.toContain('writer@example.com');
+
+      /* A commit Tau did not record, on a project not linked to GitHub: the refusal names the fix. */
+      await revise('someone@example.com', undefined, 'someone@example.com');
+      const outside = await push('authorship-outside');
+      expect(outside.code).not.toBe(0);
+      expect(outside.stderr).toContain(authorshipRefusals.GIT_PUSH_NOT_RECORDED_BY_TAU);
+      expect(outside.stderr).toContain(`your Tau no-reply address is ${noreply(callers.writer.id)}`);
+      expect(outside.stderr).not.toContain('someone@example.com');
+      expect(await advertised()).not.toMatch(/authorship-(?:forged|email|outside)/u);
+
+      /* …and the same commit on a project linked to GitHub. */
+      state.origin = 'github';
+      const linked = await push('authorship-outside');
+      expect(linked.code, linked.stderr).toBe(0);
+      state.origin = 'local-mirror';
+
+      /* A commit made with stock git under the identity Tau seeds. Pushed by another
+         member first, it names an account other than its pusher… */
+      await revise(noreply(callers.writer.id), undefined, noreply(callers.writer.id));
+      const owner = path.join(workspace, 'authorship-owner');
+      await gitOk(['clone', remoteFor(callers.owner.token), owner], workspace);
+      await gitOk(['fetch', '--quiet', clone, 'HEAD:refs/heads/authorship-git-carried'], owner);
+      const carried = await runGit(['push', 'origin', 'refs/heads/authorship-git-carried'], owner);
+      expect(carried.code).not.toBe(0);
+      expect(carried.stderr).toContain(authorshipRefusals.GIT_PUSH_ACTOR_NOT_PUSHER);
+      /* …and pushed by its own author, it is backed up. */
+      const own = await push('authorship-git');
+      expect(own.code, own.stderr).toBe(0);
+      expect(await advertised()).not.toMatch(/authorship-(?:forged|email|git-carried)/u);
+      expect(await advertised()).toContain('refs/heads/authorship-git');
+
+      /* The pusher's own revision, and an agent's on the pusher's behalf. */
+      await revise(noreply(callers.writer.id), {
+        actor: { kind: 'user', id: callers.writer.id, name: 'Member writer' },
+      });
+      const recordedOwn = await push('authorship-own');
+      expect(recordedOwn.code, recordedOwn.stderr).toBe(0);
+      await revise(noreply(callers.writer.id), {
+        source: 'agent',
+        actor: { kind: 'agent', id: 'agent', runId: 'run_b4', onBehalfOf: { kind: 'user', id: callers.writer.id } },
+      });
+      const onBehalf = await push('authorship-agent');
+      expect(onBehalf.code, onBehalf.stderr).toBe(0);
+      const advertisement = await advertised();
+      expect(advertisement).toContain('refs/heads/authorship-own');
+      expect(advertisement).toContain('refs/heads/authorship-agent');
+    } finally {
+      state.origin = 'github';
+    }
+  }, 120_000);
+
+  /**
+   * B6 (Q6, I6; Revisions Policy rule 19): a version is `refs/tags/v<number>`,
+   * held by one version on Tau Cloud, and its name is free text in the tag. A
+   * second version at that number is refused behind the marker the client
+   * renumbers on; a rename at the same number is backed up.
+   */
+  it('backs up a version named with spaces, refuses another at its number, and backs up its rename', async () => {
+    const clone = path.join(workspace, 'version-numbers');
+    await gitOk(['clone', remoteFor(callers.writer.token), clone], workspace);
+    /** One annotated version tag on the clone's head: version `id`, named `name`, made at `date`. */
+    const version = async (
+      number: number,
+      tag: Readonly<{ name: string; id: string; date: string }>,
+    ): Promise<void> => {
+      const { name, id, date } = tag;
+      const outcome = await runGit(
+        [
+          'tag',
+          '--force',
+          '-a',
+          `v${String(number)}`,
+          '-m',
+          name,
+          '-m',
+          `Tau-Tag: ${JSON.stringify({ version: 2, id, name })}`,
+        ],
+        clone,
+        { GIT_COMMITTER_DATE: date },
+      );
+      expect(outcome.code, outcome.stderr).toBe(0);
+    };
+    const push = async (number: number) => runGit(['push', '--force', 'origin', `refs/tags/v${String(number)}`], clone);
+    const ready = randomBytes(16).toString('hex');
+    const lid = randomBytes(16).toString('hex');
+
+    await version(4, { name: 'Ready for print', id: ready, date: '2026-11-12T10:00:00Z' });
+    const first = await push(4);
+    expect(first.code, first.stderr).toBe(0);
+
+    /* Another device's version at the same number, made in the same second: another id. */
+    await version(4, { name: 'Lid fit', id: lid, date: '2026-11-12T10:00:00Z' });
+    const taken = await push(4);
+    expect(taken.code).not.toBe(0);
+    expect(taken.stderr).toContain(`${versionNumberTakenMarker} — refs/tags/v4 names V4`);
+    expect(taken.stderr).toContain(versionNumberRefusals.GIT_PUSH_VERSION_NUMBER_TAKEN);
+
+    /* The device's renumbered version: the next free number is backed up. */
+    await version(5, { name: 'Lid fit', id: lid, date: '2026-11-12T10:05:00Z' });
+    const renumbered = await push(5);
+    expect(renumbered.code, renumbered.stderr).toBe(0);
+
+    /* A rename keeps the version's id: the same ref takes the new name. */
+    await version(4, { name: 'Ready for print, final', id: ready, date: '2026-11-12T10:10:00Z' });
+    const renamed = await push(4);
+    expect(renamed.code, renamed.stderr).toBe(0);
+
+    /* A tag that is not a version never takes a number. */
+    const lightweight = await runGit(['tag', '--force', 'v6'], clone);
+    expect(lightweight.code, lightweight.stderr).toBe(0);
+    const refused = await push(6);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain(versionNumberRefusals.GIT_PUSH_VERSION_TAG_INVALID);
+    const advertisement = await advertised();
+    expect(advertisement).toContain('refs/tags/v4');
+    expect(advertisement).toContain('refs/tags/v5');
+    expect(advertisement).not.toContain('refs/tags/v6');
+  }, 120_000);
+
+  /** Ruling P55: an account with no relation to the project is told it does not exist. */
+  it('answers a stranger with 404 rather than 403', async () => {
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-upload-pack`, {
+      headers: { Authorization: `Bearer ${callers.stranger.token}` },
+    });
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain('not found');
+  });
+
+  /**
+   * D33, DA3: admission is every admitted lease's real-byte reservation against
+   * the worker's free disk. A worker that cannot hold another lease says so with a
+   * `Retry-After` rather than filling its own disk and failing halfway.
+   */
+  it('answers 503 with Retry-After when this worker has no room for another lease', async () => {
+    const reservation = worker.leaseReservationFloorBytes;
+    worker.leaseReservationFloorBytes = Number.MAX_SAFE_INTEGER;
+    const wait = worker.admissionWaitMilliseconds;
+    worker.admissionWaitMilliseconds = 0;
+    /* DB1: the advertisement takes no lease, so a full disk never refuses it (TAU-API-5). */
+    const advertisement = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-upload-pack`, {
+      headers: { Authorization: `Bearer ${callers.owner.token}` },
+    });
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/git-upload-pack`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${callers.owner.token}`,
+        'Content-Type': 'application/x-git-upload-pack-request',
+      },
+      body: '0000',
+    });
+    worker.leaseReservationFloorBytes = reservation;
+    worker.admissionWaitMilliseconds = wait;
+
+    expect(advertisement.status).toBe(200);
+    expect(await advertisement.text()).toContain('refs/heads/main');
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('5');
+    expect(await response.text()).toContain('retry shortly');
+  });
+
+  it('challenges an unauthenticated git client with Basic so stock git asks for credentials', async () => {
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-upload-pack`);
+    expect(response.status).toBe(401);
+    expect(response.headers.get('www-authenticate')).toBe('Basic realm="Tau"');
+  });
+
+  it('answers a browser git client’s preflight with every header it sends', async () => {
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-upload-pack`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://tau.new',
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'git-protocol',
+      },
+    });
+    expect(response.status).toBeLessThan(300);
+    const allowed = (response.headers.get('access-control-allow-headers') ?? '')
+      .split(',')
+      .map((name) => name.trim().toLowerCase());
+    expect(allowed).toEqual(
+      expect.arrayContaining(['git-protocol', 'content-type', 'authorization', 'x-tau-proxy-authorization']),
+    );
+  });
+
+  /**
+   * C7 / N6: git prints the body of a failed request only when it is
+   * `text/plain`; a browser is told apart by `Origin` and keeps the JSON
+   * envelope.
+   */
+  it('answers a git-protocol refusal as text/plain for a client that is not a browser', async () => {
+    state.tier = 'free';
+    const forGit = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-receive-pack`, {
+      headers: { Authorization: `Bearer ${callers.owner.token}` },
+    });
+    const forBrowser = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-receive-pack`, {
+      headers: { Authorization: `Bearer ${callers.owner.token}`, origin: 'https://tau.new' },
+    });
+    state.tier = 'pro';
+
+    expect(forGit.status).toBe(403);
+    expect(forGit.headers.get('content-type')).toMatch(/text\/plain/u);
+    expect(await forGit.text()).toContain('paid plan');
+
+    expect(forBrowser.status).toBe(403);
+    expect(forBrowser.headers.get('content-type')).toMatch(/application\/json/u);
+    expect(await forBrowser.json()).toEqual(expect.objectContaining({ code: 'GIT_SYNC_NOT_ENTITLED' }));
+  });
+
+  it('answers an unauthenticated browser request through CORS instead of the raw challenge', async () => {
+    const browser = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-receive-pack`, {
+      headers: { origin: 'https://tau.new' },
+    });
+    expect(browser.status).toBe(401);
+    expect(browser.headers.get('access-control-allow-origin')).toBe('https://tau.new');
+    expect(await browser.json()).toEqual(expect.objectContaining({ code: 'UNAUTHORIZED' }));
+  });
+
+  /**
+   * C28, restated for W3's cache: a read consults neither `canSyncFiles` nor the
+   * plan headroom, and a write pays for the plan once rather than twice.
+   */
+  it('costs a read no plan lookup at all', async () => {
+    queries.entitlements = 0;
+    queries.usage = 0;
+
+    const read = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-upload-pack`, {
+      headers: { Authorization: `Bearer ${callers.owner.token}` },
+    });
+    expect(read.status).toBe(200);
+    expect(queries).toEqual({ entitlements: 0, usage: 0 });
+
+    const write = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/refs?service=git-receive-pack`, {
+      headers: { Authorization: `Bearer ${callers.owner.token}` },
+    });
+    expect(write.status).toBe(200);
+    expect(queries).toEqual({ entitlements: 1, usage: 1 });
+  });
+
+  it('hands out an LFS upload action under the owner’s tenant prefix and verifies the stored object', async () => {
+    const bytes = Buffer.from('hello world\n');
+    const oid = createHash('sha256').update(bytes).digest('hex');
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/lfs/objects/batch`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${callers.owner.token}`,
+        'content-type': 'application/vnd.git-lfs+json',
+      },
+      body: JSON.stringify({ operation: 'upload', transfers: ['basic'], objects: [{ oid, size: 12 }] }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      transfer: string;
+      objects: Array<{
+        oid: string;
+        actions?: { upload?: { href: string; header?: Record<string, string> }; verify?: { href: string } };
+      }>;
+    };
+    expect(body.transfer).toBe('basic');
+    const action = body.objects[0]?.actions?.upload;
+    /* D24: the bytes land under the owner's tenant prefix, whichever
+       collaborator uploaded them. */
+    expect(action?.href).toContain(`/tenants/${tenantLfsObjectKey(ownerId, projectId, oid)}?`);
+    expect(body.objects[0]?.actions?.verify?.href).toContain('/info/lfs/objects/verify');
+
+    const stored = await fetch(action?.href ?? '', { method: 'PUT', body: bytes, headers: action?.header });
+    expect(stored.ok, `presigned PUT failed: ${String(stored.status)}`).toBe(true);
+    const verified = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/lfs/objects/verify`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${callers.owner.token}`,
+        'content-type': 'application/vnd.git-lfs+json',
+      },
+      body: JSON.stringify({ oid, size: 12 }),
+    });
+    expect(verified.status).toBe(200);
+    expect(state.lfsBytes).toBe(12);
+
+    state.lfsBytes = 0;
+    lfsRows.delete(oid);
+  }, 60_000);
+
+  /* D11, EQ12: verify trusts the checksum-pinned PUT, so the store itself must
+     refuse bytes that do not hash to the oid, and a verify after a refused PUT
+     finds nothing to finalize. One that landed is finalized without its bytes
+     being read back. */
+  it('refuses same-size bytes the PUT pinned to another oid, and verifies a landed object without reading it', async () => {
+    const bytes = Buffer.from('pinned bytes\n');
+    const oid = createHash('sha256').update(bytes).digest('hex');
+    const batch = async (): Promise<{ href: string; header?: Record<string, string> } | undefined> => {
+      const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/lfs/objects/batch`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${callers.owner.token}`, 'content-type': 'application/vnd.git-lfs+json' },
+        body: JSON.stringify({ operation: 'upload', transfers: ['basic'], objects: [{ oid, size: bytes.byteLength }] }),
+      });
+      const body = (await response.json()) as {
+        objects: Array<{ actions?: { upload?: { href: string; header?: Record<string, string> } } }>;
+      };
+      return body.objects[0]?.actions?.upload;
+    };
+    const verify = async (): Promise<number> => {
+      const answered = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/lfs/objects/verify`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${callers.owner.token}`, 'content-type': 'application/vnd.git-lfs+json' },
+        body: JSON.stringify({ oid, size: bytes.byteLength }),
+      });
+      return answered.status;
+    };
+    const reads = vi.spyOn(storage, 'getBlob');
+    try {
+      const action = await batch();
+      const corrupt = Buffer.alloc(bytes.byteLength, 7);
+      const refused = await fetch(action?.href ?? '', { method: 'PUT', body: corrupt, headers: action?.header });
+      expect(refused.ok).toBe(false);
+      expect(await verify()).not.toBe(200);
+      expect(lfsRows.get(oid)?.finalized).toBe(false);
+
+      const landed = await fetch(action?.href ?? '', { method: 'PUT', body: bytes, headers: action?.header });
+      expect(landed.ok, `presigned PUT failed: ${String(landed.status)}`).toBe(true);
+      expect(await verify()).toBe(200);
+      expect(lfsRows.get(oid)?.finalized).toBe(true);
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+      state.lfsBytes = 0;
+      lfsRows.delete(oid);
+    }
+  }, 60_000);
+
+  it('round-trips exactly 100 MiB through stock Git LFS and refuses one byte over', async () => {
+    const clone = path.join(workspace, 'lfs-boundary');
+    await gitOk(['clone', remoteUrl, clone], workspace);
+    await gitOk(['lfs', 'install', '--local'], clone);
+    await gitOk(['lfs', 'track', '*.bin'], clone);
+    const bytes = new Uint8Array(104_857_600);
+    const oid = createHash('sha256').update(bytes).digest('hex');
+    await writeFile(path.join(clone, 'boundary.bin'), bytes);
+    await gitOk(['add', '.gitattributes', 'boundary.bin'], clone);
+    await gitOk(['commit', '-m', 'boundary fixture'], clone);
+    try {
+      await gitOk(['lfs', 'push', '--object-id', 'origin', oid], clone);
+      expect(lfsRows.get(oid)).toEqual({ size: bytes.byteLength, finalized: true });
+      await rm(path.join(clone, '.git', 'lfs', 'objects'), { recursive: true, force: true });
+      await gitOk(['lfs', 'fetch', '--all', 'origin'], clone);
+      const fetched = await readFile(path.join(clone, '.git', 'lfs', 'objects', oid.slice(0, 2), oid.slice(2, 4), oid));
+      expect(fetched.byteLength).toBe(bytes.byteLength);
+      expect(createHash('sha256').update(fetched).digest('hex')).toBe(oid);
+
+      const oversized = new Uint8Array(104_857_601);
+      const oversizedOid = createHash('sha256').update(oversized).digest('hex');
+      await writeFile(path.join(clone, 'oversized.bin'), oversized);
+      await gitOk(['add', 'oversized.bin'], clone);
+      const refused = await runGit(['lfs', 'push', '--object-id', 'origin', oversizedOid], clone);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain('100 MiB');
+      expect(lfsRows.has(oversizedOid)).toBe(false);
+    } finally {
+      state.lfsBytes = 0;
+      lfsRows.delete(oid);
+    }
+  }, 120_000);
+
+  it('refuses an over-quota LFS batch with 413 and the file list', async () => {
+    state.storageBytes = 100 * 1024 ** 3 - 1024;
+    const objects = [
+      { oid: 'b'.repeat(64), size: 4096 },
+      { oid: 'c'.repeat(64), size: 8192 },
+    ];
+    const response = await fetch(`${baseUrl}/v1/git/${projectId}.git/info/lfs/objects/batch`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${callers.owner.token}`,
+        'content-type': 'application/vnd.git-lfs+json',
+      },
+      body: JSON.stringify({ operation: 'upload', transfers: ['basic'], objects }),
+    });
+    state.storageBytes = 0;
+
+    expect(response.status).toBe(413);
+    const body = (await response.json()) as { files?: Array<{ oid: string }>; message?: string };
+    /* D17: largest first, in the sentence addressed to the owner of a Pro plan. */
+    expect(body.files?.map((file) => file.oid)).toEqual(objects.toReversed().map((object) => object.oid));
+    expect(body.message).toBe(
+      'This push needs more room than your 100 GB storage plan has left, so it was not backed up.',
+    );
+  });
+
+  /**
+   * C24 (charter I8): the `verify` action carries the caller's own Tau bearer,
+   * so its href is built from the validated `TAU_API_URL` and never from the
+   * client's own `Host`.
+   */
+  it('builds the LFS verify href from the configured API URL, not from the request', async () => {
+    const spoofed = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const upstream = new URL(baseUrl);
+      const call = httpRequest(
+        {
+          hostname: upstream.hostname,
+          port: upstream.port,
+          path: `/v1/git/${projectId}.git/info/lfs/objects/batch`,
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${callers.owner.token}`,
+            'content-type': 'application/vnd.git-lfs+json',
+            host: 'evil.example',
+          },
+        },
+        (answer) => {
+          const chunks: Array<Uint8Array<ArrayBuffer>> = [];
+          answer.on('data', (chunk: Uint8Array<ArrayBuffer>) => chunks.push(chunk));
+          answer.on('end', () => {
+            resolve({ status: answer.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') });
+          });
+        },
+      );
+      call.on('error', reject);
+      call.end(
+        JSON.stringify({ operation: 'upload', transfers: ['basic'], objects: [{ oid: 'd'.repeat(64), size: 7 }] }),
+      );
+    });
+
+    expect(spoofed.status).toBe(200);
+    const body = JSON.parse(spoofed.body) as {
+      objects: Array<{ actions?: { verify?: { href: string; header?: Record<string, string> } } }>;
+    };
+    const verify = body.objects[0]?.actions?.verify;
+    expect(verify?.href).not.toContain('evil.example');
+    expect(verify?.href).toBe(`${configuredApiUrl}/v1/git/${projectId}.git/info/lfs/objects/verify`);
+    expect(verify?.header?.['Authorization']).toBe(`Bearer ${callers.owner.token}`);
+
+    state.lfsBytes = 0;
+    lfsRows.delete('d'.repeat(64));
+  });
+
+  /**
+   * C25 / ruling OQ4: compare-and-swap for every ref family. `--force-with-lease`
+   * is client discipline; this is the server's.
+   */
+  it('refuses a ref deletion and a non-fast-forward push, and keeps what they aimed at', async () => {
+    const clone = path.join(workspace, 'cas');
+    await gitOk(['clone', remoteUrl, clone], workspace);
+    await gitOk(['tag', 'v-cas'], clone);
+    await gitOk(['push', 'origin', 'refs/tags/v-cas'], clone);
+    await gitOk(['update-ref', 'refs/tau/chats/chat_cas', 'HEAD'], clone);
+    await gitOk(['push', 'origin', 'refs/tau/chats/chat_cas'], clone);
+
+    const announcedBeforeRefusals = announced.length;
+    const deletedTag = await runGit(['push', 'origin', ':refs/tags/v-cas'], clone);
+    expect(deletedTag.code, `tag deletion was accepted: ${deletedTag.stderr}`).not.toBe(0);
+
+    const deletedRecord = await runGit(['push', 'origin', ':refs/tau/chats/chat_cas'], clone);
+    expect(deletedRecord.code, `record deletion was accepted: ${deletedRecord.stderr}`).not.toBe(0);
+
+    const head = await gitOk(['rev-parse', 'HEAD'], clone);
+    await gitOk(['reset', '--hard', 'HEAD~1'], clone);
+    const rewound = await runGit(['push', '--force', 'origin', 'HEAD:refs/heads/main'], clone);
+    expect(rewound.code, `a force push was accepted: ${rewound.stderr}`).not.toBe(0);
+    /* D13: a refused push commits no manifest, so nothing is announced. */
+    expect(announced).toHaveLength(announcedBeforeRefusals);
+
+    const references = await advertised();
+    expect(references).toContain('refs/tags/v-cas');
+    expect(references).toContain('refs/tau/chats/chat_cas');
+    expect(references).toContain(head.stdout.trim());
+  }, 120_000);
+
+  it('refuses a proxy target with a credential in the URL, a private host, or a non-git path', async () => {
+    for (const target of [
+      'https://github.com/tau/x.git/info/refs?access_token=secret',
+      'https://127.0.0.1:9000/x.git/info/refs',
+      'https://github.com/tau/x.git/secrets',
+      'http://github.com/tau/x.git/info/refs',
+    ]) {
+      // oxlint-disable-next-line no-await-in-loop -- one refusal at a time, by design
+      const refused = await fetch(`${baseUrl}/v1/git/proxy?url=${encodeURIComponent(target)}`, {
+        headers: { Authorization: `Bearer ${callers.owner.token}` },
+      });
+      expect(refused.status, target).toBe(400);
+    }
+  });
+
+  it('lets an LFS object PUT reach the relay instead of refusing its media type (D44)', async () => {
+    const put = await fetch(`${baseUrl}/v1/git/lfs/0f8fad5b-d9cb-469f-a165-70867728950e`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${callers.owner.token}`, 'content-type': 'application/octet-stream' },
+      body: Buffer.from('bytes'),
+    });
+
+    expect(put.status).toBe(400);
+    expect(((await put.json()) as { code?: string }).code).toBe('GIT_LFS_HANDLE_REFUSED');
+  });
+
+  /**
+   * W13b: a compacting push's sweep lists `packs/` and `retired/`, which grow
+   * with every push inside the retention window, so it runs after the reply.
+   * Every push here is answered while the sweep's listing is parked, and the
+   * sweep then failing costs no push anything.
+   */
+  it('answers a compacting push without waiting on its sweep, and a failed sweep fails no push', async () => {
+    const clone = path.join(workspace, 'sweep');
+    await gitOk(['clone', remoteUrl, clone], workspace);
+    const parked = Promise.withResolvers<void>();
+    let listings = 0;
+    storeControl.listObjects = () => {
+      listings += 1;
+      return {
+        [Symbol.asyncIterator]: () => ({
+          next: async (): Promise<IteratorResult<StoredObject>> => {
+            await parked.promise;
+            throw new Error('storage refused the listing');
+          },
+        }),
+      };
+    };
+    try {
+      /* One push more than the pack bound compacts at least once, whatever the earlier rows left live:
+         the last push's compaction has no later push to give way to. */
+      for (let revision = 0; revision <= livePackBound; revision += 1) {
+        // oxlint-disable-next-line no-await-in-loop -- pushes are sequential by definition
+        await writeFile(path.join(clone, 'part.ts'), `export const width = ${String(100 + revision)};\n`, 'utf8');
+        // oxlint-disable-next-line no-await-in-loop -- same reason
+        await gitOk(['add', '.'], clone);
+        // oxlint-disable-next-line no-await-in-loop -- same reason
+        await gitOk(['commit', '-m', `sweep revision ${String(revision)}`], clone);
+        // oxlint-disable-next-line no-await-in-loop -- same reason
+        const pushed = await runGit(['push', 'origin', 'HEAD:refs/heads/main'], clone);
+        expect(pushed.code, pushed.stderr).toBe(0);
+      }
+      /* The compaction, and so its sweep, runs after the reply of the push that owed it. */
+      await vi.waitFor(
+        () => {
+          expect(listings, 'no push compacted, so no sweep ran').toBeGreaterThan(0);
+        },
+        { timeout: 30_000 },
+      );
+    } finally {
+      parked.resolve();
+      await worker.settled();
+      await repositories.settled();
+      storeControl.listObjects = undefined;
+    }
+
+    const head = await gitOk(['rev-parse', 'HEAD'], clone);
+    expect(await advertised()).toContain(head.stdout.trim());
+  }, 180_000);
+});

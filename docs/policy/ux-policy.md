@@ -1,14 +1,16 @@
 ---
 title: 'UX Policy'
-description: 'Interaction design rules: inline editing, progressive disclosure, confirmation patterns, and keyboard conventions for all Tau UI surfaces.'
+description: 'Interaction design rules: inline editing, progressive disclosure, confirmation patterns, keyboard conventions and user-side copy for all Tau UI surfaces.'
 status: active
 created: '2026-04-08'
-updated: '2026-04-08'
+updated: '2026-11-18'
 related:
   - docs/policy/ui-policy.md
   - docs/policy/accessibility-policy.md
   - docs/policy/react-policy.md
   - docs/research/dialog-inline-editing-audit.md
+  - docs/research/billing-redesign-blueprint.md
+  - docs/research/cloud-and-account-naming-blueprint.md
 ---
 
 # UX Policy
@@ -116,25 +118,14 @@ For low-stakes deletions in dense lists (e.g., deleting a parameter set where "d
 
 ### 5. Progressive Disclosure in Dense Panels
 
-In space-constrained panels (parameters, file tree, chat sidebar), reveal editing controls on hover or via overflow menus — not always visible.
+Follow [docs/policy/design-policy.md — People and progressive disclosure](../../docs/policy/design-policy.md#people-and-progressive-disclosure)
+and [Composition and visible affordances](../../docs/policy/design-policy.md#composition-and-visible-affordances).
+Primary contextual actions remain visible; infrequent row actions may use a
+persistently reachable named overflow menu. Hover shortcuts require an equivalent
+visible route plus keyboard and coarse-pointer access.
 
-**Why**: Persistent edit/delete buttons on every row create visual noise and reduce content density. The hover-reveal pattern (already used in chat history items) balances discoverability with cleanliness.
-
-CORRECT:
-
-```tsx
-<div className='group flex items-center justify-between'>
-  <span>{name}</span>
-  <div className='flex gap-1 opacity-0 group-hover:opacity-100'>
-    <Button size='icon' variant='ghost'>
-      <Pencil />
-    </Button>
-    <Button size='icon' variant='ghost'>
-      <Trash />
-    </Button>
-  </div>
-</div>
-```
+**Why**: Folding detail reduces noise only when users can still discover actions
+and understand current work, consequences and recovery.
 
 ### 6. ComboBoxResponsive for Searchable Selection
 
@@ -148,7 +139,24 @@ For lists of 2-3 static options, a plain `<Select>` is acceptable.
 | 3+ or dynamic | May grow         | `ComboBoxResponsive`                     |
 | Large (100+)  | Unbounded        | `ComboBoxResponsive` with virtualization |
 
-### 7. No Nested Dialogs
+### 7. Choose, Act or Disclose; Nest With the View Stack
+
+Pick the surface by what the list does, then nest the same way everywhere:
+
+| The list lets the person…                    | Surface                                 | Nesting                                                                                          |
+| -------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Choose a value (kernel, model, file, format) | `ComboBoxResponsive`                    | A group or row opens a sub-view in the same popover or drawer; search stays global across levels |
+| Perform an action (export, rename, settings) | Responsive `DropdownMenu`               | A submenu opens a sub-view in the same menu                                                      |
+| See facts or a few controls beside actions   | Disclosure row (`menu-disclosure-item`) | Expands in place; never replaces the list                                                        |
+| Act on a target by right-click               | `ContextMenu`                           | Flyout submenus are allowed (pointer convention)                                                 |
+
+Both sub-view surfaces compose the shared responsive view stack in `packages/ui`: a full-width Back row that reads "Back" and is named `Back to <parent>` for assistive technology, the view itself named by its group (and by a heading where its rows do not say what it is), Escape and Backspace-on-empty step back, focus returns to the row that opened the view, and the same views render on pointer and touch. The Left arrow is never bound to Back, because slider rows use it.
+
+Never open a second popover from a menu or picker, stack a drawer from a menu, or use a hover flyout outside right-click menus. A `ComboBoxResponsive` opened from a pane control (no parent list) may still stack its drawer on a phone (`isNested`).
+
+**Why**: One nesting behaviour keeps focus in one scope, works identically on desktop and phone, and spares people from learning a different pattern in each menu.
+
+### 8. No Nested Dialogs
 
 Never nest a `Dialog` inside another `Dialog`. If a settings dialog needs a delete confirmation, either:
 
@@ -157,11 +165,92 @@ Never nest a `Dialog` inside another `Dialog`. If a settings dialog needs a dele
 
 **Why**: Nested dialogs create z-index issues, confuse focus trapping, and disorient users with stacked overlays.
 
-### 8. Use the InlineTextEditor Primitive
+### 9. Use the InlineTextEditor Primitive
 
 The `InlineTextEditor` component (`#components/inline-text-editor.js`) is the canonical implementation of inline editing. Use it for all label-to-input editing instead of building ad-hoc `isEditing` state.
 
 Features: display/edit toggle, Enter/Escape/blur handling, auto-focus, auto-select, optional `renderDisplay`, `shouldSubmitOnBlur`, `variant`.
+
+### 9. Write Copy From the User's Side
+
+Say what happened to the person and what they can do next, in the plainest words that are true. Name things by what the person sees and does, never by how the system stores or moves them.
+
+| Do not write (system side)                         | Write (user side)                           |
+| -------------------------------------------------- | ------------------------------------------- |
+| "Payment status: processing"                       | "We're confirming your payment"             |
+| "Quote expired", "Refresh quote"                   | "This price is out of date", "Update price" |
+| "Checkout session", "payment intent", "binding"    | "payment page", "payment", nothing at all   |
+| "Issuance pending"                                 | "Adding 500 credits to your balance…"       |
+| "Top up", "top-up" in the app                      | "Add credits"                               |
+| "Entitlement", "tier", "ledger", "hold"            | "plan", "plan", "balance", "reserved"       |
+| A wire state printed as text (`closing`, `failed`) | A sentence written for that state           |
+
+Every state of a multi-step flow has its own title and one- or two-sentence description. Never print a state name, an identifier, an error code or a raw server message where a person reads it.
+
+**Why**: the billing review found about 200 strings written from the server's point of view; people could not tell whether they had been charged. See `docs/research/billing-redesign-blueprint.md`.
+
+**Enforced by**: `tau-lint/no-engineering-vocabulary-in-copy` for the vocabulary it lists; the rest is review.
+
+### 10. Name the Button After What It Does
+
+A button's label is the action and its object: "Pay $27.50", "Add credits", "Turn on auto-reload", "Continue to payment", "Delete account". The step back is "Back"; leaving without doing anything is "Cancel"; leaving a finished or waiting screen is "Close".
+
+| Situation                        | Label                             | Never                         |
+| -------------------------------- | --------------------------------- | ----------------------------- |
+| Commits money                    | "Pay $27.50" (the exact amount)   | "Confirm", "Submit", "OK"     |
+| Goes to another site to pay      | "Continue to payment"             | "Checkout", "Proceed"         |
+| Repeats a failed action          | "Try again"                       | "Retry", "Reload"             |
+| Returns to the previous step     | "Back"                            | "Cancel" (when nothing ends)  |
+| Abandons something in progress   | "Cancel purchase", "Cancel setup" | A bare "Cancel" that is vague |
+| Current choice in a set of plans | A label, "Your current plan"      | A disabled button             |
+
+**Why**: "Confirm" and "Cancel" on a payment screen do not say whether money moves; a label that names the outcome needs no surrounding explanation.
+
+### 11. Report a Problem as "Couldn't …" Then the Next Step
+
+Write an error as what did not happen, in the past tense with a contraction, then one thing to do: "Couldn't load your balance. Try again." State what is safe when money or data is involved ("Your card wasn't charged", "Your credits are safe") only when the system knows it to be true. Offer "Try again" as the button; give the support address when trying again cannot help.
+
+CORRECT:
+
+```tsx
+<BillingInlineError>Couldn’t open the payment page. Try again.</BillingInlineError>
+```
+
+INCORRECT:
+
+```tsx
+<p className='text-destructive'>Error: checkout session creation failed (409)</p>
+<p>Unable to process request. Please retry later.</p>
+```
+
+**Why**: an error is read at the worst moment; a fixed shape lets people find the next step without parsing the sentence.
+
+### 12. Print Money and Spelling One Way
+
+Print US dollars as `$10.00` for an amount that is or will be charged and `$20` for a list price or an amount choice. Name the currency once per screen, on the total (`$27.50 USD`) or in a field label ("Amount (USD)"); never as a `US$` prefix. Use the shared formatters in `@taucad/billing` (`formatUsdMinor`, `formatUsdTotalMinor`, `formatUsdWholeMinor`, `formatMonthlyPrice`); do not format money inline. Product copy uses US spelling ("authorize", "canceled", "center").
+
+**Why**: four formats (`US$10`, `$10.00 USD`, `10 USD`, `$10`) appeared on one screen, and two spellings of "cancelled" in one flow. Legal documents keep their own governed wording.
+
+### 13. Name the Thing, Not the Product
+
+Inside the product, name a capability by what it is, not by Tau's brand. The place where Tau keeps projects is **the cloud** ("in the cloud", "Back up to the cloud", "cloud copy", "Cloud projects"); the hosted share method is **Cloud link**; the sign-in is **your account** ("Account" as a label). Never write "Tau Cloud" or "Tau Cloud account" in product copy.
+
+Write "Tau" only when the same noun on the same screen belongs to someone else, or when the reader is outside the app:
+
+| Situation                                                       | Write                                                                                           |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Backup destination choice beside "GitHub or another Git host"   | "Tau"                                                                                           |
+| Another party's account in the same sentence or screen          | "your Tau account" ("This GitHub account uses a different email address from your Tau account") |
+| Who keeps the data, said once when work first leaves the device | "Tau keeps a copy so you can open it wherever you sign in."                                     |
+| Emails, CLI output, consent pages                               | "Tau account", "Sign in to Tau"                                                                 |
+| Legal pages, docs, self-hosting docs, operator text             | "Tau Cloud" as the proper name of the operated service                                          |
+| Another vendor's cloud on the same screen                       | "Zoo's cloud", or name the thing                                                                |
+
+A label that is also dropped into sentences needs two forms: "Cloud" (label) and "the cloud" (sentence). Stored labels written before this rule stay as stored; do not add code that rewrites them.
+
+**Why**: the product also runs on this device, so it needs a word for the cloud, but not its own brand in front of every capability. "Tau Cloud" named both storage and the agent runtime, made a subsystem the actor in errors, and was untrue on self-hosted deployments. See `docs/research/cloud-and-account-naming-blueprint.md`.
+
+**Enforced by**: `tau-lint/no-engineering-vocabulary-in-copy` lists "Tau Cloud"; the "Tau account" exceptions are review.
 
 ## Anti-Patterns
 
@@ -169,8 +258,14 @@ Features: display/edit toggle, Enter/Escape/blur handling, auto-focus, auto-sele
 - Nesting `Dialog` inside `Dialog` (e.g., delete confirm inside settings)
 - Building custom `isEditing` + `Input` state when `InlineTextEditor` exists
 - Using `setTimeout` to focus an input inside a Dialog (symptom of fighting the modal lifecycle)
-- Persistent edit/delete buttons in dense lists (use hover-reveal)
+- Important actions discoverable only on hover, with no visible alternate route
 - Plain `<Select>` for unbounded or searchable lists
+- A state name, identifier or server message shown as copy ("Payment status: funds_received")
+- "Confirm", "Submit" or "OK" on a button that moves money or deletes something
+- "Failed to …", "Unable to …", "An error occurred" in place of "Couldn't … Try again."
+- `US$` prefixes, or a money amount formatted outside the shared formatters
+- A second popover, a menu-stacked drawer, or a hover flyout to nest a list (outside right-click menus)
+- A searchable listbox standing in for an action menu, or a menu standing in for a value picker
 
 ## Summary Checklist
 
@@ -179,8 +274,14 @@ Features: display/edit toggle, Enter/Escape/blur handling, auto-focus, auto-sele
 - [ ] Inline inputs support Enter, Escape, blur, auto-focus, auto-select
 - [ ] Destructive actions use AlertDialog (irrecoverable) or undo toast (recoverable)
 - [ ] No nested Dialogs
-- [ ] Dense list actions use hover-reveal pattern
+- [ ] Dense list actions follow DESIGN's visible-action and disclosure contracts
 - [ ] Searchable/dynamic lists use ComboBoxResponsive
+- [ ] Copy says what happened to the person and what to do next; no system vocabulary or state names
+- [ ] Each button names its action and object; money buttons carry the exact amount
+- [ ] Errors read "Couldn't … Try again." and claim safety only when it is known
+- [ ] Money goes through the shared formatters; the currency is named once per screen; US spelling
+- [ ] Product copy says "the cloud", "Cloud link" and "your account"; "Tau" only under the collision test or outside the app
+- [ ] Choosing uses ComboBoxResponsive, acting uses DropdownMenu, and nesting in either uses the view-stack sub-view
 - [ ] New interaction patterns reviewed against this policy
 
 ## References
@@ -189,3 +290,5 @@ Features: display/edit toggle, Enter/Escape/blur handling, auto-focus, auto-sele
 - [Accessibility Policy](accessibility-policy.md) — ARIA conventions, focus management
 - [React Policy](react-policy.md) — Component patterns, state management
 - Research: `docs/research/dialog-inline-editing-audit.md`
+- Research: `docs/research/billing-redesign-blueprint.md` — the copy glossary these rules come from
+- Research: `docs/research/cloud-and-account-naming-blueprint.md` — Rule 13's decisions

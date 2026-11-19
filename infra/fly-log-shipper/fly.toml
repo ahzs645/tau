@@ -1,0 +1,29 @@
+# Fly's log shipper (launch gate OBS-5: durable logs beyond Fly's live buffer).
+#
+# One org-wide Machine subscribes to the log stream of every app in the Fly org
+# (tau-api-staging, tau-api and their process groups, including release
+# commands and boot crashes) and forwards each line to Grafana Cloud Logs.
+#
+# Secrets, all written by tau-cloud `stacks/observability` (module
+# fly_log_shipper_secrets), never values here: ORG, ACCESS_TOKEN (read-only org
+# token), LOKI_URL, LOKI_USERNAME, LOKI_PASSWORD.
+#
+# Loki labels: the upstream set (event_provider, fly_region, fly_app_name,
+# fly_app_instance, host, level) plus service_name, the Tau service
+# (`vector-configs/sinks/loki.toml`).
+#
+# No services and no public listener: the Machine only dials out. Built from
+# the Dockerfile and deployed by `.github/workflows/deploy-log-shipper.yml`.
+
+app = 'tau-log-shipper'
+primary_region = 'syd'
+
+[build]
+# The pinned upstream image plus Tau's Loki sink (`service_name` label); the
+# digest lives in the Dockerfile.
+dockerfile = 'Dockerfile'
+
+[[vm]]
+memory = '256mb'
+cpu_kind = 'shared'
+cpus = 1

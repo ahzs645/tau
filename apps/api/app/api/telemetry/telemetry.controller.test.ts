@@ -1,15 +1,51 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ZodValidationPipe } from 'nestjs-zod';
-import type { MetricsService } from '#telemetry/metrics.js';
+import type { MetricsService } from '@taucad/api-observability/metrics';
 import { TelemetryController } from '#api/telemetry/telemetry.controller.js';
 import { IngestPayloadDto } from '#api/telemetry/telemetry.dto.js';
 import { IngestEntryName, AttributeKey } from '@taucad/telemetry';
+import type { AgentTurnContext, ClientMetricEntry } from '@taucad/telemetry';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { RuntimeIngestService } from '#api/telemetry/runtime-ingest.service.js';
+
+type AgentTurnDetail = Extract<ClientMetricEntry, { name: typeof IngestEntryName.AGENT_TURN }>['detail'];
 
 function createMockMetrics() {
   return {
-    kernelExecutionDuration: { record: vi.fn() },
-    kernelExecutions: { add: vi.fn() },
-    kernelExportDuration: { record: vi.fn() },
+    agentSessions: { add: vi.fn() },
+    agentTurns: { add: vi.fn() },
+    agentTurnDuration: { record: vi.fn() },
+    agentTimeToFirstUpdate: { record: vi.fn() },
+    agentToolCalls: { add: vi.fn() },
+    agentTokens: { add: vi.fn() },
+    agentErrors: { add: vi.fn() },
+    agentSafeguardInterventions: { add: vi.fn() },
+    agentCompactions: { add: vi.fn() },
+    agentPrefixBreaks: { add: vi.fn() },
+    agentReasoningOmittedBlocks: { add: vi.fn() },
+    agentCallsBeforeFirstWrite: { record: vi.fn() },
+    agentTimeToFirstWrite: { record: vi.fn() },
+    agentReferenceLookups: { add: vi.fn() },
+    agentReferenceBytes: { record: vi.fn() },
+    agentSkillActivations: { add: vi.fn() },
+    agentEvaluations: { add: vi.fn() },
+    agentCorrectionsAfterError: { record: vi.fn() },
+    agentGeospecAssertions: { add: vi.fn() },
+    agentGeospecRuns: { add: vi.fn() },
+    syncClientAttempts: { add: vi.fn() },
+    syncClientLag: { record: vi.fn() },
+    syncClientAttemptDuration: { record: vi.fn() },
+    syncClientPending: { record: vi.fn() },
+    syncClientLfsDuration: { record: vi.fn() },
+    syncClientLfsObjects: { add: vi.fn() },
+    syncClientLfsBytes: { add: vi.fn() },
+    projectOpenDuration: { record: vi.fn() },
+    projectOpenSpanDuration: { record: vi.fn() },
+    kernelAutoResolutions: { add: vi.fn() },
+    kernelOverrides: { add: vi.fn() },
+    kernelOverrideTurns: { record: vi.fn() },
+    kernelFirstOutcomes: { add: vi.fn() },
+    kernelTurnsToFirstRender: { record: vi.fn() },
   };
 }
 
@@ -19,80 +55,654 @@ describe('TelemetryController', () => {
 
   beforeEach(() => {
     mockMetrics = createMockMetrics();
-    controller = new TelemetryController(mockMetrics as unknown as MetricsService);
+    controller = new TelemetryController(
+      mockMetrics as unknown as MetricsService,
+      { ingest: vi.fn() } as unknown as RuntimeIngestService,
+    );
+  });
+
+  /* A legacy-only batch is recorded synchronously and answered 204 before anything is awaited. */
+  const reply = { status: vi.fn(), header: vi.fn() } as unknown as FastifyReply;
+  const request = { headers: {}, ip: '192.0.2.1' } as unknown as FastifyRequest;
+  const ingestSignedIn = (body: IngestPayloadDto): void => {
+    void controller.ingest(body, 'user-1', request, reply);
+  };
+
+  const syncAttempt = {
+    name: IngestEntryName.SYNC_ATTEMPT,
+    duration: 120,
+    detail: { direction: 'push', outcome: 'ok', placement: 'browser' },
+  } as const;
+
+  it('should accept a signed-out batch without recording it', () => {
+    void controller.ingest({ entries: [syncAttempt] }, undefined, request, reply);
+
+    expect(mockMetrics.syncClientAttempts.add).not.toHaveBeenCalled();
   });
 
   describe('POST /v1/telemetry/ingest', () => {
-    it('should record kernel execution duration and count for createGeometry entries', () => {
-      controller.ingest({
-        entries: [{ name: IngestEntryName.KERNEL_CREATE_GEOMETRY, duration: 1500, detail: { status: 'ok' } }],
+    it('should drop a retired kernel entry unrecorded and record the rest of the batch', () => {
+      ingestSignedIn({
+        entries: [{ name: 'observability.createGeometry' }, syncAttempt, { name: 'observability.exportGeometry' }],
       });
 
-      expect(mockMetrics.kernelExecutionDuration.record).toHaveBeenCalledWith(1.5, {
-        [AttributeKey.KERNEL_STATUS]: 'ok',
-      });
-      expect(mockMetrics.kernelExecutions.add).toHaveBeenCalledWith(1, { [AttributeKey.KERNEL_STATUS]: 'ok' });
+      const touched = Object.entries(mockMetrics)
+        .filter(([, instrument]) => ('add' in instrument ? instrument.add : instrument.record).mock.calls.length > 0)
+        .map(([key]) => key);
+      expect(touched).toEqual(['syncClientAttempts', 'syncClientAttemptDuration']);
     });
 
-    it('should record export duration for exportGeometry entries', () => {
-      controller.ingest({
+    it('should record a client sync attempt, its duration, its lag and its queue depth by placement, clamped', () => {
+      ingestSignedIn({
         entries: [
           {
-            name: IngestEntryName.KERNEL_EXPORT_GEOMETRY,
-            duration: 800,
-            detail: { status: 'ok', exportFormat: 'glb' },
+            name: IngestEntryName.SYNC_ATTEMPT,
+            duration: 120,
+            detail: {
+              direction: 'push',
+              outcome: 'ok',
+              placement: 'browser',
+              lagMilliseconds: 2500,
+              lagSince: 'request',
+              pending: 3,
+            },
+          },
+          {
+            name: IngestEntryName.SYNC_ATTEMPT,
+            duration: 1e12,
+            detail: { direction: 'push', outcome: 'retry', placement: 'daemon', lagMilliseconds: 1e12, pending: 1e9 },
+          },
+          {
+            name: IngestEntryName.SYNC_ATTEMPT,
+            duration: 0,
+            detail: { direction: 'pull', outcome: 'offline', placement: 'desktop' },
           },
         ],
       });
 
-      expect(mockMetrics.kernelExportDuration.record).toHaveBeenCalledWith(0.8, {
-        [AttributeKey.KERNEL_STATUS]: 'ok',
-        [AttributeKey.EXPORT_FORMAT]: 'glb',
-      });
+      expect(mockMetrics.syncClientAttempts.add.mock.calls).toEqual([
+        [1, { direction: 'push', outcome: 'ok', 'agent.placement': 'browser' }],
+        [1, { direction: 'push', outcome: 'retry', 'agent.placement': 'daemon' }],
+        [1, { direction: 'pull', outcome: 'offline', 'agent.placement': 'desktop' }],
+      ]);
+      expect(mockMetrics.syncClientAttemptDuration.record.mock.calls).toEqual([
+        [0.12, { direction: 'push', outcome: 'ok', 'agent.placement': 'browser' }],
+        [3600, { direction: 'push', outcome: 'retry', 'agent.placement': 'daemon' }],
+        [0, { direction: 'pull', outcome: 'offline', 'agent.placement': 'desktop' }],
+      ]);
+      expect(mockMetrics.syncClientLag.record.mock.calls).toEqual([
+        [2.5, { 'agent.placement': 'browser', 'sync.lag.since': 'request' }],
+        /* A client that predates `lagSince` dated its lag from a change. */
+        [86_400, { 'agent.placement': 'daemon', 'sync.lag.since': 'change' }],
+      ]);
+      expect(mockMetrics.syncClientPending.record.mock.calls).toEqual([
+        [3, { 'agent.placement': 'browser' }],
+        [10_000, { 'agent.placement': 'daemon' }],
+      ]);
     });
 
-    it('should default status to "unknown" when detail is missing', () => {
-      controller.ingest({
-        entries: [{ name: IngestEntryName.KERNEL_CREATE_GEOMETRY, duration: 500 }],
-      });
-
-      expect(mockMetrics.kernelExecutionDuration.record).toHaveBeenCalledWith(0.5, {
-        [AttributeKey.KERNEL_STATUS]: 'unknown',
-      });
-    });
-
-    it('should default export format to "unknown" when not provided', () => {
-      controller.ingest({
-        entries: [{ name: IngestEntryName.KERNEL_EXPORT_GEOMETRY, duration: 300, detail: { status: 'ok' } }],
-      });
-
-      expect(mockMetrics.kernelExportDuration.record).toHaveBeenCalledWith(0.3, {
-        [AttributeKey.KERNEL_STATUS]: 'ok',
-        [AttributeKey.EXPORT_FORMAT]: 'unknown',
-      });
-    });
-
-    it('should process multiple entries in a single batch', () => {
-      controller.ingest({
+    it('should record a tree read’s large-object fetch by cache state and source, minting no series for an unused source', () => {
+      ingestSignedIn({
         entries: [
-          { name: IngestEntryName.KERNEL_CREATE_GEOMETRY, duration: 1000, detail: { status: 'ok' } },
           {
-            name: IngestEntryName.KERNEL_EXPORT_GEOMETRY,
-            duration: 2000,
-            detail: { status: 'ok', exportFormat: 'step' },
+            name: IngestEntryName.LFS_FETCH,
+            duration: 17_500,
+            detail: {
+              placement: 'browser',
+              networkObjects: 295,
+              networkBytes: 69_960_000,
+              localObjects: 0,
+              localBytes: 0,
+            },
           },
-          { name: IngestEntryName.KERNEL_CREATE_GEOMETRY, duration: 500, detail: { status: 'error' } },
+          {
+            name: IngestEntryName.LFS_FETCH,
+            duration: 1e12,
+            detail: { placement: 'browser', networkObjects: 1e9, networkBytes: 1e15, localObjects: 3, localBytes: 300 },
+          },
         ],
       });
 
-      expect(mockMetrics.kernelExecutionDuration.record).toHaveBeenCalledTimes(2);
-      expect(mockMetrics.kernelExecutions.add).toHaveBeenCalledTimes(2);
-      expect(mockMetrics.kernelExportDuration.record).toHaveBeenCalledTimes(1);
+      expect(mockMetrics.syncClientLfsDuration.record.mock.calls).toEqual([
+        [17.5, { 'agent.placement': 'browser', cache: 'cold' }],
+        [3600, { 'agent.placement': 'browser', cache: 'partial' }],
+      ]);
+      expect(mockMetrics.syncClientLfsObjects.add.mock.calls).toEqual([
+        [295, { 'agent.placement': 'browser', source: 'network' }],
+        [100_000, { 'agent.placement': 'browser', source: 'network' }],
+        [3, { 'agent.placement': 'browser', source: 'local' }],
+      ]);
+      expect(mockMetrics.syncClientLfsBytes.add.mock.calls).toEqual([
+        [69_960_000, { 'agent.placement': 'browser', source: 'network' }],
+        [64 * 1024 * 1024 * 1024, { 'agent.placement': 'browser', source: 'network' }],
+        [300, { 'agent.placement': 'browser', source: 'local' }],
+      ]);
+    });
+
+    it('should record the kernel-selection events, naming a model only on Tau turns', () => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.KERNEL_AUTO_RESOLVED,
+            duration: 0,
+            detail: {
+              hostProfile: 'web',
+              agentId: 'tau',
+              kernel: 'replicad',
+              hadOwner: false,
+              model: 'anthropic/claude-sonnet-5-5',
+              rubricVersion: 1,
+            },
+          },
+          {
+            name: IngestEntryName.KERNEL_AUTO_RESOLVED,
+            duration: 0,
+            detail: { hostProfile: 'desktop', agentId: 'claude', hadOwner: true, model: 'x/y', rubricVersion: 1 },
+          },
+          {
+            name: IngestEntryName.KERNEL_OVERRIDE,
+            duration: 0,
+            detail: { hostProfile: 'web', resolved: 'openscad', manual: 'replicad', turnsSince: 2, rubricVersion: 1 },
+          },
+          {
+            name: IngestEntryName.KERNEL_FIRST_OUTCOME,
+            duration: 0,
+            detail: {
+              hostProfile: 'web',
+              kernel: 'openscad',
+              outcome: 'ready',
+              turnsToFirstRender: 3,
+              rubricVersion: 1,
+            },
+          },
+          {
+            name: IngestEntryName.KERNEL_FIRST_OUTCOME,
+            duration: 0,
+            detail: { hostProfile: 'web', outcome: 'failed', turnsToFirstRender: 1, rubricVersion: 1 },
+          },
+        ],
+      });
+
+      expect(mockMetrics.kernelAutoResolutions.add.mock.calls).toEqual([
+        [
+          1,
+          {
+            'tau.host.profile': 'web',
+            'agent.id': 'tau',
+            'kernel.id': 'replicad',
+            'tau.kernel.had_owner': 'false',
+            'gen_ai.request.model': 'anthropic/claude-sonnet-5-5',
+            'tau.kernel.rubric_version': '1',
+          },
+        ],
+        [
+          1,
+          {
+            'tau.host.profile': 'desktop',
+            'agent.id': 'claude',
+            'kernel.id': 'none',
+            'tau.kernel.had_owner': 'true',
+            'tau.kernel.rubric_version': '1',
+          },
+        ],
+      ]);
+      expect(mockMetrics.kernelOverrides.add.mock.calls).toEqual([
+        [
+          1,
+          {
+            'tau.host.profile': 'web',
+            'tau.kernel.resolved': 'openscad',
+            'tau.kernel.manual': 'replicad',
+            'tau.kernel.rubric_version': '1',
+          },
+        ],
+      ]);
+      expect(mockMetrics.kernelOverrideTurns.record.mock.calls).toEqual([
+        [2, { 'tau.kernel.resolved': 'openscad', 'tau.kernel.manual': 'replicad' }],
+      ]);
+      expect(mockMetrics.kernelFirstOutcomes.add.mock.calls).toEqual([
+        [1, { 'tau.host.profile': 'web', 'kernel.id': 'openscad', outcome: 'ready', 'tau.kernel.rubric_version': '1' }],
+        [1, { 'tau.host.profile': 'web', 'kernel.id': 'none', outcome: 'failed', 'tau.kernel.rubric_version': '1' }],
+      ]);
+      expect(mockMetrics.kernelTurnsToFirstRender.record.mock.calls).toEqual([[3, { 'kernel.id': 'openscad' }]]);
+    });
+
+    it('should record a hosted project open by phase and cache state, in seconds, bounding a skewed clock', () => {
+      ingestSignedIn({
+        entries: [
+          { name: IngestEntryName.PROJECT_OPEN, duration: 4200, detail: { phase: 'first_view', cache: 'cold' } },
+          { name: IngestEntryName.PROJECT_OPEN, duration: 4200, detail: { phase: 'fully_fetched', cache: 'cold' } },
+          { name: IngestEntryName.PROJECT_OPEN, duration: 1e12, detail: { phase: 'first_view', cache: 'warm' } },
+        ],
+      });
+
+      expect(mockMetrics.projectOpenDuration.record.mock.calls).toEqual([
+        [4.2, { phase: 'first_view', cache: 'cold' }],
+        [4.2, { phase: 'fully_fetched', cache: 'cold' }],
+        [3600, { phase: 'first_view', cache: 'warm' }],
+      ]);
+    });
+
+    it('should label LFS fetches and cold opens with the transport that served them', () => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.LFS_FETCH,
+            duration: 6000,
+            detail: {
+              placement: 'browser',
+              networkObjects: 2,
+              networkBytes: 20,
+              localObjects: 0,
+              localBytes: 0,
+              transport: 'files',
+            },
+          },
+          {
+            name: IngestEntryName.PROJECT_OPEN,
+            duration: 6100,
+            detail: { phase: 'fully_fetched', cache: 'cold', transport: 'r2_presigned' },
+          },
+        ],
+      });
+
+      expect(mockMetrics.syncClientLfsDuration.record.mock.calls).toEqual([
+        [6, { 'agent.placement': 'browser', cache: 'cold', 'tau.lfs.transport': 'files' }],
+      ]);
+      expect(mockMetrics.projectOpenDuration.record.mock.calls).toEqual([
+        [6.1, { phase: 'fully_fetched', cache: 'cold', 'tau.lfs.transport': 'r2_presigned' }],
+      ]);
+    });
+  });
+
+  describe('worker span totals', () => {
+    it('should record each worker span total by stage, in seconds, and nothing for an entry without spans', () => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.LFS_FETCH,
+            duration: 6000,
+            detail: {
+              placement: 'browser',
+              networkObjects: 2,
+              networkBytes: 20,
+              localObjects: 0,
+              localBytes: 0,
+              spans: { 'lfs.store': 1500, 'queue.wait': 1e12 },
+            },
+          },
+          {
+            name: IngestEntryName.PROJECT_OPEN,
+            duration: 6100,
+            detail: { phase: 'first_view', cache: 'cold', spans: { 'apply.hold': 2500 } },
+          },
+          { name: IngestEntryName.PROJECT_OPEN, duration: 6100, detail: { phase: 'fully_fetched', cache: 'cold' } },
+        ],
+      });
+
+      expect(mockMetrics.projectOpenSpanDuration.record.mock.calls).toEqual([
+        [1.5, { stage: 'lfs_fetch', span: 'lfs.store' }],
+        [3600, { stage: 'lfs_fetch', span: 'queue.wait' }],
+        [2.5, { stage: 'first_view', span: 'apply.hold' }],
+      ]);
+    });
+  });
+
+  describe('agent usage entries', () => {
+    const codex = { [AttributeKey.AGENT_ID]: 'codex', [AttributeKey.AGENT_PLACEMENT]: 'daemon' };
+
+    it('should record a completed Codex turn with tools and only the token types it reported', () => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.AGENT_TURN,
+            duration: 12_000,
+            detail: {
+              agentId: 'codex',
+              placement: 'daemon',
+              outcome: 'completed',
+              timeToFirstUpdate: 1500,
+              toolCalls: [{ kind: 'execute', status: 'completed', count: 2 }],
+              tokens: { input: 100, output: 20, cacheRead: 50, cacheWrite: 0 },
+            },
+          },
+        ],
+      });
+
+      const turn = { ...codex, [AttributeKey.AGENT_OUTCOME]: 'completed' };
+      expect(mockMetrics.agentTurns.add).toHaveBeenCalledWith(1, turn);
+      expect(mockMetrics.agentTurnDuration.record).toHaveBeenCalledWith(12, turn);
+      expect(mockMetrics.agentTimeToFirstUpdate.record).toHaveBeenCalledWith(1.5, codex);
+      expect(mockMetrics.agentToolCalls.add).toHaveBeenCalledWith(2, {
+        [AttributeKey.AGENT_ID]: 'codex',
+        [AttributeKey.AGENT_TOOL_KIND]: 'execute',
+        [AttributeKey.AGENT_TOOL_STATUS]: 'completed',
+      });
+      expect(mockMetrics.agentTokens.add.mock.calls).toEqual([
+        [100, { [AttributeKey.AGENT_ID]: 'codex', [AttributeKey.AGENT_TOKEN_TYPE]: 'input' }],
+        [20, { [AttributeKey.AGENT_ID]: 'codex', [AttributeKey.AGENT_TOKEN_TYPE]: 'output' }],
+        [50, { [AttributeKey.AGENT_ID]: 'codex', [AttributeKey.AGENT_TOKEN_TYPE]: 'cache_read' }],
+      ]);
+      expect(mockMetrics.agentErrors.add).not.toHaveBeenCalled();
+    });
+
+    it('should count safeguard interventions and compaction decisions by their labels (R9)', () => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.AGENT_TURN,
+            duration: 1000,
+            detail: {
+              agentId: 'tau',
+              placement: 'browser',
+              outcome: 'completed',
+              safeguards: [{ pattern: 'ping_pong', action: 'nudge', count: 2 }],
+              compactions: [{ lane: 'overflow', tier: 'summarization', outcome: 'placeholder', count: 1 }],
+            },
+          },
+        ],
+      });
+
+      expect(mockMetrics.agentSafeguardInterventions.add).toHaveBeenCalledWith(2, {
+        [AttributeKey.AGENT_ID]: 'tau',
+        [AttributeKey.AGENT_SAFEGUARD_PATTERN]: 'ping_pong',
+        [AttributeKey.AGENT_SAFEGUARD_ACTION]: 'nudge',
+      });
+      expect(mockMetrics.agentCompactions.add).toHaveBeenCalledWith(1, {
+        [AttributeKey.AGENT_ID]: 'tau',
+        [AttributeKey.AGENT_COMPACTION_LANE]: 'overflow',
+        [AttributeKey.AGENT_COMPACTION_TIER]: 'summarization',
+        [AttributeKey.AGENT_COMPACTION_OUTCOME]: 'placeholder',
+      });
+    });
+
+    it('should count each prefix break by cause, provider and cache outcome, and the reasoning it left out by cause', () => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.AGENT_TURN,
+            duration: 1000,
+            detail: {
+              agentId: 'tau',
+              placement: 'browser',
+              outcome: 'completed',
+              prefixBreaks: [
+                { cause: 'clearing', provider: 'anthropic', outcome: 'miss', count: 1, reasoningOmitted: 9 },
+                { cause: 'settings', provider: 'openai', count: 2, reasoningOmitted: 0 },
+              ],
+            },
+          },
+        ],
+      });
+
+      expect(mockMetrics.agentPrefixBreaks.add.mock.calls).toEqual([
+        [
+          1,
+          {
+            [AttributeKey.AGENT_ID]: 'tau',
+            [AttributeKey.AGENT_PREFIX_BREAK_CAUSE]: 'clearing',
+            [AttributeKey.GEN_AI_PROVIDER_NAME]: 'anthropic',
+            'tau.prompt_cache.outcome': 'miss',
+          },
+        ],
+        [
+          2,
+          {
+            [AttributeKey.AGENT_ID]: 'tau',
+            [AttributeKey.AGENT_PREFIX_BREAK_CAUSE]: 'settings',
+            [AttributeKey.GEN_AI_PROVIDER_NAME]: 'openai',
+            /* A client older than the field says nothing: the break is counted with no cache figure. */
+            'tau.prompt_cache.outcome': 'unreported',
+          },
+        ],
+      ]);
+      expect(mockMetrics.agentReasoningOmittedBlocks.add.mock.calls).toEqual([
+        [9, { [AttributeKey.AGENT_ID]: 'tau', [AttributeKey.AGENT_PREFIX_BREAK_CAUSE]: 'clearing' }],
+      ]);
+    });
+
+    it('should count a refused turn as an error once and record no tokens', () => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.AGENT_TURN,
+            duration: 30,
+            detail: {
+              agentId: 'tau',
+              placement: 'browser',
+              outcome: 'refused',
+              errorCode: 'CHAT_PLACEMENT_UNAVAILABLE',
+            },
+          },
+          {
+            name: IngestEntryName.AGENT_SESSION,
+            duration: 0,
+            detail: { agentId: 'tau', placement: 'browser', outcome: 'refused' },
+          },
+        ],
+      });
+
+      expect(mockMetrics.agentErrors.add).toHaveBeenCalledExactlyOnceWith(1, {
+        [AttributeKey.AGENT_ID]: 'tau',
+        [AttributeKey.AGENT_ERROR_CODE]: 'CHAT_PLACEMENT_UNAVAILABLE',
+      });
+      expect(mockMetrics.agentSessions.add).toHaveBeenCalledWith(1, {
+        [AttributeKey.AGENT_ID]: 'tau',
+        [AttributeKey.AGENT_PLACEMENT]: 'browser',
+        [AttributeKey.AGENT_OUTCOME]: 'refused',
+      });
+      expect(mockMetrics.agentTokens.add).not.toHaveBeenCalled();
+      expect(mockMetrics.agentTimeToFirstUpdate.record).not.toHaveBeenCalled();
+    });
+
+    it('should record an agent outside the known set as other', () => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.AGENT_SESSION,
+            duration: 0,
+            detail: { agentId: 'my-agent', placement: 'daemon', outcome: 'started' },
+          },
+        ],
+      });
+
+      expect(mockMetrics.agentSessions.add).toHaveBeenCalledWith(1, {
+        [AttributeKey.AGENT_ID]: 'other',
+        [AttributeKey.AGENT_PLACEMENT]: 'daemon',
+        [AttributeKey.AGENT_OUTCOME]: 'started',
+      });
+    });
+  });
+
+  describe('agent turn context', () => {
+    const context: AgentTurnContext = {
+      kernelId: 'replicad',
+      skillsActivated: ['cad-replicad', 'geospec-authoring', 'cad-replicad'],
+      callsBeforeFirstModelWrite: 6,
+      timeToFirstModelWrite: 42_000,
+      referenceLookups: [
+        { outcome: 'ok', count: 3 },
+        { outcome: 'zero_match', count: 1 },
+      ],
+      referenceBytesRead: 20_480,
+      evaluations: [
+        { class: 'api_misuse', count: 1 },
+        { class: 'ok', count: 1 },
+      ],
+      correctionsAfterError: 1,
+      geospec: {
+        runs: 2,
+        passed: 4,
+        failed: 0,
+        runStatuses: [
+          { status: 'failed', count: 1 },
+          { status: 'passed', count: 1 },
+        ],
+      },
+    };
+    const tau = { [AttributeKey.AGENT_ID]: 'tau' };
+    const kernel = { ...tau, [AttributeKey.KERNEL_ID]: 'replicad' };
+
+    const ingestTurn = (detail: Partial<AgentTurnDetail>): void => {
+      ingestSignedIn({
+        entries: [
+          {
+            name: IngestEntryName.AGENT_TURN,
+            duration: 60_000,
+            detail: { agentId: 'tau', placement: 'browser', outcome: 'completed', ...detail },
+          },
+        ],
+      });
+    };
+
+    it('should label the turn counter with the kernel but not its duration', () => {
+      ingestTurn({ context });
+
+      const turn = {
+        ...tau,
+        [AttributeKey.AGENT_PLACEMENT]: 'browser',
+        [AttributeKey.AGENT_OUTCOME]: 'completed',
+      };
+      expect(mockMetrics.agentTurns.add).toHaveBeenCalledExactlyOnceWith(1, {
+        ...turn,
+        [AttributeKey.KERNEL_ID]: 'replicad',
+      });
+      expect(mockMetrics.agentTurnDuration.record).toHaveBeenCalledExactlyOnceWith(60, turn);
+    });
+
+    it('should record calls before the first model write by kernel', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentCallsBeforeFirstWrite.record).toHaveBeenCalledExactlyOnceWith(6, kernel);
+    });
+
+    it('should record time to the first model write in seconds by kernel', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentTimeToFirstWrite.record).toHaveBeenCalledExactlyOnceWith(42, kernel);
+    });
+
+    it('should count reference lookups by outcome', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentReferenceLookups.add.mock.calls).toEqual([
+        [3, { ...kernel, [AttributeKey.AGENT_LOOKUP_OUTCOME]: 'ok' }],
+        [1, { ...kernel, [AttributeKey.AGENT_LOOKUP_OUTCOME]: 'zero_match' }],
+      ]);
+    });
+
+    it('should record reference bytes read by kernel', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentReferenceBytes.record).toHaveBeenCalledExactlyOnceWith(20_480, kernel);
+    });
+
+    it('should count each activated skill once per turn', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentSkillActivations.add.mock.calls).toEqual([
+        [1, { ...tau, [AttributeKey.AGENT_SKILL]: 'cad-replicad' }],
+        [1, { ...tau, [AttributeKey.AGENT_SKILL]: 'geospec-authoring' }],
+      ]);
+    });
+
+    it('should count evaluations by class and kernel', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentEvaluations.add.mock.calls).toEqual([
+        [1, { ...kernel, [AttributeKey.AGENT_EVALUATION_CLASS]: 'api_misuse' }],
+        [1, { ...kernel, [AttributeKey.AGENT_EVALUATION_CLASS]: 'ok' }],
+      ]);
+    });
+
+    it('should record corrections after an error by kernel', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentCorrectionsAfterError.record).toHaveBeenCalledExactlyOnceWith(1, kernel);
+    });
+
+    it('should count GeoSpec assertions by result, skipping a result with none', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentGeospecAssertions.add).toHaveBeenCalledExactlyOnceWith(4, {
+        ...tau,
+        [AttributeKey.AGENT_ASSERTION_RESULT]: 'passed',
+      });
+    });
+
+    it('should count GeoSpec runs by run status', () => {
+      ingestTurn({ context });
+
+      expect(mockMetrics.agentGeospecRuns.add.mock.calls).toEqual([
+        [1, { ...tau, [AttributeKey.AGENT_RUN_STATUS]: 'failed' }],
+        [1, { ...tau, [AttributeKey.AGENT_RUN_STATUS]: 'passed' }],
+      ]);
+    });
+
+    it('should label Tau tool calls with the tool name and leave ACP rows unnamed', () => {
+      ingestTurn({
+        toolCalls: [
+          { kind: 'search', tool: 'grep', status: 'completed', count: 2 },
+          { kind: 'execute', status: 'failed', count: 1 },
+        ],
+      });
+
+      expect(mockMetrics.agentToolCalls.add.mock.calls).toEqual([
+        [
+          2,
+          {
+            ...tau,
+            [AttributeKey.AGENT_TOOL_KIND]: 'search',
+            [AttributeKey.AGENT_TOOL_NAME]: 'grep',
+            [AttributeKey.AGENT_TOOL_STATUS]: 'completed',
+          },
+        ],
+        [1, { ...tau, [AttributeKey.AGENT_TOOL_KIND]: 'execute', [AttributeKey.AGENT_TOOL_STATUS]: 'failed' }],
+      ]);
+    });
+
+    it('should record a turn without context exactly as before', () => {
+      ingestTurn({});
+
+      expect(mockMetrics.agentTurns.add).toHaveBeenCalledExactlyOnceWith(1, {
+        ...tau,
+        [AttributeKey.AGENT_PLACEMENT]: 'browser',
+        [AttributeKey.AGENT_OUTCOME]: 'completed',
+      });
+      for (const series of [
+        mockMetrics.agentCallsBeforeFirstWrite.record,
+        mockMetrics.agentTimeToFirstWrite.record,
+        mockMetrics.agentReferenceLookups.add,
+        mockMetrics.agentReferenceBytes.record,
+        mockMetrics.agentSkillActivations.add,
+        mockMetrics.agentEvaluations.add,
+        mockMetrics.agentCorrectionsAfterError.record,
+        mockMetrics.agentGeospecAssertions.add,
+        mockMetrics.agentGeospecRuns.add,
+      ]) {
+        expect(series).not.toHaveBeenCalled();
+      }
     });
   });
 
   describe('IngestPayloadDto validation (via ZodValidationPipe)', () => {
     const pipe = new ZodValidationPipe();
+
+    it('should admit a retired kernel entry by name only, so an old client batch is not refused', () => {
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- pipe.transform return type is any from NestJS ValidationPipe
+      const parsed = pipe.transform(
+        {
+          entries: [
+            { name: 'observability.createGeometry', duration: 5, detail: { status: 'error', error: 'Kernel crash' } },
+            { name: 'observability.exportGeometry', duration: 5, detail: { status: 'ok', exportFormat: 'stl' } },
+          ],
+        },
+        { type: 'body', metatype: IngestPayloadDto },
+      );
+      expect(parsed).toEqual({
+        entries: [{ name: 'observability.createGeometry' }, { name: 'observability.exportGeometry' }],
+      });
+    });
 
     it('should reject entries with unknown names', () => {
       expect(() =>
@@ -104,10 +714,69 @@ describe('TelemetryController', () => {
       ).toThrow();
     });
 
+    it.each([
+      ['an unknown outcome', { direction: 'push', outcome: 'mystery', placement: 'browser' }],
+      ['an unknown placement', { direction: 'push', outcome: 'ok', placement: 'mars' }],
+      ['a fractional queue depth', { direction: 'push', outcome: 'ok', placement: 'browser', pending: 1.5 }],
+      ['a negative lag', { direction: 'push', outcome: 'ok', placement: 'browser', lagMilliseconds: -1 }],
+      [
+        'an unknown lag origin',
+        { direction: 'push', outcome: 'ok', placement: 'browser', lagMilliseconds: 1, lagSince: 'mint' },
+      ],
+    ])('should reject a sync attempt with %s', (_label, detail) => {
+      expect(() =>
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- pipe.transform return type is any from NestJS ValidationPipe
+        pipe.transform(
+          { entries: [{ name: IngestEntryName.SYNC_ATTEMPT, duration: 1, detail }] },
+          { type: 'body', metatype: IngestPayloadDto },
+        ),
+      ).toThrow();
+    });
+
     it('should reject empty entries array', () => {
       expect(() =>
         // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- pipe.transform return type is any from NestJS ValidationPipe
         pipe.transform({ entries: [] }, { type: 'body', metatype: IngestPayloadDto }),
+      ).toThrow();
+    });
+
+    it('should clamp an out-of-range token count instead of dropping the turn', () => {
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- pipe.transform return type is any from NestJS ValidationPipe
+      const parsed: IngestPayloadDto = pipe.transform(
+        {
+          entries: [
+            {
+              name: IngestEntryName.AGENT_TURN,
+              duration: 1e12,
+              detail: {
+                agentId: 'codex',
+                placement: 'daemon',
+                outcome: 'completed',
+                tokens: { input: 1e12, output: 1, cacheRead: 0, cacheWrite: 0 },
+              },
+            },
+          ],
+        },
+        { type: 'body', metatype: IngestPayloadDto },
+      );
+
+      expect(parsed.entries[0]).toMatchObject({
+        duration: 86_400_000,
+        detail: { tokens: { input: 100_000_000, output: 1 } },
+      });
+    });
+
+    it.each([
+      ['an unbounded agent id', { agentId: 'Some User Text', placement: 'daemon', outcome: 'completed' }],
+      ['an unknown placement', { agentId: 'codex', placement: 'mars', outcome: 'completed' }],
+      ['a free-text error code', { agentId: 'codex', placement: 'daemon', outcome: 'error', errorCode: 'oops: x' }],
+    ])('should reject an agent turn with %s', (_label, detail) => {
+      expect(() =>
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- pipe.transform return type is any from NestJS ValidationPipe
+        pipe.transform(
+          { entries: [{ name: IngestEntryName.AGENT_TURN, duration: 1, detail }] },
+          { type: 'body', metatype: IngestPayloadDto },
+        ),
       ).toThrow();
     });
   });

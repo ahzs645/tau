@@ -1,0 +1,634 @@
+#!/usr/bin/env node
+
+/**
+ * Purpose: Check the unsigned Linux/Windows package plans and the shared runtime platform packages without packaging.
+ * Why: A wrong platform package, archive name or host check ships a package that silently loses a native engine.
+ * Environment: Node.js 24+.
+ * Usage: node --import @oxc-node/core/register apps/desktop/scripts/desktop-package.test.mts
+ * Exit codes: 0 when every check passes; non-zero on regression.
+ */
+
+import assert from 'node:assert/strict';
+import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs';
+import { copyFile, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createPackageWithOptions, statFile } from '@electron/asar';
+
+/* oxlint-disable no-restricted-imports -- Operational scripts are outside the app's # source alias. */
+import { copyRuntimeClosure } from '@taucad/nx/runtime-closure';
+import {
+  desktopArchiveCommand,
+  desktopGitPayloadRefusal,
+  desktopPackageOmissions,
+  desktopStoreGuardRefusal,
+  desktopWindowsSandboxRefusal,
+  desktopPackagePlans,
+  parseDesktopPackageArguments,
+} from './desktop-package-target.mjs';
+import { gitPayloadExecutables, gitPayloadLayout } from './git-payload.mjs';
+import {
+  desktopBundledImports,
+  desktopManifestFields,
+  excludesBuildDiagnostics,
+  desktopPackageChannel,
+  keepsNodePtyPath,
+  markNodePtySpawnHelperExecutable,
+  nodePtySpawnHelper,
+  packagePathDependencyFiles,
+  runtimeAsarOptions,
+  runtimePlatformPackages,
+  stageNativePackageFiles,
+} from './runtime-stage.mjs';
+/* oxlint-enable no-restricted-imports -- End operational script import exception. */
+
+/* Target selection: exactly one supported target, on its own host. */
+assert.deepEqual(parseDesktopPackageArguments(['--platform', 'linux-x64'], 'linux-x64'), {
+  plan: desktopPackagePlans['linux-x64'],
+  archive: false,
+});
+assert.deepEqual(parseDesktopPackageArguments(['--platform', 'win32-x64', '--archive'], 'win32-x64'), {
+  plan: desktopPackagePlans['win32-x64'],
+  archive: true,
+});
+for (const arguments_ of [
+  [],
+  ['--platform'],
+  ['--platform', 'darwin-arm64'],
+  ['--platform', 'linux-arm64'],
+  ['--platform', 'linux-x64', '--zip'],
+  ['--platform', 'linux-x64', '--archive', '--archive'],
+  ['--archive', '--platform', 'linux-x64'],
+  ['--target', 'linux-x64'],
+]) {
+  assert.throws(() => parseDesktopPackageArguments(arguments_, 'linux-x64'), {
+    name: 'TypeError',
+    message: 'Usage: package-desktop.mts --platform linux-x64|win32-x64 [--archive]',
+  });
+}
+assert.throws(() => parseDesktopPackageArguments(['--platform', 'win32-x64'], 'linux-x64'), {
+  message: 'The win32-x64 package is assembled on a win32-x64 host; this host is linux-x64.',
+});
+console.log('✓ the package target is one supported platform, built on its own host; only --archive archives');
+
+/* Plans: archive names CI uploads, the Windows icon main loads, and the esbuild binary left out of the ASAR. */
+assert.deepEqual(
+  Object.values(desktopPackagePlans).map(({ target, platform, arch, appDirectory, archive }) => ({
+    target,
+    platform,
+    arch,
+    appDirectory,
+    archive,
+  })),
+  [
+    {
+      target: 'linux-x64',
+      platform: 'linux',
+      arch: 'x64',
+      appDirectory: 'Tau-linux-x64',
+      archive: { name: 'Tau-linux-x64.tar.gz', format: 'tar.gz' },
+    },
+    {
+      target: 'win32-x64',
+      platform: 'win32',
+      arch: 'x64',
+      appDirectory: 'Tau-win32-x64',
+      archive: { name: 'Tau-win32-x64.zip', format: 'zip' },
+    },
+  ],
+);
+assert.equal(desktopPackagePlans['win32-x64'].icon, 'icon.ico');
+assert.ok(desktopPackagePlans['win32-x64'].branding.includes('icon.ico'), 'main loads branding/icon.ico on Windows');
+console.log('✓ each plan names its archive and icon');
+
+/* The ASAR unpack-directory glob is a union, and every group is load-bearing: `@agentclientprotocol` adapters are
+ * spawned from disk, `@img` carries libvips, `node-pty` carries the Terminal addon and the `spawn-helper` its fork
+ * path runs from `app.asar.unpacked`, and the sandbox runtime's vendored `seccomp` and `java-proxy-agent` payloads
+ * are containment-relevant. Pin each entry so a later edit cannot silently drop one. */
+const unpackedPackageDirectories = [
+  '@agentclientprotocol',
+  '@img',
+  'node-pty',
+  '@anthropic-ai/sandbox-runtime/vendor/{seccomp,java-proxy-agent}',
+];
+assert.equal(runtimeAsarOptions.unpackDir, `**/node_modules/{${unpackedPackageDirectories.join(',')}}`);
+assert.equal(runtimeAsarOptions.unpack, '{*.node,*.dll,esbuild,esbuild.exe,libheif-*.wasm}');
+console.log('✓ the ASAR unpack globs keep every spawned adapter, libvips, node-pty and sandbox-runtime vendor payload');
+
+/* ASAR matches absolute filenames: hidden checkout ancestors must not hide spawned payloads. */
+const fixtureParent = fileURLToPath(new URL('../../../out/test-results/desktop-package/', import.meta.url));
+await mkdir(fixtureParent, { recursive: true });
+const fixtureRoot = await mkdtemp(join(fixtureParent, '.hidden-checkout-'));
+try {
+  const source = join(fixtureRoot, 'stage');
+  const archive = join(fixtureRoot, 'app.asar');
+  const unpacked = [
+    'node_modules/native/addon.node',
+    'node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp',
+    'node_modules/@anthropic-ai/sandbox-runtime/vendor/java-proxy-agent/srt-proxy-agent.jar',
+    'node_modules/native/engine.dll',
+    'node_modules/@esbuild/darwin-arm64/bin/esbuild',
+    'node_modules/@esbuild/win32-x64/esbuild.exe',
+    'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
+    'node_modules/@agentclientprotocol/codex-acp/node_modules/dependency/index.js',
+    'node_modules/@img/sharp-libvips-darwin-arm64/lib/libvips.dylib',
+    /* The node-pty fork path runs `spawn-helper` from `app.asar.unpacked`. */
+    'node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper',
+    'node_modules/@gltf-transform/functions/node_modules/ndarray-pixels/node_modules/sharp/node_modules/@img/sharp-libvips-darwin-arm64/lib/libvips.dylib',
+    /* The libheif WASM file (LGPL-3.0) stays a separate, replaceable file beside the archive. */
+    'dist/main/chunks/libheif-Bq3x9_Zk.wasm',
+  ];
+  await Promise.all(
+    [...unpacked, 'app.js', 'dist/main/chunks/mozjpeg_enc-Bq3x9_Zk.wasm'].map(async (file) => {
+      const path = join(source, file);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, 'fixture');
+    }),
+  );
+  await createPackageWithOptions(source, archive, runtimeAsarOptions);
+  for (const file of unpacked) {
+    const entry = statFile(archive, join(file));
+    assert.ok('unpacked' in entry && entry.unpacked, `${file} must exist outside the archive`);
+    assert.equal(readFileSync(join(`${archive}.unpacked`, file), 'utf8'), 'fixture');
+  }
+  assert.ok(!('unpacked' in statFile(archive, 'app.js')), 'ordinary JavaScript remains packed');
+  assert.ok(
+    !('unpacked' in statFile(archive, join('dist/main/chunks/mozjpeg_enc-Bq3x9_Zk.wasm'))),
+    'other WASM remains packed',
+  );
+  if (process.platform === 'linux') {
+    const helper = `node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/${process.arch}/apply-seccomp`;
+    const dependency = dirname(dirname(fileURLToPath(import.meta.resolve('@anthropic-ai/sandbox-runtime'))));
+    await mkdir(dirname(join(source, helper)), { recursive: true });
+    // A copy over the text placeholder retains its non-executable mode on Linux.
+    await rm(join(source, helper), { force: true });
+    await copyFile(join(dependency, 'vendor/seccomp', process.arch, 'apply-seccomp'), join(source, helper));
+    const executableArchive = join(fixtureRoot, 'executable.asar');
+    await createPackageWithOptions(source, executableArchive, runtimeAsarOptions);
+    const executable = join(`${executableArchive}.unpacked`, helper);
+    assert.doesNotThrow(() => {
+      accessSync(executable, constants.X_OK);
+    }, 'unpacked seccomp helper retains executable permission');
+    assert.deepEqual(readFileSync(executable), readFileSync(join(source, helper)));
+  }
+} finally {
+  await rm(fixtureRoot, { recursive: true, force: true });
+}
+console.log('✓ native binaries and spawned adapters stay unpacked beneath hidden checkout directories');
+
+/* Omissions: GeoSpec native is always named; git only when it is absent; no kernel closure ships anywhere. */
+const linux = desktopPackagePlans['linux-x64'];
+const windows = desktopPackagePlans['win32-x64'];
+const withGit = desktopPackageOmissions(linux, { git: true, gitResourceRoot: '/r/git/linux-x64' });
+assert.ok(withGit.some((line) => line.startsWith('GeoSpec native engine')));
+assert.ok(!withGit.some((line) => line.includes('PicoGK')));
+assert.ok(!withGit.some((line) => line.startsWith('git payload')));
+assert.ok(
+  desktopPackageOmissions(linux, { git: false, gitResourceRoot: '/r/git/linux-x64' }).includes(
+    "git payload: none at /r/git/linux-x64; this package records with the machine's own git and git-lfs.",
+  ),
+);
+assert.ok(
+  desktopPackageOmissions(windows, { git: false, gitResourceRoot: String.raw`C:\r\git\win32-x64` }).includes(
+    String.raw`git payload: none at C:\r\git\win32-x64; this package records with the machine's own git and git-lfs.`,
+  ),
+);
+assert.equal(linux.gitPayloadSupported, true);
+assert.equal(windows.gitPayloadSupported, true);
+assert.ok(
+  desktopPackageOmissions(linux, {
+    git: true,
+    gitResourceRoot: '/r/git/linux-x64',
+    storeGuard: false,
+    storeGuardRoot: '/r/store-guard/linux-x64',
+  }).includes("store guard: none at /r/store-guard/linux-x64; the Terminal opens each project's .git read-only."),
+);
+assert.ok(
+  !desktopPackageOmissions(linux, {
+    git: true,
+    gitResourceRoot: '/r/git/linux-x64',
+    storeGuard: true,
+    storeGuardRoot: '/r/store-guard/linux-x64',
+  }).some((line) => line.startsWith('store guard')),
+);
+assert.ok(
+  !desktopPackageOmissions(windows, { git: false, gitResourceRoot: 'C:\\r', storeGuard: false }).some((line) =>
+    line.startsWith('store guard'),
+  ),
+);
+assert.equal(linux.storeGuard, true);
+assert.equal(windows.storeGuard, false);
+console.log('✓ every payload a target leaves out is named');
+
+/* The Linux store guard (blueprint LP8): APT and AppImage are built from the archive, so the archive refuses without it. */
+{
+  const storeGuardRoot = '/r/store-guard/linux-x64';
+  const complete = { executable: true, notice: true, storeGuardRoot };
+  assert.equal(desktopStoreGuardRefusal(linux, true, complete), undefined);
+  assert.equal(desktopStoreGuardRefusal(linux, false, { ...complete, executable: false, notice: false }), undefined);
+  assert.equal(desktopStoreGuardRefusal(windows, true, { ...complete, executable: false, notice: false }), undefined);
+  assert.equal(
+    desktopStoreGuardRefusal(linux, true, { ...complete, executable: false, notice: false }),
+    "A linux-x64 release package must ship the Terminal's store guard; tau-store-guard and NOTICE missing at /r/store-guard/linux-x64. Run sandbox:build:store-guard with --resources first.",
+  );
+  assert.match(desktopStoreGuardRefusal(linux, true, { ...complete, notice: false }) ?? '', /; NOTICE missing at /u);
+}
+console.log('✓ a Linux release refuses to assemble without the store guard');
+
+/* The Windows shell sandbox helper (Q15): the signed installer is built from the archive, so the archive refuses without
+ * the helper, its NOTICE, or a manifest that names this very helper. */
+{
+  assert.equal(windows.windowsSandbox, true);
+  assert.equal(linux.windowsSandbox, false);
+  const windowsSandboxRoot = String.raw`C:\r\windows-sandbox\win32-x64`;
+  const complete = {
+    executable: true,
+    notice: true,
+    manifestMatches: true,
+    windowsSandboxRoot,
+  };
+  assert.equal(desktopWindowsSandboxRefusal(windows, true, complete), undefined);
+  const absent = {
+    ...complete,
+    executable: false,
+    notice: false,
+    manifestMatches: false,
+  };
+  assert.equal(desktopWindowsSandboxRefusal(windows, false, absent), undefined);
+  assert.equal(desktopWindowsSandboxRefusal(linux, true, absent), undefined);
+  assert.equal(
+    desktopWindowsSandboxRefusal(windows, true, absent),
+    String.raw`A win32-x64 release package must ship the shell sandbox helper; at C:\r\windows-sandbox\win32-x64 tau-windows-sandbox.exe is missing, NOTICE is missing. Run desktop:prepare-windows-sandbox first.`,
+  );
+  assert.match(
+    desktopWindowsSandboxRefusal(windows, true, {
+      ...complete,
+      notice: false,
+    }) ?? '',
+    / NOTICE is missing\. /u,
+  );
+  assert.match(
+    desktopWindowsSandboxRefusal(windows, true, {
+      ...complete,
+      manifestMatches: false,
+    }) ?? '',
+    / manifest\.json does not name this helper's sha256\. /u,
+  );
+  assert.ok(
+    desktopPackageOmissions(windows, {
+      git: true,
+      gitResourceRoot: 'C:\\r',
+      windowsSandbox: false,
+      windowsSandboxRoot,
+    }).includes(
+      String.raw`Windows shell sandbox helper: none at C:\r\windows-sandbox\win32-x64; this package has no sandboxed shell or Terminal.`,
+    ),
+  );
+  assert.ok(
+    !desktopPackageOmissions(windows, {
+      git: true,
+      gitResourceRoot: 'C:\\r',
+      windowsSandbox: true,
+    }).some((line) => line.startsWith('Windows shell sandbox helper')),
+  );
+  assert.ok(
+    !desktopPackageOmissions(linux, {
+      git: true,
+      gitResourceRoot: '/r',
+      storeGuard: true,
+    }).some((line) => line.startsWith('Windows shell sandbox helper')),
+  );
+}
+console.log('✓ a Windows release refuses to assemble without the shell sandbox helper and its NOTICE');
+
+/* The Linux release guard: a distribution archive ships an executable git and git-lfs, as a macOS release does. */
+{
+  const gitResourceRoot = '/r/git/linux-x64';
+  const complete = { git: true, gitLfs: true, gitResourceRoot };
+  assert.equal(desktopGitPayloadRefusal(linux, true, complete), undefined);
+  assert.equal(desktopGitPayloadRefusal(linux, false, { git: false, gitLfs: false, gitResourceRoot }), undefined);
+  assert.equal(
+    desktopGitPayloadRefusal(windows, true, {
+      git: false,
+      gitLfs: false,
+      gitResourceRoot: String.raw`C:\r\git\win32-x64`,
+    }),
+    String.raw`A win32-x64 release package must ship an executable bundled git and git-lfs; git and git-lfs missing at C:\r\git\win32-x64 (OQ3). Run prepare-git first.`,
+  );
+  assert.equal(desktopGitPayloadRefusal(windows, false, { git: false, gitLfs: false, gitResourceRoot }), undefined);
+  assert.equal(
+    desktopGitPayloadRefusal(linux, true, { git: false, gitLfs: false, gitResourceRoot }),
+    'A linux-x64 release package must ship an executable bundled git and git-lfs; git and git-lfs missing at /r/git/linux-x64 (OQ3). Run prepare-git first.',
+  );
+  assert.match(desktopGitPayloadRefusal(linux, true, { ...complete, gitLfs: false }) ?? '', /; git-lfs missing at /u);
+  assert.match(desktopGitPayloadRefusal(linux, true, { ...complete, git: false }) ?? '', /; git missing at /u);
+
+  /* What the script reads: a binary counts only as an executable regular file. */
+  const resourceRoot = await mkdtemp(join(tmpdir(), 'tau-git-payload-'));
+  try {
+    const layout = gitPayloadLayout(resourceRoot, 'linux-x64');
+    assert.deepEqual(await gitPayloadExecutables(resourceRoot, 'linux-x64'), { git: false, gitLfs: false });
+    await mkdir(dirname(layout.git), { recursive: true });
+    await mkdir(dirname(layout.gitLfs), { recursive: true });
+    await writeFile(layout.git, '#!/bin/sh\n', { mode: 0o755 });
+    await writeFile(layout.gitLfs, '#!/bin/sh\n', { mode: 0o644 });
+    /* Windows has no execute bit (any file passes X_OK), so a non-executable file is only refused on POSIX hosts. */
+    const executeBit = process.platform !== 'win32';
+    assert.deepEqual(await gitPayloadExecutables(resourceRoot, 'linux-x64'), { git: true, gitLfs: !executeBit });
+    assert.equal(
+      desktopGitPayloadRefusal(linux, true, {
+        ...(await gitPayloadExecutables(resourceRoot, 'linux-x64')),
+        gitResourceRoot,
+      }) !== undefined,
+      executeBit,
+    );
+    await rm(layout.gitLfs);
+    await mkdir(layout.gitLfs, { mode: 0o755 });
+    assert.deepEqual(await gitPayloadExecutables(resourceRoot, 'linux-x64'), { git: true, gitLfs: false });
+    await rm(layout.gitLfs, { recursive: true });
+    await writeFile(layout.gitLfs, '#!/bin/sh\n', { mode: 0o755 });
+    assert.deepEqual(await gitPayloadExecutables(resourceRoot, 'linux-x64'), { git: true, gitLfs: true });
+    assert.equal(
+      desktopGitPayloadRefusal(linux, true, {
+        ...(await gitPayloadExecutables(resourceRoot, 'linux-x64')),
+        gitResourceRoot,
+      }),
+      undefined,
+    );
+  } finally {
+    await rm(resourceRoot, { recursive: true, force: true });
+  }
+}
+console.log('✓ a Linux or Windows release refuses to assemble without an executable git and git-lfs');
+
+/* Archives: GNU/bsd tar on Linux; the inbox bsdtar on Windows, which writes ZIP. */
+assert.deepEqual(desktopArchiveCommand(linux, '/out', undefined), {
+  command: 'tar',
+  arguments: ['-czf', join('/out', 'Tau-linux-x64.tar.gz'), '-C', '/out', 'Tau-linux-x64'],
+});
+assert.deepEqual(desktopArchiveCommand(windows, '/out', String.raw`D:\Windows`), {
+  command: String.raw`D:\Windows\System32\tar.exe`,
+  arguments: ['-a', '-c', '-f', join('/out', 'Tau-win32-x64.zip'), '-C', '/out', 'Tau-win32-x64'],
+});
+assert.equal(desktopArchiveCommand(windows, '/out', undefined).command, String.raw`C:\Windows\System32\tar.exe`);
+console.log('✓ archives are written by tar, and on Windows by its inbox bsdtar');
+
+/* Runtime platform packages: each name is one its engine declares as an optional dependency. */
+assert.deepEqual(Object.keys(runtimePlatformPackages).sort(), ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64']);
+assert.deepEqual(runtimePlatformPackages['darwin-arm64'], {
+  openrscadEngine: '@taulabs/openrscad-engine-darwin-arm64',
+  esbuild: '@esbuild/darwin-arm64',
+  libassimp: 'libassimp-darwin-arm64',
+  nanoraster: 'nanoraster-darwin-arm64',
+  cadmpeg: 'cadmpeg-ts-darwin-arm64',
+  bundledOptionalDependencies: [
+    '@img/sharp-libvips-darwin-arm64',
+    '@img/sharp-darwin-arm64',
+    '@parcel/watcher-darwin-arm64',
+  ],
+  unusedSandboxHelpers: ['vendor/seccomp', 'vendor/srt-win'],
+  nodePtyNative: 'prebuilds/darwin-arm64',
+});
+for (const [target, packages] of Object.entries(runtimePlatformPackages)) {
+  const [platform, arch] = target.split('-') as [string, string];
+  for (const name of [
+    packages.openrscadEngine,
+    packages.esbuild,
+    packages.libassimp,
+    packages.nanoraster,
+    packages.cadmpeg,
+  ]) {
+    if (name === undefined) {
+      continue;
+    }
+    assert.ok(name.includes(`${platform}-${arch}`), `${name} is a ${target} package`);
+  }
+  assert.ok(packages.bundledOptionalDependencies.includes(`@img/sharp-${target}`), `${target} stages sharp's addon`);
+  assert.ok(
+    packages.bundledOptionalDependencies.some((name) => name.startsWith(`@parcel/watcher-${target}`)),
+    `${target} stages the file watcher's addon`,
+  );
+}
+const assimpManifest = JSON.parse(
+  readFileSync(
+    new URL('../../../packages/plugins/assimp/node_modules/libassimp/package.json', import.meta.url),
+    'utf8',
+  ),
+) as { optionalDependencies: Record<string, string> };
+for (const packages of Object.values(runtimePlatformPackages)) {
+  if (packages.libassimp !== undefined) {
+    assert.ok(
+      assimpManifest.optionalDependencies[packages.libassimp],
+      `${packages.libassimp} must be published by the pinned engine`,
+    );
+  }
+}
+assert.equal(runtimePlatformPackages['darwin-x64'].libassimp, undefined, 'Intel uses the staged Assimp WASM backend');
+const cadmpegManifest = JSON.parse(
+  readFileSync(
+    new URL('../../../packages/plugins/cadmpeg/node_modules/cadmpeg-ts/package.json', import.meta.url),
+    'utf8',
+  ),
+) as { optionalDependencies: Record<string, string> };
+for (const packages of Object.values(runtimePlatformPackages)) {
+  assert.ok(
+    cadmpegManifest.optionalDependencies[packages.cadmpeg],
+    `${packages.cadmpeg} must be published by the pinned engine`,
+  );
+}
+console.log('✓ each target stages its own native platform packages');
+
+/* Sandbox helpers: a target keeps only the one it executes, for its own architecture. */
+const sandboxHelpers = ['vendor/seccomp/arm64', 'vendor/seccomp/x64', 'vendor/srt-win/arm64', 'vendor/srt-win/x64'];
+const keptSandboxHelpers = (target: keyof typeof runtimePlatformPackages): string[] =>
+  sandboxHelpers.filter(
+    (helper) =>
+      !runtimePlatformPackages[target].unusedSandboxHelpers.some(
+        (unused) => helper === unused || helper.startsWith(`${unused}/`),
+      ),
+  );
+assert.deepEqual(keptSandboxHelpers('darwin-arm64'), []);
+assert.deepEqual(keptSandboxHelpers('linux-x64'), ['vendor/seccomp/x64']);
+assert.deepEqual(keptSandboxHelpers('win32-x64'), ['vendor/srt-win/x64']);
+console.log('✓ macOS stages no sandbox helper; Linux keeps x64 apply-seccomp and Windows x64 srt-win');
+
+/* Node-pty: its runtime JavaScript everywhere, and only the target's own addon directory. */
+const nodePtyPaths = [
+  'package.json',
+  'LICENSE',
+  'lib/index.js',
+  'lib/unixTerminal.js',
+  'lib/unixTerminal.test.js',
+  'lib/index.js.map',
+  'src/unix/pty.cc',
+  'deps/winpty/src/agent/Agent.cc',
+  'third_party/conpty/1.23/win10-x64/conpty.dll',
+  'build/Makefile',
+  'build/Release/pty.node',
+  'prebuilds/darwin-arm64/pty.node',
+  'prebuilds/darwin-arm64/spawn-helper',
+  'prebuilds/darwin-x64/pty.node',
+  'prebuilds/win32-x64/pty.node',
+  'prebuilds/win32-x64/pty.pdb',
+];
+const keptNodePty = (target: keyof typeof runtimePlatformPackages): string[] =>
+  nodePtyPaths.filter((path) => keepsNodePtyPath(path, runtimePlatformPackages[target].nodePtyNative));
+const nodePtyRuntime = ['package.json', 'LICENSE', 'lib/index.js', 'lib/unixTerminal.js'];
+assert.deepEqual(keptNodePty('linux-x64'), [...nodePtyRuntime, 'build/Release/pty.node']);
+assert.deepEqual(keptNodePty('darwin-arm64'), [
+  ...nodePtyRuntime,
+  'prebuilds/darwin-arm64/pty.node',
+  'prebuilds/darwin-arm64/spawn-helper',
+]);
+assert.deepEqual(keptNodePty('darwin-x64'), [...nodePtyRuntime, 'prebuilds/darwin-x64/pty.node']);
+assert.deepEqual(keptNodePty('win32-x64'), nodePtyRuntime);
+/* The copy walks directories through the same predicate, so the addon's ancestors must be kept. */
+assert.deepEqual(
+  ['', 'lib', 'build', 'prebuilds'].map((directory) => keepsNodePtyPath(directory, 'build/Release')),
+  [true, true, true, false],
+);
+assert.deepEqual(
+  ['build', 'prebuilds'].map((directory) => keepsNodePtyPath(directory, 'prebuilds/darwin-arm64')),
+  [false, true],
+);
+console.log('✓ node-pty ships its runtime and only the target addon, without sources, build tree or symbols');
+
+/* The node-pty 1.1.0 package publishes `spawn-helper` mode 0644; the macOS fork path execs it, so staging must set the bit. */
+assert.equal(
+  nodePtySpawnHelper(runtimePlatformPackages['darwin-arm64'].nodePtyNative),
+  'prebuilds/darwin-arm64/spawn-helper',
+);
+assert.equal(
+  nodePtySpawnHelper(runtimePlatformPackages['darwin-x64'].nodePtyNative),
+  'prebuilds/darwin-x64/spawn-helper',
+);
+assert.equal(nodePtySpawnHelper(runtimePlatformPackages['linux-x64'].nodePtyNative), undefined);
+assert.equal(nodePtySpawnHelper(runtimePlatformPackages['win32-x64'].nodePtyNative), undefined);
+{
+  /* Stage a 0644 helper as node-pty publishes it, then check the bit staging sets. */
+  const stagedPty = await mkdtemp(join(fixtureParent, 'node-pty-'));
+  try {
+    const native = runtimePlatformPackages['darwin-arm64'].nodePtyNative;
+    const helper = join(stagedPty, 'prebuilds/darwin-arm64/spawn-helper');
+    await mkdir(dirname(helper), { recursive: true });
+    await writeFile(helper, 'fixture', { mode: 0o644 });
+    await markNodePtySpawnHelperExecutable(stagedPty, native);
+    /* Windows has no POSIX execute bit (it reports 0666), and macOS packages are staged on a macOS host only. */
+    if (process.platform !== 'win32') {
+      assert.equal(statSync(helper).mode.toString(8).slice(-3), '755');
+    }
+    await markNodePtySpawnHelperExecutable(stagedPty, runtimePlatformPackages['linux-x64'].nodePtyNative);
+  } finally {
+    await rm(stagedPty, { recursive: true, force: true });
+  }
+}
+console.log('✓ the staged macOS node-pty spawn-helper is made executable on a POSIX host');
+
+/* The licence gate precedes every archive the script writes. */
+const packageSource = readFileSync(new URL('package-desktop.mts', import.meta.url), 'utf8');
+const licenceGate = packageSource.indexOf('if (writesArchive) {');
+assert.ok(licenceGate > 0);
+assert.ok(
+  packageSource.slice(licenceGate).startsWith(`if (writesArchive) {
+  execFileSync(process.execPath, [resolve(workspaceRoot, 'packages/plugins/tscircuit/check-vendored-licenses.mjs')],`),
+);
+assert.ok(licenceGate < packageSource.indexOf('await packager('));
+assert.ok(licenceGate < packageSource.indexOf('desktopArchiveCommand(plan'));
+console.log('✓ the vendored-licence gate runs before packaging whenever an archive is written');
+
+/* TAU_DESKTOP_CHANNEL selects the channel main reads from the staged manifest. */
+assert.equal(desktopPackageChannel(undefined), 'production');
+assert.equal(desktopPackageChannel(' '), 'production');
+assert.equal(desktopPackageChannel('production'), 'production');
+assert.equal(desktopPackageChannel('staging'), 'staging');
+assert.throws(() => desktopPackageChannel('beta'), /production or staging/u);
+assert.deepEqual(desktopManifestFields({ environmentOverrides: false, channel: 'production' }), {});
+assert.deepEqual(desktopManifestFields({ environmentOverrides: true, channel: 'production' }), {
+  tauDesktop: { environmentOverrides: true },
+});
+assert.deepEqual(desktopManifestFields({ environmentOverrides: false, channel: 'staging' }), {
+  tauDesktop: { channel: 'staging' },
+});
+console.log('✓ a staging package records its channel and a production release records nothing');
+
+/* Main prepares a kernel on first use from the package files the app ships, so every one must be staged. */
+const workspaceRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..');
+const nativeResources = await mkdtemp(join(tmpdir(), 'tau-native-packages-'));
+try {
+  await stageNativePackageFiles(nativeResources);
+  for (const name of ['build123d', 'smlibpy', 'picogk']) {
+    const manifest: unknown = JSON.parse(
+      readFileSync(join(workspaceRoot, `packages/plugins/${name}/tau-plugin.json`), 'utf8'),
+    );
+    for (const path of packagePathDependencyFiles(manifest)) {
+      assert.ok(
+        statSync(join(nativeResources, 'native-packages', `@taucad/${name}`, path)).isFile(),
+        `@taucad/${name} ${path} is staged`,
+      );
+    }
+  }
+  assert.ok(
+    packagePathDependencyFiles(
+      JSON.parse(readFileSync(join(workspaceRoot, 'packages/plugins/build123d/tau-plugin.json'), 'utf8')),
+    ).includes('python/worker.py'),
+  );
+} finally {
+  await rm(nativeResources, { recursive: true, force: true });
+}
+console.log("✓ the app ships each native package's own dependency files for first-use preparation");
+
+/*
+ * The bundled imports load from the app's own `node_modules` at run time (the Windows NSIS and AppImage updaters import
+ * `electron-updater`). Stage each closure exactly as `stageRuntimePackages` does and prove every staged package's `main`
+ * is there: `debug`, under `builder-util-runtime`, runs from `src/index.js`, and a staged copy without it made a real
+ * Windows install refuse its own update route (`updater.installed-route-invalid`).
+ */
+const bundledModules = await mkdtemp(join(tmpdir(), 'tau-bundled-imports-'));
+try {
+  const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const sources = await Promise.all(
+    desktopBundledImports.map(async (name) => ({
+      name,
+      source: await realpath(join(desktopRoot, 'node_modules', name)),
+    })),
+  );
+  for (const { name, source } of sources) {
+    // oxlint-disable-next-line no-await-in-loop -- Staging nests packages; one closure at a time, as the stage does.
+    await copyRuntimeClosure({ name, source, modulesRoot: bundledModules, filter: excludesBuildDiagnostics });
+  }
+  const missingMains: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const path = join(directory, entry.name);
+      if (entry.name.startsWith('@')) {
+        // oxlint-disable-next-line no-await-in-loop -- A bounded serial walk of the staged tree.
+        await visit(path);
+        continue;
+      }
+      const manifest = JSON.parse(readFileSync(join(path, 'package.json'), 'utf8')) as { readonly main?: string };
+      if (manifest.main !== undefined) {
+        const main = join(path, manifest.main);
+        if (![main, `${main}.js`, join(main, 'index.js')].some((candidate) => existsSync(candidate))) {
+          missingMains.push(`${relative(bundledModules, path)} (${manifest.main})`);
+        }
+      }
+      if (existsSync(join(path, 'node_modules'))) {
+        // oxlint-disable-next-line no-await-in-loop -- A bounded serial walk of the staged tree.
+        await visit(join(path, 'node_modules'));
+      }
+    }
+  };
+  await visit(bundledModules);
+  assert.deepEqual(missingMains, [], 'every staged bundled-import package keeps its main entry');
+  const updaterRequire = createRequire(join(bundledModules, 'electron-updater', 'package.json'));
+  const runtime = updaterRequire('builder-util-runtime') as { readonly CancellationToken?: unknown };
+  assert.equal(typeof runtime.CancellationToken, 'function');
+} finally {
+  await rm(bundledModules, { recursive: true, force: true });
+}
+console.log("✓ each bundled import's staged closure keeps every package's main entry, so the updater loads");

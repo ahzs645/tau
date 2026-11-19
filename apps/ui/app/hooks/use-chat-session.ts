@@ -1,17 +1,11 @@
 /**
  * Chat Session Hooks (useChatSession / useChatSessionSnapshot)
  *
- * React surface for the vanilla `ChatSessionStore`. Components that need a
- * live `Chat` instance + persistence/draft actors call `useChatSession(chatId)`
- * — the store is acquired during render so the returned record is non-null
- * on the very first render, refcounted on every consumer, and released in
- * the effect cleanup so any subtree unmount/remount cycle (panel resize,
- * focus change, route navigation) leaves the underlying actors intact as
- * long as another consumer or the store still holds it.
- *
- * The store is the source of truth for lifetime; React components are
- * subscribers, not owners. This eliminates the class of "headless
- * ChatInstance reuse" races that plagued the prior design.
+ * React surface for the vanilla `ChatSessionStore`. `useChatSession(chatId,
+ * projectId)` acquires the chat in a layout effect and keeps the last committed
+ * acquisition through a same-project handoff. A render React throws away
+ * (StrictMode, Suspense) holds no view reference (PV-S4). The store owns session
+ * lifetime; React components hold view references.
  *
  * `useChatSessionSnapshot` is a thin wrapper around `useSyncExternalStore`
  * that re-renders only when the per-chatId callback fires (messages /
@@ -20,58 +14,66 @@
  * live session without manual memoisation gymnastics.
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ChatSession, ChatSessionStore } from '#services/chat-session-store.js';
 import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
 
-type Acquisition = {
-  readonly store: ChatSessionStore;
-  readonly chatId: string;
-  readonly session: ChatSession;
-};
-
 /**
- * Acquire a chat session for the lifetime of the calling component. The
- * session is retained until the last consumer unmounts; intermediate
- * unmount/remount of any single consumer never drops the underlying actors.
+ * Hold a view of one chat for the lifetime of the calling component.
  *
- * Lifecycle:
- * - **First render**: lazy `useState` initializer acquires the session
- *   synchronously so the returned record is immediately usable.
- * - **Subsequent renders**: the cached acquisition is reused unchanged.
- * - **Store/chatId change**: a new acquisition is taken during render and
- *   the prior one is released in the effect cleanup the next time the
- *   effect commits — this guarantees the new session is live before the
- *   old one is dropped, so consumers never observe a torn state.
- * - **Unmount**: the active acquisition is released, decrementing the
- *   refcount; the store disposes the underlying actors only when no other
- *   consumer holds the chat.
+ * @param chatId - The chat to hold.
+ * @param projectId - The chat's own project; focus never names it (PV-S4, L3 D9).
+ * @returns The committed session (previous chat during a same-project handoff), or `undefined` before acquisition.
  */
-export function useChatSession(chatId: string): ChatSession {
+export function useChatSession(chatId: string, projectId: string): ChatSession | undefined {
   const store = useChatSessionStore();
 
-  const [acquisition, setAcquisition] = useState<Acquisition>(() => ({
-    store,
-    chatId,
-    session: store.acquire(chatId),
-  }));
+  const [acquired, setAcquired] = useState<{
+    readonly store: ChatSessionStore;
+    readonly projectId: string;
+    readonly session: ChatSession;
+  }>();
 
-  let active: Acquisition = acquisition;
-  if (acquisition.store !== store || acquisition.chatId !== chatId) {
-    // Acquire eagerly so the same render returns the right session.
-    // The previous acquisition is released by the effect cleanup below
-    // when its `acquisition` dep changes on the next commit.
-    active = { store, chatId, session: store.acquire(chatId) };
-    setAcquisition(active);
-  }
-
-  useEffect(() => {
+  const presented = useRef(acquired);
+  useLayoutEffect(() => {
+    presented.current = acquired;
+    if (acquired === undefined) {
+      return;
+    }
+    // The displayed view outlives a pending candidate, including rapid A → B → C switches.
+    acquired.store.acquire(acquired.session.chatId, acquired.projectId);
     return () => {
-      acquisition.store.release(acquisition.chatId);
+      acquired.store.release(acquired.session.chatId);
     };
-  }, [acquisition]);
+  }, [acquired]);
 
-  return active.session;
+  useLayoutEffect(() => {
+    const session = store.acquire(chatId, projectId);
+    const controller = new AbortController();
+    const publish = (): void => {
+      if (!controller.signal.aborted) {
+        setAcquired({ store, projectId, session });
+      }
+    };
+    const previous = presented.current;
+    if (previous?.store === store && previous.projectId === projectId) {
+      const prepare = async (): Promise<void> => {
+        await store.preparePresentation(chatId, controller.signal);
+        publish();
+      };
+      // async-iife: bootstrap -- the layout effect cannot await; cleanup aborts the pending handoff.
+      void prepare();
+    } else {
+      // Cold/project-boundary mounting also bootstraps descendants needed by the host.
+      publish();
+    }
+    return () => {
+      controller.abort();
+      store.release(chatId);
+    };
+  }, [store, chatId, projectId]);
+
+  return acquired?.store === store && acquired.projectId === projectId ? acquired.session : undefined;
 }
 
 /**

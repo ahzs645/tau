@@ -1,0 +1,332 @@
+import { createProjectFixture } from '@taucad/ui-core/lib/project.fixture';
+import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type * as XStateModule from 'xstate';
+import { useWorkbenchPanesHost } from '@taucad/workbench-panes/host/workbench-host';
+import type { ShareSource } from '@taucad/workbench-panes/share/share-source';
+import type { ProjectSharePanelProps } from '@taucad/publish-ui/components/publish/project-share-panel';
+import {
+  parseProjectShareNavigationIntent,
+  ProjectShareRouteIntent,
+  ProjectShareWorkbenchPanel,
+} from '#routes/w.$workspace.$project/project-share-action.js';
+
+const openPanel = vi.hoisted(() => vi.fn());
+const snapshotSource = vi.hoisted(() => vi.fn());
+const projectSend = vi.hoisted(() => vi.fn());
+const fileClient = vi.hoisted(() => ({ readdir: vi.fn() }));
+const parameterService = vi.hoisted(() => ({ readSettled: vi.fn() }));
+let capturedPanelProperties: ProjectSharePanelProps | undefined;
+let sourceContent = new TextEncoder().encode('initial source');
+
+const project = createProjectFixture({
+  id: 'proj_aaaaaaaaaaaaaaaaaaaaa',
+  name: 'Share fixture',
+  description: 'Current project',
+  tags: [],
+  assets: { main: { entryPath: 'main.ts', thumbnail: 'thumbnail.webp' } },
+});
+const geometryUnit = {
+  getSnapshot: () => ({
+    context: { kernelClient: { snapshotSource } },
+    value: 'ready',
+  }),
+};
+const geometryUnits = new Map([['main.ts', geometryUnit]]);
+const projectRef = {
+  getSnapshot: () => ({
+    context: { project, geometryUnits },
+  }),
+  send: projectSend,
+};
+
+vi.mock('@xstate/react', () => ({
+  useSelector: (actor: { getSnapshot: () => unknown }, selector: (state: unknown) => unknown) =>
+    selector(actor.getSnapshot()),
+}));
+
+vi.mock('xstate', async (importOriginal) => {
+  const actual = await importOriginal<typeof XStateModule>();
+  return {
+    ...actual,
+    waitFor: async (actor: { getSnapshot: () => unknown }) => actor.getSnapshot(),
+  };
+});
+
+const editorRef = {
+  getSnapshot: () => ({ context: {} }),
+};
+
+vi.mock('#hooks/use-project.js', () => ({
+  useProject: () => ({
+    parameterService,
+    projectId: project.id,
+    projectRef,
+    editorRef,
+    entriesRecord: {
+      version: 1,
+      entries: { 'main.ts': { renderTimeout: 30_000 } },
+    },
+  }),
+}));
+
+vi.mock('#hooks/use-file-manager.js', () => ({
+  useFileManager: () => ({ recordFiles: fileClient }),
+}));
+
+vi.mock('#components/publish/project-share-panel.js', () => ({
+  ProjectSharePanel: (properties: ProjectSharePanelProps) => {
+    capturedPanelProperties = properties;
+    return (
+      <div>
+        Share panel fixture
+        {properties.extraSections}
+      </div>
+    );
+  },
+}));
+
+vi.mock('#routes/w.$workspace.$project/project-workspace-context.js', () => ({
+  useProjectWorkspace: () => ({ openPanel }),
+}));
+
+/* C4: Collaborators is the pane's last section; its own rules are `revision-collaborators.test.tsx`'s. */
+vi.mock('#routes/w.$workspace.$project/revision-collaborators.js', () => ({
+  ProjectPeopleWithAccess: ({ projectId }: { readonly projectId: string }) => (
+    <section aria-label='Collaborators'>{projectId}</section>
+  ),
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  capturedPanelProperties = undefined;
+  sourceContent = new TextEncoder().encode('initial source');
+  fileClient.readdir.mockResolvedValue(['README.md', '.tau']);
+  parameterService.readSettled.mockResolvedValue(
+    new TextEncoder().encode(
+      JSON.stringify({
+        activeGroup: 'alternate',
+        groups: { alternate: { values: { width: '12.5' } } },
+      }),
+    ),
+  );
+  snapshotSource.mockImplementation(async ({ signal }: { readonly signal?: AbortSignal }) => {
+    signal?.throwIfAborted();
+    return {
+      success: true,
+      data: {
+        entryPath: 'main.ts',
+        files: [
+          {
+            path: 'main.ts',
+            content: sourceContent,
+            sha256: '1'.repeat(64),
+            role: 'entry',
+          },
+          {
+            path: 'tau.json',
+            content: new TextEncoder().encode('stale'),
+            sha256: '2'.repeat(64),
+            role: 'additional',
+          },
+          {
+            path: 'package.json',
+            content: new TextEncoder().encode('{}'),
+            sha256: '3'.repeat(64),
+            role: 'additional',
+          },
+          {
+            path: 'README.md',
+            content: new TextEncoder().encode('readme'),
+            sha256: '4'.repeat(64),
+            role: 'additional',
+          },
+          {
+            path: 'thumbnail.webp',
+            content: new Uint8Array([1]),
+            sha256: '5'.repeat(64),
+            role: 'additional',
+          },
+          {
+            path: '.tau/internal',
+            content: new Uint8Array([2]),
+            sha256: '6'.repeat(64),
+            role: 'dependency',
+          },
+          {
+            path: 'node_modules/pkg.js',
+            content: new Uint8Array([3]),
+            sha256: '7'.repeat(64),
+            role: 'dependency',
+          },
+        ],
+        unresolvedPaths: ['missing.ts'],
+      },
+    };
+  });
+});
+
+describe('ProjectShareWorkbenchPanel', () => {
+  it('hands Collaborators to the pane as its last section, inside its one scroll area (C4)', () => {
+    render(
+      <MemoryRouter initialEntries={['/w/home/share-fixture']}>
+        <ProjectShareWorkbenchPanel />
+      </MemoryRouter>,
+    );
+
+    const panel = screen.getByText(/Share panel fixture/u);
+    /* Rendered by the pane through `extraSections`, never stacked beside it as a second region. */
+    expect(panel).toContainElement(screen.getByRole('region', { name: 'Collaborators' }));
+    expect(screen.getByRole('region', { name: 'Collaborators' })).toHaveTextContent(project.id);
+  });
+
+  /* E1: the entry's CAD actor owns its operation timeout, so a unit this panel has to spawn for the
+   * thumbnail is seeded from the durable per-entry record instead of starting on the default. */
+  it('seeds a unit it spawns with the durable operation timeout', async () => {
+    const existing = geometryUnits.get('main.ts')!;
+    geometryUnits.delete('main.ts');
+    projectSend.mockClear();
+    try {
+      render(
+        <MemoryRouter initialEntries={['/w/home/share-fixture?chat=chat_1']}>
+          <ProjectShareWorkbenchPanel />
+        </MemoryRouter>,
+      );
+      await capturedPanelProperties!.collectSnapshot!().catch(() => undefined);
+
+      const claim = projectSend.mock.calls[0]?.[0] as unknown as {
+        type: string;
+        claimId: string;
+        entryPath: string;
+        operationTimeout?: number;
+      };
+      expect(claim).toEqual({
+        type: 'claimGeometryUnit',
+        claimId: claim.claimId,
+        entryPath: 'main.ts',
+        operationTimeout: 30_000,
+      });
+      expect(typeof claim.claimId).toBe('string');
+      expect(projectSend).toHaveBeenCalledWith({
+        type: 'releaseGeometryUnit',
+        claimId: claim.claimId,
+      });
+    } finally {
+      geometryUnits.set('main.ts', existing);
+      projectSend.mockClear();
+    }
+  });
+
+  it('stays lazy until an explicit share action and collects the latest self-contained snapshot', async () => {
+    render(
+      <MemoryRouter initialEntries={['/w/home/share-fixture?chat=chat_1']}>
+        <ProjectShareWorkbenchPanel />
+      </MemoryRouter>,
+    );
+
+    expect(snapshotSource).not.toHaveBeenCalled();
+    expect(projectSend).not.toHaveBeenCalled();
+
+    sourceContent = new TextEncoder().encode('edited after opening Share');
+    const snapshot = await capturedPanelProperties!.collectSnapshot!();
+
+    expect(snapshotSource).toHaveBeenCalledWith({
+      source: { path: 'main.ts' },
+      additionalPaths: [
+        { path: 'tau.json', required: true },
+        { path: 'package.json', required: false },
+        { path: 'README.md', required: false },
+        { path: 'thumbnail.webp', required: false },
+      ],
+      signal: undefined,
+    });
+    expect(new TextDecoder().decode(snapshot.files.find(({ path }) => path === 'main.ts')?.content)).toBe(
+      'edited after opening Share',
+    );
+    expect(snapshot.files.map(({ path }) => path)).toEqual([
+      'main.ts',
+      'package.json',
+      'README.md',
+      'thumbnail.webp',
+      'tau.json',
+      '.tau/parameters/main.ts.json',
+    ]);
+    expect(parameterService.readSettled).toHaveBeenCalledExactlyOnceWith('main.ts');
+    expect(new TextDecoder().decode(snapshot.files.at(-1)?.content)).toContain('"width":"12.5"');
+    const manifestFile = snapshot.files.find(({ path }) => path === 'tau.json');
+    expect(manifestFile?.role).toBe('project-metadata');
+    expect(manifestFile?.sha256).toMatch(/^[\da-f]{64}$/u);
+    expect(snapshot.warnings).toEqual([
+      {
+        code: 'UNRESOLVED_DEPENDENCY',
+        message: 'The runtime could not resolve missing.ts.',
+      },
+    ]);
+  });
+
+  it('hands the shared pane the project host with its share source', () => {
+    render(
+      <MemoryRouter>
+        <ProjectShareWorkbenchPanel />
+      </MemoryRouter>,
+    );
+    const Host = capturedPanelProperties!.host!;
+    const source: ShareSource = { methods: [] };
+    let seen: ReturnType<typeof useWorkbenchPanesHost> | undefined;
+    function Probe(): undefined {
+      seen = useWorkbenchPanesHost();
+      return undefined;
+    }
+
+    render(
+      <Host source={source}>
+        <Probe />
+      </Host>,
+    );
+
+    expect(seen?.share).toBe(source);
+    expect(seen?.claimUnits).toBeTypeOf('function');
+    projectSend.mockClear();
+    const release = seen!.claimUnits!(['main.ts']);
+    release();
+    expect(projectSend.mock.calls.map(([event]) => (event as { type: string }).type)).toEqual([
+      'claimGeometryUnit',
+      'releaseGeometryUnit',
+    ]);
+  });
+});
+
+describe('project Share navigation intent', () => {
+  it('opens the pane from a GitHub return and removes only recognized one-shot fields', () => {
+    expect(
+      parseProjectShareNavigationIntent(
+        '?chat=chat_1&workbench=share&shareProvider=github-gist&shareAuth=github-gist&error=access_denied&error_description=provider+copy&keep=1',
+      ),
+    ).toEqual({
+      shouldOpen: true,
+      initialMethod: 'github-gist',
+      githubAuthorizationOutcome: 'cancelled',
+      remainingSearch: '?chat=chat_1&keep=1',
+    });
+  });
+
+  it('preserves unknown query fields and ignores unmarked provider errors', () => {
+    expect(parseProjectShareNavigationIntent('?chat=chat_1&error=access_denied')).toEqual({
+      shouldOpen: false,
+      remainingSearch: '?chat=chat_1&error=access_denied',
+    });
+  });
+
+  it('queues opening before the Workbench connects', async () => {
+    render(
+      <MemoryRouter initialEntries={['/w/home/demo?chat=chat_1&workbench=share']}>
+        <ProjectShareRouteIntent />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(openPanel).toHaveBeenCalledWith('share');
+    });
+  });
+});

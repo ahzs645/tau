@@ -1,0 +1,174 @@
+#!/usr/bin/env node
+/** Prepare a protected publication job; all candidate inputs stay data and every public mutation uses the publisher. */
+import { execFileSync } from 'node:child_process';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { z } from 'zod';
+import { desktopReleaseIdentity, parseDesktopArtifactManifest } from '#shared/desktop-release.js';
+import type { DesktopArtifactManifest } from '#shared/desktop-release.js';
+/* oxlint-disable no-restricted-imports -- Adjacent release workflow helpers share one explicit publication boundary. */
+import {
+  desktopCandidateRoutes,
+  desktopCatalogLanes,
+  desktopLaneKeys,
+  desktopLaneManifestKey,
+  desktopManifestDigest,
+  desktopPublicationScopes,
+} from './desktop-route-publication.mjs';
+import type { DesktopPublicationScope } from './desktop-route-publication.mjs';
+import {
+  requireDesktopInstallerPublicationEnabled,
+  requireDesktopPublicationAuthority,
+} from './desktop-publication-authority.mjs';
+import { publishDesktopRoutes } from './publish-desktop-routes.mjs';
+/* oxlint-enable no-restricted-imports */
+/**
+ * Read one completed lane's immutable manifest. Each lane's manifest has its own key; a platform lane promoted before
+ * lane keys existed has it only at the shared key. Either is admitted only when it is exactly the manifest the lane's
+ * completion receipt recorded, so the fallback cannot substitute another platform's candidate.
+ */
+const readCompletedManifest = async (
+  download: (path: string) => Promise<string>,
+  completed: { tag: string; lane: DesktopPublicationScope; manifestSha256: string },
+): Promise<{ text: string; manifest: DesktopArtifactManifest }> => {
+  const { tag, lane, manifestSha256 } = completed;
+  const keys = [desktopLaneManifestKey(tag, lane), ...(lane === 'all' ? [] : [desktopLaneManifestKey(tag, 'all')])];
+  for (const key of keys) {
+    // oxlint-disable-next-line no-await-in-loop -- The lane key is preferred over the shared key.
+    const text = await download(
+      key
+        .split('/')
+        .map((segment) => encodeURIComponent(segment))
+        .join('/'),
+    ).catch(() => undefined);
+    const manifest = text === undefined ? undefined : parseDesktopArtifactManifest(JSON.parse(text));
+    if (text !== undefined && manifest && desktopManifestDigest(manifest) === manifestSha256 && manifest.tag === tag) {
+      return { text, manifest };
+    }
+  }
+  throw new Error('Completed manifest differs');
+};
+const main = async (): Promise<void> => {
+  const channel = z.enum(['staging', 'production']).parse(process.env['CHANNEL']);
+  const operation =
+    process.env['GITHUB_EVENT_NAME'] === 'schedule'
+      ? 'renew-routes'
+      : z.enum(['promote-routes', 'renew-routes']).parse(process.env['REQUESTED_OPERATION']);
+  // The channel's own gate, checked before identity, downloads or immutable mirroring.
+  requireDesktopInstallerPublicationEnabled(channel);
+  await requireDesktopPublicationAuthority(channel, operation);
+  // Selects the candidate and receipt artifact names. A platform scope (D-H5) selects a promotion only: renewal renews
+  // the completed promotion whatever scope promoted it.
+  const scope = z.enum(desktopPublicationScopes).parse(process.env['TAU_DESKTOP_QUALIFICATION_SCOPE'] ?? 'all');
+  if (scope !== 'all' && operation !== 'promote-routes') {
+    throw new Error('Platform-scoped publication is a promotion only');
+  }
+  const root = resolve(z.string().min(1).parse(process.env['DESKTOP_ASSETS_DIR']));
+  const base = channel === 'production' ? 'https://downloads.tau.new' : 'https://downloads.taucad.dev';
+  const download = async (path: string): Promise<string> => {
+    const response = await fetch(`${base}/${path}`, {
+      redirect: 'error',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok || !response.body) {
+      throw new Error('Completed publication metadata unavailable');
+    }
+    const chunks: Array<Uint8Array<ArrayBuffer>> = [];
+    let length = 0;
+    for await (const chunk of response.body) {
+      length += chunk.byteLength;
+      if (length > 1024 * 1024) {
+        throw new Error('Publication metadata exceeds bound');
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  };
+  if (operation === 'renew-routes') {
+    // Renew every lane the published catalog says is promoted, each from its own completed candidate (D-H5); the
+    // publish step renews them one at a time, each in its own directory.
+    await mkdir(root, { recursive: false });
+    const lanes = desktopCatalogLanes(JSON.parse(await download('latest/installers.json')));
+    const entries: string[] = [];
+    for (const lane of lanes) {
+      const directory = resolve(root, lane);
+      // oxlint-disable-next-line no-await-in-loop -- Each lane restores only its own small completed metadata.
+      await mkdir(directory, { recursive: false });
+      const completed = z
+        .object({ tag: z.string(), channel: z.literal(channel), manifestSha256: z.string().regex(/^[a-f\d]{64}$/u) })
+        // oxlint-disable-next-line no-await-in-loop -- Lanes are renewed in a fixed order.
+        .parse(JSON.parse(await download(desktopLaneKeys(lane).completion)));
+      const { tag } = completed;
+      if (desktopReleaseIdentity(tag).channel !== channel) {
+        throw new Error('Completed channel differs');
+      }
+      // oxlint-disable-next-line no-await-in-loop -- Lanes are renewed in a fixed order.
+      const { text, manifest } = await readCompletedManifest(download, {
+        tag,
+        lane,
+        manifestSha256: completed.manifestSha256,
+      });
+      // oxlint-disable-next-line no-await-in-loop -- Lanes are renewed in a fixed order.
+      await writeFile(resolve(directory, 'desktop-artifacts.json'), text);
+      for (const route of ['windows-nsis', 'linux-appimage']) {
+        if (!manifest.artifacts.some((item) => item.kind === route)) {
+          continue;
+        }
+        const name = `desktop-update-${route}-x64.json`;
+        // oxlint-disable-next-line no-await-in-loop -- Restore only immutable small metadata needed to renew this completed candidate.
+        await writeFile(resolve(directory, name), await download(`releases/${encodeURIComponent(tag)}/${name}`));
+      }
+      entries.push(`${lane}:${tag}:${manifest.sourceCommit}`);
+    }
+    await appendFile(
+      z.string().min(1).parse(process.env['GITHUB_ENV']),
+      `TAU_RENEWAL_LANES=${entries.join(' ')}\nTAU_ROUTE_OPERATION=${operation}\n`,
+    );
+    return;
+  }
+  const tag = z.string().min(1).parse(process.env['REQUESTED_TAG']);
+  if (desktopReleaseIdentity(tag).channel !== channel) {
+    throw new Error('Requested candidate channel differs');
+  }
+  execFileSync(
+    process.execPath,
+    ['--import', '@oxc-node/core/register', 'apps/desktop/scripts/fetch-desktop-installer-candidate.mts'],
+    { stdio: 'inherit' },
+  );
+  const manifest = parseDesktopArtifactManifest(
+    JSON.parse(await readFile(resolve(root, 'desktop-artifacts.json'), 'utf8')),
+  );
+  if (manifest.tag !== tag || manifest.channel !== channel) {
+    throw new Error('Candidate identity differs');
+  }
+  process.env['DESKTOP_RELEASE_TAG'] = tag;
+  process.env['TAU_DESKTOP_SOURCE_SHA'] = manifest.sourceCommit;
+  const approved = z
+    .string()
+    .regex(/^[a-f\d]{64}$/u)
+    .parse(process.env['APPROVED_DIGEST']);
+  if (desktopManifestDigest(manifest) !== approved) {
+    throw new Error('Operator approved a different manifest');
+  }
+  // Refuse a candidate outside the selected scope before any immutable object is mirrored.
+  desktopCandidateRoutes(manifest, scope);
+  await writeFile(
+    resolve(root, 'promotion-approval.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      tag,
+      channel,
+      version: manifest.version,
+      sourceCommit: manifest.sourceCommit,
+      manifestSha256: approved,
+      approved: true,
+    }),
+  );
+  await publishDesktopRoutes('mirror-routes');
+  await appendFile(
+    z.string().min(1).parse(process.env['GITHUB_ENV']),
+    `DESKTOP_RELEASE_TAG=${tag}\nTAU_DESKTOP_SOURCE_SHA=${manifest.sourceCommit}\nTAU_ROUTE_OPERATION=${operation}\n`,
+  );
+};
+await main();

@@ -1,35 +1,39 @@
 /**
  * Discovers all projects with .size-limit.json, builds them via Nx,
- * and writes a merged config to the workspace root for size-limit to consume.
+ * and writes a merged config below node_modules/.cache for size-limit to consume.
  *
  * Used by size-limit-action in CI to produce a single consolidated PR comment
  * across all packages with size budgets.
  */
-import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+const workspaceRoot = resolve(import.meta.dirname, '..');
+const sizeLimitRoot = join(workspaceRoot, 'node_modules', '.cache', 'size-limit');
+const mergedConfigPath = join(sizeLimitRoot, '.size-limit.json');
 
 function getProjectRoots() {
-  const output = execSync('pnpm nx show projects --json', {
-    encoding: 'utf8',
+  // One graph read for every project root, instead of one `nx show project` per project.
+  const graphPath = join(sizeLimitRoot, 'graph.json');
+  mkdirSync(sizeLimitRoot, { recursive: true });
+  execFileSync('pnpm', ['nx', 'graph', `--file=${graphPath}`], {
+    cwd: workspaceRoot,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
-  const projects = JSON.parse(output.trim().split('\n').pop());
+  const { nodes } = JSON.parse(readFileSync(graphPath, 'utf8')).graph;
   const results = [];
 
-  for (const project of projects) {
-    try {
-      const info = execSync(`pnpm nx show project ${project} --json`, {
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      const { root } = JSON.parse(info);
-      const configPath = join(root, '.size-limit.json');
-      if (existsSync(configPath)) {
-        results.push({ project, root, configPath });
-      }
-    } catch {
-      // Project might not be queryable, skip
+  for (const [project, { data }] of Object.entries(nodes)) {
+    const configPath = join(workspaceRoot, data.root, '.size-limit.json');
+    if (existsSync(configPath)) {
+      // A budget on an artifact `build` does not make (the sandbox's Rust store guard) names the target that makes it
+      // in its `size` target's `dependsOn`; those run after the builds below.
+      const extra = (data.targets?.size?.dependsOn ?? [])
+        .filter((target) => typeof target === 'string' && !target.startsWith('^'))
+        .map((target) => (target.startsWith(`${project}:`) ? target.slice(project.length + 1) : target))
+        .filter((target) => target !== 'build');
+      results.push({ project, root: data.root, configPath, extra });
     }
   }
 
@@ -38,30 +42,36 @@ function getProjectRoots() {
 
 function prefixPath(root, p) {
   if (p.startsWith('!')) {
-    return `!${root}/${p.slice(1)}`;
+    return `!${resolve(workspaceRoot, root, p.slice(1))}`;
   }
-  return `${root}/${p}`;
+  return resolve(workspaceRoot, root, p);
 }
 
 const projects = getProjectRoots();
 
 if (projects.length === 0) {
-  console.log('No projects with .size-limit.json found');
-  writeFileSync('.size-limit.json', '[]');
-  process.exit(0);
+  throw new Error('No projects with .size-limit.json found');
+}
+
+// One Nx invocation builds them all, so shared dependencies build once and the task
+// runner orders them; `--parallel=1` keeps the hosted runner within its memory.
+console.log(`Building ${projects.map(({ project }) => project).join(', ')}...`);
+execFileSync(
+  'pnpm',
+  ['nx', 'run-many', '-t', 'build', `--projects=${projects.map(({ project }) => project).join(',')}`, '--parallel=1'],
+  { cwd: workspaceRoot, stdio: 'inherit' },
+);
+
+for (const { project, extra } of projects) {
+  for (const target of extra) {
+    console.log(`Building ${project}:${target} for its size budget...`);
+    execFileSync('pnpm', ['nx', 'run', `${project}:${target}`], { cwd: workspaceRoot, stdio: 'inherit' });
+  }
 }
 
 const merged = [];
 
 for (const { project, root, configPath } of projects) {
-  console.log(`Building ${project}...`);
-  try {
-    execSync(`pnpm nx build ${project}`, { stdio: 'inherit' });
-  } catch {
-    console.warn(`Warning: Failed to build ${project}, skipping`);
-    continue;
-  }
-
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
 
   for (const entry of config) {
@@ -80,5 +90,6 @@ for (const { project, root, configPath } of projects) {
   }
 }
 
-writeFileSync('.size-limit.json', JSON.stringify(merged, null, 2));
+mkdirSync(sizeLimitRoot, { recursive: true });
+writeFileSync(mergedConfigPath, JSON.stringify(merged, null, 2));
 console.log(`Merged ${merged.length} size-limit entries from ${projects.length} project(s)`);

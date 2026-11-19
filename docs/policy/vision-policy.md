@@ -1,14 +1,14 @@
 ---
 title: 'Vision Policy'
-description: "Tau's long-term vision: connecting the five pillars of hardware engineering (systems, analysis, CAD, software/firmware, simulation) through code and AI agents. Phased progression from MCAD to automated robotic systems."
+description: "Tau's long-term vision for connecting hardware engineering through code, AI agents, and verification as the reward function."
 status: active
 created: '2026-03-04'
-updated: '2026-03-10'
+updated: '2026-11-06'
 ---
 
 # Vision Policy
 
-Internal reference for Tau's strategic direction. Tau's vision is to connect the five pillars of hardware engineering — systems design, analysis, CAD, software/firmware, and simulation — through code and AI agents.
+Internal reference for Tau's strategic direction. Tau's vision is to connect the five pillars of hardware engineering — systems design, analysis, CAD, software/firmware, and simulation — through code and AI agents. The connective tissue is **verification**: the trusted, machine-readable reward function that lets agents iterate generated designs into manufacturable ones. Generation is commoditizing; verification is the scarce resource, the moat, and the commercial core.
 
 ## Rationale
 
@@ -30,18 +30,26 @@ Software/Firmware    ──┤
 Simulation           ──┘
 ```
 
+## Verification: the Reward Function
+
+Across all five pillars, the bottleneck of agentic engineering is not generation — it is **trusted verification**. An agent that generates geometry, a circuit, or firmware without a way to check that the result is correct and manufacturable is a hallucination with a 3D viewer. Code agents have tests and CI; engineering agents need an equivalent oracle.
+
+GeoSpec is that oracle — the reward function that scores every agent iteration against reality: is the geometry valid, does it match intent, can it be made, will it fit, will it survive, and can we prove it. It is the layer that turns a stochastic generator into a manufacturing pipeline, and it is the same verification substrate that extends from MCAD to every later pillar (physical requirements, electrical clearances, firmware-in-the-loop, full-system regression).
+
+Verification is therefore a first-class pillar in its own right, not a feature of Phase 1. Whoever earns trust in the verification layer owns the loop — that is the strategic core of Tau, while its commercial value comes from operation and assurance rather than restricting the software (see [The Commercial Boundary](#the-commercial-boundary)).
+
 ## Progression
 
 ### Phase 1: Geometry (MCAD) — Current
 
 Solve code-first mechanical CAD. Tau today is an AI-native, multi-kernel CAD platform:
 
-- **Multi-kernel runtime** (`@taucad/runtime`) — Replicad, JSCAD, Manifold, OpenSCAD, KCL, any CAD kernel behind a unified `defineKernel()` API. BRep and mesh geometry, parametric models as TypeScript/OpenSCAD/KCL functions.
-- **AI agent** — LangGraph agent with file editing, kernel execution, TDD via `test.json`, screenshot verification. The agent writes geometry code, runs it, measures the result, iterates.
-- **Converter** (`@taucad/converter`) — 41 input formats, 11 output formats. STEP, STL, glTF, USDZ, IFC, and more. Convert any file format to another.
+- **Multi-kernel runtime** (`@taucad/runtime`) — Replicad, JSCAD, Manifold, OpenRSCAD, KCL, any CAD kernel behind a unified `defineKernel()` API. BRep and mesh geometry, parametric models as TypeScript/OpenSCAD/KCL functions.
+- **AI agent** — LangGraph agent with file editing, kernel execution, TDD via GeoSpec, screenshot verification. The agent writes geometry code, runs it, measures the result, iterates.
+- **Format interchange** — Import kernels in `@taucad/assimp`, `@taucad/brep` and `@taucad/gltf` plus the transcoders that write export targets. STEP, IGES, STL, glTF, USDZ, IFC, and more, composed as plugins in the same runtime rather than a separate converter package.
 - **Browser-native** — No install. Web Workers for computation, WebGL for rendering. Embeddable components for third-party apps.
-- **Open source** — Published `@taucad/*` packages on npm. MIT licensed.
-- **Files are the interface** — Everything is a file. Geometry, tests, metadata. Agent skills, subagents, scripts. A single data plane makes computational engineering precise, reproducible, with provenance by design. No vendor lock-in.
+- **Open source** — The complete Tau-authored codebase, including the GeoSpec engine, is Apache-2.0 licensed and may be forked, embedded, hosted, and redistributed.
+- **Files are the interface** — Everything is a file. Geometry, tests, metadata. Agent skills, subagents, scripts. A single data plane makes computational engineering precise, reproducible, with provenance by design. No lock-in on the _artifact_: designs, tests, and history stay portable and runnable outside Tau. What is monetized is high-assurance verification at scale — never access to your own files.
 
 This phase proves the thesis: geometry defined as code can be created, modified, tested, and iterated on by AI agents with human oversight.
 
@@ -51,7 +59,7 @@ Add engineering analysis:
 
 - **FEA/CFD kernels** — FEAScript and future solvers. Stress, thermal, and fluid analysis on geometry produced by MCAD kernels.
 - **Mathematical analysis** — Automated engineering calculations that feed requirements into geometry parameters.
-- **Test-driven engineering** — Extend the `test.json` pattern to physical requirements: max stress, thermal limits, weight budgets. AI agents iterate until specs are met.
+- **Test-driven engineering** — Extend GeoSpec to physical requirements: max stress, thermal limits, weight budgets. AI agents iterate until specs are met.
 
 ### Phase 3: Systems Integration
 
@@ -86,9 +94,33 @@ The endgame. When all five pillars are connected through code, the platform beco
 - **Fleet management** — Robots in the field are parameterized variants of the same codebase. Update a requirement, re-run the pipeline, push firmware OTA, and queue revised parts for manufacturing. Fleet-wide changes propagate from code, not spreadsheets.
 - **Continuous physical iteration** — Field telemetry feeds back into the system model. Agents identify failure modes, propose design changes, simulate fixes, and produce updated build artifacts — closing the loop between deployed hardware and the engineering workspace.
 
+## The Commercial Boundary
+
+Open software and a defensible business are not in tension. All Tau-authored software is Apache-2.0; the commercial
+boundary is the operated assurance layer, not permission to use the code.
+
+| Open software (drives adoption)                                     | Commercial assurance (the business)                              |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Complete Tau and GeoSpec codebase, runtime APIs, and file formats   | Managed, accelerated GeoSpec Cloud operation                     |
+| The `.geospec` DSL, matcher implementations, and diagnostics schema | "CI for hardware" — PR-gating, concurrency, org dashboards       |
+| Local/WASM/native checks and published `@taucad/*` packages         | Signed evidence, traceability, retention, process DFM rule packs |
+| Project artifacts, plugins, generated UI, forks, and custom engines | Manufacturability data, integrations, support, and certification |
+
+Three positions follow from this boundary and must not drift:
+
+- **The data flywheel is the durable moat.** Every verified run is a labeled `(design, spec, pass/fail, repair)` example — a dataset that does not exist publicly. We capture it **train-public, retrieve-private**: bootstrap models on public CAD corpora and Tau-generated synthetic labels, learn from opt-in free-tier runs, and never train on customers' proprietary designs. Engine speed commoditizes; the dataset compounds.
+- **Build the oracle, rent the physics.** Tau builds and owns the geometric, manufacturability, and tolerance verification engine — the scarce, compounding layer. It does not build CFD/FEA/thermal solvers; it orchestrates them (Vanellus, Navier, OpenFOAM) behind a unified assertion contract and meters the orchestration. Surrogate/loop physics is a future option, kept open by the solver-provider seam — not a commodity-solver rebuild.
+- **Independence is a feature.** A verdict from a neutral oracle is worth more than one from the tool that generated the part — you don't let the fox certify the henhouse. Apache-2.0 lets third parties, including competitors, embed, audit, extend, and independently operate Tau's verification. Official certification and contractual no-train guarantees remain separate trust products.
+
+Open adoption funds the mission; the operated assurance layer, trusted identity, integrations, and dataset are what
+make it a business. Software permission is never the moat.
+
 ## Design Principles
 
 - **Code is the interface.** Every engineering artifact — geometry, circuits, firmware, test specs, requirements — is represented as code. Code is versionable, diffable, reviewable, and agent-accessible.
 - **Everything is pluggable.** The `defineKernel()` pattern scales to any engineering domain. New solvers, languages, and tools plug into the same runtime, transport, and middleware stack.
+- **Hosts are peers.** Any capability the browser offers an agent or user must be achievable headlessly through the same files and pathways — browser, CLI, and CI produce identical artifacts.
+- **Verification is the reward function.** Generation is commoditizing; trusted verification is the scarce resource. GeoSpec is the oracle that closes the agentic loop and the connective layer across every pillar — a first-class concern, not a test harness bolted onto CAD.
+- **Build the oracle, rent the physics.** Own the geometric/manufacturability/tolerance verification engine and the data it produces; orchestrate third-party physics solvers rather than rebuilding them.
 - **AI agents are collaborators.** Agents don't replace engineers — they handle the thousands of micro-problems that make up a system design, while humans make the architectural decisions.
-- **Open by default.** Published packages, open protocols, embeddable components. Hardware tooling has been locked in proprietary silos for decades.
+- **Open software, commercial assurance.** All Tau-authored software is Apache-2.0 — runtime, kernels, workbench, GeoSpec DSL and engine, plugins, examples, and published packages — because permissionless adoption is the flywheel. Monetize managed operation, scale, the manufacturability dataset, signed evidence, certification, integrations, support, and hosted orchestration; never make software permission the product boundary.

@@ -1,0 +1,1867 @@
+import { normalizeContext } from '@earendil-works/pi-ai';
+import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy';
+import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
+import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
+import type {
+  Api,
+  AnthropicOptions,
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+  ModelCostRates,
+  OpenAICompletionsOptions,
+  OpenAIResponsesOptions,
+} from '@earendil-works/pi-ai';
+import { util as zodUtility } from 'zod';
+import { isClearedToolResult, isCompactionSummaryRow } from '#harness/compaction.js';
+import { MessageIdentities, providerMessageToPi } from '#harness/session-record.js';
+import { fitAttachmentBudget, rewriteDocuments } from '#transport/document-payload.js';
+import { readPrefixStamp } from '#log/prefix-stamp.js';
+import type { PrefixStamp } from '#log/prefix-stamp.js';
+import { prefixCodecEpoch, stampPrefix, withoutNativeReasoning } from '#transport/prefix-stamp.js';
+import type { StampedPrefix } from '#transport/prefix-stamp.js';
+import { createVertexResponseShim, echoThoughtSignatures } from '#transport/vertex-completions-shim.js';
+import { modelTelemetryParent, modelTelemetrySubject } from '#transport/model-telemetry.js';
+import { modelRequestObserver, observeModelStream } from '#transport/model-observation.js';
+import type { ModelTelemetrySeam } from '#transport/model-telemetry.js';
+import type {
+  JsonObject,
+  ModelProviderKind,
+  ModelReasoningConfig,
+  ModelSystemPromptBlock,
+  ProviderMessage,
+} from '#log/event-types.js';
+import type {
+  DeploymentModeAnswer,
+  InvocationFunding,
+  InvocationResolutionRequest,
+  ModelInvocationBinding,
+  ModelStreamEvent,
+  ModelStreamRequest,
+  ModelTransport,
+} from '#waist/ports.js';
+import { gatewayProviderKinds } from '#wire/admission.schema.js';
+import { attemptReceiptSchema, gatewayErrorCodes } from '#wire/gateway.js';
+import type { GatewayErrorCode, GatewayHostLabels, GatewayTurnLabels, InvocationResolution } from '#wire/gateway.js';
+import type { RefusalCode } from '#wire/refusals.js';
+
+const openAiGatewayPath = 'v1/llm/openai/v1';
+const anthropicGatewayPath = 'v1/llm/anthropic';
+// Pi validates provider auth before invoking custom fetch; this sentinel is
+// stripped at the wire boundary so cookie-authenticated requests emit no key header.
+const piCookieAuthValidationHeaders = {
+  authorization: 'cookie-authenticated',
+} as const;
+
+/** Failures this transport raises itself, beside the gateway's own codes. */
+const transportErrorCodes = [
+  'MODEL_PROVIDER_UNSUPPORTED',
+  'MALFORMED_RESPONSE',
+  'NETWORK_ERROR',
+  'UNKNOWN_GATEWAY_ERROR',
+] as const satisfies readonly RefusalCode[];
+
+/** Stable gateway failure code: the gateway's own codes plus the transport's (registry owners `gateway`, `transport`). @public */
+export type GatewayModelErrorCode = GatewayErrorCode | (typeof transportErrorCodes)[number];
+
+const isGatewayModelErrorCode = (value: string): value is GatewayModelErrorCode =>
+  gatewayErrorCodes.some((code) => code === value) || transportErrorCodes.some((code) => code === value);
+
+/** Typed failure returned by Tau's model gateway. @public */
+export class GatewayModelTransportError extends Error {
+  public readonly code: GatewayModelErrorCode;
+  public readonly status?: number | undefined;
+  public readonly rawType?: string | undefined;
+  /**
+   * Structured refusal fields the gateway attached to the coded error, such as
+   * an `INSUFFICIENT_CREDIT` denial's required and available credit atoms. The
+   * shape belongs to the code, so it is carried opaquely to the surface that
+   * renders it.
+   */
+  public readonly details?: Record<string, unknown> | undefined;
+
+  public constructor(options: {
+    readonly code: GatewayModelErrorCode;
+    readonly message: string;
+    readonly status?: number | undefined;
+    readonly rawType?: string | undefined;
+    readonly details?: Record<string, unknown> | undefined;
+    readonly cause?: unknown;
+  }) {
+    super(options.message, { cause: options.cause });
+    this.name = 'GatewayModelTransportError';
+    this.code = options.code;
+    this.status = options.status;
+    this.rawType = options.rawType;
+    this.details = options.details;
+  }
+}
+
+const openAiGatewayProviderKinds = new Set<ModelProviderKind>(
+  gatewayProviderKinds.filter((kind) => kind !== 'anthropic'),
+);
+
+/**
+ * Whether Tau's OpenAI gateway route speaks the catalog provider's wire.
+ *
+ * @param providerKind - Catalog provider discriminator.
+ * @returns Whether the provider uses Tau's OpenAI-compatible route.
+ * @public
+ */
+export const isOpenAiGatewayProviderKind = (providerKind: ModelProviderKind | undefined): boolean =>
+  providerKind !== undefined && openAiGatewayProviderKinds.has(providerKind);
+
+/**
+ * Whether Tau exposes a browser-safe gateway wire for the catalog provider.
+ *
+ * @param providerKind - Catalog provider discriminator.
+ * @returns Whether the browser host can route the provider through Tau's gateway.
+ * @public
+ */
+export const isGatewayProviderKind = (providerKind: string | undefined): boolean =>
+  gatewayProviderKinds.some((kind) => kind === providerKind);
+
+/**
+ * Whether the catalog provider is OpenAI itself rather than an
+ * OpenAI-compatible provider.
+ *
+ * Direct-OpenAI rows speak the Responses wire: `gpt-5.6-luna` answers HTTP 400
+ * (`Function tools with reasoning_effort are not supported ... in
+ * /v1/chat/completions`) to any completions request carrying function tools,
+ * and the browser host always sends tools. Every OpenAI-compatible provider
+ * exposes only /chat/completions and stays on that codec.
+ *
+ * @param providerKind - Catalog provider discriminator (`provider.id`).
+ * @returns Whether the request must use pi's `openai-responses` codec.
+ * @public
+ */
+export const isOpenAiResponsesProviderKind = (providerKind: ModelProviderKind | undefined): boolean =>
+  providerKind === 'openai' || providerKind === 'xai';
+
+/**
+ * Whether the request's reasoning level rides in the transcript instead of in a request field (ruling U14): the
+ * catalog says the model reads it there, and the wire is one that defines the form. Anthropic reads an empty
+ * `system`-role message carrying `output_config`, OpenAI a `configuration_update` item; pi-ai writes both and holds
+ * the request field still, so a level change appends to the prompt cache instead of rewriting it.
+ *
+ * @param request - The model stream request.
+ * @returns `true` when the codec should carry the level in the transcript.
+ */
+const carriesEffortInTranscript = (request: Pick<ModelStreamRequest, 'providerKind' | 'reasoning'>): boolean =>
+  request.reasoning?.effortInTranscript === true &&
+  request.reasoning.effort !== undefined &&
+  (request.providerKind === 'anthropic' || request.providerKind === 'openai');
+
+const replayBindingBeta = 'thinking-binding-controls-2026-08-01';
+
+/**
+ * The Anthropic body with the binding control the request asks for (WP5): what the provider does with a replayed
+ * thinking block whose prefix changed. The replay rule already leaves such a block out, so `drop` is a second net that
+ * reports what the rule missed, and `refuse` is how a test turns a miss into a failure.
+ *
+ * @param body - The Anthropic request body pi-ai built.
+ * @param binding - The behaviour to ask for.
+ * @returns The body with the control and its beta, or unchanged when the request does not think.
+ */
+const withReplayBinding = (body: Record<string, unknown>, binding: 'drop' | 'refuse'): Record<string, unknown> => {
+  const { thinking } = body;
+  if (!zodUtility.isObject(thinking) || thinking['type'] === 'disabled') {
+    return body;
+  }
+  const betas = Array.isArray(body['betas']) ? (body['betas'] as unknown[]) : [];
+  return {
+    ...body,
+    /* eslint-disable @typescript-eslint/naming-convention -- Anthropic's wire uses snake_case. */
+    thinking: {
+      ...thinking,
+      block_binding: { prefix_mismatch_behavior: binding === 'refuse' ? 'error' : 'drop_block' },
+    },
+    /* eslint-enable @typescript-eslint/naming-convention -- End Anthropic wire keys. */
+    betas: betas.includes(replayBindingBeta) ? betas : [...betas, replayBindingBeta],
+  };
+};
+
+/** Input matching Tau API's static/workspace/dynamic cache layout. @public */
+export type CachedSystemPromptOptions = {
+  readonly staticPrompt: string;
+  readonly dynamicPrompt: string;
+  readonly workspacePrompt?: string | undefined;
+};
+
+/**
+ * Preserve the ordered system-prompt structure beside pi's canonical string prompt.
+ *
+ * @param options - Static, optional workspace, and dynamic prompt content.
+ * @returns Ordered provider-neutral cache blocks.
+ * @public
+ */
+export const createCachedSystemPromptBlocks = (
+  options: CachedSystemPromptOptions,
+): readonly ModelSystemPromptBlock[] => [
+  {
+    type: 'text',
+    text: options.staticPrompt,
+    cacheControl: { type: 'ephemeral' },
+  },
+  ...(options.workspacePrompt === undefined
+    ? []
+    : ([
+        {
+          type: 'text',
+          text: options.workspacePrompt,
+          cacheControl: { type: 'ephemeral' },
+        },
+      ] as const)),
+  { type: 'text', text: options.dynamicPrompt },
+];
+
+/** Browser-safe Tau gateway transport configuration. @public */
+export type GatewayModelTransportOptions = {
+  /**
+   * Bearer token provider for hosts with no cookie jar (an Electron utility
+   * process, a daemon). Configured, its token becomes the `Authorization`
+   * header; omitted or resolving to `undefined`, the header is stripped and the
+   * request stays cookie-authenticated.
+   */
+  readonly auth?: (() => string | undefined | Promise<string | undefined>) | undefined;
+  readonly baseUrl: string;
+  /**
+   * The cloud project every call from this composition belongs to, for the
+   * gateway's spend attribution. Per composition, since one worker serves one
+   * project. Omitted for a workspace with no cloud identity — a `tau serve`
+   * checkout — whose receipts then name no project.
+   */
+  readonly projectId?: string | undefined;
+  /**
+   * Catalog limits for a host that configures one default model. Optional: a
+   * host that has none — every turn names its own row — supplies these through
+   * {@link ModelStreamRequest} instead, which is what the harness always does.
+   */
+  readonly model?:
+    | {
+        readonly contextWindow: number;
+        readonly maxTokens?: number | undefined;
+        readonly cost?: ModelCostRates | undefined;
+      }
+    | undefined;
+  readonly fetch?: typeof globalThis.fetch | undefined;
+  /**
+   * The composing build's release label. A prefix break under another release is one of `definitions`: the prompt or
+   * tool text a release changed. A composition that names none reports such a break as `instructions` or `tools`.
+   */
+  readonly release?: string | undefined;
+  /** Optional funded-operation protocol supplied only by a managed Cloud composition. */
+  readonly fundedOperations?: GatewayFundedOperationProtocol | undefined;
+  /**
+   * The billing layer, chosen per run from the API's deployment answer (D1). Configured, the transport carries a
+   * `deployment` whose run owner asks the port once at each run's admission; omitted, every call is unfunded.
+   */
+  readonly billing?: GatewayBillingOptions | undefined;
+  /**
+   * The host, build and kernel labels every call from this composition carries, with each request's model (LW17).
+   * Omitted, the call sends none of the four, so a composition opts in only once the gateway admits them (I6).
+   */
+  readonly hostLabels?: GatewayHostLabels | undefined;
+  /**
+   * Host composition's native-telemetry seam. Supplied only by a composition
+   * that has an enabled, permitted adapter; absent in every other build, which
+   * is the default. A seam never changes what is requested, retried or
+   * returned, and a seam that fails loses its telemetry rather than the call.
+   */
+  readonly telemetry?: ModelTelemetrySeam | undefined;
+};
+
+/**
+ * Managed Cloud operation binding kept outside the provider transport's self-host graph. Funding and resolution are the
+ * transport's `funding` facet (RA-S11); this seam only binds a response.
+ */
+export type GatewayFundedOperationProtocol = {
+  /** Require and validate the operation identity on an accepted gateway response. */
+  bindResponse(response: Response): ModelInvocationBinding;
+};
+
+/**
+ * The host's side of the billing layer (D1): how a run learns its mode, and the account a funded call charges.
+ *
+ * @public
+ */
+export type GatewayBillingOptions = {
+  /**
+   * The deployment answer for this transport's API origin, asked at a run's admission. The host owns fetching and
+   * caching it; `unfunded` only for an explicit answer (a `funded: false` body or a `404` for the route, I2), and
+   * `unknown` for a timeout, a `5xx`, a malformed body or a refused connection, which ends the run (I1). The signal
+   * aborts once the run is stopped or the transport's 10 s bound passes; the answer is then `unknown` whatever the port
+   * does.
+   */
+  readonly deployment: (signal: AbortSignal) => Promise<DeploymentModeAnswer>;
+  /**
+   * The account the gateway charges, read from the host's credential port on every prepare (W6 RH-S6; W11 GI-Q6).
+   * Absent or `undefined`, the host cannot check an attempt's account.
+   */
+  readonly principal?: (() => string | undefined | Promise<string | undefined>) | undefined;
+};
+
+type WireRecord = Record<string, unknown>;
+type GatewayFetchState = {
+  failure?: GatewayModelTransportError | undefined;
+  binding?: ModelInvocationBinding | undefined;
+};
+type PiGatewayModel = Model<'anthropic-messages'> | Model<'openai-completions'> | Model<'openai-responses'>;
+type PiTool = NonNullable<Context['tools']>[number];
+
+const readString = (value: WireRecord, key: string): string | undefined =>
+  typeof value[key] === 'string' ? value[key] : undefined;
+
+const readDetails = (value: WireRecord): Record<string, unknown> | undefined =>
+  zodUtility.isObject(value['details']) ? value['details'] : undefined;
+
+const gatewayErrorCode = (value: unknown, status: number): GatewayModelErrorCode => {
+  if (typeof value === 'string' && isGatewayModelErrorCode(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return 'UNKNOWN_GATEWAY_ERROR';
+  }
+  if (status === 401) {
+    return 'UNAUTHENTICATED';
+  }
+  if (status === 403) {
+    return 'UNKNOWN_GATEWAY_ERROR';
+  }
+  if (status === 413) {
+    return 'REQUEST_TOO_LARGE';
+  }
+  if (status === 429) {
+    return 'RATE_LIMITED';
+  }
+  if (status >= 500) {
+    return 'PROVIDER_UNAVAILABLE';
+  }
+  return 'INVALID_REQUEST';
+};
+
+const gatewayEnvelopeError = (
+  payload: WireRecord,
+  status: number,
+  fallback: string,
+): GatewayModelTransportError | undefined => {
+  const envelope = zodUtility.isObject(payload['error'])
+    ? payload['error']
+    : payload['type'] === 'error'
+      ? payload
+      : undefined;
+  if (!envelope) {
+    return undefined;
+  }
+  const rawType = readString(envelope, 'type');
+  const code = gatewayErrorCode(rawType, status);
+  const details = readDetails(envelope);
+  return new GatewayModelTransportError({
+    code,
+    message: readString(envelope, 'message') ?? fallback,
+    status,
+    ...(rawType && code === 'UNKNOWN_GATEWAY_ERROR' ? { rawType } : {}),
+    ...(details === undefined ? {} : { details }),
+  });
+};
+
+/**
+ * Read a typed code out of the API's flattened `HttpErrorResponse` shape.
+ *
+ * Belt and braces for an API build whose exception filter still collapses the
+ * gateway envelope: the flattened body keeps `code`, and a known gateway code
+ * there is worth more than a status-derived guess.
+ */
+const flattenedGatewayError = (payload: WireRecord, status: number): GatewayModelTransportError | undefined => {
+  const code = readString(payload, 'code');
+  if (code === undefined || !isGatewayModelErrorCode(code)) {
+    return undefined;
+  }
+  const details = readDetails(payload);
+  return new GatewayModelTransportError({
+    code,
+    message: readString(payload, 'message') ?? readString(payload, 'error') ?? code,
+    status,
+    ...(details === undefined ? {} : { details }),
+  });
+};
+
+export const gatewayResponseError = async (response: Response): Promise<GatewayModelTransportError> => {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = undefined;
+  }
+  const fallback = `Tau model gateway returned HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}.`;
+  if (zodUtility.isObject(payload)) {
+    const parsed =
+      gatewayEnvelopeError(payload, response.status, fallback) ?? flattenedGatewayError(payload, response.status);
+    const retryAfterSeconds = Number(response.headers.get('retry-after') ?? Number.NaN);
+    if (parsed && Number.isInteger(retryAfterSeconds) && retryAfterSeconds >= 0) {
+      // The card tells the customer when to try again instead of guessing.
+      return new GatewayModelTransportError({
+        code: parsed.code,
+        message: parsed.message,
+        status: parsed.status,
+        rawType: parsed.rawType,
+        details: { ...parsed.details, retryAfterSeconds },
+      });
+    }
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return new GatewayModelTransportError({
+    code: gatewayErrorCode(undefined, response.status),
+    message: fallback,
+    status: response.status,
+  });
+};
+
+const networkError = (message: string, cause: unknown, status?: number): GatewayModelTransportError =>
+  new GatewayModelTransportError({
+    code: 'NETWORK_ERROR',
+    message,
+    ...(status === undefined ? {} : { status }),
+    cause,
+  });
+
+/**
+ * Tau's own in-stream failure envelope. The gateway rewrites a classified
+ * provider failure — an exhausted account, a mid-stream rate limit — into a
+ * single SSE `error` frame carrying this marker.
+ *
+ * Two separate things keep it Tau's: model-generated text cannot produce these
+ * bytes, because content and tool-call arguments are JSON strings whose quotes
+ * arrive escaped; and the API never forwards a provider frame carrying the
+ * marker, since a provider does control its own body at the structural level
+ * (`provider-account-stream.ts`, R5).
+ */
+const tauGatewayFrameMarker = '"type":"tau_gateway"';
+const sseEventBoundary = /\r\n\r\n|\n\n|\r\r/gu;
+
+/**
+ * Drop the relayed text pi-ai has already been handed, bounding the scan buffer.
+ *
+ * @param text - Relayed SSE text scanned so far.
+ * @returns The text after the last complete event boundary.
+ */
+const sinceLastEventBoundary = (text: string): string => {
+  let start = 0;
+  for (const match of text.matchAll(sseEventBoundary)) {
+    start = match.index + match[0].length;
+  }
+  return text.slice(start);
+};
+
+/**
+ * Whether the frame carrying the Tau marker has been terminated by an event boundary.
+ *
+ * @param relayed - Relayed text since the last delivered event boundary.
+ * @returns True once a boundary follows the marker-bearing frame.
+ */
+const markerFrameComplete = (relayed: string): boolean => {
+  const frames = relayed.split(sseEventBoundary);
+  const index = frames.findIndex((event) => event.includes(tauGatewayFrameMarker));
+  return index !== -1 && index < frames.length - 1;
+};
+
+/**
+ * Read Tau's coded failure out of relayed gateway bytes.
+ *
+ * Only the frame carrying the marker is decoded, and an incomplete one answers
+ * undefined so the caller reads on until the event boundary or EOF completes
+ * it. The frame's code is mapped exactly as an error body's is on the HTTP
+ * path, so a code this build has never heard of still ends the turn — as
+ * `UNKNOWN_GATEWAY_ERROR`, carrying the wire code — rather than reaching pi's
+ * codec to be reported under a guessed one.
+ *
+ * @param relayed - Relayed SSE text since the last delivered event boundary.
+ * @param status - HTTP status of the relayed gateway response.
+ * @returns The coded failure, or undefined when no complete Tau frame is present.
+ */
+const gatewayFailureFrame = (relayed: string, status: number): GatewayModelTransportError | undefined => {
+  const frame = relayed.split(sseEventBoundary).find((event) => event.includes(tauGatewayFrameMarker));
+  if (frame === undefined) {
+    return undefined;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(
+      frame
+        .split('\n')
+        .flatMap((line) => (line.startsWith('data:') ? [line.slice('data:'.length).trim()] : []))
+        .join('\n'),
+    );
+  } catch {
+    return undefined;
+  }
+  const envelope = zodUtility.isObject(payload) && zodUtility.isObject(payload['error']) ? payload['error'] : undefined;
+  if (envelope?.['type'] !== 'tau_gateway') {
+    return undefined;
+  }
+  // A marker-bearing envelope carrying no code is not Tau's failure frame; it
+  // stays the SDK's bytes rather than ending the turn under a status-derived guess.
+  const rawCode = readString(envelope, 'code');
+  if (rawCode === undefined) {
+    return undefined;
+  }
+  const code = gatewayErrorCode(rawCode, status);
+  const details = readDetails(envelope);
+  return new GatewayModelTransportError({
+    code,
+    message: readString(envelope, 'message') ?? 'The model gateway ended this stream.',
+    status,
+    ...(code === 'UNKNOWN_GATEWAY_ERROR' ? { rawType: rawCode } : {}),
+    ...(details === undefined ? {} : { details }),
+  });
+};
+
+const guardedResponse = (options: {
+  readonly response: Response;
+  readonly state: GatewayFetchState;
+  readonly signal: AbortSignal;
+}): Response => {
+  const reader = options.response.body!.getReader();
+  const decoder = new TextDecoder();
+  // Relayed text since the last delivered event boundary, so a failure frame
+  // split across chunks is still recognised. Trimming stops once the marker
+  // appears: from there the whole frame is needed to read its code.
+  let relayed = '';
+  let failing = false;
+  // Chunks held back while a marker-bearing frame is still incomplete; they
+  // are replayed in order if that frame turns out not to be a failure.
+  let withheld: Array<Uint8Array<ArrayBuffer>> = [];
+  /**
+   * Holds one more chunk of a marker-bearing frame; releases them all once the frame proves harmless.
+   *
+   * @param chunk - The chunk just read, not yet delivered.
+   * @param controller - The guarded stream the released chunks are delivered on.
+   * @returns True once the held bytes have been delivered, false while the frame is still open.
+   */
+  const hold = (
+    chunk: Uint8Array<ArrayBuffer>,
+    controller: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>>,
+  ): boolean => {
+    withheld.push(chunk);
+    if (!markerFrameComplete(relayed)) {
+      return false;
+    }
+    // A complete Tau frame carrying no failure code belongs to the SDK after all.
+    failing = false;
+    for (const held of withheld) {
+      controller.enqueue(held);
+    }
+    withheld = [];
+    relayed = sinceLastEventBoundary(relayed);
+    return true;
+  };
+  const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    async pull(controller) {
+      /* One pull must enqueue, close or error before it resolves: a pull that
+       * only withholds bytes schedules no further pull of its own, so a
+       * marker-bearing frame spanning several chunks would strand the
+       * consumer's pending read. Read on until this call has delivered. */
+      for (;;) {
+        let next: ReadableStreamReadResult<Uint8Array<ArrayBuffer>>;
+        // Only the read is a gateway failure. Guarding this stream's own `close`
+        // and `enqueue` too would record the SDK's cancel-then-close race as
+        // `NETWORK_ERROR` and mask the provider's terminal frame behind it.
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- the upstream body is read serially.
+          next = await reader.read();
+        } catch (error) {
+          // An abort is the consumer's own: Tau's signal, the person pressing
+          // Stop, or the bundled SDK leaving the stream on a terminal frame.
+          if (options.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+            controller.error(error);
+            return;
+          }
+          const failure = networkError('Tau model gateway response stream failed.', error, options.response.status);
+          options.state.failure = failure;
+          controller.error(failure);
+          return;
+        }
+        if (next.done) {
+          const trailing = failing ? gatewayFailureFrame(relayed, options.response.status) : undefined;
+          if (trailing) {
+            options.state.failure = trailing;
+            controller.error(trailing);
+            return;
+          }
+          // A marker frame the body never terminated was never a failure, so it
+          // and the healthy frames that shared its chunks are the SDK's after
+          // all. Closing on them instead loses the turn's terminal frame and
+          // reports `Stream ended without finish_reason` in its place.
+          if (withheld.length > 0) {
+            const heldBytes = new Uint8Array(withheld.reduce((size, held) => size + held.length, 0));
+            let offset = 0;
+            for (const held of withheld) {
+              heldBytes.set(held, offset);
+              offset += held.length;
+            }
+            // Keep original bytes: a chunk may start or end inside a multibyte character.
+            let completeEnd = 0;
+            for (let index = 1; index < heldBytes.length; index += 1) {
+              const byte = heldBytes[index];
+              if ((byte === 10 || byte === 13) && heldBytes[index - 1] === byte) {
+                completeEnd = index + 1;
+              } else if (
+                index >= 3 &&
+                byte === 10 &&
+                heldBytes[index - 1] === 13 &&
+                heldBytes[index - 2] === 10 &&
+                heldBytes[index - 3] === 13
+              ) {
+                completeEnd = index + 1;
+              }
+            }
+            if (completeEnd > 0) {
+              controller.enqueue(heldBytes.subarray(0, completeEnd));
+            }
+          } else if (relayed.trim()) {
+            controller.error(
+              new GatewayModelTransportError({
+                code: 'MALFORMED_RESPONSE',
+                message: 'Tau model gateway stream ended inside an SSE frame.',
+              }),
+            );
+            return;
+          }
+          withheld = [];
+          controller.close();
+          return;
+        }
+        relayed += decoder.decode(next.value, { stream: true });
+        failing ||= relayed.includes(tauGatewayFrameMarker);
+        if (failing) {
+          // The failure frame never reaches pi-ai's codec: Tau raises the coded
+          // failure itself rather than letting the SDK report an opaque stream
+          // error. An incomplete frame just withholds its bytes and reads on.
+          // ponytail: bytes sharing the failure frame's chunk are dropped with it
+          // rather than re-encoded; the turn is terminal either way.
+          const failure = gatewayFailureFrame(relayed, options.response.status);
+          if (failure) {
+            options.state.failure = failure;
+            controller.error(failure);
+            // oxlint-disable-next-line no-await-in-loop -- the cancel ends this read loop.
+            await reader.cancel(failure);
+            return;
+          }
+          if (hold(next.value, controller)) {
+            return;
+          }
+          continue;
+        }
+        relayed = sinceLastEventBoundary(relayed);
+        controller.enqueue(next.value);
+        return;
+      }
+    },
+    cancel: async (reason) => reader.cancel(reason),
+  });
+  return new Response(body, {
+    status: options.response.status,
+    statusText: options.response.statusText,
+    headers: options.response.headers,
+  });
+};
+
+/** The prompt-cache lifetime pi-ai's codecs take: `short` is each provider's default. */
+type GatewayCacheRetention = 'short' | 'long';
+
+/** The Anthropic `cache_control.ttl` pi-ai writes for `long` retention. */
+const anthropicLongCacheTtl = '1h';
+
+/**
+ * The one owner of a request's prompt-cache lifetime.
+ *
+ * Anthropic is the only wire where Tau chooses the lifetime, and a turn there
+ * asks for one hour: the gaps it rescues are the person's think time between
+ * turns, which outlast five minutes. A compaction stays at five minutes, since
+ * the tail it writes is replaced by its summary and never read again. Every
+ * other provider keeps its own default: OpenAI's longer retention fields are
+ * refused or deprecated, and the Completions wire would put
+ * `prompt_cache_retention` and `prompt_cache_key` on a body the gateway refuses.
+ *
+ * @param request - The invocation being sent.
+ * @returns The retention every cache breakpoint of the request carries.
+ */
+const cacheRetentionFor = (request: ModelStreamRequest): GatewayCacheRetention =>
+  request.providerKind === 'anthropic' && request.invocationPurpose !== 'compaction' ? 'long' : 'short';
+
+/**
+ * The Responses `prompt_cache_key` for a chat: SHA-256 of its id, as 32 hex
+ * characters. It routes a conversation's steps to one supplier server so its
+ * prefix cache is found again, without handing a Tau identifier to the
+ * supplier (I4).
+ *
+ * @param chatId - The chat the invocation belongs to.
+ * @returns The hashed routing key.
+ */
+const promptCacheKeyFor = async (chatId: string): Promise<string> => {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(chatId));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(0, 32);
+};
+
+/** Anthropic refuses a request with more `cache_control` breakpoints than this. */
+const anthropicMaxCacheBreakpoints = 4;
+
+/**
+ * Count the `cache_control` breakpoints in part of a request body.
+ *
+ * @param value - Any JSON value from the body.
+ * @returns How many objects within it carry `cache_control`.
+ */
+const cacheBreakpointCount = (value: unknown): number => {
+  if (Array.isArray(value)) {
+    return value.reduce<number>((total, item) => total + cacheBreakpointCount(item), 0);
+  }
+  if (!zodUtility.isObject(value)) {
+    return 0;
+  }
+  return Object.entries(value).reduce(
+    (total, [key, item]) => total + (key === 'cache_control' ? 1 : cacheBreakpointCount(item)),
+    0,
+  );
+};
+
+/**
+ * Project provider-neutral prompt blocks onto Anthropic's `system` array.
+ *
+ * Anthropic validates this array strictly and the Tau gateway sanitizes every
+ * upstream 4xx, so an invalid block reaches the browser as an opaque failure.
+ * Two shapes it rejects are reachable from Tau's own callers, and both are
+ * dropped here rather than in each caller:
+ *
+ * - an empty text block (`system: text content blocks must be non-empty`, and
+ *   `system.N: cache_control cannot be set for empty text blocks`) — the chat
+ *   client emits one for the workspace slot when a project has no workspace
+ *   prompt;
+ * - `cache_control.scope` (`Extra inputs are not permitted`) — Tau's neutral
+ *   `PromptCacheControl` carries a scope that no Anthropic beta accepts.
+ *
+ * Every breakpoint carries the request's one lifetime, the same one pi-ai puts
+ * on the tool and history breakpoints: Anthropic refuses a one-hour breakpoint
+ * after a five-minute one, so a request is all one hour or all five minutes.
+ * Anthropic also refuses more than four breakpoints, so the system blocks take
+ * only those pi-ai's tool and history breakpoints leave, earliest first: the
+ * static prompt's is the one every chat shares.
+ *
+ * @param options - The neutral blocks, the request's retention and the breakpoints left for them.
+ * @returns The Anthropic `system` array.
+ */
+const anthropicSystemBlocks = (options: {
+  readonly blocks: readonly ModelSystemPromptBlock[];
+  readonly cacheRetention: GatewayCacheRetention;
+  /** Breakpoints left once pi-ai's own tool and history breakpoints are counted. */
+  readonly breakpointBudget: number;
+}): readonly JsonObject[] => {
+  let budget = options.breakpointBudget;
+  return options.blocks.flatMap((block) => {
+    const text = block.text.toWellFormed();
+    if (text === '') {
+      return [];
+    }
+    const cacheControl = budget > 0 ? block.cacheControl : undefined;
+    if (cacheControl) {
+      budget -= 1;
+    }
+    return [
+      {
+        type: 'text',
+        text,
+        ...(cacheControl
+          ? {
+              // eslint-disable-next-line @typescript-eslint/naming-convention -- Anthropic's wire uses snake_case.
+              cache_control: {
+                type: cacheControl.type,
+                ...(options.cacheRetention === 'long' ? { ttl: anthropicLongCacheTtl } : {}),
+              },
+            }
+          : {}),
+      },
+    ];
+  });
+};
+
+/* A label is sent only as printable ASCII within the gateway's bound; anything else would throw in `Headers#set`. */
+const headerLabel = /^[!-~]{1,128}$/u;
+
+const authenticatedFetch =
+  (options: {
+    readonly auth?: GatewayModelTransportOptions['auth'];
+    readonly fetch: typeof globalThis.fetch;
+    readonly signal: AbortSignal;
+    readonly state: GatewayFetchState;
+    readonly providerKind: ModelProviderKind;
+    readonly attemptId: string;
+    /** Spend attribution, each sent only when the caller has one to give. */
+    readonly projectId?: string | undefined;
+    readonly chatId?: string | undefined;
+    /**
+     * The billing activity kind this call is, when it is not the gateway's own
+     * default. Typed to the kinds this host can honestly claim, so a value the
+     * billing wire does not define cannot be put on it.
+     */
+    readonly activity?: 'compaction' | undefined;
+    /** The step's turn labels, sent as headers only: never in the body, so the digest and prompt bytes ignore them. */
+    readonly turn?: GatewayTurnLabels | undefined;
+    /** The composition's host labels and the request's model, sent as headers only, like {@link turn}. */
+    readonly host?: (GatewayHostLabels & { readonly model: string }) | undefined;
+    readonly fundedOperations?: GatewayFundedOperationProtocol | undefined;
+    readonly onInvocationBound?: ModelStreamRequest['onInvocationBound'];
+    readonly systemPromptBlocks?: readonly ModelSystemPromptBlock[] | undefined;
+    /** The request's one cache lifetime, from {@link cacheRetentionFor}. */
+    readonly cacheRetention: GatewayCacheRetention;
+  }): typeof globalThis.fetch =>
+  async (input, init) => {
+    try {
+      // Credentialed CORS ignores an `Access-Control-Allow-Headers: *` wildcard,
+      // so the gateway's allow-list stays tight and the bundled SDK's Stainless
+      // telemetry is dropped here instead of failing preflight in the browser.
+      const headers = new Headers(
+        [...new Headers(init?.headers)].filter(([name]) => !name.toLowerCase().startsWith('x-stainless-')),
+      );
+      const token = await options.auth?.();
+      if (token === undefined) {
+        headers.delete('authorization');
+      } else {
+        headers.set('authorization', `Bearer ${token}`);
+      }
+      headers.delete('x-api-key');
+      // Same allow-list problem: pi's Anthropic client stamps this browser
+      // escape hatch, which Tau's gateway never reads (it proxies server-side).
+      headers.delete('anthropic-dangerous-direct-browser-access');
+      headers.set('x-tau-attempt-id', options.attemptId);
+      // The receipt is the only place this spend can be attributed to the work
+      // that caused it. Absent rather than empty when there is nothing to name.
+      if (options.projectId !== undefined) {
+        headers.set('x-tau-project-id', options.projectId);
+      }
+      if (options.chatId !== undefined) {
+        headers.set('x-tau-chat-id', options.chatId);
+      }
+      if (options.activity !== undefined) {
+        headers.set('x-tau-activity', options.activity);
+      }
+      // Telemetry labels for the gateway's turn-step series: enumerated values only (I4), read by
+      // `readTurnTelemetry` in apps/api and listed in its CORS allow-list (`httpHeader.xTauTurnStep`).
+      if (options.turn !== undefined) {
+        headers.set('x-tau-turn-step', options.turn.step);
+        if (options.turn.gap !== undefined) {
+          headers.set('x-tau-turn-gap', options.turn.gap);
+        }
+      }
+      // Observability labels for the API's provider fact (LW17), read by `readHostLabels` in apps/api against closed
+      // vocabularies and listed in its CORS allow-list (`httpHeader.xTauHostKind` and the three beside it).
+      if (options.host !== undefined) {
+        for (const [name, value] of [
+          ['x-tau-host-kind', options.host.kind],
+          ['x-tau-host-build', options.host.build],
+          ['x-tau-kernel', options.host.kernel],
+          ['x-tau-model', options.host.model],
+        ] as const) {
+          if (value !== undefined && headerLabel.test(value)) {
+            headers.set(name, value);
+          }
+        }
+      }
+      let body = init?.body;
+      // Anthropic can preserve SP-8's three cache breakpoints. OpenAI has no
+      // per-system-block cache-control wire shape and uses pi's blanket retention.
+      if (options.providerKind === 'anthropic' && typeof body === 'string' && options.systemPromptBlocks) {
+        const payload: unknown = JSON.parse(body);
+        if (!zodUtility.isObject(payload)) {
+          throw new TypeError('pi-ai produced a non-object Anthropic request body.');
+        }
+        const system = anthropicSystemBlocks({
+          blocks: options.systemPromptBlocks,
+          cacheRetention: options.cacheRetention,
+          breakpointBudget:
+            anthropicMaxCacheBreakpoints - cacheBreakpointCount([payload['tools'], payload['messages']]),
+        });
+        // An all-empty block set leaves pi's own string prompt in place rather
+        // than posting `system: []`.
+        if (system.length > 0) {
+          body = JSON.stringify({ ...payload, system });
+        }
+      }
+      const response = await options.fetch(withoutBetaMarker(input), {
+        ...init,
+        body,
+        credentials: 'include',
+        headers,
+      });
+      if (!response.ok) {
+        const failure = await gatewayResponseError(response);
+        options.state.failure = failure;
+        throw failure;
+      }
+      if (options.fundedOperations) {
+        options.state.binding = options.fundedOperations.bindResponse(response);
+        await options.onInvocationBound?.(options.state.binding);
+      }
+      const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+      if (contentType !== 'text/event-stream' || !response.body) {
+        const failure = new GatewayModelTransportError({
+          code: 'MALFORMED_RESPONSE',
+          message: `Tau model gateway returned ${contentType ?? 'no content type'} instead of text/event-stream.`,
+          status: response.status,
+        });
+        options.state.failure = failure;
+        throw failure;
+      }
+      return guardedResponse({
+        response,
+        state: options.state,
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (error instanceof GatewayModelTransportError || options.signal.aborted) {
+        throw error;
+      }
+      const failure = networkError('Tau model gateway request failed.', error);
+      options.state.failure = failure;
+      throw failure;
+    }
+  };
+
+const baseUrlFor = (baseUrl: string, path: string): string => {
+  const root = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+  return new URL(path, root).href.replace(/\/$/u, '');
+};
+
+const piModelFor = (options: {
+  readonly request: ModelStreamRequest;
+  readonly transport: GatewayModelTransportOptions;
+}): PiGatewayModel => {
+  const maxTokens = options.request.maxTokens ?? options.transport.model?.maxTokens ?? 8192;
+  const contextWindow = options.request.contextWindow ?? options.transport.model?.contextWindow;
+  if (contextWindow === undefined) {
+    throw new GatewayModelTransportError({
+      code: 'INVALID_REQUEST',
+      message: 'Tau model gateway request named no context window and this transport configures no default model.',
+    });
+  }
+  const common = {
+    id: options.request.modelId,
+    name: options.request.modelId,
+    provider: options.request.providerKind!,
+    reasoning: true,
+    input: ['text', 'image'] as Array<'text' | 'image'>,
+    cost: options.request.modelCost ??
+      options.transport.model?.cost ?? {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    contextWindow,
+    maxTokens,
+  };
+  return options.request.providerKind === 'anthropic'
+    ? {
+        ...common,
+        api: 'anthropic-messages',
+        baseUrl: baseUrlFor(options.transport.baseUrl, anthropicGatewayPath),
+        ...(options.request.reasoning?.budgetTokens === undefined && options.request.reasoning !== undefined
+          ? {
+              compat: {
+                forceAdaptiveThinking: true,
+                ...(carriesEffortInTranscript(options.request) ? { supportsMidConvoEffort: true } : {}),
+              },
+            }
+          : {}),
+      }
+    : isOpenAiResponsesProviderKind(options.request.providerKind)
+      ? {
+          ...common,
+          // Both OpenAI codecs share this base: the bundled SDK appends
+          // `/chat/completions` or `/responses` to it.
+          api: 'openai-responses',
+          baseUrl: baseUrlFor(options.transport.baseUrl, openAiGatewayPath),
+          ...(carriesEffortInTranscript(options.request) ? { compat: { supportsMidConvoEffort: true } } : {}),
+        }
+      : {
+          ...common,
+          api: 'openai-completions',
+          baseUrl: baseUrlFor(options.transport.baseUrl, openAiGatewayPath),
+          ...(options.request.providerKind === 'vertexai' ? { compat: { supportsDeveloperRole: false } } : {}),
+          // Pi detects `provider: 'together'` and switches to its Together thinking
+          // format, which always adds `reasoning: { enabled }`. Tau never forwards a
+          // reasoning effort on this wire, and the gateway's strict completions
+          // boundary refuses that key, so every Together turn was a 400.
+          ...(options.request.providerKind === 'together' ? { compat: { thinkingFormat: 'openai' } } : {}),
+        };
+};
+
+/**
+ * Keep executed calls paired with their durable results when a stream stopped between calls.
+ * Pi drops aborted/error assistant messages but retains tool results. Project the completed
+ * prefix as a tool-use envelope, without rewriting the log or reviving unfinished calls.
+ * Native credentials in that prefix remain unchanged for the selected codec to interpret.
+ *
+ * @param messages - Durable history projected for this request.
+ * @returns Transient history with every settled interrupted call still paired.
+ */
+const replayInterruptedCalls = (messages: readonly ProviderMessage[]): readonly ProviderMessage[] =>
+  messages.map((message, index) => {
+    if (
+      message.role !== 'assistant' ||
+      !Array.isArray(message.content) ||
+      (message.metadata?.stopReason !== 'aborted' && message.metadata?.stopReason !== 'error')
+    ) {
+      return message;
+    }
+    const settled = new Map<string, string>();
+    for (let next = index + 1; next < messages.length; next++) {
+      const candidate = messages[next]!;
+      if (candidate.role === 'user' || candidate.role === 'assistant') {
+        break;
+      }
+      if (candidate.role === 'tool-output') {
+        settled.set(candidate.toolCallId, candidate.toolName);
+      }
+    }
+    const isSettledCall = (block: unknown): boolean =>
+      zodUtility.isObject(block) &&
+      block['type'] === 'toolCall' &&
+      typeof block['id'] === 'string' &&
+      typeof block['name'] === 'string' &&
+      settled.get(block['id']) === block['name'];
+    const lastSettled = message.content.findLastIndex(isSettledCall);
+    if (lastSettled === -1) {
+      return message;
+    }
+    return {
+      ...message,
+      content: message.content
+        .slice(0, lastSettled + 1)
+        .filter((block) => !zodUtility.isObject(block) || block['type'] !== 'toolCall' || isSettledCall(block)),
+      metadata: { ...message.metadata, stopReason: 'toolUse' },
+    };
+  });
+
+/** A request's pi context, and the prefix stamp each of its messages' durable rows carries, by message index. */
+type StampedContext = { readonly context: Context; readonly stamps: ReadonlyArray<PrefixStamp | undefined> };
+
+const piContextFor = (request: ModelStreamRequest, model: PiGatewayModel): StampedContext => {
+  const identities = new MessageIdentities(() => 'transport-message');
+  const stamps: Array<PrefixStamp | undefined> = [];
+  const messages = replayInterruptedCalls(request.messages).flatMap((message): Context['messages'] => {
+    const hydrated = providerMessageToPi(message, model as Model<Api>, identities);
+    if (hydrated) {
+      stamps.push(message.role === 'assistant' ? readPrefixStamp(message.metadata?.['prefix']) : undefined);
+    }
+    if (
+      hydrated?.role === 'assistant' &&
+      (hydrated.provider !== model.provider || hydrated.api !== model.api || hydrated.model !== model.id)
+    ) {
+      // Tau preserves readable cross-provider history, but never replays another model's signatures.
+      return [
+        {
+          ...hydrated,
+          content: hydrated.content.flatMap((block): AssistantMessage['content'] =>
+            block.type === 'thinking'
+              ? block.redacted === true || block.thinking.length === 0
+                ? []
+                : [{ type: 'text', text: block.thinking } as const]
+              : [block],
+          ),
+        },
+      ];
+    }
+    return hydrated ? [hydrated as Context['messages'][number]] : [];
+  });
+  const tools: PiTool[] = request.tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.inputSchema as PiTool['parameters'],
+  }));
+  return { context: { systemPrompt: request.systemPrompt, messages, tools }, stamps };
+};
+
+/**
+ * The request's pi context, holding no more attachment bytes than one request may carry (R1).
+ *
+ * @param request - The model stream request.
+ * @param model - The pi model the context is built for.
+ * @returns The fitted context, its rows' stamps and how many attachments the budget omitted.
+ */
+const budgetedContextFor = (
+  request: ModelStreamRequest,
+  model: PiGatewayModel,
+): StampedContext & { readonly evicted: number } => {
+  const { context, stamps } = piContextFor(request, model);
+  const fitted = fitAttachmentBudget(context, request.documents);
+  if (fitted.omitted > 0) {
+    // Ponytail: warned per request, since the transport keeps no session state.
+    console.warn(
+      `Tau model gateway: ${fitted.omitted} older attachment(s) exceed this request's budget and were omitted.`,
+    );
+  }
+  return { context: fitted.context, stamps, evicted: fitted.omitted };
+};
+
+/**
+ * The reasoning level a request runs at, as the prefix stamp records it: the level is part of the prompt-cache key on
+ * every wire but Anthropic's system and tools tiers.
+ *
+ * @param reasoning - The request's reasoning configuration.
+ * @returns The effort, the thinking budget, or `none`.
+ */
+const reasoningSetting = (reasoning: ModelReasoningConfig | undefined): string =>
+  reasoning?.effort ?? (reasoning?.budgetTokens === undefined ? 'none' : `budget:${String(reasoning.budgetTokens)}`);
+
+/**
+ * The request parameters the stamp records beside the prefix. A level carried in the transcript is not one of them:
+ * it is appended like a turn, so changing it breaks nothing. The binding control is, since it sits in a request field.
+ *
+ * @param request - The model stream request.
+ * @returns The settings a later request compares with.
+ */
+const settingsOf = (request: ModelStreamRequest): string =>
+  [
+    carriesEffortInTranscript(request) ? 'transcript' : reasoningSetting(request.reasoning),
+    ...(request.providerKind === 'anthropic' && request.reasoning?.replayBinding !== undefined
+      ? [request.reasoning.replayBinding]
+      : []),
+  ].join('+');
+
+/**
+ * Stamp a request's prefix: which rows may replay native reasoning (P2), and the break it suffered (P1).
+ *
+ * @param input - The request, the pi model and context it is sent as, and the composing build's release label.
+ * @returns The stamp and the stale rows.
+ */
+const prefixStampFor = (input: {
+  readonly request: ModelStreamRequest;
+  readonly model: PiGatewayModel;
+  readonly fitted: ReturnType<typeof budgetedContextFor>;
+  readonly release: string | undefined;
+}): StampedPrefix => {
+  const { request, model, fitted } = input;
+  return stampPrefix({
+    epoch: prefixCodecEpoch,
+    model: { api: model.api, provider: model.provider, id: model.id },
+    system: [request.systemPrompt, ...(request.systemPromptBlocks ?? []).map((block) => block.text)],
+    tools: fitted.context.tools ?? [],
+    messages: fitted.context.messages,
+    stamps: fitted.stamps,
+    settings: settingsOf(request),
+    transcriptEffort: carriesEffortInTranscript(request) ? request.reasoning?.effort : undefined,
+    release: input.release,
+    summary: request.messages.findLast((message) => isCompactionSummaryRow(message))?.id,
+    cleared: fitted.context.messages.filter((message) => message.role === 'toolResult' && isClearedToolResult(message))
+      .length,
+    evicted: fitted.evicted,
+  });
+};
+
+/**
+ * How many replayed thinking blocks the provider itself left out because their prefix had changed. The replay rule
+ * leaves such a block out before it is sent, so any count here is a block the rule missed. Another model's block and
+ * an entry this build does not know are not that, and are not counted.
+ *
+ * @param message - The reply pi-ai assembled.
+ * @returns The count, zero when the provider reported none.
+ */
+const reasoningDroppedByProvider = (message: AssistantMessage): number =>
+  (message.diagnostics ?? [])
+    .filter((diagnostic) => diagnostic.type === 'anthropic_input_transformations')
+    .flatMap((diagnostic) => {
+      const transformations = diagnostic.details?.['transformations'];
+      return Array.isArray(transformations) ? (transformations as unknown[]) : [];
+    })
+    .filter(
+      (entry) =>
+        zodUtility.isObject(entry) &&
+        entry['type'] === 'thinking_dropped' &&
+        entry['reason'] === 'prefix_binding_mismatch',
+    ).length;
+
+const metadataFor = (message: AssistantMessage): JsonObject | undefined => {
+  const dropped = reasoningDroppedByProvider(message);
+  const metadata: JsonObject = {
+    ...(message.responseId ? { responseId: message.responseId } : {}),
+    ...(message.responseModel ? { responseModel: message.responseModel } : {}),
+    ...(message.providerThinkingLevel ? { reasoningLevel: message.providerThinkingLevel } : {}),
+    ...(dropped === 0 ? {} : { reasoningDroppedByProvider: dropped }),
+  };
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+};
+
+const signatureEvents = (message: AssistantMessage, emitted: Map<number, string>): ModelStreamEvent[] =>
+  message.content.flatMap((block, index) => {
+    if (block.type !== 'thinking' || !block.thinkingSignature || emitted.get(index) === block.thinkingSignature) {
+      return [];
+    }
+    emitted.set(index, block.thinkingSignature);
+    return [{ type: 'thinking-signature', contentIndex: index, signature: block.thinkingSignature }];
+  });
+
+const streamedToolCall = (
+  event: Extract<AssistantMessageEvent, { readonly type: 'toolcall_start' | 'toolcall_delta' }>,
+) => {
+  const block = event.partial.content[event.contentIndex];
+  if (block?.type !== 'toolCall') {
+    throw new GatewayModelTransportError({
+      code: 'MALFORMED_RESPONSE',
+      message: `pi-ai emitted ${event.type} without a tool call at content index ${event.contentIndex}.`,
+    });
+  }
+  return block;
+};
+
+/**
+ * The same request with pi's `beta` marker taken off the query.
+ *
+ * pi posts an Anthropic messages call to `/v1/messages?beta=true`, whatever betas the request actually asks for, and
+ * Tau's own gateway accepts no query parameter at all: price and funded identity are computed from the body and an
+ * allow-listed header set, so a query input that never reaches that identity is refused rather than ignored
+ * (`assertNoQuery`). A beta Tau supports is requested through the `anthropic-beta` header, which the gateway validates
+ * against its own list, so this marker carries nothing and the gateway answers 400 while it is on. Only `beta` is
+ * dropped: anything else on the query is still something neither side meant to send.
+ *
+ * @param input - The request pi is about to make.
+ * @returns The same target with no `beta` parameter, or the input unchanged when it carries none.
+ */
+const withoutBetaMarker = (input: RequestInfo | URL): RequestInfo | URL => {
+  if (typeof input !== 'string' && !(input instanceof URL)) {
+    return input;
+  }
+  const url = new URL(input.toString());
+  if (!url.searchParams.has('beta')) {
+    return input;
+  }
+  url.searchParams.delete('beta');
+  return url.toString();
+};
+
+const abortError = (signal: AbortSignal): Error =>
+  signal.reason instanceof Error ? signal.reason : new DOMException('The operation was aborted.', 'AbortError');
+
+/**
+ * A provider refusal naming the context window is the request's own fault: it
+ * will be refused identically until the request changes, so it must not read as
+ * a transient outage the person is invited to resume into (R6).
+ */
+const contextWindowRefusal = /context_length_exceeded|exceeds? the context|maximum context length/iu;
+
+const piStreamError = (message: string): GatewayModelTransportError => {
+  if (contextWindowRefusal.test(message)) {
+    return new GatewayModelTransportError({ code: 'INVALID_REQUEST', message });
+  }
+  const malformed = /(?:parse|malformed|SSE|stream ended|finish_reason|message_stop|content block)/iu.test(message);
+  return new GatewayModelTransportError({
+    code: malformed ? 'MALFORMED_RESPONSE' : 'PROVIDER_UNAVAILABLE',
+    message,
+  });
+};
+
+const streamPiEvents = async function* (options: {
+  readonly events: AsyncIterable<AssistantMessageEvent>;
+  readonly state: GatewayFetchState;
+  readonly signal: AbortSignal;
+  /** Gemini thought signatures captured off the wire by the Vertex shim. */
+  readonly thoughtSignatures: ReadonlyMap<string, string>;
+  /** The request's prefix stamp, for the reply's durable row. */
+  readonly prefix: PrefixStamp | undefined;
+}): AsyncGenerator<ModelStreamEvent> {
+  const emittedSignatures = new Map<number, string>();
+  let terminal = false;
+  let unsentStamp = options.prefix;
+  for await (const event of options.events) {
+    /* With the codec's first event, whatever it is: the reply's row records the request's prefix even when the
+     * stream then fails, and a caller that stops reading here still closes the codec stream. */
+    if (unsentStamp !== undefined) {
+      yield { type: 'message-metadata', metadata: { prefix: unsentStamp } };
+      unsentStamp = undefined;
+    }
+    if (event.type === 'text_start') {
+      yield { type: 'text-start', contentIndex: event.contentIndex };
+      continue;
+    }
+    if (event.type === 'text_delta') {
+      yield { type: 'text-delta', contentIndex: event.contentIndex, text: event.delta };
+      continue;
+    }
+    if (event.type === 'text_end') {
+      yield { type: 'text-end', contentIndex: event.contentIndex, content: event.content };
+      continue;
+    }
+    if (event.type === 'thinking_start') {
+      yield { type: 'thinking-start', contentIndex: event.contentIndex };
+      continue;
+    }
+    if (event.type === 'thinking_delta') {
+      yield { type: 'thinking-delta', contentIndex: event.contentIndex, text: event.delta };
+      continue;
+    }
+    if (event.type === 'thinking_end') {
+      yield { type: 'thinking-end', contentIndex: event.contentIndex, content: event.content };
+      yield* signatureEvents(event.partial, emittedSignatures);
+      continue;
+    }
+    if (event.type === 'toolcall_start') {
+      const toolCall = streamedToolCall(event);
+      yield {
+        type: 'tool-input-start',
+        contentIndex: event.contentIndex,
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+      };
+      continue;
+    }
+    if (event.type === 'toolcall_delta') {
+      const toolCall = streamedToolCall(event);
+      yield {
+        type: 'tool-input-delta',
+        contentIndex: event.contentIndex,
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        delta: event.delta,
+      };
+      continue;
+    }
+    if (event.type === 'toolcall_end') {
+      const thoughtSignature = options.thoughtSignatures.get(event.toolCall.id);
+      yield {
+        type: 'tool-input',
+        contentIndex: event.contentIndex,
+        toolCallId: event.toolCall.id,
+        toolName: event.toolCall.name,
+        input: event.toolCall.arguments,
+        ...(thoughtSignature === undefined ? {} : { thoughtSignature }),
+      };
+      continue;
+    }
+    if (event.type === 'done') {
+      terminal = true;
+      yield* signatureEvents(event.message, emittedSignatures);
+      const metadata = metadataFor(event.message);
+      if (metadata) {
+        yield { type: 'message-metadata', metadata };
+      }
+      yield { type: 'usage', usage: event.message.usage };
+      yield { type: 'completed', stopReason: event.reason };
+      continue;
+    }
+    if (event.type === 'error') {
+      terminal = true;
+      yield* signatureEvents(event.error, emittedSignatures);
+      const metadata = metadataFor(event.error);
+      if (metadata) {
+        yield { type: 'message-metadata', metadata };
+      }
+      yield { type: 'usage', usage: event.error.usage };
+      if (options.signal.aborted || event.reason === 'aborted') {
+        throw abortError(options.signal);
+      }
+      throw options.state.failure ?? piStreamError(event.error.errorMessage ?? 'Tau model gateway stream failed.');
+    }
+  }
+  if (!terminal) {
+    throw new GatewayModelTransportError({
+      code: 'MALFORMED_RESPONSE',
+      message: 'Tau model gateway stream ended without a terminal pi-ai event.',
+    });
+  }
+};
+
+/**
+ * The provider transport with no billing facet: every call is unprepared, and `fundedOperations`, when set, binds it.
+ *
+ * @param options - The gateway configuration.
+ * @returns A transport whose `funding` is `unfunded`.
+ */
+const providerTransport = (options: GatewayModelTransportOptions): ModelTransport => ({
+  /* No gateway ledger here: the billing layer replaces this facet with its funded one for a funded run. */
+  funding: { type: 'unfunded' },
+  async *stream(request) {
+    if (!request.attemptId || request.attemptId.length > 128 || !/^[\u0021-\u007E]+$/u.test(request.attemptId)) {
+      throw new GatewayModelTransportError({
+        code: 'INVALID_REQUEST',
+        message: 'Invalid Tau invocation attempt identity.',
+      });
+    }
+    if (!isGatewayProviderKind(request.providerKind)) {
+      throw new GatewayModelTransportError({
+        code: 'MODEL_PROVIDER_UNSUPPORTED',
+        message: `The browser gateway transport does not speak the ${request.providerKind ?? 'unknown'} provider wire.`,
+      });
+    }
+    if (
+      request.providerKind === 'vertexai' &&
+      request.reasoning?.effort !== undefined &&
+      !['low', 'medium', 'high', 'xhigh'].includes(request.reasoning.effort)
+    ) {
+      throw new GatewayModelTransportError({
+        code: 'INVALID_REQUEST',
+        message: `Vertex does not support ${request.reasoning.effort} reasoning effort.`,
+      });
+    }
+    const model = piModelFor({ request, transport: options });
+    const state: GatewayFetchState = {};
+    const fitted = budgetedContextFor(request, model);
+    const { stamp, stale } = prefixStampFor({ request, model, fitted, release: options.release });
+    /* P2: a row whose prefix changed since it was minted replays no native reasoning. Every request obeys it; the
+     * durable row is untouched. A Gemini call of the current turn left without its signature gets the validator
+     * placeholder from `echoThoughtSignatures`, which reads this context. */
+    const context: Context =
+      stale.size === 0
+        ? fitted.context
+        : {
+            ...fitted.context,
+            messages: fitted.context.messages.map((message, index) =>
+              stale.has(index) ? withoutNativeReasoning(message) : message,
+            ),
+          };
+    /* P1: only a generation is a step of the chat's prefix. A compaction call is not stamped. */
+    const prefix = request.invocationPurpose === 'generation' ? stamp : undefined;
+    const thoughtSignatures = new Map<string, string>();
+    const rewrite = rewriteDocuments(request.documents, model.api);
+    const echo = request.providerKind === 'vertexai' ? echoThoughtSignatures(context) : undefined;
+    const cacheRetention = cacheRetentionFor(request);
+    // Set on the body rather than through pi's `sessionId`: pi would also stamp
+    // `session_id` and `x-client-request-id` headers, which the gateway's CORS
+    // allow-list refuses. Only the Responses wire admits the key, and a request
+    // with no chat has nothing to route by.
+    const promptCacheKey =
+      isOpenAiResponsesProviderKind(request.providerKind) && request.chatId !== undefined
+        ? await promptCacheKeyFor(request.chatId)
+        : undefined;
+    // Every adapter shares one request-construction step: Vertex signature echo,
+    // then the document rewrite (D21, D25), then the Responses routing key. A
+    // refusal here is the caller's request, so it surfaces as INVALID_REQUEST
+    // and nothing is fetched.
+    const replayBinding = request.providerKind === 'anthropic' ? request.reasoning?.replayBinding : undefined;
+    const onPayload = (payload: unknown): unknown => {
+      try {
+        const echoed = echo?.(payload);
+        const documented = rewrite(echoed ?? payload) ?? echoed;
+        const rewritten =
+          replayBinding !== undefined && zodUtility.isObject(documented ?? payload)
+            ? withReplayBinding((documented ?? payload) as Record<string, unknown>, replayBinding)
+            : documented;
+        if (promptCacheKey === undefined) {
+          return rewritten;
+        }
+        const body = rewritten ?? payload;
+        if (!zodUtility.isObject(body)) {
+          throw new TypeError('pi-ai produced a non-object Responses request body.');
+        }
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- OpenAI's wire uses snake_case.
+        return { ...body, prompt_cache_key: promptCacheKey };
+      } catch (error) {
+        state.failure = new GatewayModelTransportError({
+          code: 'INVALID_REQUEST',
+          message: error instanceof Error ? error.message : 'Tau could not build the model request.',
+          cause: error,
+        });
+        throw state.failure;
+      }
+    };
+    const gatewayFetch = authenticatedFetch({
+      ...(options.auth === undefined ? {} : { auth: options.auth }),
+      // Bound: a bare globalThis.fetch reference invoked as options.fetch(...)
+      // carries the wrong `this` and throws Illegal invocation in a WorkerGlobalScope.
+      fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
+      signal: request.signal,
+      state,
+      providerKind: request.providerKind!,
+      attemptId: request.attemptId,
+      // Per composition, then per request: the worker owns one project and
+      // serves every chat in it.
+      ...(options.projectId === undefined ? {} : { projectId: options.projectId }),
+      ...(request.chatId === undefined ? {} : { chatId: request.chatId }),
+      // A generation is the gateway's default activity and says nothing; a
+      // compaction is a kind of its own and says so.
+      ...(request.invocationPurpose === 'compaction' ? { activity: 'compaction' } : {}),
+      ...(request.turn === undefined ? {} : { turn: request.turn }),
+      ...(options.hostLabels === undefined
+        ? {}
+        : {
+            host: {
+              ...options.hostLabels,
+              ...(request.kernel === undefined ? {} : { kernel: request.kernel }),
+              model: request.modelId,
+            },
+          }),
+      fundedOperations: options.fundedOperations,
+      ...(options.fundedOperations && request.onInvocationBound
+        ? { onInvocationBound: request.onInvocationBound }
+        : {}),
+      systemPromptBlocks: request.systemPromptBlocks,
+      cacheRetention,
+    });
+    // Asked once per invocation, before anything is built or fetched. A seam
+    // that fails answers nothing and the request proceeds untelemetered.
+    const telemetryParent = modelTelemetryParent(options.telemetry, modelTelemetrySubject(request));
+    const commonOptions = {
+      headers: piCookieAuthValidationHeaders,
+      cacheRetention,
+      // Gemini's thought markers and tool-call thought signatures are rewritten
+      // into the OpenAI-compatible shape before pi's codec reads a byte. Every
+      // other provider keeps the gateway response untouched.
+      fetch:
+        request.providerKind === 'vertexai'
+          ? ((async (input, init) => {
+              const response = await gatewayFetch(input, init);
+              // `authenticatedFetch` has already refused a body-less response.
+              return new Response(response.body!.pipeThrough(createVertexResponseShim(thoughtSignatures)), {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+              });
+            }) satisfies typeof globalThis.fetch)
+          : gatewayFetch,
+      maxRetries: 0,
+      onPayload,
+      ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+      // Native Pi spans hang from the composition's span when it supplies one.
+      // Absent key rather than `undefined` so a build with no seam sends pi-ai
+      // exactly the options it sent before this field existed.
+      ...(telemetryParent === undefined ? {} : { telemetry: telemetryParent }),
+      signal: request.signal,
+    } as const;
+    const { reasoning } = request;
+    const events =
+      request.providerKind === 'anthropic'
+        ? anthropicMessagesApi().stream(model as Model<'anthropic-messages'>, normalizeContext(context), {
+            ...commonOptions,
+            ...(reasoning === undefined
+              ? {}
+              : {
+                  thinkingEnabled: true,
+                  ...(reasoning.budgetTokens === undefined ? {} : { thinkingBudgetTokens: reasoning.budgetTokens }),
+                  ...(reasoning.display === undefined ? {} : { thinkingDisplay: reasoning.display }),
+                  ...(reasoning.effort === undefined ? {} : { effort: reasoning.effort }),
+                }),
+          } satisfies AnthropicOptions)
+        : isOpenAiResponsesProviderKind(request.providerKind)
+          ? openAIResponsesApi().stream(model as Model<'openai-responses'>, normalizeContext(context), {
+              ...commonOptions,
+              ...(reasoning?.effort === undefined ? {} : { reasoningEffort: reasoning.effort }),
+              ...(reasoning?.summary === undefined ? {} : { reasoningSummary: reasoning.summary }),
+            } satisfies OpenAIResponsesOptions)
+          : openAICompletionsApi().stream(model as Model<'openai-completions'>, normalizeContext(context), {
+              ...commonOptions,
+              ...(request.providerKind === 'vertexai' && reasoning?.effort !== undefined
+                ? {
+                    /* eslint-disable @typescript-eslint/naming-convention -- Upstream Gemini wire keys use snake_case. */
+                    samplingParams: {
+                      extra_body: {
+                        google: {
+                          thinking_config: {
+                            include_thoughts: true,
+                            thinking_level: reasoning.effort.toUpperCase(),
+                          },
+                          thought_tag_marker: 'think',
+                          /* `stream_function_call_arguments: true` belongs here on
+                           * Google's documented wire and stays off, for two
+                           * measured reasons. Under shared-quota pressure Vertex
+                           * sheds requests carrying it with a pre-stream 499
+                           * (7/7 inside one bad window, 0/120 outside one). And
+                           * its streamed-arguments serializer cancels a turn
+                           * mid-stream — HTTP 200, real deltas, then a bare
+                           * `[{"error":{"code":499,…CANCELLED}}]` tail no
+                           * pre-stream retry can see — whenever a tool call
+                           * closes a nested object on a string value:
+                           * `apply_parameter_operation` is 0/9 live with the
+                           * flag and 9/9 without it, across 3.7 Flash, 3.8 Flash
+                           * and 3.1 Pro. It is a value shape, so no schema
+                           * contract test can guarantee it away. The live
+                           * matrix's `apply_parameter_operation` row is the
+                           * standing guard for anyone re-enabling it (blueprint
+                           * Finding 1; T13-AB and T3-BISECT). */
+                        },
+                      },
+                    },
+                    /* eslint-enable @typescript-eslint/naming-convention -- End upstream Gemini payload. */
+                  }
+                : {}),
+            } satisfies OpenAICompletionsOptions);
+    // Observation reads the codec stream Tau already consumes and never sits
+    // between it and the caller; with no parent the codec stream is used as is.
+    const observer = modelRequestObserver(telemetryParent, {
+      model,
+      ...(reasoning?.effort === undefined ? {} : { reasoning: reasoning.effort }),
+    });
+    yield* streamPiEvents({
+      events: observer === undefined ? events : observeModelStream(events, observer),
+      prefix,
+      state,
+      signal: request.signal,
+      thoughtSignatures,
+    });
+  },
+});
+
+// ── The billing layer (D1): operation binding, attempt resolution and the charged account ─────────────
+
+const validIdentity = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= 128 && /^[!-~]+$/u.test(value);
+
+/**
+ * One owner-scoped GET of the attempt route; the caller maps the answer.
+ *
+ * @param options - The transport's gateway configuration.
+ * @param attemptId - The attempt key to look up.
+ * @param signal - Cancels the lookup.
+ * @returns The route's raw response.
+ */
+const fetchAttempt = async (
+  options: GatewayModelTransportOptions,
+  attemptId: string,
+  signal: AbortSignal,
+): Promise<Response> => {
+  if (!validIdentity(attemptId)) {
+    throw new GatewayModelTransportError({
+      code: 'INVALID_REQUEST',
+      message: 'Invalid Tau invocation attempt identity.',
+    });
+  }
+  const headers = new Headers();
+  const token = await options.auth?.();
+  if (token !== undefined) {
+    headers.set('authorization', `Bearer ${token}`);
+  }
+  return (options.fetch ?? globalThis.fetch.bind(globalThis))(
+    new URL(
+      `v1/billing/attempts/gateway/${encodeURIComponent(attemptId)}`,
+      options.baseUrl.endsWith('/') ? options.baseUrl : `${options.baseUrl}/`,
+    ),
+    { credentials: 'include', headers, signal },
+  );
+};
+
+const isTimeout = (reason: unknown): boolean => reason instanceof DOMException && reason.name === 'TimeoutError';
+
+const malformedAttempt = (): GatewayModelTransportError =>
+  new GatewayModelTransportError({
+    code: 'MALFORMED_RESPONSE',
+    message: 'Tau attempt lookup returned an answer this build cannot read. Update Tau, then resume the chat.',
+  });
+
+/**
+ * Maps the route's answer (GI mapping table). A body this build cannot read is a defect, never a wait.
+ *
+ * @param body - The route's parsed JSON body.
+ * @returns The host's resolution.
+ */
+const toResolution = (body: unknown): InvocationResolution => {
+  const parsed = attemptReceiptSchema.safeParse(body);
+  if (!parsed.success) {
+    throw malformedAttempt();
+  }
+  const answer = parsed.data;
+  switch (answer.state) {
+    case 'pending': {
+      // W2: the instant the gateway settles the attempt by bounds the host's wait; an older image does not state it.
+      return answer.settlesBy === undefined
+        ? { status: 'pending' }
+        : { status: 'pending', settlesBy: answer.settlesBy };
+    }
+    case 'unavailable': {
+      return { status: 'unavailable' };
+    }
+    case 'not_found': {
+      // RV5-F3: a bare not_found comes from an image older than the void, which did not fence the key.
+      return answer.voided === true ? { status: 'voided' } : { status: 'unavailable' };
+    }
+    case 'terminal': {
+      return {
+        status: 'terminal',
+        operationId: answer.operationId,
+        outcome: answer.receipt.customerState,
+        chargedCreditAtoms: answer.receipt.chargedCreditAtoms,
+      };
+    }
+  }
+};
+
+/** RA-Q5: the run actor's opening waits on this lookup, so the transport bounds it; past it the answer is `unavailable`. */
+const attemptLookupTimeout = 10_000;
+
+const lookUpAttempt = async (
+  options: GatewayModelTransportOptions,
+  { attemptId, signal }: InvocationResolutionRequest,
+  bounded: AbortSignal,
+): Promise<InvocationResolution> => {
+  // A timeout, the caller's or the bound's, is "no answer now"; any other cancellation is the caller's to handle.
+  const cancelled = (): boolean => signal.aborted && !isTimeout(signal.reason);
+  let response: Response;
+  try {
+    response = await fetchAttempt(options, attemptId, bounded);
+  } catch (error) {
+    if (error instanceof GatewayModelTransportError || cancelled()) {
+      throw error;
+    }
+    return { status: 'unavailable' };
+  }
+  if (response.status === 401) {
+    // RV5-F2: never `unavailable` or `voided`; the same retry class (`reauth`) `stream()` throws.
+    throw new GatewayModelTransportError({
+      code: 'UNAUTHENTICATED',
+      message: 'Sign in to Tau again to finish this chat; its last model request cannot be checked until then.',
+      status: response.status,
+    });
+  }
+  if (response.status === 403) {
+    // A closed or restricted account or a refused origin is its own code (`BILLING_ACCOUNT_CLOSED`,
+    // `BILLING_ACCOUNT_RESTRICTED`, `ORIGIN_NOT_ALLOWED`), read as `stream()` reads a 403 and passed through with its
+    // details: never a sign-in failure, which signing in again would not fix.
+    throw await gatewayResponseError(response);
+  }
+  if (!response.ok) {
+    return { status: 'unavailable' };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    if (cancelled()) {
+      throw error;
+    }
+    if (bounded.aborted) {
+      return { status: 'unavailable' };
+    }
+    throw malformedAttempt();
+  }
+  return toResolution(body);
+};
+
+const resolveInvocation = async (
+  options: GatewayModelTransportOptions,
+  request: InvocationResolutionRequest,
+): Promise<InvocationResolution> => {
+  const deadline = new AbortController();
+  const timer = setTimeout(() => {
+    deadline.abort(new DOMException('The attempt lookup timed out.', 'TimeoutError'));
+  }, attemptLookupTimeout);
+  try {
+    return await lookUpAttempt(options, request, AbortSignal.any([request.signal, deadline.signal]));
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const fundedOperations: GatewayFundedOperationProtocol = {
+  bindResponse(response) {
+    const operationId = response.headers.get('x-tau-operation-id');
+    if (!validIdentity(operationId)) {
+      throw new GatewayModelTransportError({
+        code: 'MALFORMED_RESPONSE',
+        message: 'Tau model gateway did not return a valid operation identity.',
+        status: response.status,
+      });
+    }
+    return { operationId };
+  },
+};
+
+/**
+ * The funded run's transport: mandatory operation binding and recovery, and its `funded` facet.
+ *
+ * @param gateway - The gateway configuration, without a billing layer of its own.
+ * @param principal - The host's credential port for the charged account.
+ * @returns The transport a funded run uses.
+ */
+const fundedTransport = (
+  gateway: GatewayModelTransportOptions,
+  principal: GatewayBillingOptions['principal'],
+): ModelTransport & { readonly funding: Extract<InvocationFunding, { type: 'funded' }> } => ({
+  ...providerTransport({ ...gateway, fundedOperations }),
+  funding: {
+    type: 'funded',
+    usesBillingAttempt: isGatewayProviderKind,
+    resolveInvocation: async (request) => resolveInvocation(gateway, request),
+    // The transport holds a bearer or a cookie, never the account id: the host's credential port supplies it.
+    principal: async () => principal?.(),
+  },
+});
+
+/** A run's admission waits on the deployment answer, so the transport bounds it; past it the answer is `unknown` (I1). */
+const deploymentAnswerTimeout = 10_000;
+
+/**
+ * Ask the host's deployment port once, bounded, and read only the two modes as known (I1, I2).
+ *
+ * @param deployment - The host's port.
+ * @param signal - The run's stop, when its owner has one.
+ * @returns The mode, or `unknown`.
+ */
+const resolveDeployment = async (
+  deployment: GatewayBillingOptions['deployment'],
+  signal: AbortSignal | undefined,
+): Promise<DeploymentModeAnswer> => {
+  const deadline = new AbortController();
+  const timer = setTimeout(() => {
+    deadline.abort(new DOMException('The deployment answer timed out.', 'TimeoutError'));
+  }, deploymentAnswerTimeout);
+  const bounded = signal === undefined ? deadline.signal : AbortSignal.any([signal, deadline.signal]);
+  try {
+    if (bounded.aborted) {
+      return 'unknown';
+    }
+    const ended = new Promise<'unknown'>((resolve) => {
+      bounded.addEventListener(
+        'abort',
+        () => {
+          resolve('unknown');
+        },
+        { once: true },
+      );
+    });
+    const answer: unknown = await Promise.race([deployment(bounded), ended]);
+    return answer === 'funded' || answer === 'unfunded' ? answer : 'unknown';
+  } catch {
+    return 'unknown';
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const deploymentUnknown = (message: string): Error =>
+  Object.assign(new Error(message), { code: 'DEPLOYMENT_UNKNOWN' satisfies RefusalCode });
+
+/**
+ * Create the browser-safe Tau gateway transport — cookie-authenticated by
+ * default, bearer-authenticated when `auth` is supplied.
+ *
+ * With `billing`, the transport's billing layer is chosen per run (D1): its `deployment` asks the host's port at a run's
+ * admission, and `deployment.forRun` gives a funded run operation binding, attempt resolution and the charged account,
+ * and an unfunded run the plain transport. The transport's own `funding` is then the funded facet, so attempts an
+ * earlier funded run left are still resolved, and its own `stream` refuses `DEPLOYMENT_UNKNOWN`: no call leaves without
+ * its run's mode (I1). Without `billing`, every call is unfunded.
+ *
+ * @param options - Gateway base URL, catalog model limits, optional bearer provider, fetch seam and billing layer.
+ * @returns A W3 model transport delegated to pi-ai provider implementations.
+ * @public
+ */
+export const createGatewayModelTransport = (options: GatewayModelTransportOptions): ModelTransport => {
+  const { billing, ...gateway } = options;
+  if (billing === undefined) {
+    return providerTransport(gateway);
+  }
+  const { fundedOperations: _ignored, ...plain } = gateway;
+  const funded = fundedTransport(plain, billing.principal);
+  const unfunded = providerTransport(plain);
+  return {
+    funding: funded.funding,
+    // oxlint-disable-next-line require-yield -- refuses before its first event.
+    async *stream() {
+      throw deploymentUnknown('This model call was made outside a run whose billing mode is known.');
+    },
+    deployment: {
+      resolve: async (signal) => resolveDeployment(billing.deployment, signal),
+      forRun: (mode) => (mode === 'funded' ? funded : unfunded),
+    },
+  };
+};

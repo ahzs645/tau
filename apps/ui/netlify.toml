@@ -2,38 +2,67 @@
 # production (`taucad-prod-us`, tau.new).
 #
 # This file is **build config only**: commands, `[dev]`, and `[[headers]]`.
-# Per-site `TAU_*`, `NODE_ENV`, and PostHog CLI secrets live in the Netlify
-# dashboard via Terraform (`repos/cloud-infra/stacks/cloud/{staging,prod-us}`).
+# Per-site `TAU_*`, `NODE_ENV`, runtime configuration live in the Netlify
+# dashboard via Terraform (`repos/tau-cloud/stacks/cloud/{staging,prod-us}`).
 # Pattern follows novuhq/novu: one `netlify.toml` shape, sites differ by dashboard env.
 #
-# Triggers:
-#   - staging: pushes to `main` (production context) + PR previews (`taucad` site).
-#   - prod: pushes to Git branch `production` after merging the bot-managed trail PR
-#     (see `.github/workflows/prepare-prod-release.yml`).
+# Triggers: Netlify no longer builds from Git (`deploy_mode = "ci"` in tau-cloud).
+# GitHub Actions runs this build with `netlify deploy --prod --context production`
+# (`.github/workflows/deploy-ui.yml`), after bringing in the GeoSpec engine
+# products that only CI's macOS producer can make:
+#   - staging: pushes to `main` that affect the UI (`staging.yml` deploy-ui-staging).
+#   - prod: pushes to Git branch `production`, made only by dispatching
+#     `.github/workflows/deploy-production.yml` with a release tag.
+# There are no PR deploy previews.
 #
-# SOURCE MAPS (`pnpm nx run ui:sourcemaps`): run inside the Netlify build for
-# **production context** only (`[build]` + `[context.production]` include them);
-# previews skip sourcemaps uploads to avoid leaking prod PostHog project keys into
-# PR builds (POSTHOG_CLI_* are still present on staging for main-branch builds —
-# use a distinct PostHog env per site in Terraform if needed).
+# SOURCE MAPS: GitHub Actions supplies the Sentry auth token per environment and
+# requires the Sentry upload in both environments; the client maps are deleted
+# after upload. Netlify stores no source-map credentials. PostHog receives no
+# source maps: errors go to Sentry only.
+# Public analytics keys are independent.
 #
-# NX_PREFER_NODE_STRIP_TYPES: NODE_ENV=production at build time would make pnpm
-# skip devDependencies (including @swc/core). Nx needs a TS transpiler to load
-# plugin config files — this flag uses Node's native type stripping instead.
+# Actions installs the workspace's development dependencies before this build.
+# Use Nx's default TypeScript transpiler for config imports and dependency builds.
 
 [build]
+# Vendored engine licences must clear before any deploy artifact is built.
 # Paths relative to site base directory (`apps/ui`, set in Terraform).
-command = "NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build ui && pnpm nx run ui:sourcemaps"
+command = "pnpm nx run tscircuit:check-vendored-licenses && pnpm nx build ui --skip-nx-cache && node scripts/stamp-build-release.mts build && node scripts/write-content-security-policy-headers.mts build/client && ([ \"$TAU_SOURCEMAPS_ENABLED\" = true ] && SENTRY_AUTH_TOKEN=\"$TAU_SENTRY_AUTH_TOKEN\" pnpm nx run ui:sourcemaps || { [ \"$TAU_SOURCEMAPS_OPTIONAL\" = true ] && echo \"Warning: source map upload disabled or failed; continuing because TAU_SOURCEMAPS_OPTIONAL=true.\"; }) && node scripts/verify-shipped-assets.mts build/client && node scripts/retain-previous-assets.mts"
 publish = "build/client"
 
+# The last step keeps the previous deploys' `/assets/*` in this one, so a page
+# loaded just before a deploy can still lazy-load its chunks (TAU-UI-6), and the
+# content-addressed runtime bundle (`/csharp-language/<sha256>/`, listed in its own
+# `tau-served-runtimes.json` so a rollback to an older build still deploys), so it can
+# still start the C# service. It runs
+# after source-map injection, reads the live deploy's `tau-served-assets.json`
+# from `TAU_RETAIN_ASSETS_FROM` (set by `deploy-ui.yml`), verifies every byte
+# against it, and writes this deploy's index. Unset, it writes the index only.
+
+[build.environment]
+# Temporary: current Netlify plan cannot create Builds-scoped secrets.
+NX_NO_CLOUD = "true"
+
+# The React Router plugin (`@netlify/vite-plugin-react-router` 4.x) writes the
+# SSR function `react-router-server.mjs` to `.netlify/v1/functions` under this
+# base. It imports the Environment API server build `build/server/index.js` and
+# the adapter's `serverless` request handler. Naming that directory makes
+# Netlify bundle the function from its real path, where both imports resolve, as
+# a user function that outranks the copy `deploy-ui.yml` exposes as a framework
+# function through its `.netlify` link (which ships without the server build).
+# Server source maps never reach it: `ui:build` moves them to
+# `build/server-sourcemaps` (SSR bundle policy rule 5).
+[functions]
+directory = ".netlify/v1/functions"
+
 [context.production]
-command = "NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build ui && pnpm nx run ui:sourcemaps"
+command = "pnpm nx run tscircuit:check-vendored-licenses && pnpm nx build ui --skip-nx-cache && node scripts/stamp-build-release.mts build && node scripts/write-content-security-policy-headers.mts build/client && ([ \"$TAU_SOURCEMAPS_ENABLED\" = true ] && SENTRY_AUTH_TOKEN=\"$TAU_SENTRY_AUTH_TOKEN\" pnpm nx run ui:sourcemaps || { [ \"$TAU_SOURCEMAPS_OPTIONAL\" = true ] && echo \"Warning: source map upload disabled or failed; continuing because TAU_SOURCEMAPS_OPTIONAL=true.\"; }) && node scripts/verify-shipped-assets.mts build/client && node scripts/write-skew-protection-config.mts && node scripts/retain-previous-assets.mts"
 
 [context.deploy-preview]
-command = "NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build ui"
+command = "pnpm nx run tscircuit:check-vendored-licenses && pnpm nx build ui --skip-nx-cache && node scripts/stamp-build-release.mts build && node scripts/write-content-security-policy-headers.mts build/client"
 
 [context.branch-deploy]
-command = "NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build ui"
+command = "pnpm nx run tscircuit:check-vendored-licenses && pnpm nx build ui --skip-nx-cache && node scripts/stamp-build-release.mts build && node scripts/write-content-security-policy-headers.mts build/client"
 
 [dev]
 command = "pnpm nx dev ui"
@@ -45,6 +74,100 @@ NODE_ENV = "development"
 TAU_API_URL = "http://localhost:4000"
 TAU_FRONTEND_URL = "http://localhost:3000"
 TAU_WEBSOCKET_URL = "ws://localhost:4001"
+
+# Marketing site: `netlify/edge-functions/marketing.ts` proxies a full load of
+# `/` and the apps/www pages to the deploy named by the `MARKETING_ORIGIN` site
+# variable (set per site in tau-cloud). Unset, every request reaches the app.
+# A GET or HEAD of `/` with the `tau-entry=app` preference gets the prerendered
+# Home shell (progressive loading PL4): the edge function rewrites it to
+# `/__shell/home/index.html`, where the build moves the prerender of `/`
+# (scripts/place-static-shells.ts), and expires `tau_skew` on it. Nothing else
+# at `/`, and not the root data request (`/_root.data`, or `/_.data` with
+# trailing-slash-aware data requests; the edge function accepts both), changes delivery.
+
+# The docs site serves documentation at its root, so the old runtime-scoped
+# LLM indexes are replaced by its top-level ones rather than moving verbatim.
+[[redirects]]
+from = "/docs/runtime/llms.txt"
+to = "https://docs.tau.new/llms.txt"
+status = 301
+force = true
+
+[[redirects]]
+from = "/docs/runtime/llms-full.txt"
+to = "https://docs.tau.new/llms-full.txt"
+status = 301
+force = true
+
+[[redirects]]
+from = "/docs"
+to = "https://docs.tau.new/"
+status = 301
+force = true
+
+[[redirects]]
+from = "/docs/*"
+to = "https://docs.tau.new/:splat"
+status = 301
+force = true
+
+[[redirects]]
+from = "/docs.mdx"
+to = "https://docs.tau.new/docs.mdx"
+status = 301
+force = true
+
+[[redirects]]
+from = "/llms-full.txt"
+to = "https://docs.tau.new/llms-full.txt"
+status = 301
+force = true
+
+[[redirects]]
+from = "/llms.mdx"
+to = "https://docs.tau.new/llms.txt"
+status = 301
+force = true
+
+[[redirects]]
+from = "/llms.mdx/*"
+to = "https://docs.tau.new/llms.mdx/:splat"
+status = 301
+force = true
+
+# Static shells (progressive loading PL3). Every `/w/:workspace/:project` document is the
+# prerendered `build/client/w/__shell/__shell/index.html`, served by the CDN. Netlify runs
+# functions before redirects, so the React Router function excludes exactly these URLs
+# (`excludedPaths` in vite.config.ts); `.data` requests, `/preview` and every other `/w/…`
+# shape stay on it. The shell's headers are the static ones below and `_headers`, which
+# match a function document's (scripts/check-static-shells.mts). Generated from
+# app/lib/route-classes.ts; app/lib/route-classes.test.ts fails when this block drifts.
+# The edge cache serves the shell without the `Set-Cookie` below on a hit, so the edge function
+# netlify/edge-functions/static-shell.ts sets the same expiry on every shell response.
+# BEGIN static shell routing
+[[redirects]]
+from = "https://www.tau.new/w/*"
+to = "https://tau.new/w/:splat"
+status = 301
+force = true
+
+[[redirects]]
+from = "/w/:workspace/:project"
+to = "/w/__shell/__shell/index.html"
+status = 200
+force = false
+
+[[redirects]]
+from = "/w/:workspace/:project/"
+to = "/w/__shell/__shell/index.html"
+status = 200
+force = false
+
+[[headers]]
+for = "/w/*"
+[headers.values]
+Set-Cookie = "tau_skew=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
+# END static shell routing
 
 [[headers]]
 for = "/*"
@@ -59,26 +182,76 @@ Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
 # Referrer Policy
 Referrer-Policy = "strict-origin-when-cross-origin"
 # Permissions Policy (Feature Policy)
-Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(self), payment=(), usb=(), interest-cohort=()"
 # Cross-Origin Policies
 Cross-Origin-Opener-Policy = "same-origin"
 Cross-Origin-Resource-Policy = "same-origin"
 Cross-Origin-Embedder-Policy = "require-corp"
-# JavaScript Profiling
-Document-Policy = "js-profiling"
-# Content Security Policy (CSP) - Start with report-only mode
-# NOTE: Test thoroughly before switching to enforcing mode
-# Remove '-Report-Only' suffix to enforce
-# connect-src allowlist:
-#   - 'self' covers same-origin SSR fetches (proxied PostHog at /api/ph,
-#     proxied GitHub avatars at /api/github-avatar, health endpoints).
-#   - https://api.zoo.dev / https://api.kittycad.io: Zoo external converter API
-#     used by the @taucad/runtime transcoder pipeline (server-to-server).
-#   - https://api.tau.new + wss://api.tau.new: explicit production API +
-#     Socket.IO endpoint. Listed explicitly so when CSP flips to enforcing
-#     (report-only first) we don't rely on the catch-all `wss:` and any unintended hop is
-#     immediately reported.
-Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.taucad.dev https://cdn.tau.new https:; font-src 'self' data:; connect-src 'self' https://cdn.taucad.dev https://cdn.tau.new https://api.zoo.dev https://api.kittycad.io https://api.tau.new wss://api.tau.new wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
+# Document-Policy (`js-profiling`) is not set here: like the CSP below it differs per site.
+# Function documents send it off the production origin only (OQ-P11), so the build writes it
+# into staging's `_headers` and never into production's
+# (scripts/write-content-security-policy-headers.mts).
+# Content Security Policy (CSP), report-only. It is not set here: this file is
+# shared by both sites, which both deploy the production context, so it cannot
+# name only one environment's hosts. Each build writes its site's policy into
+# `build/client/_headers` (scripts/write-content-security-policy-headers.mts),
+# and SSR documents send the same policy (app/lib/content-security-policy.server.ts);
+# Netlify custom headers do not apply to function responses.
+# Marketing pages (apps/www) send their own enforced policy, which names production
+# hosts; edge-functions/marketing.ts selects staging's for taucad.dev.
+# The site's TAU_FRONTEND_URL picks the policy:
+#   - https://tau.new (production; also served as taucad-prod-us.netlify.app):
+#     cdn.tau.new, files.tau.new, api.tau.new + wss, dependencies.tau.new and the
+#     tau-prod-content-private R2 endpoint.
+#   - https://taucad.dev (staging; also staging--taucad-staging.netlify.app):
+#     cdn.taucad.dev, files.taucad.dev, api.taucad.dev + wss,
+#     dependencies.taucad.dev and the tau-staging-au-content-private R2 endpoint.
+#   - anything else (unset, local): neither environment's hosts, so a
+#     misconfigured site reports first-party requests instead of admitting the
+#     other environment's. No production page names a staging host.
+# Every policy keeps 'self' (same-origin fetches: proxied PostHog at /api/ph,
+# health endpoints) and the shared third parties: github.com images,
+# https://api.github.com, the Zoo converter API (https://api.zoo.dev,
+# https://api.kittycad.io), Sentry browser error reports
+# (https://*.ingest.sentry.io, https://*.ingest.us.sentry.io; launch gate OBS-7),
+# and https://registry.npmjs.org (the Packages panel's Install). The CDN, files
+# and dependency hosts serve signed LFS downloads and the PicoGK browser host by
+# digest; the private R2 endpoint stays for presigned uploads and for rollback to
+# presigned downloads. The API hosts are listed although `wss:` is still
+# allowed, so when the policy flips to enforcing any unintended hop is reported.
+# report-to default: violations go to the same-origin /api/reports receiver
+# named by Reporting-Endpoints (browser observability SB6), then to Sentry.
+Reporting-Endpoints = 'default="/api/reports"'
+
+# The apex selects marketing or the app from a presentation cookie. Never reuse
+# one visitor's document for another, or restore stale HTML after switching.
+# The edge function also sets these on every answer at `/`, the Home shell included.
+[[headers]]
+for = "/"
+[headers.values]
+Cache-Control = "private, no-store"
+CDN-Cache-Control = "no-store"
+Netlify-CDN-Cache-Control = "no-store"
+
+# The web app's service worker (progressive loading PL7, scripts/build-service-worker.ts).
+# Never stored by the browser or the CDN, so a new deploy's worker, the kill switch's
+# included (TAU_SERVICE_WORKER_KILL_SWITCH), reaches a visitor on their next page load.
+# server.ts sends the same for a self-hosted serve.
+[[headers]]
+for = "/service-worker.js"
+[headers.values]
+Cache-Control = "no-cache, no-store, must-revalidate"
+CDN-Cache-Control = "no-store"
+Netlify-CDN-Cache-Control = "no-store"
+
+# The retiring worker at the retired /usage worker's URL (ui@0.3.0 and earlier registered
+# /offline-shell-worker.js at scope /), stored nowhere for the same reason.
+[[headers]]
+for = "/offline-shell-worker.js"
+[headers.values]
+Cache-Control = "no-cache, no-store, must-revalidate"
+CDN-Cache-Control = "no-store"
+Netlify-CDN-Cache-Control = "no-store"
 
 # Content-hashed Vite bundles + WASM (immutable filenames)
 [[headers]]
@@ -87,14 +260,68 @@ for = "/assets/*"
 Cache-Control = "public, max-age=31536000, immutable"
 Netlify-CDN-Cache-Control = "public, durable, max-age=31536000"
 
+# C# language service runtime, emitted under its manifest digest
+# (csharp-language/<sha256>/), so every path is immutable like /assets/*.
+[[headers]]
+for = "/csharp-language/*"
+[headers.values]
+Cache-Control = "public, max-age=31536000, immutable"
+Netlify-CDN-Cache-Control = "public, durable, max-age=31536000"
+
+# Email assets. Transactional email templates (apps/libs/api-email templates/shared.ts)
+# load /wordmark.png and the Geist /fonts/*.woff2 from this origin. Webmail that
+# renders images in the reader's browser (Outlook on the web loads them directly
+# from tau.new) refuses a `same-origin` resource, so these paths allow any origin.
+# Fonts also need CORS for a cross-origin @font-face. Both are public, static and
+# credential-free; the site-wide isolation headers on documents are unchanged.
 [[headers]]
 for = "/fonts/*"
 [headers.values]
 Cache-Control = "public, max-age=2592000"
 Netlify-CDN-Cache-Control = "public, durable, max-age=2592000"
+Cross-Origin-Resource-Policy = "cross-origin"
+Access-Control-Allow-Origin = "*"
 
 [[headers]]
-for = "/*.svg"
+for = "/wordmark.png"
+[headers.values]
+Cross-Origin-Resource-Policy = "cross-origin"
+
+# Unhashed SVGs from public/ only. A site-wide `/*.svg` rule also matched the hashed
+# sprites under /assets/ and replaced their immutable year with one day (audit R17).
+[[headers]]
+for = "/avatar-circle.svg"
 [headers.values]
 Cache-Control = "public, max-age=86400"
 Netlify-CDN-Cache-Control = "public, durable, max-age=86400"
+
+[[headers]]
+for = "/avatar-square.svg"
+[headers.values]
+Cache-Control = "public, max-age=86400"
+Netlify-CDN-Cache-Control = "public, durable, max-age=86400"
+
+[[headers]]
+for = "/favicon.svg"
+[headers.values]
+Cache-Control = "public, max-age=86400"
+Netlify-CDN-Cache-Control = "public, durable, max-age=86400"
+
+[[headers]]
+for = "/placeholder.svg"
+[headers.values]
+Cache-Control = "public, max-age=86400"
+Netlify-CDN-Cache-Control = "public, durable, max-age=86400"
+
+[[headers]]
+for = "/wordmark.svg"
+[headers.values]
+Cache-Control = "public, max-age=86400"
+Netlify-CDN-Cache-Control = "public, durable, max-age=86400"
+
+# The web app manifest. Netlify serves an unknown `.webmanifest` as
+# application/octet-stream (audit R17).
+[[headers]]
+for = "/manifest.webmanifest"
+[headers.values]
+Content-Type = "application/manifest+json"

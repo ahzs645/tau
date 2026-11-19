@@ -1,0 +1,247 @@
+// @vitest-environment node
+import { createActor, setup, types, waitFor } from 'xstate';
+import { describe, expect, it, vi } from 'vitest';
+import { ChangeEventBus, MountTable, ProviderRegistry, ResourceQueue, WorkspaceFileService } from '@taucad/filesystem';
+import { composeView } from '@taucad/filesystem/composed-view';
+import { tauPathPolicy } from '@taucad/filesystem/path-registry';
+import type { FileSystemBridgeConnection, RootedBridgeConsumer } from '@taucad/fs-bridge';
+import { jscad } from '@taucad/jscad';
+import { esbuild } from '@taucad/esbuild';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { gltfEdgeDetection } from '@taucad/middleware';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { awaitFreshRender } from '#machines/await-fresh-render.js';
+import { cadMachine, closeCadRuntime } from '#machines/cad.machine.js';
+import type { CadContext } from '#machines/cad.machine.js';
+import { uiRuntimeConfigSchema } from '#runtime/ui-runtime.schema.js';
+import type { LazyKernelOptionsFactory } from '#types/runtime-client.alias.js';
+
+const validMain = [
+  "import { primitives } from '@jscad/modeling';",
+  "import makePart from './lib/part.js';",
+  'void primitives;',
+  'export default makePart;',
+].join('\n');
+
+const validPart = [
+  "import { primitives } from '@jscad/modeling';",
+  'export default function makePart() {',
+  '  return primitives.cylinder({ radius: 1, height: 1 });',
+  '}',
+].join('\n');
+
+const brokenPart = validPart.replace('radius: 1', 'radius: -1');
+
+const fixtureRuntime = defineRuntime({
+  configSchema: uiRuntimeConfigSchema,
+  createRuntime: () => ({
+    plugins: [jscad(), esbuild()],
+    middleware: [gltfEdgeDetection()],
+  }),
+});
+
+type FileManagerProbeContext = {
+  contentService: Record<string, unknown>;
+  openFileSystemBridge: (root: string, consumer: RootedBridgeConsumer) => FileSystemBridgeConnection;
+};
+
+const fileManagerProbe = setup({
+  schemas: {
+    context: types<FileManagerProbeContext>(),
+    input: types<FileManagerProbeContext>(),
+  },
+}).createMachine({
+  initial: 'ready',
+  context: ({ input }) => input,
+  states: { ready: {} },
+});
+
+const kernelOptionsFactory: LazyKernelOptionsFactory =
+  async () =>
+  ({ fileSystem }) => ({
+    transport: inProcessTransport({ runtime: fixtureRuntime, fileSystem }),
+    config: { tauApiUrl: 'https://api.test', tauWebSocketUrl: 'wss://api.test' },
+  });
+
+const createFixture = async (partSource: string) => {
+  const providerRegistry = new ProviderRegistry();
+  const provider = await providerRegistry.getProvider({
+    backend: 'memory',
+    storageRootKey: 'memory:kernel-entry-failure',
+  });
+  const mountTable = new MountTable();
+  mountTable.mount('/', provider, {
+    class: 'authored',
+    backend: 'memory',
+    storageRootKey: 'memory:kernel-entry-failure',
+  });
+  const eventBus = new ChangeEventBus();
+  const fileService = new WorkspaceFileService({
+    providerRegistry,
+    resourceQueue: new ResourceQueue(),
+    eventBus,
+    mountTable,
+  });
+  await fileService.writeFile('/main.ts', validMain);
+  await fileService.writeFile('/lib/part.ts', partSource);
+
+  const { exposeFileSystem, filesystemBridgeConnectMessageType, openFileSystemBridge, workspaceBridgeService } =
+    await import('@taucad/fs-bridge');
+  const workerScope = new EventTarget();
+  vi.stubGlobal('self', workerScope);
+  const exposedFileSystem = exposeFileSystem(workspaceBridgeService(fileService), {
+    policy: tauPathPolicy,
+    changeEventBus: eventBus,
+    /* The worker's own switch (W2): the kernel names `'agent'`, so this fixture
+     * renders through the masked view it really reads, not the checkout. */
+    handlerForRoot: (root, context, consumer) => {
+      const filesystem = fileService.createRootedFileSystem(root, context);
+      return consumer === 'working-copy'
+        ? filesystem
+        : composeView({ filesystem }, { consumer, policy: tauPathPolicy });
+    },
+  });
+  const bridgeWorker = {
+    postMessage(message: unknown): void {
+      workerScope.dispatchEvent(new MessageEvent('message', { data: message }));
+    },
+  } satisfies Pick<Worker, 'postMessage'>;
+  const fileManagerRef = createActor(fileManagerProbe, {
+    input: {
+      contentService: fileService as unknown as Record<string, unknown>,
+      openFileSystemBridge: (root, consumer) =>
+        openFileSystemBridge(bridgeWorker as Worker, {
+          messageType: filesystemBridgeConnectMessageType,
+          root,
+          consumer,
+        }),
+    },
+  }).start();
+
+  return {
+    fileService,
+    createCadActor() {
+      const actor = createActor(cadMachine, {
+        input: {
+          shouldInitializeKernelOnStart: false,
+          fileManagerRef: fileManagerRef as unknown as NonNullable<CadContext['fileManagerRef']>,
+          kernelOptionsFactory,
+          fileSystemRoot: '/',
+        },
+      }).start();
+      actor.send({ type: 'setOperationTimeout', operationTimeout: 0 });
+      return actor;
+    },
+    dispose() {
+      fileManagerRef.stop();
+      exposedFileSystem.cleanup();
+      vi.unstubAllGlobals();
+    },
+  };
+};
+
+describe('kernel entry failure settlement', { timeout: 30_000 }, () => {
+  it('should settle a failed secondary unit after the warm main unit reports the same error', async () => {
+    const fixture = await createFixture(validPart);
+    const main = fixture.createCadActor();
+    let secondary: ReturnType<typeof fixture.createCadActor> | undefined;
+
+    try {
+      const connectedMain = await waitFor(main, (snapshot) => snapshot.value === 'idle' || snapshot.value === 'error', {
+        timeout: 5000,
+      });
+      expect(connectedMain.value, JSON.stringify([...connectedMain.context.kernelIssues])).toBe('idle');
+      main.send({ type: 'initializeModel', entryPath: 'main.ts' });
+      await waitFor(main, (snapshot) => snapshot.value === 'idle' && snapshot.context.rendering?.success === true, {
+        timeout: 5000,
+      });
+      const lastViewableMainRendering = main.getSnapshot().context.rendering;
+      expect(lastViewableMainRendering?.success).toBe(true);
+
+      await fixture.fileService.writeFile('/lib/part.ts', brokenPart);
+      const failedMain = await waitFor(
+        main,
+        (snapshot) =>
+          snapshot.value === 'error' &&
+          (snapshot.context.kernelIssues
+            .get('main.ts')
+            ?.some((issue) => issue.message.includes('radius must be positive')) ??
+            false),
+        { timeout: 5000 },
+      );
+      expect(failedMain.context.rendering).toBe(lastViewableMainRendering);
+      expect(failedMain.context.latestRenderingOutcome).toBe('failure');
+      const returnedMain = await awaitFreshRender(main, { awaitTimeout: 5000 });
+      expect(returnedMain.context.rendering).toBe(lastViewableMainRendering);
+      expect(returnedMain.context.latestRenderingOutcome).toBe('failure');
+
+      secondary = fixture.createCadActor();
+      const connectedSecondary = await waitFor(
+        secondary,
+        (snapshot) => snapshot.value === 'idle' || snapshot.value === 'error',
+        { timeout: 5000 },
+      );
+      expect(connectedSecondary.value, JSON.stringify([...connectedSecondary.context.kernelIssues])).toBe('idle');
+      secondary.send({ type: 'initializeModel', entryPath: 'lib/part.ts' });
+      const secondarySettlement = awaitFreshRender(secondary, { awaitTimeout: 5000 });
+      const failedSecondary = await waitFor(
+        secondary,
+        (snapshot) =>
+          snapshot.value === 'error' &&
+          (snapshot.context.kernelIssues
+            .get('lib/part.ts')
+            ?.some((issue) => issue.message.includes('radius must be positive')) ??
+            false),
+        { timeout: 5000 },
+      );
+
+      expect(failedSecondary.context.rendering).toBeUndefined();
+      expect(failedSecondary.context.latestRenderingOutcome).toBe('failure');
+      await expect(secondarySettlement).resolves.toMatchObject({ context: { latestRenderingOutcome: 'failure' } });
+    } finally {
+      /* Each unit's runtime shuts down before the file ends: a kernel still answering a stopped actor logs during
+       * the worker's teardown, which Vitest fails as an unhandled error. */
+      await closeCadRuntime(main);
+      if (secondary !== undefined) {
+        await closeCadRuntime(secondary);
+      }
+      main.stop();
+      secondary?.stop();
+      fixture.dispose();
+    }
+  });
+
+  it('should settle a failed fresh primary unit instead of timing out', async () => {
+    const fixture = await createFixture(brokenPart);
+    const primary = fixture.createCadActor();
+
+    try {
+      const connectedPrimary = await waitFor(
+        primary,
+        (snapshot) => snapshot.value === 'idle' || snapshot.value === 'error',
+        { timeout: 5000 },
+      );
+      expect(connectedPrimary.value, JSON.stringify([...connectedPrimary.context.kernelIssues])).toBe('idle');
+      primary.send({ type: 'initializeModel', entryPath: 'main.ts' });
+      const primarySettlement = awaitFreshRender(primary, { awaitTimeout: 5000 });
+      const failedPrimary = await waitFor(
+        primary,
+        (snapshot) =>
+          snapshot.value === 'error' &&
+          (snapshot.context.kernelIssues
+            .get('main.ts')
+            ?.some((issue) => issue.message.includes('radius must be positive')) ??
+            false),
+        { timeout: 5000 },
+      );
+
+      expect(failedPrimary.context.rendering).toBeUndefined();
+      expect(failedPrimary.context.latestRenderingOutcome).toBe('failure');
+      await expect(primarySettlement).resolves.toMatchObject({ context: { latestRenderingOutcome: 'failure' } });
+    } finally {
+      await closeCadRuntime(primary);
+      primary.stop();
+      fixture.dispose();
+    }
+  });
+});

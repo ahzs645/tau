@@ -1,0 +1,236 @@
+import { describe, expect, it } from 'vitest';
+import { toolDescriptions, toolName } from '#constants/index.js';
+import {
+  applyParameterOperationInputSchema,
+  applyParameterOperationOutputSchema,
+  getParametersInputSchema,
+  getParametersOutputSchema,
+  parameterSetOperationSchema,
+} from '#schemas/tools/parameter.tool.schema.js';
+
+const proposal = {
+  action: 'propose',
+  targetFile: 'main.py',
+  requestId: 'agent:1',
+  expected: { manifestRevision: 'manifest' },
+  pressure: 'final',
+  operation: {
+    kind: 'unit-value',
+    group: 'default',
+    pointer: '/width',
+    inputUnit: 'cm',
+    value: '2.5',
+  },
+} as const;
+
+describe('parameter tool schemas', () => {
+  it('should describe the stored-number unit and explicit unit input rule', () => {
+    const rule =
+      'When current.entry.groups[g].units[pointer] exists, it is the unit of the stored number and of native-value writes; use unit-value with inputUnit to be explicit.';
+
+    expect(toolDescriptions[toolName.getParameters]).toContain(rule);
+    expect(toolDescriptions[toolName.applyParameterOperation]).toContain(rule);
+  });
+
+  it('admits the checked operation contract and refuses non-finite or extra data', () => {
+    expect(applyParameterOperationInputSchema.parse(proposal)).toEqual(proposal);
+    // A typeless wire value still has to be real JSON once it is past the provider boundary.
+    expect(
+      parameterSetOperationSchema.safeParse({
+        kind: 'native-value',
+        group: 'default',
+        pointer: '/width',
+        value: Number.POSITIVE_INFINITY,
+      }),
+    ).toMatchObject({ success: false });
+    expect(
+      parameterSetOperationSchema.safeParse({
+        kind: 'native-value',
+        group: 'default',
+        pointer: '/width',
+        value: { nested: [1, null, { deep: 'ok' }] },
+      }),
+    ).toMatchObject({ success: true });
+    expect(
+      getParametersInputSchema.safeParse({
+        targetFile: 'main.py',
+        unknown: true,
+      }),
+    ).toMatchObject({ success: false });
+  });
+
+  const retired = { parameterId: 'width', resource: 'urn:test' };
+
+  it.each([
+    ['native-value', { kind: 'native-value', group: 'default', pointer: '/width', value: 5 }, retired],
+    ['unit-value', { kind: 'unit-value', group: 'default', pointer: '/width', inputUnit: 'cm', value: '2.5' }, retired],
+    [
+      'a batch edit',
+      { kind: 'batch', group: 'default', edits: [{ pointer: '/width', value: 5 }] },
+      { edits: [{ pointer: '/width', value: 5, ...retired }] },
+    ],
+    [
+      'source-unit',
+      {
+        kind: 'source-unit',
+        mode: 'preserve-size',
+        group: 'default',
+        pointer: '/width',
+        unit: 'cm',
+        producerCapability: { producer: 'build123d', sourceRevision: 'source', capability: 'literal-v1' },
+      },
+      retired,
+    ],
+    // A field is group plus pointer under the manifest revision the request declares; .strict() refuses the retired pair.
+  ])('names %s by group and pointer alone and refuses the retired pair', (_case, operation, pair) => {
+    expect(parameterSetOperationSchema.safeParse(operation)).toMatchObject({ success: true });
+    expect(parameterSetOperationSchema.safeParse({ ...operation, ...pair })).toMatchObject({ success: false });
+  });
+
+  it.each([
+    ['propose without expected', { ...proposal, expected: undefined }],
+    ['propose without pressure', { ...proposal, pressure: undefined }],
+    ['propose without an operation', { ...proposal, operation: undefined }],
+    ['propose carrying a plan fingerprint', { ...proposal, planFingerprint: 'plan:1' }],
+    ['confirm without a plan fingerprint', { action: 'confirm', targetFile: 'main.py', requestId: 'agent:1' }],
+    [
+      'confirm carrying an operation',
+      {
+        action: 'confirm',
+        targetFile: 'main.py',
+        requestId: 'agent:1',
+        planFingerprint: 'plan:1',
+        operation: proposal.operation,
+      },
+    ],
+    [
+      'cancel carrying a plan fingerprint',
+      { action: 'cancel', targetFile: 'main.py', requestId: 'agent:1', planFingerprint: 'plan:1' },
+    ],
+    ['a missing action', { ...proposal, action: undefined }],
+    ['an unknown action', { ...proposal, action: 'apply' }],
+    ['an unknown field', { ...proposal, urgency: 'high' }],
+  ])('refuses %s', (_case, input) => {
+    expect(applyParameterOperationInputSchema.safeParse(input)).toMatchObject({ success: false });
+  });
+
+  it('keeps the source-unit capability explicit and refuses pinned source digests', () => {
+    expect(
+      parameterSetOperationSchema.safeParse({
+        kind: 'source-unit',
+        mode: 'preserve-size',
+        group: 'default',
+        pointer: '/width',
+        unit: 'cm',
+        producerCapability: {
+          producer: 'build123d',
+          sourceRevision: 'source',
+          capability: 'literal-v1',
+        },
+      }),
+    ).toMatchObject({ success: true });
+    // A source change already produces a new manifest revision; no source digest is carried.
+    expect(
+      parameterSetOperationSchema.safeParse({
+        kind: 'source-unit',
+        mode: 'preserve-size',
+        group: 'default',
+        pointer: '/width',
+        unit: 'cm',
+        producerCapability: { producer: 'build123d', sourceRevision: 'source', capability: 'literal-v1' },
+        dependencies: { source: 'source' },
+      }),
+    ).toMatchObject({ success: false });
+  });
+
+  it('should refuse retired display-preference and reinterpret operations', () => {
+    expect(
+      parameterSetOperationSchema.safeParse({ kind: 'display-preference', parameterId: 'width', unit: 'cm' }),
+    ).toMatchObject({ success: false });
+    expect(
+      parameterSetOperationSchema.safeParse({
+        kind: 'source-unit',
+        mode: 'reinterpret',
+        group: 'default',
+        pointer: '/width',
+        unit: 'cm',
+        producerCapability: {
+          producer: 'build123d',
+          sourceRevision: 'source',
+          capability: 'literal-v1',
+        },
+      }),
+    ).toMatchObject({ success: false });
+  });
+
+  it('admits explicit confirmation and cancellation continuations', () => {
+    expect(
+      applyParameterOperationInputSchema.safeParse({
+        action: 'confirm',
+        targetFile: 'main.py',
+        requestId: 'agent:1',
+        planFingerprint: 'plan:1',
+      }),
+    ).toMatchObject({ success: true, data: { action: 'confirm', planFingerprint: 'plan:1' } });
+    expect(
+      applyParameterOperationInputSchema.safeParse({
+        action: 'cancel',
+        targetFile: 'main.py',
+        requestId: 'agent:1',
+      }),
+    ).toMatchObject({ success: true, data: { action: 'cancel' } });
+    expect(
+      applyParameterOperationOutputSchema.safeParse({
+        outcome: {
+          status: 'confirmation-required',
+          requestId: 'agent:1',
+          planFingerprint: 'plan:1',
+          producerCapability: {
+            producer: 'build123d',
+            sourceRevision: 'source',
+            capability: 'literal-v1',
+          },
+          proposed: {
+            entry: { activeGroup: 'default', groups: { default: { values: { width: 25 } } } },
+            identity: { manifestRevision: 'manifest' },
+          },
+        },
+      }),
+    ).toMatchObject({ success: true });
+  });
+});
+
+describe('get_parameters detail', () => {
+  const current = {
+    entry: { activeGroup: 'default', groups: { default: { values: {} } } },
+    identity: { manifestRevision: 'm' },
+  };
+
+  it('accepts values and full and refuses other projections', () => {
+    expect(getParametersInputSchema.parse({ targetFile: 'main.ts' })).not.toHaveProperty('detail');
+    expect(getParametersInputSchema.parse({ targetFile: 'main.ts', detail: 'full' }).detail).toBe('full');
+    expect(getParametersInputSchema.safeParse({ targetFile: 'main.ts', detail: 'compact' }).success).toBe(false);
+  });
+
+  it('requires the projection a resolved read names', () => {
+    expect(
+      getParametersOutputSchema.safeParse({
+        status: 'resolved',
+        detail: 'values',
+        parameters: { '/voxelSize': { value: 0.5, default: 0.7, unit: 'mm', unitInferred: true } },
+        current,
+      }).success,
+    ).toBe(true);
+    expect(
+      getParametersOutputSchema.safeParse({ status: 'resolved', detail: 'values', manifest: {}, current }).success,
+    ).toBe(false);
+    expect(
+      getParametersOutputSchema.safeParse({ status: 'resolved', detail: 'full', manifest: {}, current }).success,
+    ).toBe(true);
+  });
+
+  it('teaches when the full manifest is needed', () => {
+    expect(toolDescriptions[toolName.getParameters]).toContain('Request detail "full"');
+    expect(toolDescriptions[toolName.applyParameterOperation]).toContain('get_parameters with detail "full"');
+  });
+});

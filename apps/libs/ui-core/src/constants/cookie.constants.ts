@@ -1,0 +1,119 @@
+import type { ConstantRecord } from '@taucad/types';
+
+/**
+ * Cookie names.
+ *
+ * These must be short, hyphen separated, and lowercase.
+ *
+ * The following conventions are in place to reduce cookie name length:
+ * - resize cookies use <namespace>-rs-<subject> (e.g. chat-rs-files)
+ * - open cookies use <namespace>-op-<subject> (e.g. chat-op-files)
+ */
+export const cookieName = {
+  machinePageSize: 'machine-page-size',
+  /* Theme */
+  // The color hue.
+  colorHue: 'color-hue',
+  // Whether code editors show parameter-name inlay hints.
+  codeInlayHints: 'code-inlay-hints',
+  // Whether actions use pointer cursors instead of the platform default.
+  pointerCursors: 'pointer-cursors',
+  // Whether the Terminal pane keeps its screen mirror and output live region (on unless the person turns it off).
+  terminalScreenReader: 'terminal-screen-reader',
+
+  /* Layout */
+  // Whether the sidebar is open.
+  sidebarOp: 'sidebar-op',
+
+  /* CAD */
+  // The last selected kernel.
+  cadKernel: 'cad-kernel',
+
+  /* Chat */
+  // The last execution used — any agent, with its model, level and config — carried onto new chats.
+  chatExecution: 'chat-execution',
+  // The last chosen Tau model.
+  chatModel: 'chat-model',
+  // The last chosen Tau reasoning level.
+  chatEffort: 'chat-effort',
+  // Per-user model availability overrides: every explicit toggle; absence follows model.recommended.
+  chatModelOverrides: 'chat-model-overrides',
+  // Pinned Tau model ids, in pin order.
+  chatModelPinned: 'chat-model-pinned',
+  // Whether to show the model cost in the chat-history.
+  chatModelCost: 'chat-model-cost',
+
+  /* Chat Context - what editor context to include in messages */
+  // Whether to include filesystem snapshot in chat context.
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ctx is conventional for context
+  chatCtxFs: 'chat-ctx-fs',
+  // Whether to include active file in chat context.
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ctx is conventional for context
+  chatCtxActive: 'chat-ctx-active',
+  // Whether to include open files in chat context.
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ctx is conventional for context
+  chatCtxOpen: 'chat-ctx-open',
+  // Whether Tau's own agent is told what the person makes and the code they read (Settings → Agents → "Use my setup
+  // answers"). Device-only and on by default; never server-visible.
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ctx is conventional for context
+  chatCtxPerson: 'chat-ctx-person',
+
+  /* Chat Tools */
+  // Whether GeoSpec testing tools are enabled.
+  chatTestingEnabled: 'chat-testing-enabled',
+
+  /* Projects */
+  // The last selected project view mode.
+  projectViewMode: 'project-view-mode',
+  // The last selected project list page size.
+  projectPageSize: 'project-page-size',
+  // The project location the new-project composer last showed, drawn before locations are probed.
+  projectLocation: 'project-location',
+
+  /* Community */
+  // The last selected Community example page size.
+  examplePageSize: 'example-page-size',
+  // The last selected Parts page size.
+  partPageSize: 'part-page-size',
+
+  /* Share */
+  // The last chosen sharing method in the workbench Share panel.
+  shareProvider: 'share-provider',
+
+  /* Console */
+  // The last selected log level.
+  consoleLogLevel: 'console-log-level',
+  // The last selected display configuration.
+  consoleDisplayConfig: 'console-display-config',
+
+  /* Converter */
+  // The last selected output formats.
+  converterOutputFormats: 'converter-output-formats',
+  // Whether to download multiple files as ZIP.
+  converterMultifileZip: 'converter-multifile-zip',
+
+  /* Privacy */
+  // The device's runtime telemetry preference: `on`, `off` (sticky) or unset (`on`).
+  telemetry: 'telemetry',
+  // Whether the desktop app sends product analytics: `false` once turned off in Data controls, otherwise on.
+  desktopAnalytics: 'desktop-analytics',
+  // When this device first ran Tau, and which baseline onboarding events it has reported (telemetry marker, BD5).
+  firstSeen: 'first-seen',
+
+  /* Person record: device-only sections, each a `StoredSection` (`@taucad/preferences`). Never server-visible. */
+  // What the person told setup: goals, last tool, languages.
+  personProfile: 'person-profile',
+  // Mouse preset, navigation toggles, gizmo style and personal view defaults.
+  viewerPreferences: 'viewer-preferences',
+  // Setup status and tour progress; it only grows.
+  onboarding: 'onboarding',
+  // This computer: input device, paused tour, dismissed invite. Never synced.
+  device: 'device',
+  // Leaves this person set, in one view, to the file format's own value (view commands).
+  viewExceptions: 'view-exceptions',
+} as const;
+
+/**
+ * Union of all cookie names.
+ */
+export type CookieName = ConstantRecord<typeof cookieName>;

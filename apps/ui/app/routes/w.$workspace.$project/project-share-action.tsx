@@ -1,0 +1,223 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router';
+import { useSelector } from '@xstate/react';
+import { waitFor } from 'xstate';
+import type { ShareProjectSnapshot, ShareSnapshotFileRole } from '@taucad/share/snapshot';
+import { parameterEntryPath, projectToManifest, serializeProjectManifest } from '@taucad/types';
+import { randomUuid } from '@taucad/utils/id';
+import { ProjectSharePanel } from '#components/publish/project-share-panel.js';
+import { missingModelFileMessage } from '@taucad/publish-ui/components/publish/project-share-panel';
+import type { ShareMethod } from '@taucad/publish-ui/components/publish/project-share-panel';
+import type { ShareSource } from '@taucad/workbench-panes/share/share-source';
+import { useFileManager } from '#hooks/use-file-manager.js';
+import { useProject } from '#hooks/use-project.js';
+import { parseGithubGistAuthorizationReturn } from '#lib/share-providers.js';
+import { useProjectWorkspace } from '#routes/w.$workspace.$project/project-workspace-context.js';
+import { ProjectWorkbenchPanesHost } from '#routes/w.$workspace.$project/workbench-panes-host.js';
+import { ProjectPeopleWithAccess } from '#routes/w.$workspace.$project/revision-collaborators.js';
+
+type ProjectShareNavigationIntent = {
+  readonly shouldOpen: boolean;
+  readonly initialMethod?: ShareMethod;
+  readonly githubAuthorizationOutcome?: 'returned' | 'cancelled' | 'failed';
+  readonly githubAuthorizationFailure?: string;
+  readonly remainingSearch: string;
+};
+
+const shareMethods: readonly ShareMethod[] = ['direct', 'tau', 'github-gist'];
+
+export const parseProjectShareNavigationIntent = (search: string): ProjectShareNavigationIntent => {
+  const parameters = new URLSearchParams(search);
+  const requestedMethod = parameters.get('shareProvider');
+  const initialMethod = shareMethods.find((method) => method === requestedMethod);
+  const githubAuthorization = parseGithubGistAuthorizationReturn(search);
+  const shouldOpen = parameters.get('workbench') === 'share' || githubAuthorization !== undefined;
+
+  if (parameters.get('workbench') === 'share') {
+    parameters.delete('workbench');
+  }
+  if (initialMethod) {
+    parameters.delete('shareProvider');
+  }
+  if (githubAuthorization) {
+    parameters.delete('shareAuth');
+    parameters.delete('error');
+    parameters.delete('error_description');
+  }
+  const remaining = parameters.toString();
+  return {
+    shouldOpen,
+    ...(initialMethod ? { initialMethod } : githubAuthorization ? { initialMethod: 'github-gist' } : {}),
+    ...(githubAuthorization ? { githubAuthorizationOutcome: githubAuthorization.outcome } : {}),
+    ...(githubAuthorization?.failure === undefined ? {} : { githubAuthorizationFailure: githubAuthorization.failure }),
+    remainingSearch: remaining ? `?${remaining}` : '',
+  };
+};
+
+const hashBytes = async (content: Uint8Array<ArrayBuffer>): Promise<string> =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', content))]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
+
+export function ProjectShareRouteIntent(): undefined {
+  const { search } = useLocation();
+  const { openPanel } = useProjectWorkspace();
+
+  useEffect(() => {
+    if (parseProjectShareNavigationIntent(search).shouldOpen) {
+      openPanel('share');
+    }
+  }, [openPanel, search]);
+
+  return undefined;
+}
+
+/**
+ * The workbench's host for the shared Share pane: the project's units and claims, with this panel's share source.
+ *
+ * @param props - The share source and the pane.
+ * @returns The host.
+ */
+export function ProjectShareHost({
+  source,
+  children,
+}: {
+  readonly source: ShareSource;
+  readonly children: ReactNode;
+}): React.JSX.Element {
+  const sources = useMemo(() => ({ share: source }), [source]);
+  return <ProjectWorkbenchPanesHost sources={sources}>{children}</ProjectWorkbenchPanesHost>;
+}
+
+export function ProjectShareWorkbenchPanel(): React.JSX.Element {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [navigationIntent] = useState(() => parseProjectShareNavigationIntent(location.search));
+  const { parameterService, projectId, projectRef, entriesRecord } = useProject();
+  const { recordFiles: fileClient } = useFileManager();
+  const project = useSelector(projectRef, (state) => state.context.project);
+
+  useEffect(() => {
+    if (!navigationIntent.shouldOpen) {
+      return;
+    }
+    void navigate(`${location.pathname}${navigationIntent.remainingSearch}${location.hash}`, { replace: true });
+  }, [location.hash, location.pathname, navigate, navigationIntent]);
+
+  const collectSnapshot = useCallback(
+    async (signal?: AbortSignal): Promise<ShareProjectSnapshot> => {
+      if (!project) {
+        throw new Error('The project metadata is unavailable.');
+      }
+      signal?.throwIfAborted();
+      const { main } = project.assets;
+      if (!main) {
+        throw new Error(missingModelFileMessage);
+      }
+      const { entryPath, thumbnail } = main;
+      const claimId = randomUuid();
+      projectRef.send({
+        type: 'claimGeometryUnit',
+        claimId,
+        entryPath,
+        operationTimeout: entriesRecord?.entries[entryPath]?.renderTimeout,
+      });
+      try {
+        let geometryUnit = projectRef.getSnapshot().context.geometryUnits.get(entryPath);
+        if (!geometryUnit) {
+          const projectState = await waitFor(
+            projectRef,
+            (candidate) => candidate.context.geometryUnits.has(entryPath) || candidate.matches('error'),
+            { signal },
+          );
+          geometryUnit = projectState.context.geometryUnits.get(entryPath);
+        }
+        if (!geometryUnit) {
+          throw new Error('The main runtime is unavailable.');
+        }
+        const state = await waitFor(
+          geometryUnit,
+          (candidate) => Boolean(candidate.context.kernelClient) || candidate.matches('error'),
+          { signal },
+        );
+        const client = state.context.kernelClient;
+        if (!client) {
+          throw new Error('The main runtime could not be connected.');
+        }
+        const readmePath = await fileClient
+          .readdir(`/projects/${projectId}`)
+          .then((paths) => paths.find((path) => path.toLocaleLowerCase('en-US') === 'readme.md'))
+          .catch(() => undefined);
+        signal?.throwIfAborted();
+        const result = await client.snapshotSource({
+          source: { path: entryPath },
+          additionalPaths: [
+            { path: 'tau.json', required: true },
+            { path: 'package.json', required: false },
+            ...(readmePath ? [{ path: readmePath, required: false }] : []),
+            ...(thumbnail ? [{ path: thumbnail, required: false }] : []),
+          ],
+          signal,
+        });
+        if (!result.success) {
+          throw new Error(result.issues[0]?.message ?? 'The project source snapshot could not be collected.');
+        }
+        const role = (value: (typeof result.data.files)[number]['role']): ShareSnapshotFileRole =>
+          value === 'additional' ? 'project-metadata' : value;
+        const manifestContent = serializeProjectManifest(projectToManifest(project));
+        const parameterContent = await parameterService.readSettled(entryPath);
+        const files = result.data.files
+          .filter(
+            ({ path }) =>
+              path !== 'tau.json' && path !== '.tau' && !path.startsWith('.tau/') && !path.startsWith('node_modules/'),
+          )
+          .map((file) => ({ ...file, role: role(file.role) }));
+        files.push({
+          path: 'tau.json',
+          content: manifestContent,
+          sha256: await hashBytes(manifestContent),
+          role: 'project-metadata',
+        });
+        if (parameterContent !== undefined) {
+          files.push({
+            path: parameterEntryPath(entryPath),
+            content: parameterContent,
+            sha256: await hashBytes(parameterContent),
+            role: 'project-metadata',
+          });
+        }
+        return {
+          entryPath: result.data.entryPath,
+          files,
+          warnings: result.data.unresolvedPaths.map((path) => ({
+            code: 'UNRESOLVED_DEPENDENCY',
+            message: `The runtime could not resolve ${path}.`,
+          })),
+        };
+      } finally {
+        projectRef.send({ type: 'releaseGeometryUnit', claimId });
+      }
+    },
+    [entriesRecord, fileClient, parameterService, project, projectId, projectRef],
+  );
+
+  const entryPath = project?.assets.main?.entryPath ?? '';
+
+  /* C4: Collaborators lives in Share, as the last section of the pane's one scroll area, under every method. */
+  return (
+    <ProjectSharePanel
+      key={projectId}
+      projectId={projectId}
+      projectName={project?.name ?? 'Untitled'}
+      projectDescription={project?.description ?? ''}
+      entryPath={entryPath}
+      collectSnapshot={collectSnapshot}
+      initialMethod={navigationIntent.initialMethod}
+      githubAuthorizationOutcome={navigationIntent.githubAuthorizationOutcome}
+      githubAuthorizationFailure={navigationIntent.githubAuthorizationFailure}
+      host={ProjectShareHost}
+      extraSections={<ProjectPeopleWithAccess projectId={projectId} />}
+    />
+  );
+}

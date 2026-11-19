@@ -1,3 +1,4 @@
+import { projectIdentityPath, serializeProjectIdentity } from '@taucad/project-core/identity';
 // oxlint-disable-next-line import/no-unassigned-import -- Side-effect import to polyfill IndexedDB for tests
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -7,53 +8,17 @@ import { ProviderRegistry } from '#provider-registry.js';
 import { ResourceQueue } from '#resource-queue.js';
 import { ChangeEventBus } from '#change-event-bus.js';
 import { MountTable } from '#mount-table.js';
-import { SharedPool } from '@taucad/memory';
+import { CrossTabCoordinator } from '#cross-tab-coordinator.js';
 import type { ChangeEvent, FileSystemProvider, WatchEvent } from '#types.js';
-import { getEventOrigin } from '#event-origin-registry.js';
-
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-/**
- * Poll a predicate until it becomes true. Used to await asynchronous
- * timer-driven side effects (e.g. EventCoalescer flushes) without coupling
- * the test to a specific wall-clock duration. Pure scheduler-bounded waits
- * are inherently flaky on loaded CI runners; this loop is bounded by
- * `timeout` (milliseconds) instead, so a slow scheduler delays the test rather
- * than failing it.
- */
-async function waitFor(predicate: () => boolean, waitTimeout = 2000, pollInterval = 5): Promise<void> {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > waitTimeout) {
-      throw new Error(`waitFor timed out after ${waitTimeout}ms`);
-    }
-    // oxlint-disable-next-line no-await-in-loop -- Sequential execution is intentional for polling
-    await new Promise((resolve) => {
-      setTimeout(resolve, pollInterval);
-    });
-  }
-}
-
-async function createWorkspaceFileService() {
-  const providerRegistry = new ProviderRegistry();
-  const provider = await providerRegistry.createMountProvider({ backend: 'memory' });
-
-  const mountTable = new MountTable();
-  mountTable.mount('/', provider, { backend: 'memory' });
-
-  const resourceQueue = new ResourceQueue();
-  const eventBus = new ChangeEventBus();
-
-  const service = new WorkspaceFileService({
-    providerRegistry,
-    resourceQueue,
-    eventBus,
-    mountTable,
-  });
-
-  return { service, eventBus, providerRegistry, resourceQueue, mountTable, provider };
-}
+import {
+  createIdbWorkspaceFileService,
+  createWorkspaceFileService,
+  decoder,
+  encoder,
+  waitFor,
+} from '#testing/workspace-service-harness.js';
+import { projectToManifest, serializeProjectManifest } from '@taucad/types';
+import { tauPathPolicy } from '#path-registry.js';
 
 describe('WorkspaceFileService', () => {
   let service: WorkspaceFileService;
@@ -69,28 +34,110 @@ describe('WorkspaceFileService', () => {
     rootProvider = context.provider;
   });
 
-  describe('Layer 2 composition', () => {
-    it('exposes a FileSystemService via fileSystem', () => {
-      expect(service.fileSystem).toBeDefined();
-      expect(typeof service.fileSystem.readFile).toBe('function');
-      expect(typeof service.fileSystem.asProvider).toBe('function');
-      expect(typeof service.fileSystem.asRuntimeFileSystem).toBe('function');
+  describe('checkout routes', () => {
+    const projectId = 'proj_kkkkkkkkkkkkkkkkkkkkk';
+    const checkoutId = 'chk_bracket_fillet';
+    const checkoutBasePath = `.tau/checkouts/${projectId}/${checkoutId}`;
+
+    /*
+     * North-star W2 red pin (execution-queue ruling P2). A linked checkout is
+     * git's worktree made addressable (charter D4, blueprint S4): a persistent
+     * `/checkouts/<id>` route over the project's own storage root, class
+     * `authored`, installed explicitly and never a discovery candidate, so that
+     * `createRootedFileSystem('/checkouts/<id>')` needs no new capability and
+     * ESTALE keeps its meaning. `ProjectRootConfiguration` has no such row
+     * today. Remove `.fails` in the change that installs the route.
+     */
+    it('should install a linked checkout route over the project storage root, invisible to discovery', async () => {
+      const provider = await providerRegistry.getProvider({ backend: 'indexeddb' });
+      await provider.mkdir(projectId);
+      await provider.writeFile(
+        `${projectId}/tau.json`,
+        serializeProjectManifest(
+          projectToManifest({
+            name: 'bracket',
+            description: '',
+            tags: [],
+            assets: { main: { entryPath: 'main.ts' } },
+          }),
+        ),
+      );
+      await provider.writeFile(
+        `${projectId}/${projectIdentityPath}`,
+        serializeProjectIdentity({ version: 1, projectId }),
+      );
+      const configuration = {
+        projects: [{ projectId, backend: 'indexeddb', providerBasePath: projectId }],
+        checkouts: [{ checkoutId, projectId, backend: 'indexeddb', providerBasePath: checkoutBasePath }],
+        roots: [{ backend: 'indexeddb' }],
+      } as const;
+      await service.configureProjectRoots(configuration);
+
+      const view = service.createRootedFileSystem(`/checkouts/${checkoutId}`);
+      await view.writeFile('main.ts', 'export const bracket = 1;');
+
+      expect(decoder.decode(await provider.readFile(`${checkoutBasePath}/main.ts`))).toBe('export const bracket = 1;');
+      const { entries } = await service.listProjectManifests();
+      expect(entries.map((entry) => entry.locator.relativeDirectory)).toEqual([projectId]);
+
+      await service.configureProjectRoots({ ...configuration, checkouts: [] });
+      await expect(view.readFile('main.ts')).rejects.toMatchObject({ code: 'ESTALE' });
     });
 
-    it('Layer 2 service shares the workspace mount table for path routing', async () => {
-      await service.writeFile('/layer2.txt', 'hello');
-      const bytes = await service.fileSystem.readFile('/layer2.txt');
-      expect(decoder.decode(bytes)).toBe('hello');
+    /* The capture walk itself is `@taucad/revisions/algorithms` (D9/W8), and its
+       own suite pins that it takes kinds from `readdirEntries` and stats
+       nothing. What is this service's claim is the half below: a rooted view
+       over a checkout offers `readdirEntries` and asks the provider for
+       mount-prefixed paths. */
+    it('should list a checkout from its entry kinds without a stat per file', async () => {
+      const provider = await providerRegistry.getProvider({ backend: 'indexeddb' });
+      await service.configureProjectRoots({
+        projects: [{ projectId, backend: 'indexeddb', providerBasePath: projectId }],
+        checkouts: [{ checkoutId, projectId, backend: 'indexeddb', providerBasePath: checkoutBasePath }],
+        roots: [{ backend: 'indexeddb' }],
+      } as const);
+      const view = service.createRootedFileSystem(`/checkouts/${checkoutId}`);
+      await view.writeFile('main.ts', 'export const bracket = 1;\n');
+      await view.writeFile('parts/fillet.ts', 'export const fillet = 2;\n');
+      const stat = vi.spyOn(provider, 'stat');
+      const readdirEntries = vi.spyOn(provider, 'readdirEntries');
+
+      const listing = view.readdirEntries;
+      if (listing === undefined) {
+        throw new TypeError('A rooted checkout view offers readdirEntries.');
+      }
+      const kinds = async (path: string): Promise<readonly string[]> => {
+        const entries = await listing(path);
+        return entries.map(({ name, kind }) => `${kind}:${name}`);
+      };
+
+      expect([...(await kinds('')), ...(await kinds('parts'))]).toEqual([
+        'file:main.ts',
+        'dir:parts',
+        'file:fillet.ts',
+      ]);
+      expect(stat).not.toHaveBeenCalled();
+      expect(readdirEntries.mock.calls).toEqual([[checkoutBasePath], [`${checkoutBasePath}/parts`]]);
     });
 
-    it('Layer 2 writes are visible to the workspace eventBus', async () => {
-      const events: ChangeEvent[] = [];
-      const off = eventBus.subscribe((event) => events.push(event));
-
-      service.fileSystem.publishChangeEvent({ type: 'fileWritten', path: '/probe.txt', backend: 'memory' });
-
-      expect(events.some((event) => event.type === 'fileWritten' && event.path === '/probe.txt')).toBe(true);
-      off();
+    /* A1 review R4 nit: `/checkouts/a/b` canonicalizes to itself, so a slashed
+       id would install a route nested under another checkout's prefix. */
+    it('should refuse a checkout id that is more than one path segment', async () => {
+      const result = await service.configureProjectRoots({
+        projects: [{ projectId, backend: 'indexeddb', providerBasePath: projectId }],
+        checkouts: [
+          {
+            checkoutId: `${checkoutId}/nested`,
+            projectId,
+            backend: 'indexeddb',
+            providerBasePath: `${checkoutBasePath}/nested`,
+          },
+        ],
+        roots: [{ backend: 'indexeddb' }],
+      } as const);
+      /* Skipped with its rule (blueprint B3) and never mounted. */
+      expect(result.skipped).toEqual([{ kind: 'checkout', reason: 'checkout-rule' }]);
+      await expect(service.exists(`/checkouts/${checkoutId}/nested`)).resolves.toBe(false);
     });
   });
 
@@ -143,6 +190,35 @@ describe('WorkspaceFileService', () => {
       const result = await service.readFile('/empty.txt', 'utf8');
       expect(result).toBe('');
     });
+
+    it('refreshes provider admission state only after entering the existing lock', async () => {
+      const coordinator = new CrossTabCoordinator();
+      const context = await createWorkspaceFileService({ crossTabCoordinator: coordinator });
+      const originalWithLocks = coordinator.withLocks.bind(coordinator);
+      let insideLock = false;
+      vi.spyOn(coordinator, 'withLocks').mockImplementation(async (paths, operation) =>
+        originalWithLocks(paths, async () => {
+          insideLock = true;
+          try {
+            return await operation();
+          } finally {
+            insideLock = false;
+          }
+        }),
+      );
+      const refresh = vi.fn(async () => {
+        expect(insideLock).toBe(true);
+      });
+      context.provider.refresh = refresh;
+
+      try {
+        await context.service.writeFile('/locked.txt', 'data');
+        expect(refresh).toHaveBeenCalledOnce();
+      } finally {
+        context.service.dispose();
+        coordinator.dispose();
+      }
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -177,13 +253,6 @@ describe('WorkspaceFileService', () => {
       const controller = new AbortController();
       controller.abort();
       await expect(service.readDirectory('/canceldir', { signal: controller.signal })).rejects.toThrow('aborted');
-    });
-
-    it('should throw AbortError for readFiles with pre-aborted signal', async () => {
-      await service.writeFile('/f1.txt', 'a');
-      const controller = new AbortController();
-      controller.abort();
-      await expect(service.readFiles(['/f1.txt'], { signal: controller.signal })).rejects.toThrow('aborted');
     });
   });
 
@@ -239,24 +308,15 @@ describe('WorkspaceFileService', () => {
       const end = await reader.read();
       expect(end.done).toBe(true);
     });
-  });
 
-  // ---------------------------------------------------------------------------
-  // readFiles
-  // ---------------------------------------------------------------------------
+    it('rejects invalid ranges before any provider I/O', async () => {
+      const nativeRead = vi.fn(() => new ReadableStream<Uint8Array<ArrayBuffer>>());
+      rootProvider.readFileStream = nativeRead;
+      const bufferedRead = vi.spyOn(rootProvider, 'readFile');
 
-  describe('readFiles', () => {
-    it('should read multiple files in parallel', async () => {
-      await service.writeFile('/a.txt', 'alpha');
-      await service.writeFile('/b.txt', 'bravo');
-      const results = await service.readFiles(['/a.txt', '/b.txt']);
-      expect(decoder.decode(results['/a.txt'])).toBe('alpha');
-      expect(decoder.decode(results['/b.txt'])).toBe('bravo');
-    });
-
-    it('should return an empty record for an empty input', async () => {
-      const results = await service.readFiles([]);
-      expect(results).toEqual({});
+      await expect(service.readFileStream('/stream.txt', { position: Number.NaN })).rejects.toThrow(RangeError);
+      expect(nativeRead).not.toHaveBeenCalled();
+      expect(bufferedRead).not.toHaveBeenCalled();
     });
   });
 
@@ -325,7 +385,7 @@ describe('WorkspaceFileService', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // exists / batchExists
+  // exists
   // ---------------------------------------------------------------------------
 
   describe('exists', () => {
@@ -344,502 +404,40 @@ describe('WorkspaceFileService', () => {
     });
   });
 
-  describe('batchExists', () => {
-    it('should return existence map for multiple paths', async () => {
-      await service.writeFile('/yes.txt', 'y');
-      const result = await service.batchExists(['/yes.txt', '/no.txt']);
-      expect(result['/yes.txt']).toBe(true);
-      expect(result['/no.txt']).toBe(false);
-    });
-
-    it('should return an empty record for empty input', async () => {
-      const result = await service.batchExists([]);
-      expect(result).toEqual({});
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // mkdir
-  // ---------------------------------------------------------------------------
-
-  describe('mkdir', () => {
-    it('should create a single directory', async () => {
-      await service.mkdir('/newdir');
-      expect(await service.exists('/newdir')).toBe(true);
-      const stat = await service.stat('/newdir');
-      expect(stat.type).toBe('dir');
-    });
-
-    it('should create nested directories with recursive option', async () => {
-      await service.mkdir('/a/b/c', { recursive: true });
-      expect(await service.exists('/a')).toBe(true);
-      expect(await service.exists('/a/b')).toBe(true);
-      expect(await service.exists('/a/b/c')).toBe(true);
-    });
-
-    it('should throw when creating nested directory without recursive', async () => {
-      await expect(service.mkdir('/x/y/z')).rejects.toThrow();
-    });
-
-    it('should list new subdirectories in readDirectory after recursive mkdir', async () => {
-      await service.writeFile('/root/existing.txt', 'x');
-      const beforeMkdir = await service.readDirectory('/root');
-      expect(beforeMkdir.map((n) => n.name)).toEqual(['existing.txt']);
-
-      await service.mkdir('/root/deep/nested', { recursive: true });
-
-      const afterMkdir = await service.readDirectory('/root');
-      const names = afterMkdir.map((n) => n.name);
-      expect(names).toContain('existing.txt');
-      expect(names).toContain('deep');
-    });
-
-    it('should not require unrelated directory reads to refresh siblings after mkdir', async () => {
-      await service.mkdir('/other', { recursive: true });
-      await service.writeFile('/other/file.txt', 'y');
-      await service.readDirectory('/other');
-
-      await service.writeFile('/root/file.txt', 'x');
-      await service.readDirectory('/root');
-
-      await service.mkdir('/root/child');
-
-      const rootEntries = await service.readDirectory('/root');
-      expect(rootEntries.map((n) => n.name)).toContain('child');
-
-      const otherEntries = await service.readDirectory('/other');
-      expect(otherEntries.map((n) => n.name)).toContain('file.txt');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // rename
-  // ---------------------------------------------------------------------------
-
-  describe('rename', () => {
-    it('should rename a file', async () => {
-      await service.writeFile('/old.txt', 'data');
-      await service.rename('/old.txt', '/new.txt');
-      expect(await service.exists('/old.txt')).toBe(false);
-      const content = await service.readFile('/new.txt', 'utf8');
-      expect(content).toBe('data');
-    });
-
-    it('should rename a directory', async () => {
-      await service.mkdir('/olddir');
-      await service.writeFile('/olddir/file.txt', 'inside');
-      await service.rename('/olddir', '/newdir');
-      expect(await service.exists('/olddir')).toBe(false);
-      expect(await service.exists('/newdir')).toBe(true);
-      const content = await service.readFile('/newdir/file.txt', 'utf8');
-      expect(content).toBe('inside');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // move
-  // ---------------------------------------------------------------------------
-
-  describe('move', () => {
-    it('should return a stat for the resulting file', async () => {
-      await service.writeFile('/source.txt', 'data');
-      const stat = await service.move('/source.txt', '/target.txt');
-      expect(stat.type).toBe('file');
-      expect(stat.size).toBe(4);
-    });
-
-    it('should move an entire directory subtree', async () => {
-      await service.writeFile('/src/index.ts', 'export {}');
-      await service.writeFile('/src/utils/helpers.ts', 'export {}');
-      const stat = await service.move('/src', '/lib');
-      expect(stat.type).toBe('dir');
-      expect(await service.exists('/src')).toBe(false);
-      expect(await service.exists('/lib/index.ts')).toBe(true);
-      expect(await service.exists('/lib/utils/helpers.ts')).toBe(true);
-    });
-
-    it('should refuse to overwrite an existing target without overwrite: true', async () => {
-      await service.writeFile('/keep.txt', 'untouched');
-      await service.writeFile('/source.txt', 'replace');
-      await expect(service.move('/source.txt', '/keep.txt')).rejects.toThrow('EEXIST');
-      const content = await service.readFile('/keep.txt', 'utf8');
-      expect(content).toBe('untouched');
-    });
-
-    it('should overwrite an existing file target when overwrite: true', async () => {
-      await service.writeFile('/keep.txt', 'untouched');
-      await service.writeFile('/source.txt', 'replace');
-      await service.move('/source.txt', '/keep.txt', { overwrite: true });
-      const content = await service.readFile('/keep.txt', 'utf8');
-      expect(content).toBe('replace');
-      expect(await service.exists('/source.txt')).toBe(false);
-    });
-
-    it('should overwrite an existing directory target when overwrite: true', async () => {
-      await service.writeFile('/old/a.txt', 'old-a');
-      await service.writeFile('/old/b.txt', 'old-b');
-      await service.writeFile('/new/c.txt', 'new-c');
-      await service.move('/new', '/old', { overwrite: true });
-      expect(await service.exists('/old/a.txt')).toBe(false);
-      expect(await service.exists('/old/c.txt')).toBe(true);
-    });
-
-    it('should emit directoryRenamed for directory sources', async () => {
-      await service.writeFile('/src/a.txt', 'a');
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-      await service.move('/src', '/lib');
-      expect(events).toContainEqual(
-        expect.objectContaining({ type: 'directoryRenamed', oldPath: '/src', newPath: '/lib' }),
-      );
-    });
-
-    it('should emit fileRenamed for file sources', async () => {
-      await service.writeFile('/a.txt', 'a');
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-      await service.move('/a.txt', '/b.txt');
-      expect(events).toContainEqual(
-        expect.objectContaining({ type: 'fileRenamed', oldPath: '/a.txt', newPath: '/b.txt' }),
-      );
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // R6: canMove / canRename / canCreate / canDelete preflights
-  // ---------------------------------------------------------------------------
-
-  describe('canMove preflight', () => {
-    it('returns true when source exists and target is free', async () => {
-      await service.writeFile('/source.txt', 'data');
-      const result = await service.canMove('/source.txt', '/target.txt');
-      expect(result).toBe(true);
-    });
-
-    it('returns NOT_FOUND when the source does not exist', async () => {
-      const result = await service.canMove('/missing.txt', '/target.txt');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('NOT_FOUND');
-      expect(result.path).toBe('/missing.txt');
-    });
-
-    it('returns NAME_EXISTS when the target already exists', async () => {
-      await service.writeFile('/source.txt', 'src');
-      await service.writeFile('/keep.txt', 'keep');
-      const result = await service.canMove('/source.txt', '/keep.txt');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('NAME_EXISTS');
-      expect(result.target).toBe('/keep.txt');
-    });
-
-    it('returns true when target exists but overwrite is requested', async () => {
-      await service.writeFile('/source.txt', 'src');
-      await service.writeFile('/keep.txt', 'keep');
-      const result = await service.canMove('/source.txt', '/keep.txt', { overwrite: true });
-      expect(result).toBe(true);
-    });
-
-    it('returns INVALID_NAME for non-normalised paths', async () => {
-      await service.writeFile('/source.txt', 'src');
-      const result = await service.canMove('/source.txt', '/foo/../bar.txt');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('INVALID_NAME');
-    });
-
-    it('returns BUNDLED_TYPES_WORKSPACE for /node_modules paths', async () => {
-      await service.writeFile('/source.txt', 'src');
-      const result = await service.canMove('/source.txt', '/node_modules/foo.ts');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('BUNDLED_TYPES_WORKSPACE');
-    });
-  });
-
-  describe('canRename preflight', () => {
-    it('rejects newName containing a slash with INVALID_NAME', async () => {
-      await service.writeFile('/a.txt', 'a');
-      const result = await service.canRename('/a.txt', 'b/c.txt');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('INVALID_NAME');
-    });
-
-    it('rejects rename onto a sibling that already exists with NAME_EXISTS', async () => {
-      await service.writeFile('/a.txt', 'a');
-      await service.writeFile('/b.txt', 'b');
-      const result = await service.canRename('/a.txt', 'b.txt');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('NAME_EXISTS');
-    });
-
-    it('accepts a sibling rename to a free name', async () => {
-      await service.writeFile('/a.txt', 'a');
-      const result = await service.canRename('/a.txt', 'b.txt');
-      expect(result).toBe(true);
-    });
-  });
-
-  describe('canCreate preflight', () => {
-    it('returns true for a new file path', async () => {
-      const result = await service.canCreate('/new.txt', 'file');
-      expect(result).toBe(true);
-    });
-
-    it('returns NAME_EXISTS for an occupied path', async () => {
-      await service.writeFile('/existing.txt', 'x');
-      const result = await service.canCreate('/existing.txt', 'file');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('NAME_EXISTS');
-    });
-
-    it('rejects /node_modules with BUNDLED_TYPES_WORKSPACE', async () => {
-      const result = await service.canCreate('/node_modules/new.ts', 'file');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('BUNDLED_TYPES_WORKSPACE');
-    });
-
-    it('rejects relative paths with INVALID_NAME', async () => {
-      const result = await service.canCreate('relative.txt', 'file');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('INVALID_NAME');
-    });
-  });
-
-  describe('canDelete preflight', () => {
-    it('returns true for an existing path', async () => {
-      await service.writeFile('/gone.txt', 'g');
-      const result = await service.canDelete('/gone.txt');
-      expect(result).toBe(true);
-    });
-
-    it('returns NOT_FOUND for a missing path', async () => {
-      const result = await service.canDelete('/never.txt');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('NOT_FOUND');
-    });
-
-    it('rejects /node_modules with BUNDLED_TYPES_WORKSPACE', async () => {
-      const result = await service.canDelete('/node_modules/foo/index.d.ts');
-      expect(result).not.toBe(true);
-      if (result === true) {
-        return;
-      }
-      expect(result.code).toBe('BUNDLED_TYPES_WORKSPACE');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // R7: bulkMove transaction with rollback
-  // ---------------------------------------------------------------------------
-
-  describe('bulkMove', () => {
-    it('moves every edit when all succeed', async () => {
-      await service.writeFile('/a.txt', 'a');
-      await service.writeFile('/b.txt', 'b');
-      await service.writeFile('/c.txt', 'c');
-      const result = await service.bulkMove([
-        { source: '/a.txt', target: '/dst/a.txt' },
-        { source: '/b.txt', target: '/dst/b.txt' },
-        { source: '/c.txt', target: '/dst/c.txt' },
-      ]);
-      expect(result.moved.length).toBe(3);
-      expect(result.failed.length).toBe(0);
-      expect(await service.exists('/dst/a.txt')).toBe(true);
-      expect(await service.exists('/dst/b.txt')).toBe(true);
-      expect(await service.exists('/dst/c.txt')).toBe(true);
-    });
-
-    it('rolls back every prior move when a middle edit fails', async () => {
-      await service.writeFile('/a.txt', 'a');
-      await service.writeFile('/b.txt', 'b');
-      await service.writeFile('/c.txt', 'c');
-      await service.writeFile('/dst/b.txt', 'collision');
-
-      const result = await service.bulkMove([
-        { source: '/a.txt', target: '/dst/a.txt' },
-        { source: '/b.txt', target: '/dst/b.txt' },
-        { source: '/c.txt', target: '/dst/c.txt' },
-      ]);
-
-      expect(result.moved.length).toBe(0);
-      expect(result.failed.length).toBe(1);
-      expect(result.failed[0]?.edit.source).toBe('/b.txt');
-      expect(result.failed[0]?.error.code).toBe('NAME_EXISTS');
-
-      expect(await service.exists('/a.txt')).toBe(true);
-      expect(await service.exists('/b.txt')).toBe(true);
-      expect(await service.exists('/c.txt')).toBe(true);
-      expect(await service.exists('/dst/a.txt')).toBe(false);
-      expect(await service.exists('/dst/c.txt')).toBe(false);
-      expect(await service.readFile('/dst/b.txt', 'utf8')).toBe('collision');
-    });
-
-    it('returns an empty result for an empty edit list', async () => {
-      const result = await service.bulkMove([]);
-      expect(result.moved).toEqual([]);
-      expect(result.failed).toEqual([]);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // unlink
-  // ---------------------------------------------------------------------------
-
-  describe('unlink', () => {
-    it('should delete a file', async () => {
-      await service.writeFile('/del.txt', 'gone');
-      await service.unlink('/del.txt');
-      expect(await service.exists('/del.txt')).toBe(false);
-    });
-
-    it('should throw when deleting a non-existent file', async () => {
-      await expect(service.unlink('/nonexistent.txt')).rejects.toThrow();
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // rmdir
-  // ---------------------------------------------------------------------------
-
-  describe('rmdir', () => {
-    it('should remove an empty directory', async () => {
-      await service.mkdir('/todel');
-      await service.rmdir('/todel');
-      expect(await service.exists('/todel')).toBe(false);
-    });
-
-    it('should throw when removing a non-existent directory', async () => {
-      await expect(service.rmdir('/nope')).rejects.toThrow();
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // ensureDirectoryExists
-  // ---------------------------------------------------------------------------
-
-  describe('ensureDirectoryExists', () => {
-    it('should create the full directory chain', async () => {
-      await service.ensureDirectoryExists('/x/y/z');
-      expect(await service.exists('/x')).toBe(true);
-      expect(await service.exists('/x/y')).toBe(true);
-      expect(await service.exists('/x/y/z')).toBe(true);
-    });
-
-    it('should be a no-op when directories already exist', async () => {
-      await service.mkdir('/existing', { recursive: true });
-      await service.ensureDirectoryExists('/existing');
-      expect(await service.exists('/existing')).toBe(true);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // duplicateFile
-  // ---------------------------------------------------------------------------
-
-  describe('duplicateFile', () => {
-    it('should copy a file to a new location', async () => {
-      await service.writeFile('/src.txt', 'copy me');
-      await service.duplicateFile('/src.txt', '/dst.txt');
-      const content = await service.readFile('/dst.txt', 'utf8');
-      expect(content).toBe('copy me');
-      expect(await service.exists('/src.txt')).toBe(true);
-    });
-
-    it('should create parent directories for the destination', async () => {
-      await service.writeFile('/orig.txt', 'data');
-      await service.duplicateFile('/orig.txt', '/deep/nested/copy.txt');
-      const content = await service.readFile('/deep/nested/copy.txt', 'utf8');
-      expect(content).toBe('data');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // copyDirectory
-  // ---------------------------------------------------------------------------
-
-  describe('copyDirectory', () => {
-    it('should recursively copy a directory', async () => {
-      await service.writeFile('/source/a.txt', 'aaa');
-      await service.writeFile('/source/sub/b.txt', 'bbb');
-      await service.copyDirectory('/source', '/dest');
-      expect(await service.readFile('/dest/a.txt', 'utf8')).toBe('aaa');
-      expect(await service.readFile('/dest/sub/b.txt', 'utf8')).toBe('bbb');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // getDirectoryContents
-  // ---------------------------------------------------------------------------
-
-  describe('getDirectoryContents', () => {
-    it('should return all files with relative paths', async () => {
-      await service.writeFile('/proj/readme.md', '# Hi');
-      await service.writeFile('/proj/src/main.ts', 'code');
-      const contents = await service.getDirectoryContents('/proj');
-      expect(decoder.decode(contents['readme.md'])).toBe('# Hi');
-      expect(decoder.decode(contents['src/main.ts'])).toBe('code');
-    });
-
-    it('should return an empty record for a non-existent directory', async () => {
-      const contents = await service.getDirectoryContents('/nonexistent');
-      expect(contents).toEqual({});
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // writeFiles
-  // ---------------------------------------------------------------------------
-
-  describe('writeFiles', () => {
-    it('should write multiple files atomically', async () => {
-      const pathA = '/batch/a.txt';
-      const pathB = '/batch/b.txt';
-      await service.writeFiles({
-        [pathA]: { content: 'alpha' },
-        [pathB]: { content: 'bravo' },
-      });
-      expect(await service.readFile(pathA, 'utf8')).toBe('alpha');
-      expect(await service.readFile(pathB, 'utf8')).toBe('bravo');
-    });
-
-    it('should create parent directories for each file', async () => {
-      const pathA = '/deep/a/file.txt';
-      const pathB = '/deep/b/file.txt';
-      await service.writeFiles({
-        [pathA]: { content: 'deep-a' },
-        [pathB]: { content: 'deep-b' },
-      });
-      expect(await service.readFile(pathA, 'utf8')).toBe('deep-a');
-      expect(await service.readFile(pathB, 'utf8')).toBe('deep-b');
-    });
+  it('rejects every generic mutation path into the authority-global bundled types mount', async () => {
+    await service.writeFile('/source.txt', 'source');
+    await service.writeFile('/source-dir/file.txt', 'source');
+    const cases: ReadonlyArray<{ name: string; run: () => Promise<unknown> }> = [
+      { name: 'writeFile', run: async () => service.writeFile('/node_modules/file.ts', 'x') },
+      {
+        name: 'writeFiles',
+        run: async () => service.writeFiles(Object.fromEntries([['/node_modules/file.ts', { content: 'x' }]])),
+      },
+      { name: 'mkdir', run: async () => service.mkdir('/node_modules/package') },
+      { name: 'move source', run: async () => service.move('/node_modules/file.ts', '/target.ts') },
+      { name: 'move target', run: async () => service.move('/source.txt', '/node_modules/file.ts') },
+      /* `duplicate` and `copyTree` are the rooted surface's since W12d; the
+       * rooted `assertMutableRoot` refuses the same mount (W5 G8). */
+      { name: 'unlink', run: async () => service.unlink('/node_modules/file.ts') },
+      { name: 'rmdir', run: async () => service.rmdir('/node_modules/package', { recursive: true }) },
+      {
+        name: 'canonical alias',
+        run: async () => service.writeFile('/safe/../node_modules/alias.ts', 'x'),
+      },
+    ];
+
+    for (const { name, run } of cases) {
+      // oxlint-disable-next-line no-await-in-loop -- Each public endpoint is an independent trust-boundary assertion.
+      await expect(run(), name).rejects.toMatchObject({ code: 'BUNDLED_TYPES_WORKSPACE' });
+    }
+    await expect(service.bulkMove([{ source: '/source.txt', target: '/node_modules/bulk.ts' }])).resolves.toMatchObject(
+      {
+        moved: [],
+        failed: [{ error: { code: 'BUNDLED_TYPES_WORKSPACE' } }],
+      },
+    );
+    await expect(service.readFile('/source.txt', 'utf8')).resolves.toBe('source');
+    await expect(service.readFile('/source-dir/file.txt', 'utf8')).resolves.toBe('source');
   });
 
   // ---------------------------------------------------------------------------
@@ -847,6 +445,32 @@ describe('WorkspaceFileService', () => {
   // ---------------------------------------------------------------------------
 
   describe('readDirectory', () => {
+    it('should list 10,000 provider rows through the authority without per-entry stats', async () => {
+      const rows = 10_000;
+      await Promise.all(
+        Array.from({ length: rows }, async (_, index) => rootProvider.writeFile(`wide/file-${index}.txt`, 'row')),
+      );
+      const readdirWithStats = vi.spyOn(rootProvider, 'readdirWithStats');
+      const stat = vi.spyOn(rootProvider, 'stat');
+
+      const entries = await service.readDirectory('/wide');
+
+      expect(entries).toHaveLength(rows);
+      expect(readdirWithStats).toHaveBeenCalledOnce();
+      expect(stat).not.toHaveBeenCalled();
+    });
+
+    /* A tree row is metadata only (I3): known write-path facts may ride along, nothing is read for them. */
+    it('should list metadata without reading content', async () => {
+      await service.writeFile('/heads/notes.txt', 'one\ntwo\nthree\n');
+      const readFile = vi.spyOn(rootProvider, 'readFile');
+
+      const nodes = await service.readDirectory('/heads');
+
+      expect(nodes).toEqual([expect.objectContaining({ name: 'notes.txt', size: 14 })]);
+      expect(readFile).not.toHaveBeenCalled();
+    });
+
     it('should return sorted tree nodes (folders first)', async () => {
       await service.mkdir('/tree/sub', { recursive: true });
       await service.writeFile('/tree/file.txt', 'x');
@@ -952,59 +576,14 @@ describe('WorkspaceFileService', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // getDirectoryStat
-  // ---------------------------------------------------------------------------
-
-  describe('getDirectoryStat', () => {
-    it('should return stat entries for all files recursively', async () => {
-      await service.writeFile('/stats/a.txt', 'aaa');
-      await service.writeFile('/stats/sub/b.txt', 'bb');
-      const stats = await service.getDirectoryStat('/stats');
-      expect(stats).toHaveLength(2);
-
-      const paths = stats.map((s) => s.path).sort();
-      expect(paths).toEqual(['a.txt', 'sub/b.txt']);
-
-      const aEntry = stats.find((s) => s.name === 'a.txt')!;
-      expect(aEntry.type).toBe('file');
-      expect(aEntry.size).toBeGreaterThan(0);
-      expect(aEntry.mtimeMs).toBeGreaterThan(0);
-    });
-
-    it('should return empty array for an empty directory', async () => {
-      await service.mkdir('/emptystats');
-      const stats = await service.getDirectoryStat('/emptystats');
-      expect(stats).toEqual([]);
-    });
-
-    it('should return subdirectory stats from in-memory tree after initial scan', async () => {
-      await service.writeFile('/stats/a.txt', 'aaa');
-      await service.writeFile('/stats/sub/b.txt', 'bb');
-      await service.getDirectoryStat('/stats');
-
-      const subStats = await service.getDirectoryStat('/stats/sub');
-      expect(subStats).toHaveLength(1);
-      expect(subStats[0]!.path).toBe('b.txt');
-      expect(subStats[0]!.name).toBe('b.txt');
-    });
-
-    it('should list a new file under a subpath after write following initial scan', async () => {
-      await service.writeFile('/stats/a.txt', 'aaa');
-      await service.getDirectoryStat('/stats');
-      await service.writeFile('/stats/sub/c.txt', 'ccc');
-
-      const subStats = await service.getDirectoryStat('/stats/sub');
-      expect(subStats.some((s) => s.path === 'c.txt' && s.name === 'c.txt')).toBe(true);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // readShallowDirectory
   // ---------------------------------------------------------------------------
 
   describe('readShallowDirectory', () => {
     it('should return empty array for memory scope', async () => {
-      const nodes = await service.readShallowDirectory('/', { scope: { backend: 'memory' } });
+      const nodes = await service.readShallowDirectory('/', {
+        scope: { backend: 'memory', storageRootKey: 'memory:shallow-directory' },
+      });
       expect(nodes).toEqual([]);
     });
 
@@ -1013,27 +592,30 @@ describe('WorkspaceFileService', () => {
         readdir: vi.fn().mockResolvedValue(['zebra.txt', 'alpha', 'beta.txt', 'alpha-dir']),
         stat: vi.fn().mockImplementation(async (path: string) => {
           const directories = new Set(['/alpha', '/alpha-dir']);
-          return { type: directories.has(path) ? 'dir' : 'file', size: 10, mtimeMs: 1 };
+          if (directories.has(path)) {
+            return { type: 'dir', size: 10, mtimeMs: 1 };
+          }
+          return { type: 'file', size: 10, mtimeMs: 1, contentKind: 'text', lineCount: 1 };
         }),
         readdirWithStats: undefined,
       });
-      vi.spyOn(providerRegistry, 'getStandaloneProvider').mockResolvedValue(mockProvider);
+      vi.spyOn(providerRegistry, 'getProvider').mockResolvedValue(mockProvider);
 
       const nodes = await service.readShallowDirectory('/', { scope: { backend: 'indexeddb' } });
 
       expect(nodes).toEqual([
         { id: '/alpha', name: 'alpha', size: 10, mtimeMs: 1, children: [] },
         { id: '/alpha-dir', name: 'alpha-dir', size: 10, mtimeMs: 1, children: [] },
-        { id: '/beta.txt', name: 'beta.txt', size: 10, mtimeMs: 1 },
-        { id: '/zebra.txt', name: 'zebra.txt', size: 10, mtimeMs: 1 },
+        { id: '/beta.txt', name: 'beta.txt', size: 10, mtimeMs: 1, contentKind: 'text', lineCount: 1 },
+        { id: '/zebra.txt', name: 'zebra.txt', size: 10, mtimeMs: 1, contentKind: 'text', lineCount: 1 },
       ]);
     });
 
-    it('should propagate errors when getStandaloneProvider throws', async () => {
+    it('should propagate errors when getProvider throws', async () => {
       // Audit R7: structured error propagation replaces the previous
       // swallow-to-`[]` fallback so the /files route can surface
       // recovery UI for revoked permissions / missing handles.
-      vi.spyOn(providerRegistry, 'getStandaloneProvider').mockRejectedValue(new Error('no provider'));
+      vi.spyOn(providerRegistry, 'getProvider').mockRejectedValue(new Error('no provider'));
 
       await expect(service.readShallowDirectory('/', { scope: { backend: 'indexeddb' } })).rejects.toThrow(
         'no provider',
@@ -1045,7 +627,7 @@ describe('WorkspaceFileService', () => {
         readdir: vi.fn().mockRejectedValue(new Error('ENOENT')),
         readdirWithStats: undefined,
       });
-      vi.spyOn(providerRegistry, 'getStandaloneProvider').mockResolvedValue(mockProvider);
+      vi.spyOn(providerRegistry, 'getProvider').mockResolvedValue(mockProvider);
 
       await expect(service.readShallowDirectory('/', { scope: { backend: 'indexeddb' } })).rejects.toThrow('ENOENT');
     });
@@ -1055,25 +637,27 @@ describe('WorkspaceFileService', () => {
         readdir: vi.fn().mockResolvedValue(['good.txt', 'bad.txt']),
         stat: vi.fn().mockImplementation(async (path: string) => {
           if (path === '/good.txt') {
-            return { type: 'file', size: 5, mtimeMs: 1 };
+            return { type: 'file', size: 5, mtimeMs: 1, contentKind: 'text', lineCount: 1 };
           }
           throw new Error('stat failed');
         }),
         readdirWithStats: undefined,
       });
-      vi.spyOn(providerRegistry, 'getStandaloneProvider').mockResolvedValue(mockProvider);
+      vi.spyOn(providerRegistry, 'getProvider').mockResolvedValue(mockProvider);
 
       const nodes = await service.readShallowDirectory('/', { scope: { backend: 'indexeddb' } });
-      expect(nodes).toEqual([{ id: '/good.txt', name: 'good.txt', size: 5, mtimeMs: 1 }]);
+      expect(nodes).toEqual([
+        { id: '/good.txt', name: 'good.txt', size: 5, mtimeMs: 1, contentKind: 'text', lineCount: 1 },
+      ]);
     });
 
     it('should build correct paths when root is /', async () => {
       const mockProvider = mock<FileSystemProvider>({
         readdir: vi.fn().mockResolvedValue(['file.txt']),
-        stat: vi.fn().mockResolvedValue({ type: 'file', size: 1, mtimeMs: 1 }),
+        stat: vi.fn().mockResolvedValue({ type: 'file', size: 1, mtimeMs: 1, contentKind: 'text', lineCount: 1 }),
         readdirWithStats: undefined,
       });
-      vi.spyOn(providerRegistry, 'getStandaloneProvider').mockResolvedValue(mockProvider);
+      vi.spyOn(providerRegistry, 'getProvider').mockResolvedValue(mockProvider);
 
       const nodes = await service.readShallowDirectory('/', { scope: { backend: 'indexeddb' } });
       expect(nodes[0]!.id).toBe('/file.txt');
@@ -1083,171 +667,14 @@ describe('WorkspaceFileService', () => {
     it('should build correct paths for nested directories', async () => {
       const mockProvider = mock<FileSystemProvider>({
         readdir: vi.fn().mockResolvedValue(['child.txt']),
-        stat: vi.fn().mockResolvedValue({ type: 'file', size: 1, mtimeMs: 1 }),
+        stat: vi.fn().mockResolvedValue({ type: 'file', size: 1, mtimeMs: 1, contentKind: 'text', lineCount: 1 }),
         readdirWithStats: undefined,
       });
-      vi.spyOn(providerRegistry, 'getStandaloneProvider').mockResolvedValue(mockProvider);
+      vi.spyOn(providerRegistry, 'getProvider').mockResolvedValue(mockProvider);
 
       const nodes = await service.readShallowDirectory('/parent/sub', { scope: { backend: 'indexeddb' } });
       expect(nodes[0]!.id).toBe('/parent/sub/child.txt');
       expect(mockProvider.stat).toHaveBeenCalledWith('/parent/sub/child.txt');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Event emission
-  // ---------------------------------------------------------------------------
-
-  describe('event emission', () => {
-    it('should emit fileWritten on writeFile', async () => {
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-
-      await service.writeFile('/ev.txt', 'data');
-
-      const writeEvents = events.filter((event) => event.type === 'fileWritten');
-      expect(writeEvents).toHaveLength(1);
-      expect(writeEvents[0]!.path).toBe('/ev.txt');
-    });
-
-    it('should leave event untagged on direct mutations (no context)', async () => {
-      const origins: Array<string | undefined> = [];
-      eventBus.subscribe((event) => origins.push(getEventOrigin(event)));
-      await service.writeFile('/direct-origin.txt', 'x');
-      expect(origins).toEqual([undefined]);
-    });
-
-    it('should tag fileWritten via WorkspaceMutationContext on writeFile', async () => {
-      const received: Array<{ type: string; origin: string | undefined }> = [];
-      eventBus.subscribe((event) => {
-        received.push({ type: event.type, origin: getEventOrigin(event) });
-      });
-      await service.writeFile('/ctx.txt', 'y12345678901234567890123456789012', { originClientId: 'port_kernel' });
-      expect(received.some((r) => r.type === 'fileWritten' && r.origin === 'port_kernel')).toBe(true);
-    });
-
-    it('should leave observer-raw emits untagged when emit() is used without tagEventOrigin', async () => {
-      const origins: Array<string | undefined> = [];
-      eventBus.subscribe((changeEvent) => origins.push(getEventOrigin(changeEvent)));
-      eventBus.emit({ type: 'fileWritten', path: '/observer.txt', backend: 'memory' });
-      expect(origins).toEqual([undefined]);
-    });
-
-    it('should tag events for every mutating method when context.originClientId is set', async () => {
-      const context = { originClientId: 'all_methods' };
-      const originsByType: Array<{ type: ChangeEvent['type']; origin?: string }> = [];
-      eventBus.subscribe((event) => {
-        originsByType.push({ type: event.type, origin: getEventOrigin(event) });
-      });
-
-      await service.writeFile('/mut-w.txt', 'a', context);
-      await service.writeFiles({ '/mut-batch/x.txt': { content: 'b' } }, context);
-      await service.mkdir('/mut-mkdir', { recursive: true }, context);
-      await service.writeFile('/mut-r1.txt', 'c');
-      await service.rename('/mut-r1.txt', '/mut-r2.txt', context);
-      await service.writeFile('/mut-u.txt', 'd');
-      await service.unlink('/mut-u.txt', undefined, context);
-      await service.mkdir('/mut-rmdir', { recursive: true });
-      await service.rmdir('/mut-rmdir', undefined, context);
-      await service.writeFile('/mut-dup-s.txt', 'e');
-      await service.duplicateFile('/mut-dup-s.txt', '/mut-dup-d.txt', context);
-      await service.mkdir('/mut-cd-src', { recursive: true });
-      await service.writeFile('/mut-cd-src/nested.txt', 'f');
-      await service.copyDirectory('/mut-cd-src', '/mut-cd-dst', context);
-
-      const tagged = originsByType.filter((row) => row.origin === 'all_methods');
-      expect(tagged.length).toBeGreaterThanOrEqual(8);
-      const types = new Set(tagged.map((row) => row.type));
-      expect(types.has('fileWritten')).toBe(true);
-      expect(types.has('fileRenamed')).toBe(true);
-      expect(types.has('fileDeleted')).toBe(true);
-      expect(types.has('directoryChanged')).toBe(true);
-    });
-
-    it('should emit directoryChanged on writeFiles', async () => {
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-
-      const filePath = '/batch/f.txt';
-      await service.writeFiles({ [filePath]: { content: 'x' } });
-
-      const directoryEvents = events.filter((event) => event.type === 'directoryChanged');
-      expect(directoryEvents.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('should emit directoryCreated on mkdir', async () => {
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-
-      await service.mkdir('/evdir');
-
-      const directoryEvents = events.filter((event) => event.type === 'directoryCreated');
-      expect(directoryEvents).toHaveLength(1);
-      expect(directoryEvents[0]).toMatchObject({ type: 'directoryCreated', path: '/evdir' });
-    });
-
-    it('should emit fileRenamed on rename', async () => {
-      await service.writeFile('/ren.txt', 'data');
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-
-      await service.rename('/ren.txt', '/renamed.txt');
-
-      const renameEvents = events.filter((event) => event.type === 'fileRenamed');
-      expect(renameEvents).toHaveLength(1);
-      const renameEvent = renameEvents[0]!;
-      expect(renameEvent.oldPath).toBe('/ren.txt');
-      expect(renameEvent.newPath).toBe('/renamed.txt');
-    });
-
-    it('should emit fileDeleted on unlink', async () => {
-      await service.writeFile('/gone.txt', 'bye');
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-
-      await service.unlink('/gone.txt');
-
-      const deleteEvents = events.filter((event) => event.type === 'fileDeleted');
-      expect(deleteEvents).toHaveLength(1);
-      expect(deleteEvents[0]!.path).toBe('/gone.txt');
-    });
-
-    it('should emit directoryDeleted on rmdir', async () => {
-      await service.mkdir('/rmd');
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-
-      await service.rmdir('/rmd');
-
-      const directoryEvents = events.filter((event) => event.type === 'directoryDeleted');
-      expect(directoryEvents).toHaveLength(1);
-      expect(directoryEvents[0]).toMatchObject({ type: 'directoryDeleted', path: '/rmd' });
-    });
-
-    it('should emit fileCopied on duplicateFile', async () => {
-      await service.writeFile('/dup-src.txt', 'copy');
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-
-      await service.duplicateFile('/dup-src.txt', '/dup-dst.txt');
-
-      const copyEvents = events.filter((event) => event.type === 'fileCopied');
-      expect(copyEvents).toHaveLength(1);
-      expect(copyEvents[0]).toMatchObject({
-        type: 'fileCopied',
-        sourcePath: '/dup-src.txt',
-        targetPath: '/dup-dst.txt',
-      });
-    });
-
-    it('should include backend in emitted events', async () => {
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => events.push(event));
-
-      await service.writeFile('/backend.txt', 'x');
-
-      const writeEvent = events.find((event) => event.type === 'fileWritten')!;
-      expect('backend' in writeEvent && writeEvent.backend).toBe('memory');
     });
   });
 
@@ -1275,11 +702,11 @@ describe('WorkspaceFileService', () => {
       expect(after).toHaveLength(0);
     });
 
-    it('should return fresh listing after rename', async () => {
+    it('should return a fresh listing after a move', async () => {
       await service.writeFile('/ren-cache/old.txt', 'data');
       await service.readDirectory('/ren-cache');
 
-      await service.rename('/ren-cache/old.txt', '/ren-cache/new.txt');
+      await service.move('/ren-cache/old.txt', '/ren-cache/new.txt');
       const nodes = await service.readDirectory('/ren-cache');
       const names = nodes.map((n) => n.name);
       expect(names).toContain('new.txt');
@@ -1299,6 +726,23 @@ describe('WorkspaceFileService', () => {
       eventBus.emit({ type: 'fileWritten', path: '/x', backend: 'memory' });
       expect(handler).not.toHaveBeenCalled();
     });
+
+    it('clears search, route, and discovery derivatives without reviving providers', async () => {
+      await service.writeFile('/cached.txt', 'cached');
+      await service.readFile('/cached.txt');
+      /* Captured before dispose: after it the mount is gone, so a fresh rooted
+       * handle cannot even be created and the stale one must refuse. */
+      const rooted = service.createRootedFileSystem('/');
+      await rooted.search!('cached');
+      await service.configureProjectRoots({ projects: [], roots: [{ backend: 'indexeddb' }] });
+      const getProvider = vi.spyOn(providerRegistry, 'getProvider');
+
+      service.dispose();
+
+      await expect(service.listProjectManifests()).resolves.toEqual({ entries: [], roots: [] });
+      await expect(rooted.search!('cached')).rejects.toThrow();
+      expect(getProvider).not.toHaveBeenCalled();
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -1314,14 +758,9 @@ describe('WorkspaceFileService', () => {
       unsub();
     });
 
-    it('should expose watchRegistry', () => {
-      expect(service.watchRegistry).toBeDefined();
-      expect(service.watchRegistry.subscriptionCount).toBe(0);
-    });
-
     it('should coalesce watch events within 75ms kernel window', async () => {
       const received: WatchEvent[] = [];
-      service.watch({ paths: ['/src'], correlationId: 'c', recursive: true }, (event) => {
+      service.watch({ paths: ['/src'], recursive: true }, (event) => {
         received.push(event);
       });
 
@@ -1335,190 +774,9 @@ describe('WorkspaceFileService', () => {
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // Concurrent writes are serialized
-  // ---------------------------------------------------------------------------
-
-  describe('write serialization', () => {
-    it('should serialize concurrent writes to the same file', async () => {
-      const order: string[] = [];
-      eventBus.subscribe((event) => {
-        if (event.type === 'fileWritten' && 'path' in event) {
-          order.push(event.path);
-        }
-      });
-
-      const w1 = service.writeFile('/same.txt', 'a');
-      const w2 = service.writeFile('/same.txt', 'b');
-      const w3 = service.writeFile('/same.txt', 'c');
-
-      await Promise.all([w1, w2, w3]);
-
-      expect(order).toEqual(['/same.txt', '/same.txt', '/same.txt']);
-      const finalContent = await service.readFile('/same.txt', 'utf8');
-      expect(finalContent).toBe('c');
-    });
-
-    it('should allow parallel writes to different files', async () => {
-      const w1 = service.writeFile('/p1.txt', 'a');
-      const w2 = service.writeFile('/p2.txt', 'b');
-      const w3 = service.writeFile('/p3.txt', 'c');
-
-      await Promise.all([w1, w2, w3]);
-
-      expect(await service.readFile('/p1.txt', 'utf8')).toBe('a');
-      expect(await service.readFile('/p2.txt', 'utf8')).toBe('b');
-      expect(await service.readFile('/p3.txt', 'utf8')).toBe('c');
-    });
-  });
-
-  describe('cleanupWatches', () => {
-    it('should delegate to watchRegistry.cleanupOwner', async () => {
-      const handler = vi.fn();
-      service.watch({ paths: ['/'], correlationId: 'c', recursive: true }, handler, 'owner-1');
-      expect(service.watchRegistry.handlerCount).toBe(1);
-
-      service.cleanupWatches('owner-1');
-      expect(service.watchRegistry.handlerCount).toBe(0);
-    });
-  });
-
-  describe('eventBus getter', () => {
-    it('should return the event bus instance', () => {
-      expect(service.eventBus).toBe(eventBus);
-    });
-  });
-
-  describe('_ensurePath error propagation', () => {
-    it('should propagate non-EEXIST errors during nested writes', async () => {
-      const origMkdir = rootProvider.mkdir.bind(rootProvider);
-      let callCount = 0;
-      rootProvider.mkdir = async (path: string) => {
-        callCount++;
-        if (callCount === 2) {
-          const error = new Error('disk full') as NodeJS.ErrnoException;
-          error.code = 'EIO';
-          throw error;
-        }
-        return origMkdir(path);
-      };
-
-      await expect(service.writeFile('/a/b/c.txt', 'data')).rejects.toThrow('disk full');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // In-memory tree integration
-  // ---------------------------------------------------------------------------
-
-  describe('in-memory tree integration', () => {
-    it('should reflect writeFile in subsequent getDirectoryStat', async () => {
-      await service.writeFile('/root/a.txt', 'aaa');
-      await service.getDirectoryStat('/root');
-
-      await service.writeFile('/root/b.txt', 'bb');
-
-      const stats = await service.getDirectoryStat('/root');
-      const paths = stats.map((s) => s.path).sort();
-      expect(paths).toEqual(['a.txt', 'b.txt']);
-    });
-
-    it('should reflect mkdir in subsequent getDirectoryStat', async () => {
-      await service.writeFile('/root/a.txt', 'a');
-      await service.getDirectoryStat('/root');
-
-      await service.mkdir('/root/sub');
-      await service.writeFile('/root/sub/x.txt', 'x');
-
-      const stats = await service.getDirectoryStat('/root/sub');
-      expect(stats).toHaveLength(1);
-      expect(stats[0]!.path).toBe('x.txt');
-    });
-
-    it('should reflect unlink in subsequent getDirectoryStat', async () => {
-      await service.writeFile('/root/a.txt', 'a');
-      await service.writeFile('/root/b.txt', 'b');
-      await service.getDirectoryStat('/root');
-
-      await service.unlink('/root/a.txt');
-
-      const stats = await service.getDirectoryStat('/root');
-      expect(stats).toHaveLength(1);
-      expect(stats[0]!.path).toBe('b.txt');
-    });
-
-    it('should reflect rename in subsequent getDirectoryStat', async () => {
-      await service.writeFile('/root/old.txt', 'data');
-      await service.getDirectoryStat('/root');
-
-      await service.rename('/root/old.txt', '/root/new.txt');
-
-      const stats = await service.getDirectoryStat('/root');
-      const paths = stats.map((s) => s.path);
-      expect(paths).toContain('new.txt');
-      expect(paths).not.toContain('old.txt');
-    });
-
-    it('should reflect rmdir in subsequent getDirectoryStat', async () => {
-      await service.mkdir('/root/sub', { recursive: true });
-      await service.writeFile('/root/a.txt', 'a');
-      await service.getDirectoryStat('/root');
-
-      await service.rmdir('/root/sub');
-
-      const stats = await service.getDirectoryStat('/root');
-      expect(stats).toHaveLength(1);
-      expect(stats[0]!.path).toBe('a.txt');
-    });
-
-    it('should reflect duplicateFile in subsequent getDirectoryStat', async () => {
-      await service.writeFile('/root/src.txt', 'copy');
-      await service.getDirectoryStat('/root');
-
-      await service.duplicateFile('/root/src.txt', '/root/dst.txt');
-
-      const stats = await service.getDirectoryStat('/root');
-      const paths = stats.map((s) => s.path).sort();
-      expect(paths).toEqual(['dst.txt', 'src.txt']);
-    });
-
-    it('should reflect copyDirectory in subsequent getDirectoryStat', async () => {
-      await service.writeFile('/root/src/a.txt', 'aaa');
-      await service.writeFile('/root/src/sub/b.txt', 'bb');
-      await service.getDirectoryStat('/root');
-
-      await service.copyDirectory('/root/src', '/root/dest');
-
-      const stats = await service.getDirectoryStat('/root/dest');
-      const paths = stats.map((s) => s.path).sort();
-      expect(paths).toEqual(['a.txt', 'sub/b.txt']);
-    });
-
-    it('should reflect ensureDirectoryExists in subsequent getDirectoryStat', async () => {
-      await service.writeFile('/root/a.txt', 'a');
-      await service.getDirectoryStat('/root');
-
-      await service.ensureDirectoryExists('/root/new-dir');
-
-      const stats = await service.getDirectoryStat('/root');
-      const hasEntry = stats.some((s) => s.path === 'a.txt');
-      expect(hasEntry).toBe(true);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // getDirectoryStat abort signal
-  // ---------------------------------------------------------------------------
-
-  describe('getDirectoryStat abort signal', () => {
-    it('should throw AbortError when signal is already aborted', async () => {
-      await service.writeFile('/abort/a.txt', 'a');
-      const controller = new AbortController();
-      controller.abort();
-
-      await expect(service.getDirectoryStat('/abort', { signal: controller.signal })).rejects.toThrow('aborted');
-    });
-  });
+  /* The abort signal went with `getDirectoryStat` (W12d). The rooted `statTree`
+   * takes an entry filter, not a signal: a warm index answers without I/O, and a
+   * cold build is one walk the rooted view owns. */
 });
 
 // =============================================================================
@@ -1529,23 +787,7 @@ describe('WorkspaceFileService integration [DirectIDB]', () => {
   let service: WorkspaceFileService;
 
   beforeEach(async () => {
-    const providerRegistry = new ProviderRegistry({
-      databasePrefix: `test-integration-${Date.now()}`,
-    });
-    const provider = await providerRegistry.createMountProvider({ backend: 'indexeddb' });
-
-    const mountTable = new MountTable();
-    mountTable.mount('/', provider, { backend: 'indexeddb' });
-
-    const resourceQueue = new ResourceQueue();
-    const eventBus = new ChangeEventBus();
-
-    service = new WorkspaceFileService({
-      providerRegistry,
-      resourceQueue,
-      eventBus,
-      mountTable,
-    });
+    ({ service } = await createIdbWorkspaceFileService());
   });
 
   it('should round-trip a string through write and read', async () => {
@@ -1562,12 +804,10 @@ describe('WorkspaceFileService integration [DirectIDB]', () => {
   });
 
   it('should support batch writeFiles', async () => {
-    /* eslint-disable @typescript-eslint/naming-convention -- Path-keyed object */
     await service.writeFiles({
       '/batch/a.txt': { content: encoder.encode('a') },
       '/batch/b.txt': { content: encoder.encode('b') },
     });
-    /* eslint-enable @typescript-eslint/naming-convention -- Re-enable after path-keyed object */
     expect(await service.readFile('/batch/a.txt', 'utf8')).toBe('a');
     expect(await service.readFile('/batch/b.txt', 'utf8')).toBe('b');
   });
@@ -1577,11 +817,15 @@ describe('WorkspaceFileService integration [DirectIDB]', () => {
     const eventBus = new ChangeEventBus();
 
     const providerRegistry = new ProviderRegistry({
-      databasePrefix: `test-events-${Date.now()}`,
+      databasePrefix: `test-events-${crypto.randomUUID()}`,
     });
-    const provider = await providerRegistry.createMountProvider({ backend: 'indexeddb' });
+    const provider = await providerRegistry.getProvider({ backend: 'indexeddb' });
     const mountTable = new MountTable();
-    mountTable.mount('/', provider, { backend: 'indexeddb' });
+    mountTable.mount('/', provider, {
+      class: 'authored',
+      backend: 'indexeddb',
+      storageRootKey: providerRegistry.resolveStorageRootKey({ backend: 'indexeddb' }),
+    });
 
     const eventService = new WorkspaceFileService({
       providerRegistry,
@@ -1596,157 +840,44 @@ describe('WorkspaceFileService integration [DirectIDB]', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'fileWritten', path: '/evented.txt' }));
   });
 
-  it('should build in-memory tree via getDirectoryStat', async () => {
+  it('should build the per-root tree index via statTree', async () => {
     await service.writeFile('/tree/a.txt', 'a');
     await service.writeFile('/tree/b/c.txt', 'c');
-    const stats = await service.getDirectoryStat('/');
+    const stats = await service.createRootedFileSystem('/').statTree!('');
     expect(stats.length).toBeGreaterThan(0);
   });
 
-  describe('searchFiles', () => {
-    it('should return matching files from InMemoryFileTree', async () => {
-      await service.writeFile('/src/main.ts', 'console.log("hi")');
-      await service.writeFile('/src/utils/helper.ts', 'export {}');
-      await service.writeFile('/README.md', '# Hello');
-      await service.getDirectoryStat('/');
-
-      const results = service.searchFiles('/', 'helper');
-      expect(results).toHaveLength(1);
-      expect(results[0]!.path).toBe('src/utils/helper.ts');
+  it('keeps the tree index warm for the writes that survived a partial batch failure', async () => {
+    const providerRegistry = new ProviderRegistry();
+    const provider = await providerRegistry.getProvider({ backend: 'memory', storageRootKey: 'memory:test-root' });
+    const mountTable = new MountTable();
+    mountTable.mount('/', provider, { class: 'authored', backend: 'memory', storageRootKey: 'memory:test-root' });
+    const svc = new WorkspaceFileService({
+      providerRegistry,
+      resourceQueue: new ResourceQueue(),
+      eventBus: new ChangeEventBus(),
+      mountTable,
+    });
+    await svc.writeFile('/keep.txt', 'keep');
+    await svc.writeFile('/doomed.txt', 'before');
+    await svc.createRootedFileSystem('/').statTree!('');
+    const readdirWithStats = vi.spyOn(provider, 'readdirWithStats');
+    const writeFile = provider.writeFile.bind(provider);
+    vi.spyOn(provider, 'writeFile').mockImplementation(async (path, data) => {
+      if (path === 'doomed.txt') {
+        throw new Error('write failed');
+      }
+      return writeFile(path, data);
     });
 
-    it('should return empty array when tree is not built', () => {
-      const results = service.searchFiles('/', 'anything');
-      expect(results).toEqual([]);
-    });
+    await expect(svc.writeFiles({ '/ok.txt': { content: 'ok' }, '/doomed.txt': { content: 'after' } })).rejects.toThrow(
+      'write failed',
+    );
 
-    it('should forward maxResults option', async () => {
-      await service.writeFile('/a.ts', 'a');
-      await service.writeFile('/b.ts', 'b');
-      await service.writeFile('/c.ts', 'c');
-      await service.getDirectoryStat('/');
-
-      const results = service.searchFiles('/', '.ts', { maxResults: 2 });
-      expect(results).toHaveLength(2);
-    });
-
-    it('should forward includeDirectories option', async () => {
-      await service.writeFile('/src/main.ts', 'a');
-      await service.getDirectoryStat('/');
-
-      const results = service.searchFiles('/', 'src', { includeDirectories: true });
-      const types = results.map((r) => r.type);
-      expect(types).toContain('dir');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // SharedPool integration
-  // ---------------------------------------------------------------------------
-
-  describe('SharedPool integration', () => {
-    async function createWorkspaceFileServiceWithPool() {
-      const buffer = new SharedArrayBuffer(128 * 1024);
-      const pool = new SharedPool(buffer, { maxEntries: 128 });
-
-      const providerRegistry = new ProviderRegistry();
-      const provider = await providerRegistry.createMountProvider({ backend: 'memory' });
-      const mountTable = new MountTable();
-      mountTable.mount('/', provider, { backend: 'memory' });
-
-      const resourceQueue = new ResourceQueue();
-      const eventBus = new ChangeEventBus();
-
-      const svc = new WorkspaceFileService({
-        providerRegistry,
-        resourceQueue,
-        eventBus,
-        filePool: pool,
-        mountTable,
-      });
-
-      return { service: svc, pool, eventBus };
-    }
-
-    it('should store binary content in pool after readFile', async () => {
-      const { service: svc, pool } = await createWorkspaceFileServiceWithPool();
-      await svc.writeFile('/cached.txt', 'pooled content');
-
-      await svc.readFile('/cached.txt');
-
-      const cached = pool.resolveCopy('/cached.txt');
-      expect(cached).toBeDefined();
-      expect(decoder.decode(cached)).toBe('pooled content');
-    });
-
-    it('should invalidate pool entry on writeFile', async () => {
-      const { service: svc, pool } = await createWorkspaceFileServiceWithPool();
-      await svc.writeFile('/update.txt', 'original');
-      await svc.readFile('/update.txt');
-      expect(pool.has('/update.txt')).toBe(true);
-
-      await svc.writeFile('/update.txt', 'updated');
-      expect(pool.has('/update.txt')).toBe(false);
-    });
-
-    it('should invalidate pool entries on rename', async () => {
-      const { service: svc, pool } = await createWorkspaceFileServiceWithPool();
-      await svc.writeFile('/old.txt', 'data');
-      await svc.readFile('/old.txt');
-      expect(pool.has('/old.txt')).toBe(true);
-
-      await svc.rename('/old.txt', '/new.txt');
-      expect(pool.has('/old.txt')).toBe(false);
-      expect(pool.has('/new.txt')).toBe(false);
-    });
-
-    it('should invalidate pool entry on unlink', async () => {
-      const { service: svc, pool } = await createWorkspaceFileServiceWithPool();
-      await svc.writeFile('/delete.txt', 'data');
-      await svc.readFile('/delete.txt');
-      expect(pool.has('/delete.txt')).toBe(true);
-
-      await svc.unlink('/delete.txt');
-      expect(pool.has('/delete.txt')).toBe(false);
-    });
-
-    it('should work identically without pool', async () => {
-      const { service: svc } = await createWorkspaceFileService();
-      await svc.writeFile('/no-pool.txt', 'data');
-
-      const content = await svc.readFile('/no-pool.txt', 'utf8');
-      expect(content).toBe('data');
-    });
-
-    it('should accept filePool via setFilePool after construction', async () => {
-      const { service: svc } = await createWorkspaceFileService();
-      const buffer = new SharedArrayBuffer(128 * 1024);
-      const pool = new SharedPool(buffer, { maxEntries: 128 });
-
-      svc.setFilePool(pool);
-
-      await svc.writeFile('/late-pool.txt', 'late binding');
-      await svc.readFile('/late-pool.txt');
-
-      const cached = pool.resolveCopy('/late-pool.txt');
-      expect(cached).toBeDefined();
-      expect(decoder.decode(cached)).toBe('late binding');
-    });
-
-    it('should invalidate late-bound pool on writeFile', async () => {
-      const { service: svc } = await createWorkspaceFileService();
-      const buffer = new SharedArrayBuffer(128 * 1024);
-      const pool = new SharedPool(buffer, { maxEntries: 128 });
-
-      svc.setFilePool(pool);
-
-      await svc.writeFile('/invalidate.txt', 'original');
-      await svc.readFile('/invalidate.txt');
-      expect(pool.has('/invalidate.txt')).toBe(true);
-
-      await svc.writeFile('/invalidate.txt', 'updated');
-      expect(pool.has('/invalidate.txt')).toBe(false);
-    });
+    await expect(svc.createRootedFileSystem('/').statTree!('')).resolves.toContainEqual(
+      expect.objectContaining({ path: 'ok.txt' }),
+    );
+    expect(readdirWithStats).not.toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------------------------
@@ -1754,11 +885,14 @@ describe('WorkspaceFileService integration [DirectIDB]', () => {
   // ---------------------------------------------------------------------------
 
   describe('getZippedDirectory', () => {
+    /* Scope-only since W3: a routed path is archived on its rooted view. */
+    const scope = { backend: 'indexeddb' } as const;
+
     it('should return a Blob containing the directory files as a zip', async () => {
       await service.writeFile('/ziptest/a.txt', 'hello');
       await service.writeFile('/ziptest/b.txt', 'world');
 
-      const blob = await service.getZippedDirectory('/ziptest');
+      const blob = await service.getZippedDirectory('/ziptest', { scope });
 
       expect(blob).toBeInstanceOf(Blob);
       expect(blob.size).toBeGreaterThan(0);
@@ -1768,7 +902,7 @@ describe('WorkspaceFileService integration [DirectIDB]', () => {
       await service.writeFile('/ziptest/sub/nested.txt', 'nested content');
       await service.writeFile('/ziptest/root.txt', 'root content');
 
-      const blob = await service.getZippedDirectory('/ziptest');
+      const blob = await service.getZippedDirectory('/ziptest', { scope });
       const jszipModule = await import('jszip');
       const jszip = jszipModule.default;
       const zip = await jszip.loadAsync(await blob.arrayBuffer());
@@ -1787,90 +921,103 @@ describe('WorkspaceFileService integration [DirectIDB]', () => {
     it('should handle empty directories', async () => {
       await service.mkdir('/emptydir', { recursive: true });
 
-      const blob = await service.getZippedDirectory('/emptydir');
+      const blob = await service.getZippedDirectory('/emptydir', { scope });
 
       expect(blob).toBeInstanceOf(Blob);
       expect(blob.size).toBeGreaterThan(0);
     });
+
+    /* PP3: a control-plane row is hidden wherever its segment sits, so a
+     * workspace folder that happens to hold a project packs the project's files
+     * and not its repository. */
+    it('should omit control-plane rows at any depth while keeping the project files', async () => {
+      /* The memory harness mounts `memory:0` at `/`, so that is the scope the archive resolves. */
+      const { service: masked } = await createWorkspaceFileService({ policy: tauPathPolicy });
+      await masked.writeFile('/ziptest/sub/.git/HEAD', 'ref: refs/heads/main');
+      await masked.writeFile('/ziptest/sub/main.ts', 'export const part = 1;');
+
+      const blob = await masked.getZippedDirectory('/ziptest', {
+        scope: { backend: 'memory', storageRootKey: 'memory:0' },
+      });
+      const jszipModule = await import('jszip');
+      const jszip = jszipModule.default;
+      const zip = await jszip.loadAsync(await blob.arrayBuffer());
+
+      expect(
+        Object.values(zip.files)
+          .filter((file) => !file.dir)
+          .map((file) => file.name),
+      ).toEqual(['sub/main.ts']);
+    });
+
+    it('rejects missing and file paths instead of returning plausible empty archives', async () => {
+      await service.writeFile('/file.txt', 'file');
+
+      await expect(service.getZippedDirectory('/missing', { scope })).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(service.getZippedDirectory('/file.txt', { scope })).rejects.toMatchObject({ code: 'ENOTDIR' });
+    });
   });
 
-  // ---------------------------------------------------------------------------
-  // mount / unmount (dynamic mount routing)
-  // ---------------------------------------------------------------------------
-
-  describe('mount / unmount', () => {
+  describe('protected dynamic mounts', () => {
     let mountedService: WorkspaceFileService;
-    let mountedEventBus: ChangeEventBus;
     let mountedRegistry: ProviderRegistry;
 
     beforeEach(async () => {
       mountedRegistry = new ProviderRegistry();
-      const rootProvider = await mountedRegistry.createMountProvider({ backend: 'memory' });
+      const rootProvider = await mountedRegistry.getProvider({
+        backend: 'memory',
+        storageRootKey: 'memory:dynamic-test-root',
+      });
 
       const mountTable = new MountTable();
-      mountTable.mount('/', rootProvider, { backend: 'memory' });
-      mountedEventBus = new ChangeEventBus();
+      mountTable.mount('/', rootProvider, {
+        class: 'authored',
+        backend: 'memory',
+        storageRootKey: 'memory:dynamic-test-root',
+      });
 
       mountedService = new WorkspaceFileService({
         providerRegistry: mountedRegistry,
         resourceQueue: new ResourceQueue(),
-        eventBus: mountedEventBus,
+        eventBus: new ChangeEventBus(),
         mountTable,
       });
     });
 
-    it('should mount a path prefix on the specified backend', async () => {
-      await mountedService.mount('/data', { backend: 'memory' });
-      await mountedService.writeFile('/data/test.txt', 'hello');
-      const content = await mountedService.readFile('/data/test.txt', 'utf8');
-      expect(content).toBe('hello');
+    it('mounts and unmounts one isolated preview root', async () => {
+      await mountedService.mount('/previews/card-a', {
+        class: 'authored',
+        backend: 'memory',
+        storageRootKey: 'memory:preview:card-a',
+      });
+      await mountedService.writeFile('/previews/card-a/main.ts', 'preview');
+      await expect(mountedService.readFile('/previews/card-a/main.ts', 'utf8')).resolves.toBe('preview');
+
+      mountedService.unmount('/previews/card-a');
+      await expect(mountedService.exists('/previews/card-a/main.ts')).resolves.toBe(false);
     });
 
-    it('should unmount a path prefix and dispose the provider', async () => {
-      await mountedService.mount('/ephemeral', { backend: 'memory', preservePath: true });
-      await mountedService.writeFile('/ephemeral/file.txt', 'temp');
-      expect(await mountedService.exists('/ephemeral/file.txt')).toBe(true);
+    it.each(['/data', '/projects/proj_a', '/previews/a/nested', '/previews/../projects/proj_a'])(
+      'rejects dynamic prefix %s before provider lookup',
+      async (prefix) => {
+        const getProvider = vi.spyOn(mountedRegistry, 'getProvider');
+        await expect(
+          mountedService.mount(prefix, { class: 'authored', backend: 'memory', storageRootKey: 'memory:preview:a' }),
+        ).rejects.toThrow(/not admitted|canonical/);
+        expect(getProvider).not.toHaveBeenCalled();
+      },
+    );
 
-      mountedService.unmount('/ephemeral');
-
-      expect(await mountedService.exists('/ephemeral/file.txt')).toBe(false);
-    });
-
-    it('should route writes to the mounted provider and not the root', async () => {
-      await mountedService.mount('/isolated', { backend: 'memory' });
-      await mountedService.writeFile('/isolated/secret.txt', 'data');
-
-      const rootEntries = await mountedService.readdir('/');
-      expect(rootEntries).not.toContain('secret.txt');
-    });
-
-    it('should handle unmount of non-existent prefix gracefully', () => {
-      expect(() => {
-        mountedService.unmount('/nonexistent');
-      }).not.toThrow();
-    });
-
-    it('should support multiple simultaneous mounts', async () => {
-      await mountedService.mount('/a', { backend: 'memory' });
-      await mountedService.mount('/b', { backend: 'memory' });
-
-      await mountedService.writeFile('/a/x.txt', 'A');
-      await mountedService.writeFile('/b/y.txt', 'B');
-
-      expect(await mountedService.readFile('/a/x.txt', 'utf8')).toBe('A');
-      expect(await mountedService.readFile('/b/y.txt', 'utf8')).toBe('B');
-      expect(await mountedService.exists('/b/x.txt')).toBe(false);
-    });
-
-    it('should pass preservePath option through to mount table', async () => {
-      await mountedService.mount('/projects/abc', { backend: 'memory', preservePath: true });
-      await mountedService.writeFile('/projects/abc/main.ts', 'code');
-
-      const content = await mountedService.readFile('/projects/abc/main.ts', 'utf8');
-      expect(content).toBe('code');
-
-      const entries = await mountedService.readdir('/projects/abc');
-      expect(entries).toContain('main.ts');
+    it('rejects a preview identity that does not match its prefix before provider lookup', async () => {
+      const getProvider = vi.spyOn(mountedRegistry, 'getProvider');
+      await expect(
+        mountedService.mount('/previews/card-a', {
+          class: 'authored',
+          backend: 'memory',
+          storageRootKey: 'memory:preview:card-b',
+        }),
+      ).rejects.toThrow('protected prefix');
+      expect(getProvider).not.toHaveBeenCalled();
     });
   });
 });

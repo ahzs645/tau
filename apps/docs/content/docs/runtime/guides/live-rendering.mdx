@@ -1,0 +1,86 @@
+---
+title: Live Rendering
+description: Open a watched document, subscribe to independent views, and update parameters or projection options.
+docType: how-to
+icon: lucide:radio
+---
+
+Open a document when a viewer must follow parameter changes or file edits. Each view subscription independently renders the document's evaluations. Exports use its committed evaluation.
+
+## Prerequisites
+
+- Complete the [Quick Start](../getting-started/quick-start).
+- Choose a transport and [filesystem](./filesystem-setup) for the model source.
+
+## Steps
+
+### 1. Open and subscribe
+
+```typescript
+import { createRuntimeClient } from '@taucad/runtime/client';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { replicad } from '@taucad/replicad';
+import { esbuild } from '@taucad/esbuild';
+
+const runtime = defineRuntime({ plugins: [replicad(), esbuild()] });
+const client = createRuntimeClient({
+  transport: inProcessTransport({ runtime, fileSystem: fromMemoryFs() }),
+});
+const document = client.open({
+  source: {
+    files: {
+      'main.ts':
+        'import { makeBox } from "replicad"; export default ({ width = 50 }) => makeBox([0,0,0],[width,20,10]);',
+    },
+  },
+});
+const view = document.view('model');
+const unsubscribe = view.on('rendered', (rendering) => {
+  if (rendering.success) {
+    console.log(rendering.artifact.mimeType, rendering.hash);
+    // Present rendering.artifact using its MIME type.
+  }
+  for (const issue of rendering.issues) {
+    console.warn(issue.code, issue.message);
+  }
+});
+
+try {
+  await view.rendering();
+  await document.update({ parameters: { width: 75 } });
+  await view.update({ options: { tessellation: { linearTolerance: 0.05 } } });
+} finally {
+  unsubscribe();
+  view.close();
+  document.close();
+  await client.shutdown();
+}
+```
+
+`open()` returns synchronously and connects lazily. Filesystem watches default to enabled. `view.on('rendered')` receives the settled `Rendering`; `rendering()` also reads the current projection. Keep the document and view handles for the UI's lifetime, closing them when it unmounts.
+
+### 2. Separate model inputs from projection inputs
+
+`document.update({ parameters })` evaluates changed model inputs; supplied parameters replace the effective parameter bag, with model defaults resolved by the kernel. `evaluateOptions` belong to evaluation. `view.update({ options })` changes only that projection request. Other subscriptions keep their own view, options, and instance.
+
+`document.view()` follows the first offered view. For dynamic kernels, inspect `evaluation.views` before creating a subscription: a successful export-only evaluation may offer none. A saved declared view can become unavailable after an edit; retain its choice and expose recovery instead of silently changing it.
+
+### 3. Handle supersession and failures
+
+Both document updates and view reads/updates return a union. Check `superseded` before accessing `evaluation` or `rendering`. Newer work can displace older work normally; operational cancellation, timeout, and transport loss reject. Model failures resolve with `success: false` and structured issues. See [Handle Errors](./error-handling).
+
+Keep the last successful artifact visible while a replacement is pending or fails. Clear it after a successful empty result, and show unsupported MIME types without pretending they are model failures.
+
+## Variations
+
+Create multiple `document.view(id, request)` subscriptions for independent panes. Instance-capable views accept a named sheet/part using `instance`; camera placement remains host-owned. Exports use `document.export(target, request)` and do not inherit the visible pane's options or transient parameter changes.
+
+For React, `useRuntime` owns the document/subscription lifecycle. See [Framework API](../api/frameworks).
+
+## Related
+
+- [Client API](../api/client)
+- [Render Lifecycle](../concepts/render-lifecycle)
+- [Configure Render Timeouts](./render-timeouts)

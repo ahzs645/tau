@@ -1,0 +1,150 @@
+import { Box, LayoutGrid, MessageCircle, SlidersHorizontal } from 'lucide-react';
+import { useId } from 'react';
+import { cn } from '@taucad/ui/utils/cn';
+import { useTourAnchor } from '#components/tour/tour-anchors.js';
+
+const destinations = [
+  { id: 'chat', label: 'Chat', icon: MessageCircle },
+  { id: 'parameters', label: 'Parameters', icon: SlidersHorizontal },
+  { id: 'model', label: 'Model', icon: Box },
+  { id: 'all', label: 'All', icon: LayoutGrid },
+] as const;
+
+type Destination = (typeof destinations)[number]['id'];
+
+/** Something waiting behind a destination: an attention dot, and the sentence a screen reader hears after its name. */
+export type MobileWorkbenchDestinationCue = Readonly<{
+  tone: 'attention' | 'failed';
+  description: string;
+}>;
+
+/**
+ * The nav's height contract, set on the shell and on any portalled surface that sits above the nav: `--nav-height` is
+ * the button row (its top border, 40px targets and 2px of padding), and `--nav-offset` adds the home-indicator inset beneath it.
+ */
+export const mobileWorkbenchNavigationHeight =
+  '[--nav-height:calc(var(--spacing)*11)] [--nav-offset:calc(var(--nav-height)_+_env(safe-area-inset-bottom))]';
+
+const navigationRowClass = cn(
+  'grid h-(--nav-offset) shrink-0 auto-cols-fr grid-flow-col items-center gap-1 rounded-none border-x-0 border-t border-b-0 bg-background px-2 pt-px',
+  // One row whatever the text size: the row's height is fixed (--nav-height), so a destination that wrapped to a
+  // second row would sit under the viewport's edge. 1px border + 1px + 40px buttons + 2px fills --nav-height
+  // exactly; the home-indicator inset goes below the buttons.
+  'pb-[calc(var(--spacing)*0.5_+_env(safe-area-inset-bottom))]',
+  mobileWorkbenchNavigationHeight,
+);
+const destinationClass =
+  'flex h-10 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg border border-transparent text-xs';
+const activeDestinationClass = 'border-border bg-background font-medium text-foreground';
+
+/**
+ * The frame's selected destination, from `data-frame-tab` on `<html>` (the pre-paint script's, then the frame's on the
+ * client); with none, the model. Literal for Tailwind.
+ */
+const frameSelectedClass: Readonly<Record<Destination, string>> = {
+  chat: '[:root[data-frame-tab=chat]_&]:border-border [:root[data-frame-tab=chat]_&]:bg-background [:root[data-frame-tab=chat]_&]:font-medium [:root[data-frame-tab=chat]_&]:text-foreground',
+  parameters:
+    '[:root[data-frame-tab=parameters]_&]:border-border [:root[data-frame-tab=parameters]_&]:bg-background [:root[data-frame-tab=parameters]_&]:font-medium [:root[data-frame-tab=parameters]_&]:text-foreground',
+  model:
+    '[:root[data-frame-tab=model]_&]:border-border [:root[data-frame-tab=model]_&]:bg-background [:root[data-frame-tab=model]_&]:font-medium [:root[data-frame-tab=model]_&]:text-foreground [:root:not([data-frame-tab])_&]:border-border [:root:not([data-frame-tab])_&]:bg-background [:root:not([data-frame-tab])_&]:font-medium [:root:not([data-frame-tab])_&]:text-foreground',
+  all: '[:root[data-frame-tab=all]_&]:border-border [:root[data-frame-tab=all]_&]:bg-background [:root[data-frame-tab=all]_&]:font-medium [:root[data-frame-tab=all]_&]:text-foreground',
+};
+
+/**
+ * The tab bar as the workspace frame draws it before the workspace has loaded (A15c): the same row, destinations and
+ * boxes as {@link MobileWorkbenchNavigation}, with no controls. The frame is inert and hidden from assistive
+ * technology, so this is a plain row rather than a second Workbench landmark. The selected destination is the frame
+ * hint's (`frameSelectedClass`).
+ *
+ * @param props - Classes for the row's position.
+ * @returns The row.
+ */
+export function MobileWorkbenchNavigationFrame({ className }: { readonly className?: string }): React.JSX.Element {
+  return (
+    <div data-frame-part='tab-bar' className={cn(navigationRowClass, className)}>
+      {destinations.map(({ id, label, icon: Icon }) => (
+        <span
+          key={id}
+          data-destination={id}
+          className={cn(destinationClass, 'text-muted-foreground', frameSelectedClass[id])}
+        >
+          <span className='relative'>
+            <Icon aria-hidden className='size-4' />
+          </span>
+          <span className='max-w-full truncate'>{label}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** The mobile workbench's primary destinations; secondary surfaces live under All. */
+export function MobileWorkbenchNavigation({
+  active,
+  onSelect,
+  className,
+  cues,
+}: {
+  readonly active: string;
+  readonly onSelect: (destination: Destination) => void;
+  readonly className?: string;
+  /** Cues by destination; the name stays the label, the cue is its description (I6). */
+  readonly cues?: Partial<Record<Destination, MobileWorkbenchDestinationCue>>;
+}): React.JSX.Element {
+  const cueId = useId();
+  /* One region shows at a time on a phone, so the product tour places a tip beside the entry for its target's region. */
+  const tourAnchors = {
+    chat: useTourAnchor('mobile-tab-chat'),
+    parameters: useTourAnchor('mobile-tab-parameters'),
+    model: useTourAnchor('mobile-tab-model'),
+    all: useTourAnchor('mobile-tab-all'),
+  };
+  return (
+    <nav aria-label='Workbench' className={cn(navigationRowClass, className)}>
+      {destinations.map(({ id, label, icon: Icon }) => {
+        const cue = cues?.[id];
+        return (
+          <button
+            key={id}
+            ref={tourAnchors[id]}
+            type='button'
+            aria-current={active === id ? 'page' : undefined}
+            aria-describedby={cue ? `${cueId}-${id}` : undefined}
+            onClick={() => {
+              onSelect(id);
+            }}
+            className={cn(
+              destinationClass,
+              'outline-none focus-visible:focus-outline',
+              active === id ? activeDestinationClass : 'text-muted-foreground hover:bg-accent/60',
+            )}
+          >
+            <span className='relative'>
+              <Icon aria-hidden className='size-4' />
+              {cue ? (
+                <span
+                  aria-hidden
+                  data-slot='destination-cue'
+                  data-tone={cue.tone}
+                  className={cn(
+                    'absolute -top-0.5 -right-1 size-2 rounded-full ring-2 ring-background',
+                    // The sidebar's mark hues (status-mark.tsx): amber needs you, the feature hue failed.
+                    cue.tone === 'failed' ? 'bg-feature/80' : 'bg-warning/80',
+                  )}
+                />
+              ) : null}
+            </span>
+            {/* One line: the button is 40px for an icon and a line, so large text truncates the label, never the target. */}
+            <span className='max-w-full truncate'>{label}</span>
+            {cue ? (
+              // Hidden from the name computation, still read as the description.
+              <span hidden id={`${cueId}-${id}`}>
+                {cue.description}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}

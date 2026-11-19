@@ -1,0 +1,124 @@
+/* oxlint-disable no-barrel-files/no-barrel-files -- the published `./wire` subpath barrel */
+
+/**
+ * `@taucad/agent-host/wire`: the one seam contract (D11). Strict payload-only schemas, the answers, the reads, the
+ * hello and limits, the refusal registry and the attachment media table. Imports only `zod`, zod-only schemas and
+ * the dependency-free image header reader, so the page, the CLI, apps/api and the run actor share it.
+ */
+
+export {
+  agentChannelAdmissionConfigSchema,
+  agentChannelModelCostSchema,
+  agentChannelModelSchema,
+  agentChannelRunKindSchema,
+  agentChannelSystemPromptBlockSchema,
+  agentChannelToolChoiceSchema,
+  gatewayProviderKinds,
+} from '#wire/admission.schema.js';
+export type { AgentChannelAdmissionConfig, AgentChannelModel } from '#wire/admission.schema.js';
+export { agentWireLimits } from '#wire/limits.js';
+export {
+  attachmentImageBackground,
+  attachmentImageLimits,
+  normalizeImageAttachment,
+  sniffAttachmentMediaType,
+} from '#wire/attachment-media.js';
+export type {
+  AttachmentRefusalReason,
+  AttachmentTranscodeInput,
+  AttachmentTranscodePort,
+  NormalizedImageAttachment,
+  NormalizeImageAttachmentInput,
+} from '#wire/attachment-media.js';
+// The stored-media table and its pure helpers live in the bundled `@taucad/utils/attachment-media`, so a package that
+// needs only the table does not depend on this one (I2).
+export {
+  attachmentExtensionOf,
+  attachmentExtensions,
+  attachmentImageMediaTypes,
+  attachmentMedia,
+  attachmentMediaTypes,
+  isAttachmentMediaType,
+} from '@taucad/utils/attachment-media';
+export type { AttachmentImageMediaType, AttachmentMediaType } from '@taucad/utils/attachment-media';
+export {
+  providerPermissionSchema,
+  providerPermissionObservationSchema,
+  providerPermissionResolutionSchema,
+} from '#wire/provider-permission.schema.js';
+export type {
+  ProviderPermission,
+  ProviderPermissionObservation,
+  ProviderPermissionResolution,
+} from '#wire/provider-permission.schema.js';
+export { chatIdSchema, commandAnswerSchema, commandPayloads } from '#wire/commands.schema.js';
+export type {
+  CommandAnswer,
+  CommandFrame,
+  CommandInput,
+  CommandPayload,
+  CommandVerb,
+  HostCommand,
+} from '#wire/commands.schema.js';
+export {
+  externalAgentAuthMethodSchema,
+  externalAgentDescriptorSchema,
+  externalAgentLoginSchema,
+  externalAgentRefusalCodes,
+  externalAgentStopCodes,
+  externalAgentStopSchema,
+} from '#wire/external-agent.schema.js';
+export type {
+  ExternalAgentDescriptor,
+  ExternalAgentLogin,
+  ExternalAgentRefusalCode,
+  ExternalAgentStop,
+  ExternalAgentStopCode,
+} from '#wire/external-agent.schema.js';
+export {
+  agentChannelRevisionEventSchema,
+  agentLiveEventSchema,
+  sourceLiveEventSchema,
+  agentWireHelloSchema,
+  agentWireProtocolSchemas,
+  agentWireVersion,
+  catchUpRequestSchema,
+  catchUpPositionSchema,
+  catchUpFrameSchema,
+  readAnswerSchema,
+  readRequestSchema,
+  rowKeySchema,
+} from '#wire/frames.schema.js';
+export type {
+  AgentChannelRevisionEvent,
+  AgentWireHello,
+  AgentWireProtocol,
+  CatchUpRequest,
+  CatchUpInput,
+  CatchUpFrame,
+  ReadAnswer,
+  ReadInput,
+  ReadRequest,
+} from '#wire/frames.schema.js';
+export {
+  attemptReceiptSchema,
+  gatewayErrorCodes,
+  gatewayHostKinds,
+  gatewayTurnGaps,
+  gatewayTurnSteps,
+} from '#wire/gateway.js';
+export type {
+  GatewayErrorCode,
+  GatewayHostKind,
+  GatewayHostLabels,
+  GatewayTurnGap,
+  GatewayTurnLabels,
+  GatewayTurnStep,
+  InvocationResolution,
+} from '#wire/gateway.js';
+export { isResumable, refusalOf, refusals } from '#wire/refusals.js';
+export { externalToolName, tauToolEvidence } from '#wire/tool-evidence.js';
+export type { ToolEvidenceClass } from '#wire/tool-evidence.js';
+export { turnPlacementSchema, turnSettlementSchema } from '#wire/settlement.schema.js';
+export type { TurnPlacementRecord, TurnSettlementBody } from '#wire/settlement.schema.js';
+export type { RefusalCode, RefusalEntry, RefusalOwner, RetryClass } from '#wire/refusals.js';

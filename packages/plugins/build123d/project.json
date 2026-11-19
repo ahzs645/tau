@@ -1,0 +1,131 @@
+{
+  "name": "build123d",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/plugins/build123d",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:package", "ci:native-hosts"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build"],
+      "options": {
+        "command": "tsdown",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "generate-tau-plugin": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/core/python-kernel/scripts/tau-python-kernel.mts generate --package packages/plugins/build123d"
+      },
+      "configurations": {
+        "check": {
+          "command": "node --import @oxc-node/core/register packages/core/python-kernel/scripts/tau-python-kernel.mts check --package packages/plugins/build123d"
+        }
+      }
+    },
+    "generate-project-template": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/core/python-kernel/scripts/tau-python-kernel.mts template --package packages/plugins/build123d"
+      },
+      "configurations": {
+        "check": {
+          "command": "node --import @oxc-node/core/register packages/core/python-kernel/scripts/tau-python-kernel.mts template --package packages/plugins/build123d --check"
+        }
+      }
+    },
+    "seed": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/core/python-kernel/scripts/tau-python-kernel.mts seed --package packages/plugins/build123d"
+      }
+    },
+    "golden-tau-plugin": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["seed"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/core/python-kernel/scripts/tau-python-kernel.mts golden --package packages/plugins/build123d"
+      }
+    },
+    "test": {
+      "dependsOn": ["seed"],
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/libs/tau-examples/src/kernels/build123d/planetary-gear-system/main.py",
+        {
+          "env": "TAU_BUILD123D_TEST_STORE"
+        }
+      ]
+    },
+    "test:native-darwin": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["seed"],
+      "metadata": {
+        "description": "Tier 3b of Build123d on darwin-arm64 (charter D27, D30; the native-darwin CI job): the closure sealed from the digest-keyed seed must equal the golden receipt, re-verify intact and import OCP inside the sandbox, then the kernel and sandbox suites run on it. Each file installs the global-fetch tripwire, and the golden comparison is appended to TAU_GOLDEN_SUMMARY_FILE when set."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/packages/plugins/build123d",
+        "command": "../../../node_modules/.bin/vitest run src/build123d-closure.native.integration.test.ts src/build123d.native.integration.test.ts src/build123d.native-sandbox.integration.test.ts"
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/libs/tau-examples/src/kernels/build123d/{v8-engine-brep,planetary-gear-system}/main.py"
+      ]
+    },
+    "test-python": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["seed"],
+      "outputs": ["{workspaceRoot}/out/reports/coverage/packages/plugins/build123d-python"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/core/python-kernel/scripts/tau-python-kernel.mts test --package packages/plugins/build123d"
+      },
+      "inputs": [
+        "default",
+        "^production",
+        {
+          "env": "TAU_BUILD123D_TEST_STORE"
+        }
+      ]
+    },
+    "test-python-desktop": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["desktop"],
+          "target": "prepare-build123d-python"
+        }
+      ],
+      "outputs": ["{workspaceRoot}/out/reports/coverage/packages/plugins/build123d-python"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/plugins/build123d/scripts/test-python-desktop.mts"
+      }
+    },
+    "benchmark-native": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["seed"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/plugins/build123d/scripts/benchmark-native.mts"
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/libs/tau-examples/src/kernels/build123d/v8-engine-brep/main.py"
+      ]
+    }
+  }
+}

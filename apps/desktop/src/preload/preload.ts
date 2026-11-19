@@ -1,0 +1,447 @@
+import { desktopNativeKernelChannels } from '@taucad/types/desktop-native-kernels';
+import type {
+  DesktopKernelPreparation,
+  DesktopKernelProgress,
+  DesktopNativeKernelBridge,
+} from '@taucad/types/desktop-native-kernels';
+import { desktopUpdateChannels } from '@taucad/types/desktop-updates';
+import type { DesktopUpdateBridge, DesktopUpdateSnapshot } from '@taucad/types/desktop-updates';
+import { browserChannels } from '@taucad/types/browser';
+import type { BrowserBridge, BrowserSnapshot } from '@taucad/types/browser';
+/**
+ * Electron preload entry (work item E4).
+ *
+ * Four seams reach the renderer from here, and nothing else:
+ *
+ * 1. `exposeElectronRuntime()` — the kernel-port bridge `@taucad/runtime` owns.
+ * 2. `window.ENV` — installed **before** app-module evaluation, which is the
+ *    contract `environment.config.ts` requires. The document's own inline
+ *    script merges *under* whatever is already there
+ *    (`window.ENV = { ...<build env>, ...(window.ENV ?? {}) }`), so preload
+ *    wins; the desktop build bakes in nothing, and `TAU_API_URL` /
+ *    `TAU_WEBSOCKET_URL` are required — `requireClientEnvironment` throws
+ *    without them.
+ * 3. `window.tauAuth` — the A6 renderer session bridge.
+ * 4. `window.tau` — L2's node-filesystem and dialog seam. Plain values and
+ *    functions only: a `MessagePort` cannot cross `contextBridge` (it arrives
+ *    as an inert proxy), so the services port takes the same route the
+ *    runtime's kernel port already takes — `relayElectronPorts` posts it into
+ *    this document, and the page claims it with `awaitElectronRelayedPort`,
+ *    whose same-window guard is the tree's one relay-acceptance predicate.
+ */
+
+import { contextBridge, ipcRenderer } from 'electron';
+/* Exposes `__SENTRY_IPC__` so the renderer SDK sends its events to main over IPC (SB11). */
+// oxlint-disable-next-line import/no-unassigned-import -- the SDK's preload hookup is a side effect.
+import '@sentry/electron/preload';
+import { exposeElectronRuntime, relayElectronPorts } from '@taucad/runtime/electron/preload';
+
+import {
+  appIconThemeChannel,
+  bootChannels,
+  recoveryChannels,
+  rendererBootStages,
+  telemetryConsentChannel,
+  openDirectoryChannel,
+  directoryGrantChannels,
+  revealPathChannel,
+  agentHostRatingChannel,
+  agentHostSessionChannels,
+  externalAgentsChannel,
+  hostHandOffChannel,
+  machinesChannels,
+  quitChannels,
+  computeControlChannels,
+  readBootstrap,
+  servicesPortRelayTag,
+  slicersChannels,
+  windowFullscreenChannel,
+} from '#shared/desktop-bootstrap.js';
+import type { AppIconTheme } from '#shared/desktop-bootstrap.js';
+import {
+  generatedImageIpcChannel,
+  isQuickLookEnabled,
+  openFilesIpcChannel,
+  releaseImportGrantsIpcChannel,
+  selectImportFolderIpcChannel,
+  quickLookIpcChannels,
+} from '#shared/quick-look.js';
+import type {
+  DesktopOpenFile,
+  QuickLookPathRequest,
+  QuickLookResult,
+  QuickLookUsdzRequest,
+} from '#shared/quick-look.js';
+import quickLookManifest from '#macos/quick-look-formats.json' with { type: 'json' };
+import { createTerminalBridge } from '#preload/terminal-bridge.js';
+import { createAgentSignInBridge } from '#preload/agent-sign-in-bridge.js';
+import { permissionBridge } from '#preload/permission-bridge.js';
+
+const bootstrap = readBootstrap(process.argv);
+
+// Keep the snapshot even when native fullscreen changes before React mounts.
+let isWindowFullscreen = false;
+ipcRenderer.on(windowFullscreenChannel, (_event, isFullscreen: unknown) => {
+  if (typeof isFullscreen === 'boolean') {
+    isWindowFullscreen = isFullscreen;
+  }
+});
+
+let pendingQuitAsk: string | undefined;
+let quitAskHandler: ((attemptId: string) => void) | undefined;
+ipcRenderer.on(quitChannels.ask, (_event, attemptId: unknown) => {
+  if (typeof attemptId !== 'string') {
+    return;
+  }
+  if (quitAskHandler === undefined) {
+    pendingQuitAsk = attemptId;
+    return;
+  }
+  quitAskHandler(attemptId);
+});
+
+let pendingMachineRoute: string | undefined;
+let machineNavigationHandler: ((route: string) => void) | undefined;
+ipcRenderer.on(quitChannels.navigate, (_event, route: unknown) => {
+  if (typeof route !== 'string' || !/^\/machines(?:\/[^/?#]+\/[^/?#]+)?$/u.test(route)) {
+    return;
+  }
+  if (machineNavigationHandler) {
+    machineNavigationHandler(route);
+  } else {
+    pendingMachineRoute = route;
+  }
+});
+
+/** One daemon hand-off from main (X54), kept until the page listens: a cold launch delivers it before React mounts. */
+type HostHandOff = { readonly origin: string; readonly code: string };
+const pendingHostHandOffs: HostHandOff[] = [];
+let hostHandOffHandler: ((handOff: HostHandOff) => void) | undefined;
+ipcRenderer.on(hostHandOffChannel, (_event, value: unknown) => {
+  const { origin, code } = (value ?? {}) as { readonly origin?: unknown; readonly code?: unknown };
+  if (typeof origin !== 'string' || typeof code !== 'string') {
+    return;
+  }
+  if (hostHandOffHandler) {
+    hostHandOffHandler({ origin, code });
+  } else {
+    pendingHostHandOffs.push({ origin, code });
+  }
+});
+
+exposeElectronRuntime();
+relayElectronPorts(servicesPortRelayTag);
+
+contextBridge.exposeInMainWorld('ENV', bootstrap.env);
+
+contextBridge.exposeInMainWorld('tauAuth', {
+  signIn: async (): Promise<void> => {
+    await ipcRenderer.invoke('tau:auth:sign-in');
+  },
+  signOut: async (): Promise<void> => {
+    await ipcRenderer.invoke('tau:auth:sign-out');
+  },
+  onAuthChanged: (listener: () => void): (() => void) => {
+    const handler = (): void => {
+      listener();
+    };
+    ipcRenderer.on('tau:auth-changed', handler);
+    return () => {
+      ipcRenderer.off('tau:auth-changed', handler);
+    };
+  },
+});
+
+const updates: DesktopUpdateBridge = {
+  snapshot: async () => ipcRenderer.invoke(desktopUpdateChannels.snapshot) as Promise<DesktopUpdateSnapshot>,
+  subscribe: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: DesktopUpdateSnapshot): void => {
+      listener(snapshot);
+    };
+    ipcRenderer.on(desktopUpdateChannels.changed, handler);
+    return () => {
+      ipcRenderer.off(desktopUpdateChannels.changed, handler);
+    };
+  },
+  check: async () => {
+    await ipcRenderer.invoke(desktopUpdateChannels.check);
+  },
+  install: async () => {
+    await ipcRenderer.invoke(desktopUpdateChannels.install);
+  },
+  download: async () => {
+    await ipcRenderer.invoke(desktopUpdateChannels.download);
+  },
+};
+
+/* First-use download: the renderer names a kernel; main owns the store, the origins and the progress. */
+const nativeKernels: DesktopNativeKernelBridge = {
+  prepare: async (kernel) =>
+    ipcRenderer.invoke(desktopNativeKernelChannels.prepare, kernel) as Promise<DesktopKernelPreparation>,
+  cancel: async (kernel) => {
+    await ipcRenderer.invoke(desktopNativeKernelChannels.cancel, kernel);
+  },
+  subscribe: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: DesktopKernelProgress): void => {
+      listener(progress);
+    };
+    ipcRenderer.on(desktopNativeKernelChannels.progress, handler);
+    return () => {
+      ipcRenderer.off(desktopNativeKernelChannels.progress, handler);
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld('tau', {
+  updates,
+  nativeKernels,
+  /* The page matches relays on this tag rather than repeating the literal:
+   * a duplicated string across a process boundary is how relays go quiet. */
+  relayTag: servicesPortRelayTag,
+  requestServicesPort: (requestId: string, concern: string, context?: Readonly<Record<string, string>>): void => {
+    ipcRenderer.send(servicesPortRelayTag, { requestId, concern, context });
+  },
+  /* The Terminal's own seam: preload holds the session port and validates both directions (W5). */
+  terminal: createTerminalBridge(ipcRenderer),
+  /* An external agent's own sign-in in a Terminal tab: the page names the agent, main chooses what runs. */
+  agentSignIn: createAgentSignInBridge(ipcRenderer),
+  agentHost: {
+    retain: async (workspaceRoot: string, projectId: string, attachmentId: string): Promise<void> => {
+      await ipcRenderer.invoke(agentHostSessionChannels.retain, { workspaceRoot, projectId, attachmentId });
+    },
+    release: async (workspaceRoot: string, projectId: string, attachmentId: string): Promise<void> => {
+      await ipcRenderer.invoke(agentHostSessionChannels.release, { workspaceRoot, projectId, attachmentId });
+    },
+    /* LW8: the account rated a run; main checks it and relays it to the project host that ran it. */
+    rated: async (rating: Readonly<Record<string, unknown>>): Promise<void> => {
+      await ipcRenderer.invoke(agentHostRatingChannel, rating);
+    },
+  },
+  permissions: permissionBridge(ipcRenderer),
+  machines: {
+    /* The one route a secret takes: invoke → main → the utility's ceremony,
+     * which saves it once the printer accepts it. Omit `accessCode` to reuse
+     * a saved one. The port relay above carries the non-secret half. A failed
+     * ceremony resolves `{ status: 'failed', code?, message }`, keeping the
+     * host's typed code, which a rejection across this bridge would drop. */
+    completeBinding: async (input: { ceremonyId: string; address?: string; accessCode?: string }): Promise<unknown> =>
+      ipcRenderer.invoke(machinesChannels.completeBinding, input),
+  },
+  slicers: {
+    /* Read-only presets and settings (D12); refusals arrive as `{ ok: false, error }`. */
+    bambuStudio: {
+      status: async (): Promise<unknown> => ipcRenderer.invoke(slicersChannels.bambuStudio.status),
+      catalog: async (filter?: unknown): Promise<unknown> =>
+        ipcRenderer.invoke(slicersChannels.bambuStudio.catalog, filter),
+      resolveSelection: async (input: unknown): Promise<unknown> =>
+        ipcRenderer.invoke(slicersChannels.bambuStudio.resolveSelection, input),
+      settings: async (input: unknown): Promise<unknown> =>
+        ipcRenderer.invoke(slicersChannels.bambuStudio.settings, input),
+    },
+  },
+  directories: {
+    list: async (): Promise<string[]> => (await ipcRenderer.invoke(directoryGrantChannels.list)) as string[],
+    disconnect: async (path: string): Promise<void> => {
+      const refusal: unknown = await ipcRenderer.invoke(directoryGrantChannels.disconnect, path);
+      if (typeof refusal === 'string') {
+        // oxlint-disable-next-line unicorn/prefer-type-error -- A valid response carries a user-facing refusal, not a type failure.
+        throw new Error(refusal);
+      }
+    },
+    readMarker: async (path: string): Promise<string | undefined> => {
+      const text: unknown = await ipcRenderer.invoke(directoryGrantChannels.marker, path);
+      return typeof text === 'string' ? text : undefined;
+    },
+    onChange: (listener: () => void): (() => void) => {
+      ipcRenderer.on(directoryGrantChannels.changed, listener);
+      return () => {
+        ipcRenderer.off(directoryGrantChannels.changed, listener);
+      };
+    },
+    openIcon: process.platform === 'darwin' ? 'finder' : process.platform === 'win32' ? 'file-explorer' : 'folder',
+    openLabel:
+      process.platform === 'darwin'
+        ? 'Open in Finder'
+        : process.platform === 'win32'
+          ? 'Open in File Explorer'
+          : 'Open in file manager',
+    revealLabel:
+      process.platform === 'darwin'
+        ? 'Reveal in Finder'
+        : process.platform === 'win32'
+          ? 'Reveal in File Explorer'
+          : 'Reveal in file manager',
+    open: async (path: string): Promise<void> => {
+      await ipcRenderer.invoke(openDirectoryChannel, path);
+    },
+    reveal: async (path: string): Promise<void> => {
+      await ipcRenderer.invoke(revealPathChannel, path);
+    },
+  },
+  nodeFs: { homeRoot: bootstrap.homeRoot },
+  /* D0: present only in a launch that started in safe mode, with why. */
+  ...(bootstrap.safeMode === undefined ? {} : { safeMode: { reason: bootstrap.safeMode.reason } }),
+  /* D0: the renderer's two boot stages for main's ledger and watchdog; anything else is dropped here. */
+  boot: {
+    report: (stage: unknown): void => {
+      if (rendererBootStages.includes(stage as (typeof rendererBootStages)[number])) {
+        ipcRenderer.send(bootChannels.stage, stage);
+      }
+    },
+  },
+  /* D0, D6: the exits a classified error panel and the safe-mode bar offer. Main checks the sender and the action. */
+  troubleshooting: {
+    showLogs: async (): Promise<void> => {
+      await ipcRenderer.invoke(recoveryChannels.action, { type: 'show-logs' });
+    },
+    open: async (): Promise<void> => {
+      await ipcRenderer.invoke(recoveryChannels.action, { type: 'open-recovery-window' });
+    },
+    restartInSafeMode: async (): Promise<void> => {
+      await ipcRenderer.invoke(recoveryChannels.action, { type: 'restart', mode: 'safe' });
+    },
+    restartNormally: async (): Promise<void> => {
+      await ipcRenderer.invoke(recoveryChannels.action, { type: 'restart', mode: 'normal' });
+    },
+    copyDiagnostics: async (): Promise<void> => {
+      await ipcRenderer.invoke(recoveryChannels.action, { type: 'copy-diagnostics' });
+    },
+    /* R7, D3: the database panel's reset. Main records it and applies it at the next start, so the app restarts. */
+    resetLocalDatabase: async (): Promise<void> => {
+      await ipcRenderer.invoke(recoveryChannels.action, { type: 'reset', store: 'local-database' });
+      await ipcRenderer.invoke(recoveryChannels.action, { type: 'restart', mode: 'normal' });
+    },
+  },
+  runtimeKernelIds: bootstrap.runtimeKernelIds,
+  firstRun: bootstrap.firstRun,
+  /* A call, not a value (D17): main answers when ACP discovery settles, which no
+   * longer blocks this window's creation. */
+  externalAgents: async (): Promise<unknown> => ipcRenderer.invoke(externalAgentsChannel),
+  compute: {
+    inspect: async (projectRoot: string) =>
+      (await ipcRenderer.invoke(computeControlChannels.inspect, projectRoot)) as unknown,
+    clear: async (projectRoot: string) =>
+      (await ipcRenderer.invoke(computeControlChannels.clear, projectRoot)) as unknown,
+    collect: async (projectRoot: string, input: { budget: number; cursor?: string }) =>
+      (await ipcRenderer.invoke(computeControlChannels.collect, projectRoot, input)) as unknown,
+  },
+  appIcon: {
+    setTheme: (theme: AppIconTheme): void => {
+      ipcRenderer.send(appIconThemeChannel, theme);
+    },
+  },
+  telemetry: {
+    /* The renderer's resolved consent on every change; main persists it for its own producers (AR-W4-03c). */
+    setConsent: (consent: 'granted' | 'denied' | 'unknown'): void => {
+      ipcRenderer.send(telemetryConsentChannel, consent);
+    },
+  },
+  window: {
+    isFullscreen: (): boolean => isWindowFullscreen,
+    onFullscreenChange: (listener: () => void): (() => void) => {
+      const handler = (): void => {
+        listener();
+      };
+      ipcRenderer.on(windowFullscreenChannel, handler);
+      return () => {
+        ipcRenderer.off(windowFullscreenChannel, handler);
+      };
+    },
+  },
+  hostHandOff: {
+    onHandOff: (handler: (handOff: HostHandOff) => void): (() => void) => {
+      hostHandOffHandler = handler;
+      for (const handOff of pendingHostHandOffs.splice(0)) {
+        handler(handOff);
+      }
+      return () => {
+        if (hostHandOffHandler === handler) {
+          hostHandOffHandler = undefined;
+        }
+      };
+    },
+  },
+  quit: {
+    isReady: (): boolean => quitAskHandler !== undefined,
+    onNavigate: (handler: (route: string) => void): (() => void) => {
+      machineNavigationHandler = handler;
+      if (pendingMachineRoute !== undefined) {
+        const route = pendingMachineRoute;
+        pendingMachineRoute = undefined;
+        handler(route);
+      }
+      return () => {
+        if (machineNavigationHandler === handler) {
+          machineNavigationHandler = undefined;
+        }
+      };
+    },
+    onAsk: (handler: (attemptId: string) => void): (() => void) => {
+      quitAskHandler = handler;
+      if (pendingQuitAsk !== undefined) {
+        const attemptId = pendingQuitAsk;
+        pendingQuitAsk = undefined;
+        handler(attemptId);
+      }
+      return () => {
+        if (quitAskHandler === handler) {
+          quitAskHandler = undefined;
+        }
+      };
+    },
+    reportQuiesced: (attemptId: string, forced: boolean): void => {
+      ipcRenderer.send(quitChannels.quiesced, attemptId, forced);
+    },
+  },
+  dialog: {
+    selectDirectory: async (options?: { id?: string; defaultPath?: string }): Promise<string | undefined> =>
+      (await ipcRenderer.invoke('tau:select-directory', options)) as string | undefined,
+    selectImportFolder: async (): Promise<{ grant: string; name: string } | undefined> =>
+      (await ipcRenderer.invoke(selectImportFolderIpcChannel)) as { grant: string; name: string } | undefined,
+    releaseImportGrants: async (grants: readonly string[]): Promise<void> => {
+      await ipcRenderer.invoke(releaseImportGrantsIpcChannel, [...grants]);
+    },
+  },
+  openFiles: {
+    consume: async (): Promise<DesktopOpenFile[]> =>
+      (await ipcRenderer.invoke(openFilesIpcChannel)) as DesktopOpenFile[],
+  },
+  generatedImages: {
+    read: async (path: string): Promise<{ readonly path: string; readonly bytes: Uint8Array<ArrayBuffer> }> =>
+      (await ipcRenderer.invoke(generatedImageIpcChannel, path)) as {
+        readonly path: string;
+        readonly bytes: Uint8Array<ArrayBuffer>;
+      },
+  },
+  ...(isQuickLookEnabled()
+    ? {
+        quickLook: {
+          directPreviewExtensions: quickLookManifest.directElectronPreviewExtensions,
+          previewPath: async (request: QuickLookPathRequest): Promise<QuickLookResult> =>
+            (await ipcRenderer.invoke(quickLookIpcChannels.previewPath, request)) as QuickLookResult,
+          previewUsdz: async (request: QuickLookUsdzRequest): Promise<QuickLookResult> =>
+            (await ipcRenderer.invoke(quickLookIpcChannels.previewUsdz, request)) as QuickLookResult,
+          close: (): void => {
+            ipcRenderer.send(quickLookIpcChannels.close);
+          },
+        },
+      }
+    : {}),
+});
+
+const browserBridge: BrowserBridge = {
+  command: async (command) => ipcRenderer.invoke(browserChannels.command, command) as Promise<BrowserSnapshot>,
+  subscribe: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: BrowserSnapshot): void => {
+      listener(snapshot);
+    };
+    ipcRenderer.on(browserChannels.state, handler);
+    return () => {
+      ipcRenderer.off(browserChannels.state, handler);
+    };
+  },
+};
+contextBridge.exposeInMainWorld('tauBrowser', browserBridge);
+ipcRenderer.on('tau:browser:shortcut', (_event, key: string) => {
+  globalThis.dispatchEvent(new CustomEvent('tau-browser-shortcut', { detail: key }));
+});

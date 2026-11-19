@@ -1,41 +1,34 @@
+import type { ToolUIPart } from 'ai';
 import type {
-  MessageRole,
-  MyMetadata,
+  CadAgentExecution,
   MyMessagePart,
-  MyToolPart,
   MyUIMessage,
+  ModelSupport,
   ToolInvocation,
   MyTools,
   UsageData,
 } from '@taucad/chat';
-import { isToolPart } from '@taucad/chat';
+import { getToolPartName, isAnyToolPart, isToolPart, modelSupportsInput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import {
+  cadReferenceFromToken,
+  cadReferenceToken,
+  maxCadReferences,
+  parseCadReferenceTokens,
+} from '@taucad/chat/references';
+import type { CadReference } from '@taucad/chat/references';
+import type { ExportValidation } from '@taucad/chat/schemas/tools/export-model';
+import type { EvaluateModelOutput } from '@taucad/chat/schemas/tools/evaluate-model';
+import { isUndecidedFailure, summarizeTestModelOutput } from '@taucad/chat/schemas/tools/test-model-summary';
 import { idPrefix } from '@taucad/types/constants';
-import { getStaticToolName } from 'ai';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { metaConfig } from '#constants/meta.constants.js';
-import { formatExportDate } from '#utils/date.utils.js';
-import { getRpcOutcome } from '#services/rpc-ledger.js';
+import { formatExportDate } from '@taucad/ui-core/utils/date.utils';
+import { getRpcOutcome } from '@taucad/chat-ui/services/rpc-ledger';
+import { attachmentKind, attachmentUrl } from '@taucad/chat-ui/utils/attachment.utils';
+import type { AttachmentName, StoredAttachmentRef } from '@taucad/chat-ui/utils/attachment.utils';
 import type { RequestTerminationCause } from '#hooks/chat-persistence.machine.js';
-
-/**
- * Extract the mime type from a data URL
- *
- * @example
- * extractMimeTypeFromDataUrl('data:image/webp;base64,UklGRu6VAQBXR')
- * // -> 'image/webp'
- *
- * @param dataUrl
- * @returns
- */
-export const extractMimeTypeFromDataUrl = (dataUrl: string): string => {
-  const mimeType = dataUrl.split(',')[0]?.split(':')[1]?.split(';')[0];
-  if (!mimeType) {
-    throw new Error('Invalid data URL');
-  }
-
-  return mimeType;
-};
+import type { ResolvedModel } from '#hooks/use-models.js';
 
 /**
  * The maximum number of characters to include in a snippet of web search results.
@@ -43,6 +36,48 @@ export const extractMimeTypeFromDataUrl = (dataUrl: string): string => {
 const maxSnippetLength = 200;
 
 const joinLines = (...lines: Array<string | undefined | false>): string => lines.filter(Boolean).join('\n');
+
+/* An export's validation as one line: its unit, mesh facts and solids, as far as the format carries them. */
+const validationLine = ({ units, triangles, watertight, solids }: ExportValidation): string =>
+  [
+    units === undefined ? 'no declared unit' : `units ${units}`,
+    triangles === undefined ? undefined : `${String(triangles)} triangles`,
+    watertight === undefined ? undefined : watertight ? 'watertight' : 'not watertight',
+    solids === undefined ? undefined : `${String(solids)} solids`,
+  ]
+    .filter((part) => part !== undefined)
+    .join(', ');
+
+/* A job on a simulator reads as one in Copy and export, as the job card says it. */
+const simulatedMark = (simulated: boolean | undefined): string => (simulated === true ? ' (simulated)' : '');
+
+/* A listing reports a file by size alone where its kind or line count was not measured. */
+type SerializableFileMetadata = {
+  readonly size: number;
+  readonly contentKind?: 'text' | 'binary';
+  readonly lineCount?: number;
+};
+
+const formatSerializedFileSize = (bytes: number): string => {
+  if (bytes < 1024) {
+    return `${bytes}B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 1024)}KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+};
+
+const formatSerializedFileMetadata = (metadata: SerializableFileMetadata): string => {
+  if (metadata.contentKind === 'binary') {
+    return `binary, ${formatSerializedFileSize(metadata.size)}`;
+  }
+  if (metadata.contentKind === undefined || metadata.lineCount === undefined) {
+    return formatSerializedFileSize(metadata.size);
+  }
+  const lineLabel = metadata.lineCount === 1 ? '1 line' : `${metadata.lineCount} lines`;
+  return `${lineLabel}, ${formatSerializedFileSize(metadata.size)}`;
+};
 
 const serializeToolState = (part: { state: string; errorText?: string }): string | undefined => {
   switch (part.state) {
@@ -71,7 +106,50 @@ type ToolSerializer<T extends keyof MyTools> = {
   readonly output: (output: ToolOutputOf<T>) => string;
 };
 
-const toolSerializers = {
+type ToolPartFor<Name extends keyof MyTools> = ToolUIPart<Pick<MyTools, Name>>;
+
+/** The machine tools answer in text; an old chat's object answer is kept readable rather than `[object Object]`. */
+const machineTextOf = (output: unknown): string =>
+  typeof output === 'string' ? output : JSON.stringify(output, undefined, 2);
+
+/**
+ * The evaluate_model build report as one line: reused or computed, its milliseconds, and the operations when reported.
+ * @param build - The report.
+ * @returns The line.
+ */
+const buildLine = (build: NonNullable<EvaluateModelOutput['build']>): string => {
+  const { reused, elapsed, operations, costliest } = build;
+  const facts = [
+    `${reused ? 'reused' : 'computed'}, ${Math.round(elapsed)} ms`,
+    operations === undefined ? undefined : `operations ${operations.reused} reused, ${operations.computed} computed`,
+    costliest === undefined || costliest.length === 0
+      ? undefined
+      : `costliest ${costliest
+          .map(({ operation, elapsed: spent, calls }) => `${operation} ${Math.round(spent)} ms (${calls} calls)`)
+          .join(', ')}`,
+  ].filter(Boolean);
+  return `Build: ${facts.join('; ')}`;
+};
+
+const toolSerializers: { [Name in keyof MyTools]: ToolSerializer<Name> } = {
+  [toolName.getParameters]: {
+    input: (input) =>
+      joinLines(
+        `targetFile: ${input.targetFile}`,
+        input.resolutionMode === undefined ? undefined : `resolutionMode: ${input.resolutionMode}`,
+      ),
+    output: (output) => JSON.stringify(output, null, 2),
+  },
+  [toolName.applyParameterOperation]: {
+    input: (input) =>
+      joinLines(
+        `targetFile: ${input.targetFile}`,
+        `requestId: ${input.requestId}`,
+        'action' in input && input.action !== undefined ? `action: ${input.action}` : undefined,
+        'operation' in input && input.operation !== undefined ? `operation: ${input.operation.kind}` : undefined,
+      ),
+    output: (output) => JSON.stringify(output, null, 2),
+  },
   [toolName.webSearch]: {
     input: (input) => `query: ${input.query}`,
     output: (output) =>
@@ -88,6 +166,7 @@ const toolSerializers = {
     output: (output) => output.map((result) => `- [${result.url}]\n  ${result.content.slice(0, 200)}...`).join('\n'),
   },
   [toolName.editFile]: {
+    // oxlint-disable-next-line typescript/no-deprecated -- Historical edit transcripts retain their recorded target path.
     input: (input) => `targetFile: ${input.targetFile}\ncodeEdit: <${input.codeEdit?.length ?? 0} chars>`,
     output(output) {
       const { diffStats } = output;
@@ -102,37 +181,31 @@ const toolSerializers = {
   [toolName.testModel]: {
     input: () => '',
     output(output) {
-      const lines = [`${output.passed}/${output.total} passed`];
+      const lines = [summarizeTestModelOutput(output).line];
       for (const failure of output.failures) {
-        lines.push(`- FAIL [${failure.targetFile}]: ${failure.requirement}`, `  ${failure.reason}`);
+        const label = isUndecidedFailure(failure)
+          ? `UNDECIDED (${failure.category ?? failure.status ?? 'undecided'})`
+          : `FAIL${failure.category === undefined ? '' : ` (${failure.category})`}`;
+        lines.push(
+          `- ${label} [${failure.targetFile}]: ${failure.requirement}`,
+          `  ${failure.reason}`,
+          `  suggestion: ${failure.suggestion}`,
+        );
       }
 
       return joinLines(...lines);
     },
   },
-  [toolName.editTests]: {
-    input: (input) => `codeEdit: <${input.codeEdit?.length ?? 0} chars>`,
-    output(output) {
-      const { diffStats } = output;
-      const lines = [`+${diffStats.linesAdded}/-${diffStats.linesRemoved} lines`];
-      if (diffStats.modifiedContent.length > 0) {
-        lines.push('```', diffStats.modifiedContent, '```');
-      }
-
-      return joinLines(...lines);
-    },
-  },
-  [toolName.transferToCadExpert]: {
-    input: () => '',
-    output: (output) => output,
-  },
-  [toolName.transferToResearchExpert]: {
-    input: () => '',
-    output: (output) => output,
-  },
-  [toolName.transferBackToSupervisor]: {
-    input: () => '',
-    output: (output) => output,
+  [toolName.useSkill]: {
+    input: (input) => joinLines(`skillName: ${input.skillName}`, input.reason ? `reason: ${input.reason}` : undefined),
+    output: (output) =>
+      joinLines(
+        `Activated skill: ${output.skillName}`,
+        output.skillPath ? `path: ${output.skillPath}` : undefined,
+        `resource: ${output.resourceUri}`,
+        `source: ${output.source}`,
+        output.fingerprint ? `fingerprint: ${output.fingerprint}` : undefined,
+      ),
   },
   [toolName.readFile]: {
     input: (input) =>
@@ -141,13 +214,24 @@ const toolSerializers = {
         input.offset === undefined ? undefined : `offset: ${input.offset}`,
         input.limit === undefined ? undefined : `limit: ${input.limit}`,
       ),
-    output: (output) => `Line ${output.startLine}:\n\`\`\`\n${output.content}\n\`\`\``,
+    output(output) {
+      const startLine = output.startLine ?? 1;
+      const visibleLineCount = output.content.split('\n').length;
+      const endLine = startLine + visibleLineCount - 1;
+      return `L${startLine}-L${endLine}\n\`\`\`\n${output.content}\n\`\`\``;
+    },
   },
   [toolName.listDirectory]: {
-    input: (input) => `path: ${input.path}`,
+    // Path is optional (omitted = project root); match the glob/grep formatters
+    // and drop the line rather than rendering `path: undefined`.
+    input: (input) => (input.path ? `path: ${input.path}` : ''),
     output(output) {
       const header = output.path ? `Path: ${output.path}\n` : '';
-      const list = output.entries.map((entry) => `  ${entry.type === 'dir' ? '[dir]' : ''} ${entry.name}`).join('\n');
+      const list = output.entries
+        .map((entry) =>
+          entry.type === 'dir' ? `  [dir] ${entry.name}` : `   ${entry.name} (${formatSerializedFileMetadata(entry)})`,
+        )
+        .join('\n');
 
       return header + list;
     },
@@ -173,21 +257,87 @@ const toolSerializers = {
         `pattern: ${input.pattern}`,
         input.path ? `path: ${input.path}` : undefined,
         input.caseSensitive ? 'caseSensitive: true' : undefined,
+        input.context ? `context: ${input.context}` : undefined,
       ),
+    // Context lines use ripgrep's `file-line-` separator so they stay distinct from `file:line:` matches.
     output: (output) =>
       joinLines(
         `Total: ${output.totalMatches}`,
-        output.matches.map((match) => `${match.file}:${match.line}: ${match.content}`).join('\n'),
+        output.pendingFiles?.length ? `Not searched (still downloading): ${output.pendingFiles.join(', ')}` : undefined,
+        output.matches
+          .flatMap((match) => {
+            const firstLine = match.line - (match.before?.length ?? 0);
+            return [
+              ...(match.before ?? []).map((content, index) => `${match.file}-${firstLine + index}- ${content}`),
+              `${match.file}:${match.line}: ${match.content}`,
+              ...(match.after ?? []).map((content, index) => `${match.file}-${match.line + 1 + index}- ${content}`),
+            ];
+          })
+          .join('\n'),
       ),
   },
   [toolName.globSearch]: {
     input: (input) => joinLines(`pattern: ${input.pattern}`, input.path ? `path: ${input.path}` : undefined),
-    output: (output) => joinLines(`Total: ${output.totalFiles}`, output.files.join('\n')),
+    output: (output) =>
+      joinLines(
+        `Total: ${output.totalFiles}`,
+        output.entries
+          .map((entry) =>
+            entry.isDirectory === true
+              ? `${entry.path} [dir]`
+              : `${entry.path} (${formatSerializedFileMetadata(entry)})`,
+          )
+          .join('\n'),
+      ),
   },
-  [toolName.getKernelResult]: {
+  [toolName.evaluateModel]: {
     input: (input) => `targetFile: ${input.targetFile}`,
     output(output) {
       const lines = [`Status: ${output.status}`];
+      if (output.build) {
+        lines.push(buildLine(output.build));
+      }
+      if (output.tessellation) {
+        const {
+          triangles,
+          vertices,
+          elapsed,
+          voxelSize,
+          activeVoxels,
+          memoryBytes,
+          requested,
+          linearTolerance,
+          angularTolerance,
+        } = output.tessellation;
+        const grid = [
+          voxelSize === undefined ? undefined : `voxelSize ${voxelSize} mm`,
+          activeVoxels === undefined ? undefined : `${activeVoxels} active voxels`,
+          memoryBytes === undefined ? undefined : `${memoryBytes} bytes`,
+        ].filter(Boolean);
+        lines.push(
+          `Mesh: ${triangles} triangles, ${vertices} vertices, ${Math.round(elapsed)} ms${grid.length > 0 ? ` (${grid.join(', ')})` : ''}`,
+        );
+        const resolution = [
+          requested === undefined ? undefined : `requested ${requested}`,
+          linearTolerance === undefined ? undefined : `linearTolerance ${linearTolerance} mm`,
+          angularTolerance === undefined ? undefined : `angularTolerance ${angularTolerance}°`,
+        ].filter(Boolean);
+        if (resolution.length > 0) {
+          lines.push(`Resolution: ${resolution.join(', ')}`);
+        }
+        if (output.tessellation.meshes) {
+          const { reused, computed } = output.tessellation.meshes;
+          lines.push(`Meshes: ${reused} reused, ${computed} computed`);
+        }
+      }
+      if (output.mechanism?.declared) {
+        const { admitted, links, joints, couplings, animations } = output.mechanism;
+        lines.push(
+          admitted
+            ? `Mechanism: ${links} links, ${joints} joints, ${couplings} couplings${animations.length > 0 ? `, animations ${animations.join(', ')}` : ''}`
+            : 'Mechanism: declared, not admitted',
+        );
+      }
       if (output.kernelIssues && output.kernelIssues.length > 0) {
         const issues = output.kernelIssues.map((issue) => `  - ${issue.message}`).join('\n');
         lines.push('Issues:', issues);
@@ -196,32 +346,157 @@ const toolSerializers = {
       return joinLines(...lines);
     },
   },
-  [toolName.exportGeometry]: {
-    input: (input) => joinLines(`targetFile: ${input.targetFile}`, `format: ${input.format}`),
+  [toolName.exportModel]: {
+    input: (input) => joinLines(`targetFile: ${input.targetFile}`, `to: ${input.to}`),
     output: (output) =>
       joinLines(
-        `artifactPath: ${output.artifactPath}`,
-        `format: ${output.format}`,
-        `${output.mimeType}`,
-        `${output.byteLength} bytes`,
+        `to: ${output.to}`,
+        `exportId: ${output.exportId}`,
+        ...output.files.map(
+          (file) => `${file.name}: ${file.artifactPath} (${file.mimeType}, ${file.byteLength} bytes)`,
+        ),
+        output.validation === undefined ? undefined : `Validation: ${validationLine(output.validation)}`,
       ),
   },
   [toolName.screenshot]: {
     input: (input) => `mode: ${input.mode}`,
     output: (output) => `Captured ${output.images.length} image(s)`,
   },
-} satisfies { [K in keyof MyTools]: ToolSerializer<K> };
+  [toolName.updateTodos]: {
+    input: (input) => (input.items ?? []).map((item) => `- [${item?.status ?? '?'}] ${item?.title ?? ''}`).join('\n'),
+    output: (output) =>
+      `${output.path}: ${String(output.counts.done)} done, ${String(output.counts.in_progress)} in progress, ${String(output.counts.pending)} pending`,
+  },
+  [toolName.askQuestions]: {
+    input: (input) =>
+      (input.questions ?? [])
+        .map(
+          (question) =>
+            `${question?.question ?? ''}\n${(question?.options ?? []).map((option, index) => `  ${String.fromCodePoint(65 + index)}. ${option?.label ?? ''}`).join('\n')}`,
+        )
+        .join('\n'),
+    output: (output) =>
+      output.answers
+        .map(
+          (answer) =>
+            `${answer.id}: ${answer.answer}${answer.source === 'recommended' ? ' (recommended, no reply)' : ''}`,
+        )
+        .join('\n'),
+  },
+  [toolName.arrangeWorkbench]: {
+    input: (input) => `arrange_workbench(${Object.keys(input).join(', ')})`,
+    output: (output) => `-> ${output.revisions.map((revision) => revision.path).join(', ')}`,
+  },
+  [toolName.installPackages]: {
+    input: (input) =>
+      joinLines(
+        ...Object.entries(input.add ?? {}).map(([name, range]) => `add: ${name}@${String(range)}`),
+        ...(input.remove ?? []).map((name) => `remove: ${String(name)}`),
+        ...(input.upgrade ?? []).map((name) => `upgrade: ${String(name)}`),
+      ),
+    output: (output) =>
+      joinLines(
+        ...output.packages.map((item) => `${item.name}@${item.version}`),
+        ...output.issues.map((issue) => `${issue.code}: ${issue.message}`),
+      ),
+  },
+  [toolName.listMachines]: {
+    input: () => '',
+    output: (output: unknown) => machineTextOf(output),
+  },
+  [toolName.getMachine]: {
+    input: (input) => (input.machineId === undefined ? '' : `machineId: ${input.machineId}`),
+    output: (output: unknown) => machineTextOf(output),
+  },
+  [toolName.machineAction]: {
+    input: (input) =>
+      joinLines(
+        input.machineId === undefined ? undefined : `machineId: ${input.machineId}`,
+        `${input.componentId}: ${input.action}`,
+        input.parameters === undefined ? undefined : JSON.stringify(input.parameters),
+      ),
+    output: (output) => `${output.status}: ${output.message}`,
+  },
+  [toolName.stopMachine]: {
+    input: (input) => (input.machineId === undefined ? '' : `machineId: ${input.machineId}`),
+    output: (output) => `${output.status}: ${output.message}`,
+  },
+  [toolName.getPrintProfiles]: {
+    input: (input) => (input.machineId === undefined ? '' : `machineId: ${input.machineId}`),
+    output: (output) => JSON.stringify(output, null, 2),
+  },
+  [toolName.requestJob]: {
+    input: (input) =>
+      joinLines(
+        input.artifact === undefined ? `targetFile: ${input.targetFile}` : `artifact: ${input.artifact}`,
+        input.machineId === undefined ? undefined : `machineId: ${input.machineId}`,
+        input.preset === undefined ? undefined : `preset: ${input.preset}`,
+      ),
+    output: (output) =>
+      joinLines(
+        `${output.job.program.name} on ${output.machineName ?? output.job.machineId}${simulatedMark(output.simulated)}: ${output.job.state}`,
+        output.job.failure?.message,
+        output.nextStep,
+      ),
+  },
+  [toolName.checkJob]: {
+    input: (input) =>
+      joinLines(
+        input.artifact === undefined ? `targetFile: ${input.targetFile}` : `artifact: ${input.artifact}`,
+        input.machineId === undefined ? undefined : `machineId: ${input.machineId}`,
+      ),
+    output: (output) =>
+      joinLines(
+        `${output.status}${simulatedMark(output.simulated)}${output.program ? `: ${output.program.name}` : ''}`,
+        output.message,
+      ),
+  },
+  [toolName.shell]: {
+    input: (input) =>
+      joinLines(
+        input.cwd === undefined || input.cwd === '' ? undefined : `cwd: ${input.cwd}`,
+        input.command,
+        input.access === undefined
+          ? undefined
+          : `access: ${[...(input.access.read ?? []), ...(input.access.write ?? []), ...(input.access.domains ?? [])].join(', ')} (agent's reason: ${input.access.reason})`,
+      ),
+    output: (output) =>
+      'stdout' in output
+        ? joinLines(
+            output.status === 'completed' ? `exit ${String(output.exitCode)}` : output.status,
+            output.stdout.text === '' ? undefined : output.stdout.text,
+            output.stderr.text === '' ? undefined : `stderr: ${output.stderr.text}`,
+            output.log?.status === 'saved' ? `full output: ${output.log.path}` : undefined,
+          )
+        : `${output.status}: ${output.message}`,
+  },
+  [toolName.history]: {
+    input: (input) => `action: ${input.action}`,
+    /* The `where` line first, because it is the answer every action carries. */
+    output: (output) =>
+      [
+        output.where,
+        output.revisions === undefined
+          ? undefined
+          : `${String(output.revisions.length)} ${output.revisions.length === 1 ? 'entry' : 'entries'}`,
+        output.changes === undefined ? undefined : `${String(output.changes.length)} changed file(s)`,
+        output.branches === undefined ? undefined : `${String(output.branches.length)} branch(es)`,
+        output.conflict === undefined ? undefined : `${String(output.conflict.files.length)} conflicted file(s)`,
+      ]
+        .filter((field) => field !== undefined)
+        .join(' · '),
+  },
+};
 
-const serializeToolPart = (part: MyToolPart): string => {
-  const name = getStaticToolName<MyTools>(part);
+const serializeToolPart = <Name extends keyof MyTools>(part: ToolPartFor<Name>): string => {
+  const name = getToolPartName(part);
+  if (!Object.hasOwn(toolSerializers, name)) {
+    return serializeDynamicToolPart({ ...part, type: 'dynamic-tool', toolName: name });
+  }
   const serializer = toolSerializers[name];
-  const inputString =
-    part.state !== 'input-streaming' && part.input !== undefined
-      ? serializer.input(part.input as NonNullable<typeof part.input>)
-      : '';
+  const inputString = part.state !== 'input-streaming' && part.input !== undefined ? serializer.input(part.input) : '';
   const resultString =
-    serializeToolState(part) ??
-    (part.state === 'output-available' ? (serializer as ToolSerializer<keyof MyTools>).output(part.output) : '');
+    serializeToolState(part) ?? (part.state === 'output-available' ? serializer.output(part.output) : '');
 
   return joinLines(
     `<tool_call name="${name}">`,
@@ -306,6 +581,11 @@ function serializePart(part: MyMessagePart): string {
       return '';
     }
 
+    case 'data-acp-activity':
+    case 'data-acp-session': {
+      return '';
+    }
+
     case 'dynamic-tool': {
       return serializeDynamicToolPart(part);
     }
@@ -326,19 +606,35 @@ function aggregateUsage(usageParts: UsageData[]): string {
     return '';
   }
 
+  /* `inputTokens` is the uncached input only: cache reads and writes are separate
+   * provider counts, so a turn served mostly from cache must not read as a dozen
+   * tokens of input. Each count is summed and rendered on its own. */
   let inputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
   let outputTokens = 0;
-  let totalCost = 0;
+  const operationIds = new Set<string>();
   for (const d of usageParts) {
     inputTokens += d.inputTokens;
+    cacheReadTokens += d.cacheReadTokens;
+    cacheWriteTokens += d.cacheWriteTokens;
     outputTokens += d.outputTokens;
-    totalCost += d.totalCost;
+    if (d.operationId !== undefined) {
+      operationIds.add(d.operationId);
+    }
   }
 
-  const model = usageParts.at(-1)?.model ?? '';
-  const cost = totalCost > 0 ? ` | Cost: $${totalCost.toFixed(4)}` : '';
+  const last = usageParts.at(-1);
+  const model = last?.model ?? '';
+  /* An export is a copy of the transcript, not of the bill: the charge lives on
+   * the account's receipts and is read from them, so the export names the funded
+   * operations instead of quoting a number it would have to invent (B4 R2). No
+   * price for an external turn either — Tau did not sell those tokens and must
+   * not present the vendor's own billing as one (V6). The agent is named. */
+  const operations = operationIds.size === 0 ? '' : ` | Tau operations: ${[...operationIds].sort().join(', ')}`;
+  const agent = last?.agent === undefined ? '' : `Agent: ${last.agent} | `;
 
-  return `Model: ${model} | Tokens: ${inputTokens} in / ${outputTokens} out${cost}`;
+  return `${agent}Model: ${model} | Tokens: ${inputTokens} in / ${cacheReadTokens} cache read / ${cacheWriteTokens} cache write / ${outputTokens} out${operations}`;
 }
 
 /**
@@ -383,7 +679,7 @@ export function serializeMessage(message: MyUIMessage): string {
  * @param title - Title for the transcript (e.g. the chat name)
  * @returns Markdown transcript string
  */
-export function serializeTranscript(messages: MyUIMessage[], title: string): string {
+export function serializeTranscript(messages: readonly MyUIMessage[], title: string): string {
   const exportDate = formatExportDate(new Date());
   const header = `# ${title}\n\n_Exported on ${exportDate} from ${metaConfig.userAgent}_`;
 
@@ -424,7 +720,10 @@ function fallbackInterruptedToolError(cause: RequestTerminationCause): { errorCo
     }
 
     case 'success': {
-      return { errorCode: 'USER_INTERRUPTED', message: 'Interrupted by user.' };
+      return {
+        errorCode: 'ORPHANED_TOOL_CALL',
+        message: 'The chat stream ended before this tool produced a result.',
+      };
     }
 
     default: {
@@ -460,7 +759,7 @@ export function finalizeInterruptedToolParts(
   }
 
   const hasInterruptedTools = lastMessage.parts.some(
-    (part) => isToolPart(part) && (part.state === 'input-streaming' || part.state === 'input-available'),
+    (part) => isAnyToolPart(part) && (part.state === 'input-streaming' || part.state === 'input-available'),
   );
 
   if (!hasInterruptedTools) {
@@ -468,7 +767,7 @@ export function finalizeInterruptedToolParts(
   }
 
   const updatedParts = lastMessage.parts.map((part) => {
-    if (isToolPart(part) && (part.state === 'input-streaming' || part.state === 'input-available')) {
+    if (isAnyToolPart(part) && (part.state === 'input-streaming' || part.state === 'input-available')) {
       if (chatId) {
         const ledgered = getRpcOutcome(chatId, part.toolCallId);
         if (ledgered?.kind === 'success') {
@@ -481,7 +780,7 @@ export function finalizeInterruptedToolParts(
         }
 
         if (ledgered?.kind === 'error') {
-          const toolNm = getStaticToolName<MyTools>(part);
+          const toolNm = getToolPartName(part);
           const errorText = JSON.stringify({
             errorCode: ledgered.errorCode,
             message: ledgered.message,
@@ -497,7 +796,7 @@ export function finalizeInterruptedToolParts(
         }
       }
 
-      const toolNm = getStaticToolName<MyTools>(part);
+      const toolNm = getToolPartName(part);
       const { errorCode, message } = fallbackInterruptedToolError(cause);
       const errorText = JSON.stringify({
         errorCode,
@@ -520,45 +819,160 @@ export function finalizeInterruptedToolParts(
   return [...messages.slice(0, -1), { ...lastMessage, parts: updatedParts }];
 }
 
-// Helper function to create a new message
-export function createMessage({
-  id,
-  content,
-  role,
-  metadata,
-  imageUrls = [],
-}: {
-  id?: string;
-  content: string;
-  role: MessageRole;
-  metadata: MyMetadata;
-  imageUrls?: string[];
-}): MyUIMessage {
-  const trimmedContent = content.trim();
+/**
+ * Stamp `metadata.createdAt` (epoch ms) onto any message that lacks it — the
+ * single idempotent stamp site at the persist boundary.
+ *
+ * User messages are normally stamped at submit time (`use-cad-chat-client`, the
+ * `chat-session-store` draft/edit builders) and assistant messages have never
+ * carried one until here; this stamps whichever rows arrive without a
+ * `createdAt` (defense in depth for legacy / round-tripped rows). `createdAt` is
+ * a display/sort key only — revision identity keys on `messageId`
+ * (docs/research/revision-anchor-identity-collapse.md) — but a stable timestamp
+ * keeps ordering deterministic. `persistMessagesActor` routes every persist
+ * (milestone / final / stop) through here, so each message acquires a
+ * `createdAt` exactly once and it never changes on re-persist. `status` and any
+ * other metadata are preserved.
+ *
+ * Returns the original array when every message is already stamped.
+ * @param messages - Chat messages about to be persisted.
+ */
+export function stampMessageCreatedAt(messages: MyUIMessage[]): MyUIMessage[] {
+  const needsStamp = messages.some((message) => message.metadata?.createdAt === undefined);
+  if (!needsStamp) {
+    return messages;
+  }
+  const now = Date.now();
+  return messages.map((message) =>
+    message.metadata?.createdAt === undefined
+      ? { ...message, metadata: { ...message.metadata, createdAt: now } }
+      : message,
+  );
+}
 
+/**
+ * The one user-message builder for every chat verb that sends what the person
+ * composed (submit, edit).
+ *
+ * One file part per attachment comes first, referenced by `attachmentUrl`
+ * relative to the chat's own directory (providers read attachments best ahead
+ * of the text about them), then the text, trimmed and omitted when empty. A part carries `providerMetadata.common.byteLength` only when the
+ * reference knows its size (P29); nothing is invented for one that does not.
+ * The metadata carries the message's geometry references when its text holds `@cad[...]` tokens.
+ *
+ * @param input - The composed text, the chat's attachment references and the chips' structured references.
+ * @returns A pending user message with a fresh id.
+ */
+export function buildUserMessage(input: {
+  readonly text: string;
+  readonly attachments?: readonly StoredAttachmentRef[];
+  /** Structured references the composer's chips held; matched to the text's `@cad[...]` tokens. */
+  readonly references?: readonly CadReference[];
+}): MyUIMessage {
+  const text = input.text.trim();
+  const references = messageReferences(text, input.references ?? []);
   return {
-    id: id ?? generatePrefixedId(idPrefix.message),
-    role,
+    id: generatePrefixedId(idPrefix.message),
+    role: 'user',
     parts: [
-      // Always add image parts first so they are rendered first in the UI
-      ...imageUrls.map(
-        (url) =>
+      ...(input.attachments ?? []).map(
+        (attachment) =>
           ({
             type: 'file',
-            url,
-            mediaType: extractMimeTypeFromDataUrl(url),
+            mediaType: attachment.mediaType,
+            ...(attachment.filename === undefined ? {} : { filename: attachment.filename }),
+            url: attachmentUrl(attachment),
+            ...(attachment.byteLength === undefined
+              ? {}
+              : { providerMetadata: { common: { byteLength: attachment.byteLength } } }),
           }) as const,
       ),
-      // Only add text part if there is text content
-      ...(trimmedContent.length > 0
-        ? [
-            {
-              type: 'text',
-              text: trimmedContent,
-            } as const,
-          ]
-        : []),
+      ...(text.length > 0 ? [{ type: 'text', text } as const] : []),
     ],
-    metadata: { ...metadata, createdAt: Date.now() },
+    metadata: { createdAt: Date.now(), status: 'pending', ...(references.length === 0 ? {} : { references }) },
   };
+}
+
+/**
+ * The user message an edit produces: the original's id and metadata around the edited text, attachments and
+ * references. References are re-derived from the edited text, so a token the edit removed drops its reference; the
+ * edit composer's chips, then the original's references, supply the detail for each token that remains.
+ *
+ * @param original - The message being edited.
+ * @param input - The edited text, attachments and the edit composer's structured references.
+ * @returns The edited message under the original's id.
+ */
+export function buildEditedUserMessage(
+  original: MyUIMessage,
+  input: {
+    readonly text: string;
+    readonly attachments?: readonly StoredAttachmentRef[];
+    readonly references?: readonly CadReference[];
+  },
+): MyUIMessage {
+  const { references: previous = [], ...metadata } = original.metadata ?? {};
+  const built = buildUserMessage({
+    text: input.text,
+    ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
+    // A later reference wins its token, so the edit composer's chips go last.
+    references: [...previous, ...(input.references ?? [])],
+  });
+  return { ...built, id: original.id, metadata: { ...metadata, ...built.metadata } };
+}
+
+/**
+ * The references a message carries (blueprint D6): one per distinct `@cad[...]` token in its text, the composer's
+ * structured reference when one matches the token, else what the token itself names. A reference whose token the
+ * text no longer holds (the chip was deleted) is dropped.
+ */
+function messageReferences(text: string, supplied: readonly CadReference[]): CadReference[] {
+  const byToken = new Map(supplied.map((reference) => [cadReferenceToken(reference), reference]));
+  const references = new Map<string, CadReference>();
+  for (const segment of parseCadReferenceTokens(text)) {
+    if (segment.type === 'cadReference' && !references.has(segment.token) && references.size < maxCadReferences) {
+      references.set(segment.token, byToken.get(segment.token) ?? cadReferenceFromToken(segment.target));
+    }
+  }
+  return [...references.values()];
+}
+
+// ACP transports both media kinds; the local agent's prompt capabilities decide what it can read.
+const acpAttachmentSupport: ModelSupport = { modalities: { input: ['text', 'image', 'pdf'], output: ['text'] } };
+
+/**
+ * The selected execution's draft attachment admission, independent of the Tau catalog for ACP.
+ *
+ * @param execution - The selected execution.
+ * @param selectedModel - The last selected Tau model.
+ * @returns The name and transport support checked before draft storage.
+ */
+export const attachmentModelForExecution = (
+  execution: CadAgentExecution,
+  selectedModel: ResolvedModel,
+): { readonly name: string; readonly support?: ModelSupport } =>
+  execution.kind === 'acp'
+    ? { name: execution.agentId, support: acpAttachmentSupport }
+    : { name: selectedModel.name, support: selectedModel.model?.support };
+
+/**
+ * Why a message holding these attachments cannot be sent to the selected
+ * model, or `undefined` when it can (D20). The composer disables Send with
+ * this reason; the chat client refuses with it.
+ *
+ * @param attachments - The draft's (or the open edit's) attachments.
+ * @param model - The selected model: its name for the reason, and what it reads.
+ * @returns The reason, naming the model.
+ */
+export function attachmentSendBlockReason(
+  attachments: readonly AttachmentName[],
+  model: { readonly name: string; readonly support?: ModelSupport },
+): string | undefined {
+  const kinds = new Set(attachments.map((attachment) => attachmentKind(attachment.mediaType)));
+  if (kinds.has('document') && !modelSupportsInput(model.support, 'pdf')) {
+    return `${model.name} can't read PDFs. Remove the PDF or pick another model.`;
+  }
+  if (kinds.has('image') && !modelSupportsInput(model.support, 'image')) {
+    return `${model.name} can't read images. Remove the image or pick another model.`;
+  }
+  return undefined;
 }

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "Hexagonal bar",
+  "description": "Constant-section stock profile with genuine openings where applicable, adjustable section dimensions and cut length.",
+  "tags": [
+    "Structural profiles",
+    "parametric",
+    "replicad",
+    "warehouse"
+  ],
+  "assets": {
+    "main": {
+      "entryPath": "main.ts",
+      "thumbnail": "thumbnail.webp"
+    }
+  }
+}

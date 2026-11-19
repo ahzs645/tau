@@ -1,0 +1,153 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "@taucad/picogk",
+      "name": "@taucad/picogk",
+      "description": "The native PicoGK runtime closure: Microsoft's .NET runtime archive and the Tau framework-dependent layer."
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "7d847ecaa123efae40b114c5d45641e456b4cd65e5114b4612095d45d7c71a63",
+      "type": "platform",
+      "supplier": {
+        "name": "Microsoft"
+      },
+      "name": "dotnet-runtime",
+      "version": "10.0.11",
+      "purl": "pkg:generic/microsoft/dotnet-runtime@10.0.11?download_url=https%3A%2F%2Fbuilds.dotnet.microsoft.com%2Fdotnet%2FRuntime%2F10.0.11%2Fdotnet-runtime-10.0.11-linux-x64.tar.gz",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7d847ecaa123efae40b114c5d45641e456b4cd65e5114b4612095d45d7c71a63"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.11/dotnet-runtime-10.0.11-linux-x64.tar.gz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "taucad:target",
+          "value": "linux-x64"
+        }
+      ]
+    },
+    {
+      "bom-ref": "8847a4f3321a5c42a682cdf8551489dbed6ebe52c04f1be58494ec0d56872403",
+      "type": "platform",
+      "supplier": {
+        "name": "Microsoft"
+      },
+      "name": "dotnet-runtime",
+      "version": "10.0.11",
+      "purl": "pkg:generic/microsoft/dotnet-runtime@10.0.11?download_url=https%3A%2F%2Fbuilds.dotnet.microsoft.com%2Fdotnet%2FRuntime%2F10.0.11%2Fdotnet-runtime-10.0.11-osx-arm64.tar.gz",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8847a4f3321a5c42a682cdf8551489dbed6ebe52c04f1be58494ec0d56872403"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.11/dotnet-runtime-10.0.11-osx-arm64.tar.gz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "taucad:target",
+          "value": "darwin-arm64"
+        }
+      ]
+    },
+    {
+      "bom-ref": "98a50727c2143456cd943f90798eee702afb207e7ca505de4fa6353679519baa",
+      "type": "library",
+      "supplier": {
+        "name": "Tau"
+      },
+      "name": "tau-picogk-layer",
+      "version": "picogk-layer-98a50727c2143456",
+      "purl": "pkg:github/taucad/tau@picogk-layer-98a50727c2143456?file_name=tau-picogk-layer-linux-x64.tar.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "98a50727c2143456cd943f90798eee702afb207e7ca505de4fa6353679519baa"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://dependencies.tau.new/blobs/sha256/98a50727c2143456cd943f90798eee702afb207e7ca505de4fa6353679519baa"
+        },
+        {
+          "type": "distribution",
+          "url": "https://github.com/taucad/tau/releases/download/picogk-layer-98a50727c2143456/tau-picogk-layer-linux-x64.tar.gz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "taucad:target",
+          "value": "linux-x64"
+        },
+        {
+          "name": "taucad:sbom",
+          "value": "tau-worker/tau-picogk-sbom.cdx.json"
+        }
+      ]
+    },
+    {
+      "bom-ref": "f7767d236745fd316f79e92b8e239497ea9d44bfb1ce957c8cb3ce05db9cdc81",
+      "type": "library",
+      "supplier": {
+        "name": "Tau"
+      },
+      "name": "tau-picogk-layer",
+      "version": "picogk-layer-f7767d236745fd31",
+      "purl": "pkg:github/taucad/tau@picogk-layer-f7767d236745fd31?file_name=tau-picogk-layer-darwin-arm64.tar.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f7767d236745fd316f79e92b8e239497ea9d44bfb1ce957c8cb3ce05db9cdc81"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://dependencies.tau.new/blobs/sha256/f7767d236745fd316f79e92b8e239497ea9d44bfb1ce957c8cb3ce05db9cdc81"
+        },
+        {
+          "type": "distribution",
+          "url": "https://github.com/taucad/tau/releases/download/picogk-layer-f7767d236745fd31/tau-picogk-layer-darwin-arm64.tar.gz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "taucad:target",
+          "value": "darwin-arm64"
+        },
+        {
+          "name": "taucad:sbom",
+          "value": "tau-worker/tau-picogk-sbom.cdx.json"
+        }
+      ]
+    }
+  ]
+}

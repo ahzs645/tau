@@ -1,0 +1,87 @@
+import { FuseV1Options } from '@electron/fuses';
+
+export type MacosPackageMode = {
+  readonly release: boolean;
+  readonly unsigned: boolean;
+  readonly zip: boolean;
+  readonly dmg: boolean;
+  readonly notarize: boolean;
+};
+
+const flags = new Set(['--release', '--unsigned', '--zip', '--dmg', '--skip-notarization']);
+
+export const parseMacosPackageMode = (arguments_: readonly string[], channel = 'production'): MacosPackageMode => {
+  if (arguments_.some((argument) => !flags.has(argument))) {
+    throw new TypeError('Usage: <script> [--release | --unsigned] [--zip] [--dmg] [--skip-notarization]');
+  }
+  const release = arguments_.includes('--release');
+  const unsigned = arguments_.includes('--unsigned');
+  if (release && unsigned) {
+    throw new TypeError('--release and --unsigned cannot be used together');
+  }
+  const skipNotarization = arguments_.includes('--skip-notarization');
+  if (skipNotarization && (!release || channel !== 'staging')) {
+    throw new TypeError('--skip-notarization requires --release and the staging channel');
+  }
+  // The distribution archive is release output; any other mode writes it only on request.
+  return {
+    release,
+    unsigned,
+    zip: release || arguments_.includes('--zip'),
+    dmg: arguments_.includes('--dmg'),
+    notarize: release && !skipNotarization,
+  };
+};
+
+/**
+ * Electron fuses every macOS package flips before signing, keyed by fuse index.
+ *
+ * `RunAsNode` stays at Electron's default (enabled): the services utility runs
+ * the bundled ACP adapters as `ELECTRON_RUN_AS_NODE=1 <Tau> <adapter>`
+ * (`packages/host/src/acp/spawn.ts`), and the package verifier probes the
+ * packaged runtime the same way. `--inspect` is refused only in a release:
+ * Playwright's Electron launcher attaches to main through `--inspect=0`, and
+ * the packaged e2e lane launches the ad-hoc package.
+ *
+ * @param mode - The package mode; only `release` changes the set.
+ * @returns The fuse states to write; an omitted fuse keeps Electron's default.
+ */
+export const macosPackageFuses = (
+  mode: Pick<MacosPackageMode, 'release'>,
+): Partial<Record<FuseV1Options, boolean>> => ({
+  [FuseV1Options.EnableCookieEncryption]: true,
+  [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+  [FuseV1Options.EnableNodeCliInspectArguments]: !mode.release,
+  [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+  [FuseV1Options.OnlyLoadAppFromAsar]: true,
+});
+
+/**
+ * The host app's `CFBundleIdentifier` for a package mode.
+ *
+ * Only a release carries `com.taucad.tau.desktop`. A locally signed development package keeps
+ * `com.taucad.tau.desktop.local`, and every other development package (unsigned or ad-hoc, the
+ * packaged e2e lane and device runs) gets `com.taucad.tau.desktop.e2e`, so LaunchServices never
+ * treats it as the installed Tau or Tau Staging. The profile and single-instance lock are separate:
+ * a development package honours `--user-data-dir`, a release does not.
+ *
+ * @param mode - The package mode; only `release` changes the id.
+ * @param localSigned - Whether the package is signed with a local Apple Development identity.
+ * @returns The bundle identifier to write into the host `Info.plist`.
+ */
+export const macosBundleId = (mode: Pick<MacosPackageMode, 'release'>, localSigned: boolean): string => {
+  if (mode.release) {
+    return 'com.taucad.tau.desktop';
+  }
+  return localSigned ? 'com.taucad.tau.desktop.local' : 'com.taucad.tau.desktop.e2e';
+};
+
+/** Select the native Mac host; cross-packaging cannot verify the installed payload. */
+export const macosPackageArchitecture = (platform: string, architecture: string): 'arm64' | 'x64' => {
+  if (platform !== 'darwin' || (architecture !== 'arm64' && architecture !== 'x64')) {
+    throw new Error(
+      `Mac packages require a native darwin-arm64 or darwin-x64 host, received ${platform}-${architecture}`,
+    );
+  }
+  return architecture;
+};

@@ -1,5 +1,7 @@
+import { bundlePattern, workspace } from '@taucad/nx';
+import { assembleBundledDeclarations } from '@taucad/nx/bundled-declarations';
 import { defineConfig } from 'tsdown';
-import type { Options } from 'tsdown';
+import type { UserConfig } from 'tsdown';
 
 /*
  * Packages that must remain external from the CLI bin bundle. Bundling them
@@ -14,50 +16,60 @@ const cliExternals: Array<RegExp | string> = [
   /^@taucad\//,
   'replicad',
   'replicad-opencascadejs',
-  'opencascade.js',
+  'libcascade',
   'manifold-3d',
   '@kittycad/lib',
   'esbuild-wasm',
-  'openscad-wasm-prebuilt',
+  '@taulabs/openrscad-engine',
   'jszip',
+  '@napi-rs/keyring',
 ];
 
-const baseConfig: Options = {
-  entry: ['src/index.ts'],
+const baseConfig: UserConfig = {
+  entry: ['src/index.ts', 'src/geospec/index.ts'],
   sourcemap: false,
-  clean: true,
-  dts: true,
+  clean: ['dist'],
+  dts: { eager: true },
   minify: true,
+  hooks: {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- tsdown's hook API uses colon-delimited names.
+    'build:done': async ({ options }) => assembleBundledDeclarations(process.cwd(), options.outDir, 'cli'),
+  },
   tsconfig: 'tsconfig.build.json',
   unbundle: true,
 };
 
-const cjsConfig: Options = {
-  ...baseConfig,
-  format: 'cjs',
-  outDir: 'dist/cjs',
-  dts: false,
-};
-
-const esmConfig: Options = {
-  ...baseConfig,
-  format: 'esm',
-  outDir: 'dist/esm',
-};
-
-const cliConfig: Options = {
-  entry: { taucad: 'src/bin.ts' },
+const cliConfig: UserConfig = {
+  entry: {
+    tau: 'src/bin.ts',
+    'host-runtime-child': 'src/host-runtime-child.ts',
+    'compute-store-worker': 'src/compute-store.worker.ts',
+    'runtime-worker': 'src/runtime.worker.ts',
+    // Imported by URL inside each `tau test` GeoSpec pool worker, so it must be a real file.
+    'geospec-exporter': 'src/geospec/exporter-module.ts',
+    // Imported by URL inside each `tau test` GeoSpec pool worker for Tau's module VM.
+    'geospec-module-vm': 'src/geospec/module-vm.ts',
+  },
   format: 'esm',
   outDir: 'dist/bin',
   platform: 'node',
-  target: 'node22',
-  clean: true,
+  target: 'node24',
+  clean: ['dist/bin'],
   dts: false,
   minify: false,
   sourcemap: false,
   tsconfig: 'tsconfig.build.json',
-  external: cliExternals,
+  deps: { neverBundle: cliExternals },
   banner: { js: '#!/usr/bin/env node' },
 };
 
-export default defineConfig([esmConfig, cjsConfig, cliConfig]);
+export default defineConfig(async () => {
+  const pattern = bundlePattern(await workspace(), 'cli');
+  const packageConfig: UserConfig = {
+    ...baseConfig,
+    format: 'esm',
+    outDir: 'dist',
+    deps: { alwaysBundle: [pattern], dts: { neverBundle: [pattern] } },
+  };
+  return [packageConfig, cliConfig];
+});

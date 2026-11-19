@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { VirtualPathError } from '@taucad/utils/path';
 import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import { getErrorCode, getErrorMessage, toRpcError } from '#rpc/rpc-error.js';
 
@@ -9,6 +10,13 @@ function makeErrnoError(message: string, code: string): Error {
 }
 
 describe('getErrorCode', () => {
+  it.each(['INVALID_PATH', 'PATH_OUTSIDE_ROOT'] as const)(
+    'should map VirtualPathError %s to VALIDATION_ERROR',
+    (code) => {
+      expect(getErrorCode(new VirtualPathError(code, '../secret'))).toBe(rpcClientErrorCode.validationError);
+    },
+  );
+
   describe('errno code lookup (primary signal)', () => {
     it('should map ENOENT to FILE_NOT_FOUND', () => {
       const error = makeErrnoError('No such file or directory', 'ENOENT');
@@ -22,6 +30,11 @@ describe('getErrorCode', () => {
 
     it('should map EPERM to PERMISSION_DENIED', () => {
       const error = makeErrnoError('Operation not permitted', 'EPERM');
+      expect(getErrorCode(error)).toBe(rpcClientErrorCode.permissionDenied);
+    });
+
+    it('should map EROFS to PERMISSION_DENIED', () => {
+      const error = makeErrnoError('Read-only file system', 'EROFS');
       expect(getErrorCode(error)).toBe(rpcClientErrorCode.permissionDenied);
     });
 
@@ -40,7 +53,7 @@ describe('getErrorCode', () => {
 
   describe('Node.js-style errors (ErrnoException)', () => {
     it('should classify ENOENT ErrnoException as FILE_NOT_FOUND', () => {
-      const error = makeErrnoError("ENOENT: no such file or directory, open '/test.json'", 'ENOENT');
+      const error = makeErrnoError("ENOENT: no such file or directory, open '/missing.json'", 'ENOENT');
       expect(getErrorCode(error)).toBe(rpcClientErrorCode.fileNotFound);
     });
 
@@ -52,38 +65,32 @@ describe('getErrorCode', () => {
 
   describe('fromMemoryFS-style errors (with code property)', () => {
     it('should classify ENOENT memoryFS error as FILE_NOT_FOUND', () => {
-      const error = makeErrnoError('ENOENT: no such file: /test.json', 'ENOENT');
+      const error = makeErrnoError('ENOENT: no such file: /missing.json', 'ENOENT');
       expect(getErrorCode(error)).toBe(rpcClientErrorCode.fileNotFound);
     });
   });
 
-  describe('message fallback (errors without code property)', () => {
-    it('should classify "not found" message as FILE_NOT_FOUND', () => {
-      expect(getErrorCode(new Error('File not found'))).toBe(rpcClientErrorCode.fileNotFound);
+  describe('errors without a code property', () => {
+    /* Classification comes from `code` alone. These messages read like a
+     * classification and are deliberately not treated as one: the substring
+     * heuristics they used to drive reported `PARSE_ERROR` for any failure
+     * whose path ended in `.json`. */
+    it.each([
+      'File not found',
+      'ENOENT: no such file',
+      'No such file or directory',
+      'Permission denied',
+      'Failed to parse input',
+      'Invalid JSON',
+      'Something went wrong',
+    ])('should classify %s as IO_ERROR', (message) => {
+      expect(getErrorCode(new Error(message))).toBe(rpcClientErrorCode.ioError);
     });
 
-    it('should classify "enoent" in message as FILE_NOT_FOUND', () => {
-      expect(getErrorCode(new Error('ENOENT: no such file'))).toBe(rpcClientErrorCode.fileNotFound);
-    });
-
-    it('should classify "no such file" message as FILE_NOT_FOUND', () => {
-      expect(getErrorCode(new Error('No such file or directory'))).toBe(rpcClientErrorCode.fileNotFound);
-    });
-
-    it('should classify "permission" message as PERMISSION_DENIED', () => {
-      expect(getErrorCode(new Error('Permission denied'))).toBe(rpcClientErrorCode.permissionDenied);
-    });
-
-    it('should classify "parse" message as PARSE_ERROR', () => {
-      expect(getErrorCode(new Error('Failed to parse input'))).toBe(rpcClientErrorCode.parseError);
-    });
-
-    it('should classify "json" message as PARSE_ERROR', () => {
-      expect(getErrorCode(new Error('Invalid JSON'))).toBe(rpcClientErrorCode.parseError);
-    });
-
-    it('should fall back to IO_ERROR for unrecognized Error messages', () => {
-      expect(getErrorCode(new Error('Something went wrong'))).toBe(rpcClientErrorCode.ioError);
+    it('should not read a classification out of a path in the message', () => {
+      /* The defect this pins: a write that failed for any reason on
+       * `tau.json` was reported to the client as a parse failure. */
+      expect(getErrorCode(new Error('Write failed: /project/tau.json'))).toBe(rpcClientErrorCode.ioError);
     });
   });
 
@@ -130,6 +137,14 @@ describe('getErrorMessage', () => {
 });
 
 describe('toRpcError', () => {
+  it('should preserve VirtualPathError details as a validation failure', () => {
+    expect(toRpcError(new VirtualPathError('PATH_OUTSIDE_ROOT', '../secret'))).toStrictEqual({
+      success: false,
+      errorCode: rpcClientErrorCode.validationError,
+      message: 'Virtual path escapes the filesystem root.',
+    });
+  });
+
   it('should produce a structured RpcHandlerError with correct shape', () => {
     const error = makeErrnoError('No such file or directory', 'ENOENT');
     const result = toRpcError(error);
@@ -159,6 +174,20 @@ describe('toRpcError', () => {
       success: false,
       errorCode: rpcClientErrorCode.unknown,
       message: 'Unknown error',
+    });
+  });
+
+  it('should keep a thrown error retryable when it says so', () => {
+    const error = Object.assign(new Error('models/a.step is still downloading.'), {
+      code: rpcClientErrorCode.operationTimeout,
+      retryable: true,
+    });
+
+    expect(toRpcError(error)).toStrictEqual({
+      success: false,
+      errorCode: rpcClientErrorCode.operationTimeout,
+      message: 'models/a.step is still downloading.',
+      retryable: true,
     });
   });
 });

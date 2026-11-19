@@ -1,0 +1,1207 @@
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { chatTurnRequestSchema } from '@taucad/chat/schemas';
+
+const collectKeys = (node: unknown, keys: Set<string>): void => {
+  if (node === null || typeof node !== 'object') {
+    return;
+  }
+  if (Array.isArray(node)) {
+    for (const entry of node) {
+      collectKeys(entry, keys);
+    }
+    return;
+  }
+  for (const [key, value] of Object.entries(node)) {
+    keys.add(key);
+    collectKeys(value, keys);
+  }
+};
+
+describe('chatTurnRequestSchema JSON Schema contract (R13)', () => {
+  // `unrepresentable: 'any'` collapses `z.never()` / `z.undefined()` (used in
+  // AI SDK tool-part discriminated unions) to `{}` instead of throwing — the
+  // wire contract this test cares about is on the `agent` block, not the
+  // upstream-defined message-part shapes.
+  const fullSchema = z.toJSONSchema(chatTurnRequestSchema, { unrepresentable: 'any' }) as Record<string, unknown>;
+
+  const defs = (fullSchema['$defs'] ?? fullSchema['definitions']) as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  const resolveRef = (node: Record<string, unknown>): Record<string, unknown> => {
+    const ref = node['$ref'];
+    if (typeof ref !== 'string') {
+      return node;
+    }
+    const segments = ref.split('/').slice(1);
+    let current: unknown = fullSchema;
+    for (const segment of segments) {
+      if (current === null || typeof current !== 'object') {
+        throw new Error(`Could not resolve $ref ${ref}: segment ${segment} missing`);
+      }
+      current = (current as Record<string, unknown>)[segment];
+    }
+    if (current === null || typeof current !== 'object') {
+      throw new Error(`Resolved $ref ${ref} is not an object`);
+    }
+    return current as Record<string, unknown>;
+  };
+
+  it('should emit no `not` / `if` / `then` keywords inside the agent slice — proves no `.refine()` / `.superRefine()` survives on the config block', () => {
+    // Restricted to the agent slice: the messages slice imports tool-part
+    // schemas from the AI SDK that use `z.never()` and surface as `not`
+    // (representing "this state forbids this field"), which is not what this
+    // test guards against. The agent block is the one we own end-to-end.
+    const agentDefinition = (defs?.['AgentConfig'] ??
+      (fullSchema['properties'] as { agent?: unknown }).agent) as Record<string, unknown>;
+    const keys = new Set<string>();
+    collectKeys(agentDefinition, keys);
+
+    expect(keys.has('not'), 'agent JSON Schema must not contain `not` (would indicate a refine)').toBe(false);
+    expect(keys.has('if'), 'agent JSON Schema must not contain `if`').toBe(false);
+    expect(keys.has('then'), 'agent JSON Schema must not contain `then`').toBe(false);
+  });
+
+  describe('agent field structure', () => {
+    const agentNodeRaw = (fullSchema['properties'] as { agent: Record<string, unknown> }).agent;
+    const agentNode = resolveRef(agentNodeRaw);
+
+    const resolvedBranches = ((agentNode['anyOf'] ?? agentNode['oneOf']) as ReadonlyArray<Record<string, unknown>>).map(
+      (branch) => resolveRef(branch),
+    );
+
+    const findBranch = (profile: string): Record<string, unknown> | undefined =>
+      resolvedBranches.find(
+        (branch) => (branch['properties'] as { profile?: { const?: string } } | undefined)?.profile?.const === profile,
+      );
+
+    it('should declare agent as a top-level required property of the chat body', () => {
+      expect((fullSchema['required'] as readonly string[]).includes('agent')).toBe(true);
+    });
+
+    it('should register the agent union by id (`AgentConfig`) in $defs for OpenAPI reuse', () => {
+      expect(defs?.['AgentConfig']).toBeDefined();
+    });
+
+    it('should encode agent as a discriminated branching of three profile variants', () => {
+      expect(resolvedBranches.length).toBe(3);
+    });
+
+    it('should key each agent branch on a profile literal (cad, project_name, commit_name)', () => {
+      const profiles = resolvedBranches
+        .map((branch) => (branch['properties'] as { profile?: { const?: string } } | undefined)?.profile?.const)
+        .filter((value): value is string => typeof value === 'string')
+        .sort();
+
+      expect(profiles).toEqual(['cad', 'commit_name', 'project_name']);
+    });
+
+    it('should keep snapshot OUT of the cad agent required[] (optional, no default)', () => {
+      const cadBranch = findBranch('cad');
+      const required = (cadBranch?.['required'] ?? []) as readonly string[];
+
+      expect(required).not.toContain('snapshot');
+    });
+
+    it('should keep contextPayload OUT of the cad agent required[] (optional, no default)', () => {
+      const cadBranch = findBranch('cad');
+      const required = (cadBranch?.['required'] ?? []) as readonly string[];
+
+      expect(required).not.toContain('contextPayload');
+    });
+
+    it('should NOT emit a `default` key on snapshot or contextPayload — they are truly optional, not sentinel-defaulted', () => {
+      const cadBranch = findBranch('cad');
+      const properties = cadBranch?.['properties'] as
+        | { snapshot?: Record<string, unknown>; contextPayload?: Record<string, unknown> }
+        | undefined;
+
+      expect(properties?.snapshot).toBeDefined();
+      expect(properties?.contextPayload).toBeDefined();
+      expect(properties?.snapshot?.['default']).toBeUndefined();
+      expect(properties?.contextPayload?.['default']).toBeUndefined();
+    });
+
+    it('should keep the cad agent branch contract stable (inline snapshot guards regressions)', () => {
+      const cadBranch = findBranch('cad');
+
+      expect(cadBranch).toMatchInlineSnapshot(`
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contextPayload": {
+              "additionalProperties": false,
+              "properties": {
+                "memory": {
+                  "additionalProperties": {
+                    "maxLength": 25256,
+                    "type": "string",
+                  },
+                  "propertyNames": {
+                    "type": "string",
+                  },
+                  "type": "object",
+                },
+                "skills": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "description": {
+                        "type": "string",
+                      },
+                      "enabled": {
+                        "type": "boolean",
+                      },
+                      "fingerprint": {
+                        "type": "string",
+                      },
+                      "name": {
+                        "type": "string",
+                      },
+                      "path": {
+                        "type": "string",
+                      },
+                      "resourceUri": {
+                        "type": "string",
+                      },
+                      "shadowedSources": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fingerprint": {
+                              "type": "string",
+                            },
+                            "path": {
+                              "type": "string",
+                            },
+                            "resourceUri": {
+                              "type": "string",
+                            },
+                            "skillPath": {
+                              "type": "string",
+                            },
+                            "source": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "source",
+                          ],
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "skillPath": {
+                        "type": "string",
+                      },
+                      "source": {
+                        "type": "string",
+                      },
+                      "version": {
+                        "type": "string",
+                      },
+                      "whenToUse": {
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "name",
+                      "description",
+                    ],
+                    "type": "object",
+                  },
+                  "maxItems": 64,
+                  "type": "array",
+                },
+              },
+              "type": "object",
+            },
+            "execution": {
+              "$ref": "#/$defs/CadAgentExecution",
+            },
+            "kernel": {
+              "enum": [
+                "auto",
+                "picogk",
+                "picovoxel",
+                "build123d",
+                "smlibpy",
+                "openscad",
+                "replicad",
+                "manifold",
+                "zoo",
+                "jscad",
+                "opencascadejs",
+                "smlib",
+                "tscircuit",
+              ],
+              "type": "string",
+            },
+            "mode": {
+              "enum": [
+                "agent",
+                "plan",
+              ],
+              "type": "string",
+            },
+            "person": {
+              "$ref": "#/$defs/AgentPerson",
+            },
+            "profile": {
+              "const": "cad",
+              "type": "string",
+            },
+            "snapshot": {
+              "additionalProperties": false,
+              "properties": {
+                "activeFile": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "contentKind": {
+                          "const": "text",
+                          "type": "string",
+                        },
+                        "lineCount": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "path",
+                        "name",
+                        "size",
+                        "contentKind",
+                        "lineCount",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "contentKind": {
+                          "const": "binary",
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "path",
+                        "name",
+                        "size",
+                        "contentKind",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "path",
+                        "name",
+                      ],
+                      "type": "object",
+                    },
+                  ],
+                },
+                "fileTree": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                          "size": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer",
+                          },
+                          "type": {
+                            "const": "dir",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "name",
+                          "size",
+                          "type",
+                        ],
+                        "type": "object",
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "contentKind": {
+                            "const": "text",
+                            "type": "string",
+                          },
+                          "lineCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                          "size": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer",
+                          },
+                          "type": {
+                            "const": "file",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "name",
+                          "size",
+                          "type",
+                          "contentKind",
+                          "lineCount",
+                        ],
+                        "type": "object",
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "contentKind": {
+                            "const": "binary",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                          "size": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer",
+                          },
+                          "type": {
+                            "const": "file",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "name",
+                          "size",
+                          "type",
+                          "contentKind",
+                        ],
+                        "type": "object",
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                          "size": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer",
+                          },
+                          "type": {
+                            "const": "file",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "name",
+                          "size",
+                          "type",
+                        ],
+                        "type": "object",
+                      },
+                    ],
+                  },
+                  "type": "array",
+                },
+                "fileTreeOmitted": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer",
+                },
+                "kernel": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "available": {
+                      "items": {
+                        "enum": [
+                          "picogk",
+                          "picovoxel",
+                          "build123d",
+                          "smlibpy",
+                          "openscad",
+                          "replicad",
+                          "manifold",
+                          "zoo",
+                          "jscad",
+                          "opencascadejs",
+                          "smlib",
+                          "tscircuit",
+                        ],
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "guidance": {
+                      "type": "string",
+                    },
+                    "owner": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entryPath": {
+                          "maxLength": 1024,
+                          "minLength": 1,
+                          "type": "string",
+                        },
+                        "kernel": {
+                          "enum": [
+                            "picogk",
+                            "picovoxel",
+                            "build123d",
+                            "smlibpy",
+                            "openscad",
+                            "replicad",
+                            "manifold",
+                            "zoo",
+                            "jscad",
+                            "opencascadejs",
+                            "smlib",
+                            "tscircuit",
+                          ],
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "kernel",
+                        "entryPath",
+                      ],
+                      "type": "object",
+                    },
+                    "preference": {
+                      "enum": [
+                        "auto",
+                        "picogk",
+                        "picovoxel",
+                        "build123d",
+                        "smlibpy",
+                        "openscad",
+                        "replicad",
+                        "manifold",
+                        "zoo",
+                        "jscad",
+                        "opencascadejs",
+                        "smlib",
+                        "tscircuit",
+                      ],
+                      "type": "string",
+                    },
+                    "unavailable": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kernel": {
+                            "enum": [
+                              "picogk",
+                              "picovoxel",
+                              "build123d",
+                              "smlibpy",
+                              "openscad",
+                              "replicad",
+                              "manifold",
+                              "zoo",
+                              "jscad",
+                              "opencascadejs",
+                              "smlib",
+                              "tscircuit",
+                            ],
+                            "type": "string",
+                          },
+                          "reason": {
+                            "const": "not available here",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "kernel",
+                          "reason",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "preference",
+                    "available",
+                    "unavailable",
+                    "guidance",
+                  ],
+                  "type": "object",
+                },
+                "openFiles": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "contentKind": {
+                            "const": "text",
+                            "type": "string",
+                          },
+                          "lineCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                          "size": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "name",
+                          "size",
+                          "contentKind",
+                          "lineCount",
+                        ],
+                        "type": "object",
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "contentKind": {
+                            "const": "binary",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                          "size": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "name",
+                          "size",
+                          "contentKind",
+                        ],
+                        "type": "object",
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "name",
+                        ],
+                        "type": "object",
+                      },
+                    ],
+                  },
+                  "type": "array",
+                },
+                "viewerSelection": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entryPath": {
+                      "maxLength": 1024,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "selected": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "resource": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "workspace-file",
+                                "type": "string",
+                              },
+                              "path": {
+                                "maxLength": 1024,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "revision": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "kind",
+                              "path",
+                            ],
+                            "type": "object",
+                          },
+                          "target": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "componentId": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "componentKind": {
+                                "enum": [
+                                  "model",
+                                  "assembly",
+                                  "part",
+                                  "body",
+                                  "face",
+                                  "edge",
+                                  "vertex",
+                                  "mesh",
+                                  "line",
+                                  "material",
+                                  "unknown",
+                                ],
+                                "type": "string",
+                              },
+                              "kind": {
+                                "const": "component",
+                                "type": "string",
+                              },
+                              "label": {
+                                "maxLength": 256,
+                                "type": "string",
+                              },
+                              "selector": {
+                                "maxLength": 256,
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "kind",
+                              "componentId",
+                              "label",
+                              "componentKind",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "resource",
+                          "target",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 32,
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "entryPath",
+                    "selected",
+                  ],
+                  "type": "object",
+                },
+                "workbench": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entries": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "hidden": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "path": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string",
+                          },
+                          "renderTimeout": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "hidden",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 16,
+                      "type": "array",
+                    },
+                    "lanes": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "chat": {
+                          "type": "boolean",
+                        },
+                        "workbench": {
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "chat",
+                        "workbench",
+                      ],
+                      "type": "object",
+                    },
+                    "layoutDigest": {
+                      "anyOf": [
+                        {
+                          "pattern": "^sha256:[0-9a-f]{64}$",
+                          "type": "string",
+                        },
+                        {
+                          "enum": [
+                            "missing",
+                          ],
+                          "type": "string",
+                        },
+                      ],
+                    },
+                    "refused": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": {
+                            "enum": [
+                              "debug-only",
+                            ],
+                            "type": "string",
+                          },
+                          "tab": {
+                            "oneOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "kind": {
+                                    "enum": [
+                                      "view",
+                                    ],
+                                    "type": "string",
+                                  },
+                                  "view": {
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "kind",
+                                  "view",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "kind": {
+                                    "enum": [
+                                      "pane",
+                                    ],
+                                    "type": "string",
+                                  },
+                                  "pane": {
+                                    "enum": [
+                                      "browser",
+                                      "parameters",
+                                      "model",
+                                      "print",
+                                      "kinematics",
+                                      "revisions",
+                                      "agents",
+                                      "jobs",
+                                      "export",
+                                      "share",
+                                      "details",
+                                      "kernel",
+                                      "console",
+                                      "terminal",
+                                    ],
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "kind",
+                                  "pane",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "filesOpen": {
+                                    "type": "boolean",
+                                  },
+                                  "kind": {
+                                    "enum": [
+                                      "file",
+                                    ],
+                                    "type": "string",
+                                  },
+                                  "path": {
+                                    "maxLength": 1024,
+                                    "minLength": 1,
+                                    "type": "string",
+                                  },
+                                  "presentation": {
+                                    "enum": [
+                                      "preview",
+                                      "source",
+                                    ],
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "kind",
+                                  "path",
+                                ],
+                                "type": "object",
+                              },
+                            ],
+                          },
+                        },
+                        "required": [
+                          "tab",
+                          "reason",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 16,
+                      "type": "array",
+                    },
+                    "unavailable": {
+                      "items": {
+                        "enum": [
+                          "browser",
+                          "parameters",
+                          "model",
+                          "print",
+                          "kinematics",
+                          "revisions",
+                          "agents",
+                          "jobs",
+                          "export",
+                          "share",
+                          "details",
+                          "kernel",
+                          "console",
+                          "terminal",
+                        ],
+                        "type": "string",
+                      },
+                      "maxItems": 16,
+                      "type": "array",
+                    },
+                    "views": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "camera": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "isometric",
+                                  "front",
+                                  "back",
+                                  "right",
+                                  "left",
+                                  "top",
+                                  "bottom",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "enum": [
+                                  "look",
+                                  "pose",
+                                ],
+                                "type": "string",
+                              },
+                            ],
+                          },
+                          "entryPath": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "id": {
+                            "maxLength": 64,
+                            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                            "type": "string",
+                          },
+                          "name": {
+                            "maxLength": 40,
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "entryPath",
+                          "camera",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 16,
+                      "type": "array",
+                    },
+                    "visible": {
+                      "items": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "enum": [
+                                  "view",
+                                ],
+                                "type": "string",
+                              },
+                              "view": {
+                                "maxLength": 64,
+                                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "kind",
+                              "view",
+                            ],
+                            "type": "object",
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "enum": [
+                                  "pane",
+                                ],
+                                "type": "string",
+                              },
+                              "pane": {
+                                "enum": [
+                                  "browser",
+                                  "parameters",
+                                  "model",
+                                  "print",
+                                  "kinematics",
+                                  "revisions",
+                                  "agents",
+                                  "jobs",
+                                  "export",
+                                  "share",
+                                  "details",
+                                  "kernel",
+                                  "console",
+                                  "terminal",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "kind",
+                              "pane",
+                            ],
+                            "type": "object",
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "filesOpen": {
+                                "type": "boolean",
+                              },
+                              "kind": {
+                                "enum": [
+                                  "file",
+                                ],
+                                "type": "string",
+                              },
+                              "path": {
+                                "maxLength": 1024,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "presentation": {
+                                "enum": [
+                                  "preview",
+                                  "source",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "kind",
+                              "path",
+                            ],
+                            "type": "object",
+                          },
+                        ],
+                      },
+                      "maxItems": 32,
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "layoutDigest",
+                    "lanes",
+                    "visible",
+                    "views",
+                    "entries",
+                    "unavailable",
+                    "refused",
+                  ],
+                  "type": "object",
+                },
+              },
+              "type": "object",
+            },
+            "testingEnabled": {
+              "type": "boolean",
+            },
+            "toolChoice": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "auto",
+                    "any",
+                    "custom",
+                  ],
+                  "type": "string",
+                },
+                {
+                  "items": {
+                    "enum": [
+                      "web_search",
+                      "web_browser",
+                      "test_model",
+                      "use_skill",
+                      "read_file",
+                      "edit_file",
+                      "arrange_workbench",
+                      "list_directory",
+                      "create_file",
+                      "delete_file",
+                      "grep",
+                      "glob_search",
+                      "evaluate_model",
+                      "export_model",
+                      "get_parameters",
+                      "apply_parameter_operation",
+                      "screenshot",
+                      "history",
+                      "update_todos",
+                      "ask_questions",
+                      "install_packages",
+                      "list_machines",
+                      "get_machine",
+                      "machine_action",
+                      "stop_machine",
+                      "get_print_profiles",
+                      "request_job",
+                      "check_job",
+                      "shell",
+                    ],
+                    "type": "string",
+                  },
+                  "type": "array",
+                },
+              ],
+            },
+          },
+          "required": [
+            "profile",
+            "execution",
+            "kernel",
+            "mode",
+            "toolChoice",
+            "testingEnabled",
+          ],
+          "type": "object",
+        }
+      `);
+    });
+  });
+});

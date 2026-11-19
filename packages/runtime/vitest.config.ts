@@ -1,11 +1,9 @@
 import { defineConfig } from 'vitest/config';
-import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 export default defineConfig({
-  // oxlint-disable-next-line typescript/no-explicit-any -- vite type mismatch from pnpm duplicate @types/node resolutions
-  plugins: [nxViteTsPaths() as any],
   test: {
     environment: 'node',
+    maxWorkers: 4,
     typecheck: {
       enabled: true,
       include: ['**/*.test-d.ts'],
@@ -16,7 +14,7 @@ export default defineConfig({
     setupFiles: ['vitest.setup.ts'],
     coverage: {
       provider: 'v8',
-      reportsDirectory: '../../coverage/packages/runtime',
+      reportsDirectory: '../../out/reports/coverage/packages/runtime',
       include: ['src/**/*'],
       exclude: [
         'src/**/*.{test,spec,test-d}.ts',

@@ -1,0 +1,1679 @@
+import { describe, expect, it, vi } from 'vitest';
+import { Agent } from '@earendil-works/pi-agent-core';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import { createAssistantMessageEventStream, normalizeContext } from '@earendil-works/pi-ai';
+import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate';
+import type { AssistantMessage, Context, Models, UserMessage } from '@earendil-works/pi-ai';
+import { compactionFoldOf, installCompaction } from '#harness/compaction.js';
+import type { CompactionOutcome, CompactionSummarizer } from '#harness/compaction.js';
+import { createAgentSession } from '#harness/session.js';
+import { createMemoryEventLogFile, stubModel } from '#harness/harness.fixture.js';
+import {
+  createSessionRecord,
+  MessageIdentities,
+  piMessageToProvider,
+  providerMessageToPi,
+} from '#harness/session-record.js';
+import type { SessionLogEvent, SessionRecord } from '#harness/session-record.js';
+import { reduceEventLog } from '#log/reducer.js';
+import type { AgentLogEvent, AssistantProviderMessage, UserProviderMessage } from '#log/event-types.js';
+import type { ModelStreamEvent, ModelStreamRequest, ModelTransport, ToolRegistry } from '#waist/ports.js';
+
+const oversizedToolHistory = (toolName = 'read_file'): AgentMessage[] =>
+  Array.from(
+    { length: 7 },
+    (_, index): AgentMessage => ({
+      role: 'toolResult',
+      toolCallId: `call-${index}`,
+      toolName,
+      content: [{ type: 'text', text: index < 2 ? 'x'.repeat(24_000) : `small-${index}` }],
+      isError: false,
+      timestamp: index,
+    }),
+  );
+
+const providerUsage = (totalTokens: number): AssistantMessage['usage'] => ({
+  input: totalTokens,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+});
+
+/** An assistant turn the provider already answered, carrying the usage it reported. */
+const answeredTurn = (totalTokens: number, timestamp: number): AssistantMessage => ({
+  role: 'assistant',
+  content: [{ type: 'text', text: 'Done.' }],
+  api: stubModel.api,
+  provider: stubModel.provider,
+  model: stubModel.id,
+  usage: providerUsage(totalTokens),
+  stopReason: 'stop',
+  timestamp,
+});
+
+const dispatchedStream = () => {
+  const stream = createAssistantMessageEventStream();
+  const message = answeredTurn(0, 100);
+  stream.push({ type: 'start', partial: message });
+  stream.push({ type: 'done', reason: 'stop', message });
+  return stream;
+};
+
+const recordFor = (
+  messages: readonly AgentMessage[],
+  append: SessionRecord['append'] = async () => undefined,
+): SessionRecord => {
+  let nextId = 0;
+  const identities = new MessageIdentities(() => `generated-${nextId++}`);
+  for (const [index, message] of messages.entries()) {
+    identities.set(message, `message-${index}`);
+  }
+  const history = messages.map((message) => piMessageToProvider(message, identities));
+  /* The rows this record journaled, as the log would read them back: compaction folds its strikes from them. */
+  const journaled: SessionLogEvent[] = [];
+  return {
+    messages: identities,
+    append: async (event) => {
+      await append(event);
+      journaled.push(event);
+    },
+    events: async () => journaled as unknown as readonly AgentLogEvent[],
+    rows: async () => journaled as unknown as readonly AgentLogEvent[],
+    history: async () => history,
+  };
+};
+
+const evictableHistory = (count: number): UserMessage[] =>
+  Array.from({ length: count }, (_, index) => ({
+    role: 'user',
+    content: `${index}-${'x'.repeat(4000)}`,
+    timestamp: index,
+  }));
+
+describe('Compaction', () => {
+  it('uses durable turn preparation to clear old tool results at tier 1', async () => {
+    const messages = oversizedToolHistory();
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const outcome = vi.fn();
+    const record = recordFor(messages);
+    const compaction = installCompaction({
+      agent,
+      record,
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize: async () => 'summary should not be needed',
+      onCompaction: outcome,
+    });
+
+    const compacted = await compaction.prepareTurn();
+
+    expect(compacted.slice(0, 2).map((message) => JSON.stringify(message))).toEqual([
+      expect.stringContaining(
+        '[Tool result exceeded the context window and was cleared; re-run with a narrower request]',
+      ),
+      expect.stringContaining(
+        '[Tool result exceeded the context window and was cleared; re-run with a narrower request]',
+      ),
+    ]);
+    expect(compacted.slice(-5)).toEqual(agent.state.messages.slice(-5));
+    expect(agent.state.messages).toEqual(compacted);
+    expect(outcome).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'tool_result_clearing', cleared: 2, evicted: 0 }),
+    );
+  });
+
+  /* Ruling U15: a pass lands the history at a fifth of the window, and clearing stands in for a summary only when it
+   * gets there alone. Twelve read results against an 8,192-token window: seven old ones of 1,000 tokens put the
+   * history over the trigger, and clearing keeps the newest five. */
+  it.each([
+    ['take clearing alone when it lands the history at a fifth of the window', 300, 'tool_result_clearing'],
+    ['write a summary and clear nothing when clearing alone would land above it', 1500, 'summarization'],
+  ] as const)('should %s', async (_name, recentCharacters, tier) => {
+    const messages: AgentMessage[] = [{ role: 'user', content: 'read the parts', timestamp: 0 }];
+    for (let index = 0; index < 12; index++) {
+      messages.push(
+        {
+          ...answeredTurn(0, index * 2 + 1),
+          content: [
+            { type: 'toolCall', id: `call-${index}`, name: 'read_file', arguments: { targetFile: `part-${index}.ts` } },
+          ],
+          stopReason: 'toolUse',
+        },
+        {
+          role: 'toolResult',
+          toolCallId: `call-${index}`,
+          toolName: 'read_file',
+          content: [{ type: 'text', text: 'x'.repeat(index < 7 ? 4000 : recentCharacters) }],
+          isError: false,
+          timestamp: index * 2 + 2,
+        },
+      );
+    }
+    const appended: Array<Parameters<SessionRecord['append']>[0]> = [];
+    const outcomes: CompactionOutcome[] = [];
+    const compaction = installCompaction({
+      agent: new Agent({
+        streamFn: () => createAssistantMessageEventStream(),
+        initialState: { model: stubModel, messages },
+      }),
+      record: recordFor(messages, async (event) => {
+        appended.push(event);
+      }),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize: async () => 'The parts read so far.',
+      onCompaction: (outcome) => outcomes.push(outcome),
+    });
+
+    const prepared = await compaction.prepareTurn();
+
+    expect(outcomes.map((outcome) => outcome.tier)).toEqual([tier]);
+    /* Either tier leaves at most a fifth of the window of history, beside the summary it may have written. */
+    const retained = prepared
+      .filter((message) => !JSON.stringify(message).includes('<summary>'))
+      .reduce((total, message) => total + estimateMessageTokens(message), 0);
+    expect(retained).toBeLessThanOrEqual(Math.floor(8192 * 0.2));
+    /* A pass writes clearings or one summary, never both. */
+    expect(appended.map((event) => event.type).filter((type) => type !== 'message.envelope-replaced')).toEqual(
+      tier === 'summarization' ? ['history.compacted'] : [],
+    );
+    expect(appended.some((event) => event.type === 'message.envelope-replaced')).toBe(tier === 'tool_result_clearing');
+  });
+
+  it('matches the transitional compactable-tool set', async () => {
+    const messages: AgentMessage[] = [
+      ...oversizedToolHistory('evaluate_model'),
+      {
+        role: 'toolResult',
+        toolCallId: 'edit-call',
+        toolName: 'edit_file',
+        content: [{ type: 'text', text: 'edit result stays' }],
+        isError: false,
+        timestamp: 8,
+      },
+    ];
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const summarize = vi.fn(async () => 'summary should not be needed');
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize,
+    });
+
+    const compacted = await compaction.prepareTurn();
+
+    expect(JSON.stringify(compacted.slice(0, 2))).toContain('re-run with a narrower request');
+    expect(compacted.at(-1)).toEqual(messages.at(-1));
+    expect(summarize).not.toHaveBeenCalled();
+  });
+
+  it('should skip tier-one persistence when clearing does not restore one recent-window of headroom', async () => {
+    const messages: AgentMessage[] = [
+      ...Array.from(
+        { length: 7 },
+        (_, index): AgentMessage => ({
+          role: 'toolResult',
+          toolCallId: `hysteresis-${index}`,
+          toolName: 'read_file',
+          content: [{ type: 'text', text: 'x'.repeat(index < 2 ? 5000 : 4600) }],
+          isError: false,
+          timestamp: index,
+        }),
+      ),
+      { role: 'user', content: 'continue', timestamp: 8 },
+    ];
+    const appended: Array<Parameters<SessionRecord['append']>[0]> = [];
+    const append: SessionRecord['append'] = async (event) => {
+      appended.push(event);
+    };
+    const summarize = vi.fn(async () => 'Tier two restored durable headroom.');
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages, append),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize,
+    });
+
+    await compaction.prepareTurn();
+
+    expect(summarize).toHaveBeenCalledOnce();
+    const compacted = appended.find((event) => event.type === 'history.compacted');
+    expect(compacted?.type).toBe('history.compacted');
+    if (compacted?.type !== 'history.compacted') {
+      throw new Error('Expected tier-two compaction to be persisted.');
+    }
+    expect(compacted.details).toMatchObject({
+      lane: 'start_of_turn',
+      tier: 'summarization',
+      summarizerAttempts: 1,
+      summarizerUsage: null,
+    });
+    expect(compacted.details?.tokensBefore).toBeTypeOf('number');
+    expect(compacted.details?.tokensAfter).toBeTypeOf('number');
+    expect(compacted.details?.evicted).toBeTypeOf('number');
+    expect(appended.some((event) => event.type === 'message.envelope-replaced')).toBe(false);
+  });
+
+  it('preserves tagged context in durable between-turn compaction', async () => {
+    const messages: UserMessage[] = Array.from({ length: 8 }, (_, index) => ({
+      role: 'user',
+      content: `${index === 0 ? '<system-reminder>keep</system-reminder>' : ''}${String(index).repeat(4000)}`,
+      timestamp: index,
+    }));
+    const append = vi.fn(async () => undefined);
+    const record = recordFor(messages, append);
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const summarize = vi.fn(async () => 'Earlier context summary.');
+    installCompaction({
+      agent,
+      record,
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize,
+    });
+    const prepare = agent.prepareNextTurn;
+    if (!prepare) {
+      throw new Error('Compaction did not install the durable pi seam.');
+    }
+    const prepared = await prepare();
+
+    expect(JSON.stringify(prepared?.context?.messages)).toContain('<summary>');
+    expect(JSON.stringify(prepared?.context?.messages)).toContain('<system-reminder>keep</system-reminder>');
+    expect(summarize).toHaveBeenCalledWith(expect.objectContaining({ keepContextTags: ['<system-reminder>'] }));
+    expect(append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'history.compacted',
+        /* A fifth of the window holds one of these messages: the newest stays, and the tagged first one is pinned. */
+        evictedMessageIds: ['message-1', 'message-2', 'message-3', 'message-4', 'message-5', 'message-6'],
+      }),
+    );
+    expect(agent.state.messages).toEqual(prepared?.context?.messages);
+  });
+
+  it('should preserve every safety block but only the newest reminder across two compactions', async () => {
+    const file = createMemoryEventLogFile();
+    const log = await file.open();
+    const oldSafety = '<safety>old safety rule</safety>';
+    const newestSafety = '<safety>newest safety rule</safety>';
+    const oldReminder = '<system-reminder>old reminder</system-reminder>';
+    const newestReminder = '<system-reminder>newest reminder</system-reminder>';
+    const seeded: AgentLogEvent[] = Array.from({ length: 10 }, (_, sequence) => ({
+      version: 1,
+      leaderEpoch: 'seed-epoch',
+      sequence,
+      recordedAt: '2026-09-20T00:00:00.000Z',
+      runId: 'seed-run',
+      type: 'message.appended',
+      message: {
+        id: `safety-${sequence}`,
+        role: 'user',
+        content: `${sequence === 0 ? oldSafety : sequence === 4 ? newestSafety : ''}${sequence === 1 ? oldReminder : sequence === 5 ? newestReminder : ''}${'x'.repeat(4000)}`,
+      },
+    }));
+    for (const event of seeded) {
+      // oxlint-disable-next-line no-await-in-loop -- The fixture seeds one ordered log.
+      await log.append(event);
+    }
+    const record = await createSessionRecord({
+      log,
+      runId: 'safety-run',
+      leaderEpoch: 'safety-epoch',
+      createId: (() => {
+        let id = 0;
+        return () => `safety-summary-${id++}`;
+      })(),
+      now: () => '2026-09-20T00:00:01.000Z',
+    });
+    const projectHistory = async () => {
+      const durable = await record.history();
+      return durable
+        .map((message) => providerMessageToPi(message, stubModel, record.messages))
+        .filter((message): message is AgentMessage => message !== undefined);
+    };
+    const initial = await projectHistory();
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages: initial },
+    });
+    const compaction = installCompaction({
+      agent,
+      record,
+      projectHistory,
+      contextWindow: 8192,
+      summarize: async () => 'Earlier work.',
+    });
+
+    await compaction.prepareTurn();
+    for (let index = 0; index < 7; index++) {
+      // oxlint-disable-next-line no-await-in-loop -- The second cycle is built as ordered durable history.
+      await record.append({
+        type: 'message.appended',
+        message: piMessageToProvider(
+          { role: 'user', content: `later-${index}-${'y'.repeat(4000)}`, timestamp: 20 + index },
+          record.messages,
+        ),
+      });
+    }
+    await compaction.prepareTurn();
+
+    const history = JSON.stringify(await record.history());
+    expect(history).toContain(newestSafety);
+    expect(history).toContain(oldSafety);
+    expect(history).toContain(newestReminder);
+    expect(history).not.toContain(oldReminder);
+    expect(history.match(new RegExp(oldSafety, 'gu'))).toHaveLength(1);
+    expect(history.match(new RegExp(newestSafety, 'gu'))).toHaveLength(1);
+    const events = await record.events();
+    expect(events.filter((event) => event.type === 'history.compacted')).toHaveLength(2);
+    await log.close();
+  });
+
+  it('uses pi token-budgeted turn cut points instead of retaining a fixed message count', async () => {
+    const messages: UserMessage[] = Array.from({ length: 10 }, (_, index) => ({
+      role: 'user',
+      content: `${index}-${'x'.repeat(4000)}`,
+      timestamp: index,
+    }));
+    const summarize = vi.fn(async (_input: Parameters<CompactionSummarizer>[0]) => 'Token-budgeted summary.');
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize,
+    });
+
+    await compaction.prepareTurn();
+
+    /* Ten messages of about 1,000 tokens against a landing point of 1,638 (a fifth of the window): one is kept. */
+    expect(summarize.mock.calls[0]?.[0].messages).toHaveLength(9);
+  });
+
+  it('should leave enough tier-two headroom for one typical assistant turn', async () => {
+    const file = createMemoryEventLogFile();
+    const log = await file.open();
+    for (let sequence = 0; sequence < 8; sequence++) {
+      // oxlint-disable-next-line no-await-in-loop -- The fixture seeds one ordered log.
+      await log.append({
+        version: 1,
+        leaderEpoch: 'headroom-seed',
+        sequence,
+        recordedAt: '2026-09-20T00:00:00.000Z',
+        runId: 'headroom-seed-run',
+        type: 'message.appended',
+        message: {
+          id: `headroom-${sequence}`,
+          role: 'user',
+          content: `${sequence}-${'h'.repeat(4000)}`,
+        },
+      });
+    }
+    const record = await createSessionRecord({
+      log,
+      runId: 'headroom-run',
+      leaderEpoch: 'headroom-epoch',
+      createId: (() => {
+        let id = 0;
+        return () => `headroom-generated-${id++}`;
+      })(),
+      now: () => '2026-09-20T00:00:01.000Z',
+    });
+    const projectHistory = async () => {
+      const history = await record.history();
+      return history
+        .map((message) => providerMessageToPi(message, stubModel, record.messages))
+        .filter((message): message is AgentMessage => message !== undefined);
+    };
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages: await projectHistory() },
+    });
+    const compaction = installCompaction({
+      agent,
+      record,
+      projectHistory,
+      contextWindow: 8192,
+      summarize: async () => 'Earlier work.',
+    });
+
+    await compaction.prepareTurn();
+    await record.append({
+      type: 'message.appended',
+      message: piMessageToProvider(
+        { ...answeredTurn(0, 100), content: [{ type: 'text', text: 'Typical assistant turn. '.repeat(100) }] },
+        record.messages,
+      ),
+    });
+    await compaction.prepareTurn();
+
+    const events = await record.events();
+    expect(events.filter((event) => event.type === 'history.compacted')).toHaveLength(1);
+    await log.close();
+  });
+
+  it('uses pi summary prompts, update context, serialization clamp, and Tau file-operation mappings', async () => {
+    const previousSummary = 'Previous durable work.\n<system-reminder>keep</system-reminder>';
+    const messages: AgentMessage[] = [
+      { role: 'user', content: `<summary>\n${previousSummary}\n</summary>`, timestamp: 0 },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            id: 'edit-call',
+            name: 'edit_file',
+            arguments: { targetFile: 'edited.ts', oldString: 'x'.repeat(8000), newString: 'done' },
+          },
+          { type: 'toolCall', id: 'read-call', name: 'read_file', arguments: { targetFile: 'read-only.ts' } },
+        ],
+        api: stubModel.api,
+        provider: stubModel.provider,
+        model: stubModel.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'toolUse',
+        timestamp: 1,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'edit-call',
+        toolName: 'edit_file',
+        content: [{ type: 'text', text: 'result-'.repeat(1000) }],
+        isError: false,
+        timestamp: 2,
+      },
+      ...Array.from(
+        { length: 8 },
+        (_, index): UserMessage => ({
+          role: 'user',
+          content: `${index}-${'z'.repeat(4000)}`,
+          timestamp: index + 3,
+        }),
+      ),
+    ];
+    let summaryContext: Context | undefined;
+    const models = {
+      completeSimple: vi.fn(async (_model, context: Context): Promise<AssistantMessage> => {
+        summaryContext = context;
+        return {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Updated durable summary.' }],
+          api: stubModel.api,
+          provider: stubModel.provider,
+          model: stubModel.id,
+          usage: {
+            input: 10,
+            output: 4,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 14,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'stop',
+          timestamp: 12,
+        };
+      }),
+    } as unknown as Models;
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      models,
+    });
+
+    const compacted = await compaction.prepareTurn();
+    const prompt = JSON.stringify(summaryContext?.messages ?? []);
+
+    expect(summaryContext?.systemPrompt).toBe(
+      'You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.',
+    );
+    expect(prompt).toContain(
+      String.raw`<previous-summary>\nPrevious durable work.\n<system-reminder>keep</system-reminder>\n</previous-summary>`,
+    );
+    expect(prompt).toContain('NEW conversation messages');
+    expect(prompt).toContain('more characters truncated');
+    expect(JSON.stringify(compacted)).toContain(String.raw`<read-files>\nread-only.ts\n</read-files>`);
+    expect(JSON.stringify(compacted)).toContain(String.raw`<modified-files>\nedited.ts\n</modified-files>`);
+  });
+
+  it('uses a placeholder when no compaction summarizer is configured', async () => {
+    const messages: UserMessage[] = Array.from({ length: 8 }, (_, index) => ({
+      role: 'user',
+      content: String(index).repeat(4000),
+      timestamp: index,
+    }));
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const appended: Array<Parameters<SessionRecord['append']>[0]> = [];
+    const append: SessionRecord['append'] = async (event) => {
+      appended.push(event);
+    };
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages, append),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+    });
+
+    const prepared = await compaction.prepareTurn();
+
+    expect(JSON.stringify(prepared)).toContain(
+      'Compaction could not summarize 7 messages spanning 7 turns. The project files are the source of truth for the current work.',
+    );
+    const compacted = appended.find((event) => event.type === 'history.compacted');
+    expect(compacted?.type === 'history.compacted' && compacted.details?.summary).toBe('placeholder');
+  });
+
+  it('should not open the circuit breaker after repeated non-headroom refusals', async () => {
+    const messages = evictableHistory(8);
+    const record = recordFor(messages, async (event) => {
+      if (event.type === 'history.compacted') {
+        throw new Error('durable compaction append rejected');
+      }
+    });
+    const agent = new Agent({
+      streamFn: dispatchedStream,
+      initialState: { model: stubModel, messages },
+    });
+    const compaction = installCompaction({
+      agent,
+      record,
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize: async () => 'Summary that cannot be persisted.',
+    });
+    const failures: AssistantMessage[] = [];
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      // oxlint-disable-next-line no-await-in-loop -- Each refusal must clear before the next attempt.
+      await compaction.prepareTurn();
+      // oxlint-disable-next-line no-await-in-loop -- The failure marker is the observable result of that attempt.
+      const stream = await compaction.wrapStreamFn(dispatchedStream)(stubModel, normalizeContext({ messages }));
+      // oxlint-disable-next-line no-await-in-loop -- The stream result closes one refusal before the next attempt.
+      failures.push(await stream.result());
+    }
+
+    expect(failures.map((failure) => failure.errorMessage)).toEqual([
+      'durable compaction append rejected',
+      'durable compaction append rejected',
+      'durable compaction append rejected',
+    ]);
+    const diagnostics = JSON.stringify(failures.map((failure) => failure.diagnostics));
+    expect(diagnostics).toContain('SESSION_LOG_INTEGRITY');
+    expect(diagnostics).not.toContain('CIRCUIT_BREAKER_OPEN');
+    expect(diagnostics).toContain('"lane":"start_of_turn"');
+    expect(diagnostics).toContain('"tier":"summarization"');
+    expect(diagnostics).toContain('"tokensBefore":');
+    expect(diagnostics).toContain('"tokensAfter":');
+    expect(diagnostics).toContain('"evicted":');
+    expect(diagnostics).toContain('"summarizerUsage":null');
+  });
+
+  it('should open the circuit breaker after three completed summaries cannot restore headroom', async () => {
+    const messages = evictableHistory(8);
+    const appended: Array<Parameters<SessionRecord['append']>[0]> = [];
+    const agent = new Agent({
+      streamFn: dispatchedStream,
+      initialState: { model: stubModel, messages },
+    });
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages, async (event) => {
+        appended.push(event);
+      }),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize: async () => 'summary-too-large-'.repeat(3000),
+    });
+    const failures: AssistantMessage[] = [];
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      // oxlint-disable-next-line no-await-in-loop -- Each headroom verdict is one circuit-breaker strike.
+      await compaction.prepareTurn();
+      // oxlint-disable-next-line no-await-in-loop -- The stream exposes that attempt's coded failure.
+      const stream = await compaction.wrapStreamFn(dispatchedStream)(stubModel, normalizeContext({ messages }));
+      // oxlint-disable-next-line no-await-in-loop -- The terminal result must settle before the next strike.
+      failures.push(await stream.result());
+    }
+
+    expect(failures.map((failure) => failure.errorMessage)).toEqual([
+      undefined,
+      undefined,
+      'Repeated compaction could not restore provider headroom; start a new thread.',
+    ]);
+    expect(appended.filter((event) => event.type === 'history.compacted')).toHaveLength(2);
+    expect(
+      appended
+        .filter((event) => event.type === 'history.compacted')
+        .every((event) => event.details?.overBudget === true),
+    ).toBe(true);
+    expect(JSON.stringify(failures[2]?.diagnostics)).toContain('CIRCUIT_BREAKER_OPEN');
+    expect(JSON.stringify(failures.map((failure) => failure.diagnostics))).not.toContain('SUMMARY_REQUIRED');
+  });
+
+  /* L2a D15 (RA-S10): the strikes are a fold over the durable log, so three admissions — three sessions, three
+   * compaction installs — count as one chat, and the third over-budget summary opens the breaker. */
+  it('should open the breaker on the third over-budget summary across three admissions', async () => {
+    const messages = evictableHistory(8);
+    const durable: SessionLogEvent[] = [];
+    const failures: AssistantMessage[] = [];
+
+    for (let admission = 0; admission < 3; admission++) {
+      const agent = new Agent({ streamFn: dispatchedStream, initialState: { model: stubModel, messages } });
+      const compaction = installCompaction({
+        agent,
+        record: {
+          ...recordFor(messages, async (event) => {
+            durable.push(event);
+          }),
+          events: async () => durable as unknown as readonly AgentLogEvent[],
+        },
+        projectHistory: async () => messages,
+        contextWindow: 8192,
+        summarize: async () => 'summary-too-large-'.repeat(3000),
+      });
+      // oxlint-disable-next-line no-await-in-loop -- each admission reads what the one before it journaled.
+      await compaction.prepareTurn();
+      // oxlint-disable-next-line no-await-in-loop -- as above.
+      const stream = await compaction.wrapStreamFn(dispatchedStream)(stubModel, normalizeContext({ messages }));
+      // oxlint-disable-next-line no-await-in-loop -- as above.
+      failures.push(await stream.result());
+    }
+
+    expect(failures.map((failure) => failure.errorMessage)).toEqual([
+      undefined,
+      undefined,
+      'Repeated compaction could not restore provider headroom; start a new thread.',
+    ]);
+    expect(durable.filter((event) => event.type === 'history.compacted')).toHaveLength(2);
+  });
+
+  /* RA-S10 (L2a D15): the overhead a summary measured is the chat's, not the session's. A later admission reloads a
+   * summary newer than the retained assistant's usage; without the fold it estimates messages alone and sends a request
+   * the provider rejects. */
+  it('should keep the measured overhead across admissions until a later usage-bearing assistant', async () => {
+    const assistant = answeredTurn(7000, 6);
+    const first: AgentMessage[] = [
+      ...evictableHistory(6),
+      assistant,
+      { role: 'user', content: 'mirror it', timestamp: 7 },
+    ];
+    const durable: SessionLogEvent[] = [];
+    const firstCompaction = installCompaction({
+      agent: new Agent({ streamFn: dispatchedStream, initialState: { model: stubModel, messages: first } }),
+      record: {
+        ...recordFor(first, async (event) => {
+          durable.push(event);
+        }),
+        events: async () => durable as unknown as readonly AgentLogEvent[],
+      },
+      projectHistory: async () => first,
+      contextWindow: 8192,
+      summarize: async () => 'Earlier work.',
+    });
+    const compacted = await firstCompaction.prepareTurn();
+    const carried = compactionFoldOf(durable as unknown as readonly AgentLogEvent[]).anchor;
+    expect(carried).toMatchObject({ messageId: 'message-6', tokens: expect.any(Number) as unknown });
+
+    /* The next admission: a new session over the compacted history and a large new request, sized so the messages
+     * alone stay under the trigger (80 % of the window) and only the carried overhead puts the request over it. */
+    const retained = compacted.reduce((total, message) => total + estimateMessageTokens(message), 0);
+    const underTrigger = Math.floor(8192 * 0.8) - retained - 200;
+    const second: AgentMessage[] = [
+      ...compacted,
+      { role: 'user', content: 'y'.repeat(underTrigger * 4), timestamp: 8 },
+    ];
+    const identities = new MessageIdentities(() => 'unused');
+    for (const [index, message] of second.entries()) {
+      identities.set(message, message === assistant ? 'message-6' : `second-${String(index)}`);
+    }
+    const summarize = vi.fn(async () => 'Earlier work, again.');
+    const secondCompaction = installCompaction({
+      agent: new Agent({ streamFn: dispatchedStream, initialState: { model: stubModel, messages: second } }),
+      record: {
+        messages: identities,
+        append: async () => undefined,
+        events: async () => durable as unknown as readonly AgentLogEvent[],
+        rows: async () => durable as unknown as readonly AgentLogEvent[],
+        history: async () => second.map((message) => piMessageToProvider(message, identities)),
+      },
+      projectHistory: async () => second,
+      contextWindow: 8192,
+      summarize,
+    });
+
+    await secondCompaction.prepareTurn();
+
+    expect(summarize).toHaveBeenCalledTimes(1);
+    /* A later usage-bearing assistant re-measures the overhead itself. */
+    expect(
+      compactionFoldOf([
+        ...(durable as unknown as readonly AgentLogEvent[]),
+        {
+          type: 'message.appended',
+          message: { id: 'assistant-late', role: 'assistant', content: [], metadata: { usage: assistant.usage } },
+        } as unknown as AgentLogEvent,
+      ]).anchor,
+    ).toBeUndefined();
+  });
+
+  it('should fold strikes from the log and reset them on a healthy summary, a clearing or a refusal', () => {
+    const summary = (overBudget: boolean, kind: 'generated' | 'placeholder' = 'generated') =>
+      ({
+        type: 'history.compacted',
+        evictedMessageIds: [],
+        summary: { id: 's', role: 'user', content: 'summary' },
+        details: {
+          lane: 'start_of_turn',
+          tier: 'summarization',
+          tokensBefore: 1,
+          tokensAfter: 1,
+          cleared: 0,
+          evicted: 1,
+          summarizerAttempts: 1,
+          summarizerUsage: null,
+          summary: kind,
+          ...(overBudget ? { overBudget: true } : {}),
+        },
+      }) as const satisfies SessionLogEvent;
+    const refused = {
+      type: 'run.lifecycle',
+      state: 'failed',
+      detail: { code: 'NO_EVICTABLE_HISTORY', message: 'Nothing to evict.' },
+    } as const satisfies SessionLogEvent;
+
+    expect(compactionFoldOf([summary(true), summary(true)]).strikes).toBe(2);
+    expect(compactionFoldOf([summary(true), summary(false), summary(true)]).strikes).toBe(1);
+    expect(compactionFoldOf([summary(true), summary(true, 'placeholder')]).strikes).toBe(0);
+    expect(compactionFoldOf([summary(true), refused]).strikes).toBe(0);
+    expect(
+      compactionFoldOf([summary(true), { ...refused, detail: { code: 'CIRCUIT_BREAKER_OPEN', message: 'Open.' } }])
+        .strikes,
+    ).toBe(1);
+  });
+
+  it('should not count placeholder summaries as circuit-breaker strikes', async () => {
+    const messages: AgentMessage[] = [
+      ...evictableHistory(8),
+      { role: 'user', content: 'x'.repeat(22_800), timestamp: 100 },
+    ];
+    const agent = new Agent({
+      streamFn: dispatchedStream,
+      initialState: { model: stubModel, messages },
+    });
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize: async () => '',
+    });
+    const results: AssistantMessage[] = [];
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      // oxlint-disable-next-line no-await-in-loop -- Each placeholder refusal is one independent pass.
+      await compaction.prepareTurn();
+      // oxlint-disable-next-line no-await-in-loop -- The failure marker closes before the next pass.
+      const stream = await compaction.wrapStreamFn(dispatchedStream)(
+        stubModel,
+        normalizeContext({
+          messages: messages as Context['messages'],
+        }),
+      );
+      // oxlint-disable-next-line no-await-in-loop -- The stream result is the observable breaker verdict.
+      results.push(await stream.result());
+    }
+
+    expect(results.map((result) => result.errorMessage)).toEqual([undefined, undefined, undefined]);
+    expect(JSON.stringify(results.map((result) => result.diagnostics))).not.toContain('CIRCUIT_BREAKER_OPEN');
+  });
+
+  it('should timestamp a summary after its evicted prefix and before a future-dated retained tail', async () => {
+    const messages: UserMessage[] = Array.from({ length: 8 }, (_, index) => ({
+      role: 'user',
+      content: `${index}-${'x'.repeat(4000)}`,
+      timestamp: index === 7 ? 10_000 : index,
+    }));
+    const appended: Array<Parameters<SessionRecord['append']>[0]> = [];
+    const compaction = installCompaction({
+      agent: new Agent({
+        streamFn: () => createAssistantMessageEventStream(),
+        initialState: { model: stubModel, messages },
+      }),
+      record: recordFor(messages, async (event) => {
+        appended.push(event);
+      }),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize: async () => 'Earlier work.',
+      now: () => 100,
+    });
+
+    await compaction.prepareTurn();
+
+    const compacted = appended.find((event) => event.type === 'history.compacted');
+    expect(compacted?.type === 'history.compacted' ? compacted.summary.metadata?.timestamp : undefined).toBe(100);
+  });
+
+  it('should compact the durable projection when live state has no registered identities', async () => {
+    const durable: UserMessage[] = Array.from({ length: 8 }, (_, index) => ({
+      role: 'user',
+      content: String(index).repeat(4000),
+      timestamp: index,
+    }));
+    const live = durable.map((message) => ({ ...message }));
+    const append = vi.fn(async () => undefined);
+    const record = recordFor(durable, append);
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages: live },
+    });
+    const compaction = installCompaction({
+      agent,
+      record,
+      projectHistory: async () => durable,
+      contextWindow: 8192,
+      summarize: async () => 'durable summary',
+    });
+
+    const prepared = await compaction.prepareTurn();
+
+    expect(JSON.stringify(prepared)).toContain('<summary>');
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({ type: 'history.compacted' }));
+  });
+
+  it('should evict durable assistant, tool-input, and tool-output rows as one tier-2 group', async () => {
+    const file = createMemoryEventLogFile();
+    const seedLog = await file.open();
+    const base = (sequence: number) =>
+      ({
+        version: 1,
+        leaderEpoch: 'seed-epoch',
+        sequence,
+        recordedAt: '2026-09-01T00:00:00.000Z',
+        runId: 'seed-run',
+      }) as const;
+    const seedEvents: AgentLogEvent[] = [];
+    /* Twelve calls of about 620 tokens against an 8,192-token window: past the trigger, and a fifth of the window holds two. */
+    for (let index = 0; index < 12; index++) {
+      const callId = `call-${index}`;
+      seedEvents.push(
+        {
+          ...base(seedEvents.length),
+          type: 'message.appended',
+          message: {
+            id: `assistant-${index}`,
+            role: 'assistant',
+            content: [
+              {
+                type: 'toolCall',
+                id: callId,
+                name: 'edit_file',
+                arguments: { targetFile: 'main.ts', oldString: 'x'.repeat(2400), newString: `${index}` },
+              },
+            ],
+            metadata: { api: 'openai-responses', provider: 'stub', model: 'stub', stopReason: 'toolUse' },
+          },
+        },
+        {
+          ...base(seedEvents.length + 1),
+          type: 'message.appended',
+          message: {
+            id: `input-${index}`,
+            role: 'tool-input',
+            toolCallId: callId,
+            toolName: 'edit_file',
+            content: { targetFile: 'main.ts', oldString: 'x'.repeat(2400), newString: `${index}` },
+          },
+        },
+        {
+          ...base(seedEvents.length + 2),
+          type: 'message.appended',
+          message: {
+            id: `output-${index}`,
+            role: 'tool-output',
+            toolCallId: callId,
+            toolName: 'edit_file',
+            content: { changed: true },
+            isError: false,
+          },
+        },
+      );
+    }
+    for (const event of seedEvents) {
+      // oxlint-disable-next-line no-await-in-loop -- The fixture seeds one physical JSONL sequence.
+      await seedLog.append(event);
+    }
+    await seedLog.close();
+
+    const noTools: ToolRegistry = { list: () => [], invoke: async () => ({ content: null, isError: false }) };
+    let firstId = 0;
+    const first = await createAgentSession({
+      chatId: 'chat-tier-2',
+      runId: 'run-tier-2',
+      leaderEpoch: 'tier-2-epoch',
+      systemPrompt: 'system',
+      model: { id: 'stub', contextWindow: 8192 },
+      modelTransport: {
+        funding: { type: 'unfunded' },
+        async *stream(): AsyncGenerator<ModelStreamEvent> {
+          yield { type: 'text-delta', text: 'after compaction' };
+          yield { type: 'completed', stopReason: 'stop' };
+        },
+      },
+      toolRegistry: noTools,
+      eventLog: await file.open(),
+      summarize: async () => 'durable summary',
+      createId: () => `generated-${firstId++}`,
+      now: () => new Date('2026-09-01T00:00:00.000Z'),
+    });
+    await first.prompt({ id: 'turn-tier-2', role: 'user', content: 'continue' });
+    await first.close();
+
+    const inspect = await file.open();
+    const compactedEvents = await inspect.read();
+    const compacted = compactedEvents.find((event) => event.type === 'history.compacted');
+    if (compacted?.type !== 'history.compacted') {
+      throw new Error('Tier-two compaction did not persist its durable projection.');
+    }
+    expect(compacted.evictedMessageIds).toEqual(
+      Array.from({ length: 10 }, (_, index) => [`assistant-${index}`, `input-${index}`, `output-${index}`]).flat(),
+    );
+    expect(compacted.evictedMessageIds).not.toContain('input-11');
+    expect(reduceEventLog(compactedEvents).map((message) => message.id)).toEqual([
+      'generated-0',
+      'assistant-10',
+      'input-10',
+      'output-10',
+      'assistant-11',
+      'input-11',
+      'output-11',
+      'turn-tier-2',
+      'generated-1',
+    ]);
+    await inspect.close();
+
+    const requests: ModelStreamRequest[] = [];
+    const secondTransport: ModelTransport = {
+      funding: { type: 'unfunded' },
+      async *stream(request): AsyncGenerator<ModelStreamEvent> {
+        requests.push(request);
+        yield { type: 'completed', stopReason: 'stop' };
+      },
+    };
+    const second = await createAgentSession({
+      chatId: 'chat-tier-2',
+      runId: 'run-after-tier-2',
+      leaderEpoch: 'after-tier-2-epoch',
+      systemPrompt: 'system',
+      model: { id: 'stub', contextWindow: 200_000 },
+      modelTransport: secondTransport,
+      toolRegistry: noTools,
+      eventLog: await file.open(),
+      createId: () => 'after-tier-2-assistant',
+      now: () => new Date('2026-09-01T00:00:01.000Z'),
+    });
+    await second.prompt({ id: 'turn-after-tier-2', role: 'user', content: 'use compacted history' });
+
+    expect(requests[0]?.messages.map((message) => message.id)).toEqual([
+      'generated-0',
+      'assistant-10',
+      'input-10',
+      'output-10',
+      'assistant-11',
+      'input-11',
+      'output-11',
+      'turn-tier-2',
+      'generated-1',
+      'turn-after-tier-2',
+    ]);
+    expect(requests[0]?.messages.filter((message) => message.role === 'tool-input')).toEqual([
+      expect.objectContaining({ id: 'input-10', toolCallId: 'call-10', toolName: 'edit_file' }),
+      expect.objectContaining({ id: 'input-11', toolCallId: 'call-11', toolName: 'edit_file' }),
+    ]);
+    await second.close();
+  });
+
+  /*
+   * Required compaction fails closed on its *commit* leg too. A tier-two
+   * projection that cannot be recorded must stop the turn, not run it: the
+   * model would otherwise be prompted with a compacted history the durable log
+   * never learned about, and the next reader would replay a different turn.
+   */
+  it('should reach no provider dispatch when a tier-two persist cannot be recorded', async () => {
+    const file = createMemoryEventLogFile();
+    const seedLog = await file.open();
+    const base = (sequence: number) =>
+      ({
+        version: 1,
+        leaderEpoch: 'fail-closed-epoch',
+        sequence,
+        recordedAt: '2026-09-01T00:00:00.000Z',
+        runId: 'run-fail-closed',
+      }) as const;
+    const seedEvents: AgentLogEvent[] = [];
+    for (let index = 0; index < 6; index++) {
+      const callId = `call-${index}`;
+      seedEvents.push(
+        {
+          ...base(seedEvents.length),
+          type: 'message.appended',
+          message: {
+            id: `assistant-${index}`,
+            role: 'assistant',
+            content: [
+              {
+                type: 'toolCall',
+                id: callId,
+                name: 'edit_file',
+                arguments: { targetFile: 'main.ts', oldString: 'x'.repeat(8000), newString: `${index}` },
+              },
+            ],
+            metadata: { api: 'openai-responses', provider: 'stub', model: 'stub', stopReason: 'toolUse' },
+          },
+        },
+        {
+          ...base(seedEvents.length + 1),
+          type: 'message.appended',
+          message: {
+            id: `input-${index}`,
+            role: 'tool-input',
+            toolCallId: callId,
+            toolName: 'edit_file',
+            content: { targetFile: 'main.ts', oldString: 'x'.repeat(8000), newString: `${index}` },
+          },
+        },
+        {
+          ...base(seedEvents.length + 2),
+          type: 'message.appended',
+          message: {
+            id: `output-${index}`,
+            role: 'tool-output',
+            toolCallId: callId,
+            toolName: 'edit_file',
+            content: { changed: true },
+            isError: false,
+          },
+        },
+      );
+    }
+    for (const event of seedEvents) {
+      // oxlint-disable-next-line no-await-in-loop -- The fixture seeds one physical JSONL sequence.
+      await seedLog.append(event);
+    }
+    await seedLog.close();
+
+    const dispatched: ModelStreamRequest[] = [];
+    const opened = await file.open();
+    const session = await createAgentSession({
+      chatId: 'chat-fail-closed',
+      runId: 'run-fail-closed',
+      leaderEpoch: 'fail-closed-run-epoch',
+      systemPrompt: 'system',
+      model: { id: 'stub', contextWindow: 8192 },
+      modelTransport: {
+        funding: { type: 'unfunded' },
+        async *stream(request): AsyncGenerator<ModelStreamEvent> {
+          dispatched.push(request);
+          yield { type: 'completed', stopReason: 'stop' };
+        },
+      },
+      toolRegistry: { list: () => [], invoke: async () => ({ content: null, isError: false }) },
+      eventLog: {
+        ...opened,
+        append: async (event) => {
+          if (event.type === 'history.compacted') {
+            throw new Error('injected durable failure');
+          }
+          return opened.append(event);
+        },
+      },
+      summarize: async () => 'durable summary',
+      createId: () => 'fail-closed-id',
+      now: () => new Date('2026-09-01T00:00:00.000Z'),
+    });
+
+    await session.prompt({ id: 'turn-fail-closed', role: 'user', content: 'continue' });
+    expect(dispatched).toEqual([]);
+    expect(await session.snapshot()).toMatchObject({
+      state: 'failed',
+      failure: { code: 'SESSION_LOG_INTEGRITY', message: 'injected durable failure' },
+    });
+    await session.close();
+  });
+
+  it('should select compaction from the latest durable projection', async () => {
+    const original: UserMessage[] = Array.from({ length: 8 }, (_, index) => ({
+      role: 'user',
+      content: `A-${index}-${'x'.repeat(4000)}`,
+      timestamp: index,
+    }));
+    const replacement: UserMessage = { role: 'user', content: `B-${'x'.repeat(4000)}`, timestamp: 0 };
+    const changed = [replacement, ...original.slice(1)];
+    const append = vi.fn(async () => undefined);
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages: original },
+    });
+    const summarize = vi.fn(async ({ messages }: { readonly messages: readonly AgentMessage[] }) =>
+      JSON.stringify(messages[0]).includes('B-') ? 'summary B' : 'summary A',
+    );
+    installCompaction({
+      agent,
+      record: recordFor(changed, append),
+      projectHistory: async () => changed,
+      contextWindow: 8192,
+      summarize,
+    });
+    const prepare = agent.prepareNextTurn;
+    if (!prepare) {
+      throw new Error('Compaction did not install the durable pi seam.');
+    }
+    const prepared = await prepare();
+
+    expect(summarize).toHaveBeenCalled();
+    expect(summarize.mock.calls.every(([input]) => JSON.stringify(input.messages[0]).includes('B-'))).toBe(true);
+    expect(JSON.stringify(prepared?.context?.messages)).toContain('summary B');
+    expect(JSON.stringify(prepared?.context?.messages)).not.toContain('summary A');
+  });
+
+  it('should compose the prior turn-preparation hook before selecting and persisting compaction', async () => {
+    const messages: UserMessage[] = Array.from({ length: 8 }, (_, index) => ({
+      role: 'user',
+      content: `${index}-${'x'.repeat(4000)}`,
+      timestamp: index,
+    }));
+    const marker: UserMessage = {
+      role: 'user',
+      content: '<system-reminder>prior hook marker</system-reminder>',
+      timestamp: 99,
+    };
+    const durable = [marker, ...messages];
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    agent.prepareNextTurn = async () => ({
+      context: {
+        systemPrompt: agent.state.systemPrompt,
+        messages: [marker, ...agent.state.messages],
+        tools: agent.state.tools,
+      },
+    });
+    const append = vi.fn(async () => undefined);
+    installCompaction({
+      agent,
+      record: recordFor(durable, append),
+      projectHistory: async () => durable,
+      contextWindow: 8192,
+      summarize: async () => 'summary after prior hook',
+    });
+    const prepared = await agent.prepareNextTurn();
+    if (!prepared?.context) {
+      throw new Error('Compaction did not return the final prepared context.');
+    }
+
+    expect(JSON.stringify(prepared.context.messages)).toContain('prior hook marker');
+    expect(agent.state.messages).toEqual(prepared.context.messages);
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({ type: 'history.compacted' }));
+  });
+
+  /*
+   * RV5-F1 (W0.20): pi reads a successful reply whose input exceeds the window
+   * as overflow, and Tau passes its capped window, so a charged reply was
+   * dropped and the step charged again. Only a refused call is retried.
+   */
+  const cappedReplies: ReadonlyArray<readonly [string, 'stop' | 'length', AssistantMessage]> = [
+    ['a stop', 'stop', answeredTurn(9000, 1)],
+    ['an empty length stop', 'length', { ...answeredTurn(8192, 1), content: [], stopReason: 'length' }],
+  ];
+  it.each(cappedReplies)(
+    'should keep %s reply whose input exceeds the capped window and charge the step once',
+    async (_name, reason, reply) => {
+      const messages = evictableHistory(8);
+      const append = vi.fn<SessionRecord['append']>(async () => undefined);
+      const agent = new Agent({ streamFn: dispatchedStream, initialState: { model: stubModel, messages } });
+      const compaction = installCompaction({
+        agent,
+        record: recordFor(messages, append),
+        projectHistory: async () => messages,
+        contextWindow: 8192,
+        summarize: async () => 'emergency summary',
+      });
+      const base = vi.fn(() => {
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: 'start', partial: reply });
+        stream.push({ type: 'done', reason, message: reply });
+        return stream;
+      }) as unknown as Parameters<typeof compaction.wrapStreamFn>[0];
+
+      const stream = await compaction.wrapStreamFn(base)(
+        stubModel,
+        normalizeContext({ messages: messages as Context['messages'] }),
+      );
+
+      expect(await stream.result()).toBe(reply);
+      expect(base).toHaveBeenCalledTimes(1);
+      expect(append).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'history.compacted' }));
+    },
+  );
+
+  it('should persist an emergency overflow projection before retrying the model', async () => {
+    const messages: UserMessage[] = Array.from({ length: 8 }, (_, index) => ({
+      role: 'user',
+      content: `${index}-${'x'.repeat(4000)}`,
+      timestamp: index,
+    }));
+    const appended: Array<Parameters<SessionRecord['append']>[0]> = [];
+    const append: SessionRecord['append'] = async (event) => {
+      appended.push(event);
+    };
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages, append),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize: async () => 'emergency summary',
+    });
+    let calls = 0;
+    const base = vi.fn(() => {
+      calls++;
+      const stream = createAssistantMessageEventStream();
+      // The provider refuses the first call (pi's error case); only a refused call is sent again.
+      const stopReason: 'error' | 'stop' = calls === 1 ? 'error' : 'stop';
+      const message: AssistantMessage = {
+        role: 'assistant',
+        content: [],
+        api: stubModel.api,
+        provider: stubModel.provider,
+        model: stubModel.id,
+        usage: {
+          input: calls === 1 ? 8192 : 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: calls === 1 ? 8192 : 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason,
+        ...(calls === 1 ? { errorMessage: 'prompt is too long: provider overflow response body' } : {}),
+        timestamp: 0,
+      };
+      stream.push({ type: 'start', partial: message });
+      stream.push(
+        stopReason === 'error'
+          ? { type: 'error', reason: stopReason, error: message }
+          : { type: 'done', reason: stopReason, message },
+      );
+      return stream;
+    });
+
+    const stream = await compaction.wrapStreamFn(base)(stubModel, normalizeContext({ messages }));
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe('stop');
+    expect(base).toHaveBeenCalledTimes(2);
+    const compacted = appended.find((event) => event.type === 'history.compacted');
+    expect(compacted?.type === 'history.compacted' ? compacted.details : undefined).toMatchObject({
+      lane: 'overflow',
+      tier: 'summarization',
+      discardedOverflowError: 'prompt is too long: provider overflow response body',
+    });
+  });
+
+  it('should refuse one overflow lane without resummarizing a maximal compaction', async () => {
+    const messages = evictableHistory(8);
+    let projected: AgentMessage[] = messages;
+    const summarize = vi.fn(async () => 'summary-too-large-'.repeat(3000));
+    const agent = new Agent({
+      streamFn: dispatchedStream,
+      initialState: { model: stubModel, messages },
+    });
+    const record = recordFor(messages);
+    const compaction = installCompaction({
+      agent,
+      record: {
+        ...record,
+        append: async (event) => {
+          if (event.type === 'history.compacted') {
+            const evicted = new Set(event.evictedMessageIds);
+            const summary = providerMessageToPi(event.summary, stubModel, record.messages);
+            if (!summary) {
+              throw new Error('Compaction summary did not hydrate.');
+            }
+            projected = [summary, ...projected.filter((message) => !evicted.has(record.messages.id(message)))];
+          }
+        },
+      },
+      projectHistory: async () => projected,
+      contextWindow: 8192,
+      summarize,
+    });
+    const firstPrepared = await compaction.prepareTurn();
+    expect(JSON.stringify(firstPrepared)).toContain('<summary>');
+    const attemptsAfterMaximalCompaction = summarize.mock.calls.length;
+
+    const overflow = vi.fn(() => {
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = {
+        ...answeredTurn(8192, 101),
+        stopReason: 'error',
+        errorMessage: 'prompt is too long',
+      };
+      stream.push({ type: 'start', partial: message });
+      stream.push({ type: 'error', reason: 'error', error: message });
+      return stream;
+    }) as unknown as Parameters<typeof compaction.wrapStreamFn>[0];
+    const stream = await compaction.wrapStreamFn(overflow)(
+      stubModel,
+      normalizeContext({
+        messages: firstPrepared as Context['messages'],
+      }),
+    );
+    const result = await stream.result();
+
+    expect(result.errorMessage).toBe('Context is oversized but has no safe history to evict or clear.');
+    expect(JSON.stringify(result.diagnostics)).toContain('NO_EVICTABLE_HISTORY');
+    expect(summarize).toHaveBeenCalledTimes(attemptsAfterMaximalCompaction);
+    expect(overflow).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+   * A chat whose whole history is one oversized turn has no earlier turn to
+   * evict, so rolling pi's cut back to the turn start leaves an empty prefix
+   * and the turn was refused. Summarise the turn's head instead — pi's
+   * `prepareCompaction` splits a turn the same way — and keep every retained
+   * tool result paired with the call that produced it.
+   */
+  it('should evict the head of a single oversized turn instead of refusing', async () => {
+    const messages: AgentMessage[] = [{ role: 'user', content: 'model the bracket', timestamp: 0 }];
+    for (let index = 0; index < 6; index++) {
+      messages.push(
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'toolCall',
+              id: `call-${index}`,
+              name: 'edit_file',
+              arguments: { targetFile: 'main.ts', oldString: 'x'.repeat(2800), newString: String(index) },
+            },
+          ],
+          api: stubModel.api,
+          provider: stubModel.provider,
+          model: stubModel.id,
+          usage: {
+            input: 1400 * (index + 1),
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 1400 * (index + 1),
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'toolUse',
+          timestamp: index * 2 + 1,
+        },
+        {
+          role: 'toolResult',
+          toolCallId: `call-${index}`,
+          toolName: 'edit_file',
+          content: [{ type: 'text', text: 'y'.repeat(1600) }],
+          isError: false,
+          timestamp: index * 2 + 2,
+        },
+      );
+    }
+    messages.push({
+      role: 'user',
+      content: '<system-reminder>synthetic context</system-reminder>',
+      timestamp: 99,
+    });
+    const agent = new Agent({
+      streamFn: () => createAssistantMessageEventStream(),
+      initialState: { model: stubModel, messages },
+    });
+    const outcomes: CompactionOutcome[] = [];
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(messages),
+      projectHistory: async () => messages,
+      contextWindow: 8192,
+      summarize: async () => 'Head of the oversized turn.',
+      onCompaction: (outcome) => outcomes.push(outcome),
+    });
+
+    const prepared = await compaction.prepareTurn();
+
+    expect(outcomes[0]?.tier).toBe('summarization');
+    expect(outcomes[0]?.evicted).toBeGreaterThan(0);
+    expect(prepared[0]).toBe(messages[0]);
+    expect(JSON.stringify(prepared[1])).toContain('<summary>');
+    expect(JSON.stringify(prepared)).toContain('synthetic context');
+    const keptCallIds = new Set(
+      prepared.flatMap((message) =>
+        message.role === 'assistant'
+          ? message.content.flatMap((block) => (block.type === 'toolCall' ? [block.id] : []))
+          : [],
+      ),
+    );
+    expect(
+      prepared.filter((message) => message.role === 'toolResult').map((message) => message.toolCallId),
+    ).not.toEqual([]);
+    for (const message of prepared) {
+      if (message.role === 'toolResult') {
+        expect(keptCallIds).toContain(message.toolCallId);
+      }
+    }
+  });
+
+  /*
+   * Provider usage measures the request that produced it, so a retained
+   * assistant keeps reporting the context the provider saw *before* the
+   * eviction. Reusing that number verbatim made every post-summary check see a
+   * context that no longer exists: the strike counter landed on 2 after one
+   * successful summarization and the same turn's ephemeral lane opened the
+   * circuit breaker. All three live compaction rows of the provider-switch
+   * suite died this way.
+   */
+  it('should summarize once and reach the provider when the retained tail carries provider usage', async () => {
+    const history: AgentMessage[] = [
+      ...evictableHistory(6),
+      answeredTurn(7000, 6),
+      { role: 'user', content: 'now mirror the bracket', timestamp: 7 },
+    ];
+    const agent = new Agent({
+      streamFn: dispatchedStream,
+      initialState: { model: stubModel, messages: history },
+    });
+    const summarize = vi.fn(async () => 'Earlier work.');
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(history),
+      projectHistory: async () => history,
+      contextWindow: 8192,
+      summarize,
+    });
+    const base = vi.fn(dispatchedStream) as unknown as Parameters<typeof compaction.wrapStreamFn>[0];
+
+    const prepared = await compaction.prepareTurn();
+    const stream = await compaction.wrapStreamFn(base)(
+      stubModel,
+      normalizeContext({ messages: prepared as Context['messages'] }),
+    );
+    const result = await stream.result();
+
+    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(prepared)).toContain('<summary>');
+    expect(result.errorMessage).toBeUndefined();
+    expect(base).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ stopReason: 'stop' });
+  });
+
+  it('should clear tool results at tier one when the retained tail carries provider usage', async () => {
+    const history: AgentMessage[] = [
+      ...Array.from(
+        { length: 7 },
+        (_, index): AgentMessage => ({
+          role: 'toolResult',
+          toolCallId: `call-${index}`,
+          toolName: 'read_file',
+          content: [{ type: 'text', text: index < 2 ? 'x'.repeat(8000) : `small-${index}` }],
+          isError: false,
+          timestamp: index,
+        }),
+      ),
+      answeredTurn(7000, 7),
+    ];
+    const agent = new Agent({
+      streamFn: dispatchedStream,
+      initialState: { model: stubModel, messages: history },
+    });
+    const summarize = vi.fn(async () => 'summary should not be needed');
+    const outcome = vi.fn();
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(history),
+      projectHistory: async () => history,
+      contextWindow: 8192,
+      summarize,
+      onCompaction: outcome,
+    });
+
+    await compaction.prepareTurn();
+
+    expect(outcome).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'tool_result_clearing', cleared: 2, evicted: 0 }),
+    );
+    expect(summarize).not.toHaveBeenCalled();
+  });
+
+  it('should take a turn on a session reloaded from a log that already holds its summary', async () => {
+    const identities = new MessageIdentities(() => 'unused');
+    const durable: Array<UserProviderMessage | AssistantProviderMessage> = [
+      {
+        id: 'summary-1',
+        role: 'user',
+        content: '<summary>\nEarlier work.\n</summary>',
+        metadata: { timestamp: 20 },
+      },
+      {
+        id: 'assistant-9',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Done.' }],
+        metadata: {
+          api: stubModel.api,
+          provider: stubModel.provider,
+          model: stubModel.id,
+          stopReason: 'stop',
+          usage: providerUsage(7000),
+          timestamp: 10,
+        },
+      },
+      { id: 'user-10', role: 'user', content: 'keep going', metadata: { timestamp: 21 } },
+    ];
+    const reloaded = durable.map((message) => providerMessageToPi(message, stubModel, identities));
+    const agent = new Agent({
+      streamFn: dispatchedStream,
+      initialState: { model: stubModel, messages: reloaded },
+    });
+    const summarize = vi.fn(async () => 'summary should not be needed');
+    const compaction = installCompaction({
+      agent,
+      record: {
+        messages: identities,
+        append: async () => undefined,
+        events: async () => [],
+        rows: async () => [],
+        history: async () => durable,
+      },
+      projectHistory: async () => reloaded,
+      contextWindow: 8192,
+      summarize,
+    });
+    const base = vi.fn(dispatchedStream) as unknown as Parameters<typeof compaction.wrapStreamFn>[0];
+
+    const prepared = await compaction.prepareTurn();
+    const stream = await compaction.wrapStreamFn(base)(
+      stubModel,
+      normalizeContext({ messages: prepared as Context['messages'] }),
+    );
+    const result = await stream.result();
+
+    expect(summarize).not.toHaveBeenCalled();
+    expect(prepared).toEqual(reloaded);
+    expect(base).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ stopReason: 'stop' });
+  });
+
+  it('should escalate the cut within the same pass without pre-arming the circuit breaker', async () => {
+    const history: AgentMessage[] = [
+      ...evictableHistory(2),
+      answeredTurn(9000, 2),
+      { role: 'user', content: 'keep going', timestamp: 3 },
+    ];
+    const agent = new Agent({
+      streamFn: dispatchedStream,
+      initialState: { model: stubModel, messages: history },
+    });
+    const summarize = vi.fn(async () => 'Earlier work.');
+    const compaction = installCompaction({
+      agent,
+      record: recordFor(history),
+      projectHistory: async () => history,
+      contextWindow: 8192,
+      summarize,
+    });
+    const base = vi.fn(dispatchedStream) as unknown as Parameters<typeof compaction.wrapStreamFn>[0];
+
+    const prepared = await compaction.prepareTurn();
+    const stream = await compaction.wrapStreamFn(base)(
+      stubModel,
+      normalizeContext({ messages: prepared as Context['messages'] }),
+    );
+    const result = await stream.result();
+
+    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(base).toHaveBeenCalledTimes(1);
+    expect(result.errorMessage).toBeUndefined();
+    expect(result).toMatchObject({ stopReason: 'stop' });
+  });
+});

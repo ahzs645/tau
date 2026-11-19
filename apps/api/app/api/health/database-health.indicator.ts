@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { HealthIndicatorService } from '@nestjs/terminus';
 import type { HealthIndicatorResult } from '@nestjs/terminus';
 import { sql } from 'drizzle-orm';
-import { DatabaseService } from '#database/database.service.js';
+import { DatabaseService } from '@taucad/api-database';
 
 @Injectable()
 export class DatabaseHealthIndicator {
@@ -26,7 +26,10 @@ export class DatabaseHealthIndicator {
 
       return indicator.up({ responseTimeMs });
     } catch (error) {
-      return indicator.down({ message: error instanceof Error ? error.message : String(error) });
+      return indicator.down({
+        responseTimeMs: Math.round(performance.now() - start),
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

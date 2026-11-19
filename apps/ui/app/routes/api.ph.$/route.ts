@@ -27,8 +27,14 @@ const extractHostname = (host: string): string => {
   return host;
 };
 
-const posthogProxy = async (request: Request): Promise<Response> => {
+export const posthogProxy = async (request: Request): Promise<Response> => {
+  if (request.headers.get('Sec-GPC') === '1') {
+    return new Response(null, { status: 204 });
+  }
+
   const environment = await getEnvironment();
+  // `request.url`, not the `url` argument: a resource route is requested directly, never as `.data`, and its path and
+  // query are forwarded exactly as sent (B4).
   const url = new URL(request.url);
   const rawHost = url.pathname.startsWith('/api/ph/static/')
     ? environment.POSTHOG_ASSET_HOST
@@ -43,21 +49,55 @@ const posthogProxy = async (request: Request): Promise<Response> => {
   // Remove the expected `/api/ph` prefix to forward to PostHog's root path
   newUrl.pathname = newUrl.pathname.replace(/^\/api\/ph/, '');
 
-  const headers = new Headers(request.headers);
-  headers.set('host', hostname);
-  headers.delete('accept-encoding');
+  const headers = new Headers();
+  for (const name of ['accept', 'content-type']) {
+    const value = request.headers.get(name);
+    if (value !== null) {
+      headers.set(name, value);
+    }
+  }
+
+  const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+  // PostHog's browser SDK gzips capture payloads and labels them `text/plain`. Something on the hosted path
+  // decodes a textual body as text and re-encodes it, which destroys those bytes: PostHog then
+  // answers `invalid GZIP data`, so every capture is dropped. A body declared as binary survives,
+  // so forward a gzip payload under its true type. Buffering also removes the streamed `duplex`
+  // body, which the same path handles less predictably than a known-length one.
+  const body = hasBody ? new Uint8Array(await request.arrayBuffer()) : null;
+  if (body !== null && body.length > 1 && body[0] === 0x1f && body[1] === 0x8b) {
+    headers.set('content-type', 'application/octet-stream');
+  }
 
   const response = await fetch(newUrl, {
     method: request.method,
     headers,
-    body: request.body,
-    // @ts-expect-error - duplex is required for streaming request bodies
-    duplex: 'half',
+    body,
   });
 
   const responseHeaders = new Headers(response.headers);
-  responseHeaders.delete('content-encoding');
-  responseHeaders.delete('content-length');
+  // RFC 9110 §7.6.1: fields nominated by Connection are hop-by-hop and must not be forwarded.
+  const nominated = (response.headers.get('connection') ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => /^[!#$%&'*+.^_`|~\dA-Za-z-]+$/u.test(name));
+  for (const name of [
+    ...nominated,
+    'connection',
+    'content-encoding',
+    'content-length',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'proxy-connection',
+    'set-cookie',
+    'set-cookie2',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  ]) {
+    responseHeaders.delete(name);
+  }
 
   // Null body statuses (204, 205, 304) cannot have a response body per HTTP spec
   const nullBodyStatuses = [204, 205, 304];

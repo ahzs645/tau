@@ -1,35 +1,35 @@
 /* eslint-disable @typescript-eslint/naming-convention -- snake_case is expected for webmanifest */
-import type { WebAppManifest } from '@remix-pwa/dev';
-import type { LinkDescriptor, LoaderFunctionArgs } from 'react-router';
+import type { WebAppManifest } from 'web-app-manifest';
+import type { LoaderFunction } from 'react-router';
 import { metaConfig } from '#constants/meta.constants.js';
+import { appStartUrl } from '#lib/route-classes.js';
 
-export const webManifestHref = '/manifest.webmanifest';
-export const webManifestLinks: LinkDescriptor[] = [{ rel: 'manifest', href: webManifestHref }];
-
-export function loader({ request }: LoaderFunctionArgs): Response {
-  const publicBasePath = getPublicBasePath(request.url);
-
+export const loader: LoaderFunction = () => {
   return Response.json(
     {
       short_name: metaConfig.name,
       name: metaConfig.name,
       description: metaConfig.description,
       orientation: 'portrait',
-      start_url: publicBasePath === '' ? '/' : `${publicBasePath}/`,
+      /* The app's Home, whatever the visitor's `tau-entry` preference: `/` alone opens marketing without it. The
+       * service worker answers it from the Home shell, so an installed app launches offline (PL7). */
+      start_url: appStartUrl,
+      // A stable identity, so a later change of `start_url` updates the installed app instead of making another.
+      id: '/',
+      scope: '/',
       display: 'standalone',
       // @see https://developer.mozilla.org/en-US/docs/Web/Manifest/Reference/display_override
-      // @ts-expect-error - fullscreen and minimal-ui are available in types, but are legitimate values
       display_override: ['fullscreen', 'minimal-ui'],
       background_color: '#ffffff',
       theme_color: '#ffffff',
       icons: [
         {
-          src: `${publicBasePath}/android-chrome-192x192.png`,
+          src: '/android-chrome-192x192.png',
           sizes: '192x192',
           type: 'image/png',
         },
         {
-          src: `${publicBasePath}/android-chrome-512x512.png`,
+          src: '/android-chrome-512x512.png',
           sizes: '512x512',
           type: 'image/png',
         },
@@ -42,10 +42,4 @@ export function loader({ request }: LoaderFunctionArgs): Response {
       },
     },
   );
-}
-
-function getPublicBasePath(requestUrl: string): string {
-  const { pathname } = new URL(requestUrl);
-  const suffix = '/manifest.webmanifest';
-  return pathname.endsWith(suffix) ? pathname.slice(0, -suffix.length) : '';
-}
+};

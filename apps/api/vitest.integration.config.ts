@@ -3,11 +3,14 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { config } from 'dotenv';
 import { defineConfig } from 'vitest/config';
-import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 config({ path: path.resolve(__dirname, '.env') });
+// Live provider credentials remain authoritative when present; the tracked
+// test environment fills only missing values so hermetic integration targets
+// also boot from a clean checkout.
+config({ path: path.resolve(__dirname, '.env.test') });
 
 // Forward every value loaded from `.env` (and any inherited from the shell)
 // into the test worker. Vitest 4 isolates `test.env` and does NOT inherit
@@ -23,7 +26,6 @@ for (const [key, value] of Object.entries(process.env)) {
 export default defineConfig({
   root: __dirname,
   cacheDir: '../../node_modules/.vite/apps/api-integration',
-  plugins: [nxViteTsPaths()],
   test: {
     environment: 'node',
     include: ['app/testing/**/*.test.ts'],

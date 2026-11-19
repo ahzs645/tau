@@ -3,42 +3,271 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/api-extractor",
   "projectType": "library",
-  "tags": ["scope:shared", "type:lib"],
+  "tags": ["scope:shared", "type:tool"],
+  "implicitDependencies": [
+    "workbench",
+    "kinematics",
+    "spatial",
+    "geometry-core",
+    "types",
+    "replicad",
+    "jscad",
+    "manifold",
+    "opencascade",
+    "build123d",
+    "picogk",
+    "picovoxel",
+    "smlib",
+    "smlibpy",
+    "openrscad",
+    "zoo",
+    "tscircuit"
+  ],
   "targets": {
     "extract-replicad": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tsx src/extract-replicad-api.ts",
         "cwd": "libs/api-extractor"
-      }
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/extract-replicad-api.ts",
+        "{workspaceRoot}/node_modules/replicad/dist/replicad.d.ts",
+        "sharedGlobals",
+        "{workspaceRoot}/packages/plugins/replicad/src/model.ts",
+        "{workspaceRoot}/packages/plugins/replicad/src/annotations/interface-declarations.ts",
+        "{workspaceRoot}/packages/core/geometry/src/utils/glb-material.ts",
+        "{workspaceRoot}/libs/types/src/types/json-value.types.ts",
+        "{workspaceRoot}/pnpm-lock.yaml"
+      ],
+      "outputs": ["{projectRoot}/src/generated/replicad"]
     },
     "extract-jscad": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tsx src/extract-jscad-types.ts",
         "cwd": "libs/api-extractor"
-      }
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/extract-jscad-types.ts",
+        "{workspaceRoot}/node_modules/@jscad/modeling/src/**/*",
+        "sharedGlobals"
+      ],
+      "outputs": ["{projectRoot}/src/generated/jscad"]
+    },
+    "extract-geospec": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/extract-geospec-types.ts",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": true,
+      "inputs": ["{projectRoot}/src/extract-geospec-types.ts", "{workspaceRoot}/pnpm-lock.yaml", "sharedGlobals"],
+      "outputs": ["{projectRoot}/src/generated/geospec"]
+    },
+    "extract-kinematics": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/extract-kinematics-types.ts",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/extract-kinematics-types.ts",
+        "{projectRoot}/src/emit-package-declarations.ts",
+        "{workspaceRoot}/packages/kinematics/src/types.ts",
+        "{workspaceRoot}/packages/spatial/src/**/*",
+        "sharedGlobals"
+      ],
+      "outputs": ["{projectRoot}/src/generated/kinematics"]
     },
     "extract-kcl": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tsx src/extract-kcl-api.ts",
         "cwd": "libs/api-extractor"
-      }
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/extract-kcl-api.ts",
+        "{workspaceRoot}/repos/zoo-modeling-app/docs/kcl-std/kcl-stdlib-export.json",
+        "sharedGlobals"
+      ],
+      "outputs": ["{projectRoot}/src/generated/kcl"]
     },
     "extract-manifold": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tsx src/extract-manifold-types.ts",
         "cwd": "libs/api-extractor"
-      }
+      },
+      "cache": true,
+      "inputs": ["{projectRoot}/src/extract-manifold-types.ts", "{workspaceRoot}/pnpm-lock.yaml", "sharedGlobals"],
+      "outputs": ["{projectRoot}/src/generated/manifold"]
     },
     "extract-opencascade": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tsx src/extract-opencascade-types.ts",
         "cwd": "libs/api-extractor"
-      }
+      },
+      "cache": true,
+      "inputs": ["{projectRoot}/src/extract-opencascade-types.ts", "{workspaceRoot}/pnpm-lock.yaml", "sharedGlobals"],
+      "outputs": ["{projectRoot}/src/generated/opencascade"]
+    },
+    "extract-picovoxel": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/extract-picovoxel-types.ts",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/extract-picovoxel-types.ts",
+        "{workspaceRoot}/packages/plugins/picovoxel/src/model.ts",
+        "{workspaceRoot}/packages/core/geometry/src/utils/glb-material.ts",
+        "{workspaceRoot}/libs/types/src/types/json-value.types.ts",
+        "{workspaceRoot}/pnpm-lock.yaml",
+        "sharedGlobals"
+      ],
+      "outputs": ["{projectRoot}/src/generated/picovoxel"]
+    },
+    "extract-smlib": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/extract-smlib-types.ts",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/extract-smlib-types.ts",
+        "{workspaceRoot}/packages/plugins/smlib/src/model.ts",
+        "{workspaceRoot}/packages/core/geometry/src/utils/glb-material.ts",
+        "{workspaceRoot}/libs/types/src/types/json-value.types.ts",
+        "{workspaceRoot}/pnpm-lock.yaml",
+        "sharedGlobals"
+      ],
+      "outputs": ["{projectRoot}/src/generated/smlib"]
+    },
+    "collect-usage": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/usage/collect-usage.ts",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": false
+    },
+    "extract-tscircuit": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/extract-tscircuit-types.ts",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/extract-tscircuit-types.ts",
+        "{projectRoot}/src/languages/typescript/extract.ts",
+        "{projectRoot}/src/languages/typescript/tscircuit.ts",
+        "{projectRoot}/src/languages/typescript/tscircuit-declarations.ts",
+        "{workspaceRoot}/pnpm-lock.yaml",
+        "sharedGlobals"
+      ],
+      "outputs": ["{projectRoot}/src/generated/tscircuit"]
+    },
+    "generate-bundles": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/bundle/generate.ts",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/bundle/**/*.ts",
+        "{projectRoot}/src/languages/**/*.ts",
+        "{projectRoot}/src/model/**/*.ts",
+        "{projectRoot}/src/render/**/*.ts",
+        "{projectRoot}/src/generated/**/*",
+        "{workspaceRoot}/packages/plugins/*/agent/*.md",
+        "{workspaceRoot}/packages/workbench/agent/doctrine.md",
+        "{workspaceRoot}/packages/plugins/*/package.json",
+        "{workspaceRoot}/packages/workbench/package.json",
+        "{workspaceRoot}/pnpm-lock.yaml",
+        "sharedGlobals"
+      ],
+      "outputs": [
+        "{workspaceRoot}/packages/plugins/build123d/agent/cad-build123d",
+        "{workspaceRoot}/packages/plugins/jscad/agent/cad-jscad",
+        "{workspaceRoot}/packages/plugins/manifold/agent/cad-manifold",
+        "{workspaceRoot}/packages/plugins/opencascade/agent/cad-opencascadejs",
+        "{workspaceRoot}/packages/plugins/openrscad/agent/cad-openscad",
+        "{workspaceRoot}/packages/plugins/picogk/agent/cad-picogk",
+        "{workspaceRoot}/packages/plugins/picovoxel/agent/cad-picovoxel",
+        "{workspaceRoot}/packages/plugins/replicad/agent/cad-replicad",
+        "{workspaceRoot}/packages/plugins/smlib/agent/cad-smlib",
+        "{workspaceRoot}/packages/plugins/smlibpy/agent/cad-smlibpy",
+        "{workspaceRoot}/packages/plugins/zoo/agent/cad-zoo",
+        "{workspaceRoot}/packages/plugins/tscircuit/agent/cad-tscircuit",
+        "{workspaceRoot}/packages/workbench/agent/workbench",
+        "{workspaceRoot}/packages/workbench/agent/resources.js",
+        "{workspaceRoot}/packages/workbench/agent/resources.d.ts",
+        "{workspaceRoot}/packages/workbench/agent/skills.json",
+        "{workspaceRoot}/packages/workbench/agent/skills.d.cts",
+        "{workspaceRoot}/packages/plugins/*/agent/resources.js",
+        "{workspaceRoot}/packages/plugins/*/agent/resources.d.ts",
+        "{workspaceRoot}/packages/plugins/*/agent/skills.json",
+        "{workspaceRoot}/packages/plugins/*/agent/skills.d.cts"
+      ]
+    },
+    "extract-build123d": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["desktop"],
+          "target": "prepare-build123d-python"
+        }
+      ],
+      "options": {
+        "command": "tsx src/languages/python/extract-python-api.ts build123d",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/languages/python/**/*",
+        "{projectRoot}/src/model/**/*",
+        "{workspaceRoot}/packages/plugins/build123d/python/requirements.lock",
+        "{workspaceRoot}/apps/desktop/resources/python/manifest.json",
+        "sharedGlobals"
+      ],
+      "outputs": ["{projectRoot}/src/generated/build123d"]
+    },
+    "extract-smlibpy": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/languages/python/extract-python-api.ts smlibpy",
+        "cwd": "libs/api-extractor"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/languages/python/**/*",
+        "{projectRoot}/src/model/**/*",
+        "{workspaceRoot}/packages/plugins/smlibpy/python/requirements.lock",
+        { "env": "TAU_PYTHON_API_EXECUTABLE" },
+        "sharedGlobals"
+      ],
+      "outputs": ["{projectRoot}/src/generated/smlibpy"]
+    },
+    "test": {
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/packages/plugins/*/agent/**/*.md",
+        "{workspaceRoot}/packages/workbench/agent/**/*.md",
+        "{workspaceRoot}/pnpm-lock.yaml",
+        "{workspaceRoot}/packages/plugins/*/package.json",
+        "{workspaceRoot}/libs/tau-examples/src/kernels/replicad/copper-lampshade/main.ts"
+      ]
     }
   }
 }

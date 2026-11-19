@@ -1,0 +1,31 @@
+/* oxlint-disable new-cap -- NestJS decorators are factories */
+import { Module } from '@nestjs/common';
+import { DatabaseModule } from '@taucad/api-database';
+import { EmailDeliverabilityModule, EmailModule } from '@taucad/api-email';
+import { PublicationsModule } from '#api/publications/publications.module.js';
+import {
+  CollaboratorsController,
+  InvitationsController,
+} from '@taucad/api-projects/collaboration/collaboration.controller';
+import { ProjectAccessModule } from '@taucad/api-projects/collaboration/project-access.module';
+import { ProjectInviteEmailService } from '@taucad/api-projects/collaboration/project-invite-email.service';
+
+/**
+ * Collaboration on a project (D27).
+ *
+ * `ProjectAccessModule` is re-exported because its service is the *single*
+ * authority on project access: the projects routes and the git service ask it
+ * rather than comparing `owner_id` themselves. It is a module of its own so
+ * `GitModule` can import it without the cycle `PublicationsModule` would close.
+ * `PublicationsModule` is imported
+ * for the API's one daily-budget rate limiter, the same way `ProjectsModule`
+ * imports it. One direction only; nothing in publications reads this module.
+ * The email modules send the invitation itself (stable cloud link blueprint D6).
+ */
+@Module({
+  imports: [DatabaseModule, EmailModule, EmailDeliverabilityModule, PublicationsModule, ProjectAccessModule],
+  controllers: [CollaboratorsController, InvitationsController],
+  providers: [ProjectInviteEmailService],
+  exports: [ProjectAccessModule],
+})
+export class CollaborationModule {}

@@ -1,16 +1,13 @@
 import { defineConfig } from 'vitest/config';
-import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 export default defineConfig({
-  plugins: [nxViteTsPaths()],
   test: {
     environment: 'node',
     passWithNoTests: true,
     /*
-     * The dist-smoke test spawns the built CLI against the real birdhouse
-     * fixture; the cold path includes WASM init for the replicad kernel.
-     * 60s gives plenty of headroom on slow CI runners while keeping the
-     * default short for the rest of the suite.
+     * A few unit suites (cold start, serve) spawn the built CLI; the cold path
+     * includes WASM init. 60s gives plenty of headroom on slow CI runners. The
+     * end-to-end suites live in `apps/cli-e2e`.
      */
     testTimeout: 60_000,
     typecheck: {
@@ -19,10 +16,11 @@ export default defineConfig({
       tsconfig: './tsconfig.spec.json',
       ignoreSourceErrors: true,
     },
-    reporters: ['verbose'],
+    // On GitHub Actions a failure also becomes a check-run annotation, readable without the job log.
+    reporters: process.env['GITHUB_ACTIONS'] === 'true' ? ['verbose', 'github-actions'] : ['verbose'],
     coverage: {
       provider: 'v8',
-      reportsDirectory: '../../coverage/packages/cli',
+      reportsDirectory: '../../out/reports/coverage/packages/cli',
       include: ['src/**/*'],
       exclude: ['src/**/*.{test,spec,test-d}.ts', 'src/cli-dist.test.ts'],
       thresholds: {

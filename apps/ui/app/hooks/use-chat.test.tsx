@@ -1,33 +1,44 @@
 // @vitest-environment jsdom
 /* eslint-disable @typescript-eslint/naming-convention -- mock for AI SDK's Chat class uses the SDK's own `~`-prefixed subscriber method names verbatim so the mock surface matches the real one. */
 /* eslint-disable @typescript-eslint/explicit-member-accessibility -- mock class constructor omits the `public` keyword to mirror the AI SDK's published shape. */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadChatSdk } from '#services/chat-sdk-loader.js';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { MyUIMessage } from '@taucad/chat';
 import type { ChatError } from '@taucad/types';
 import { resolveKernel } from '@taucad/types/constants';
+import { createActor } from 'xstate';
+import { mock } from 'vitest-mock-extended';
+import { KeyedMutex } from '@taucad/utils/keyed-mutex';
+import type * as ChatMessageQueueModule from '@taucad/chat-ui/db/chat-message-queue-store';
+import type { AgentHostClient } from '#services/agent-host-client.js';
+import { projectSessionMachine } from '#machines/project-session.machine.js';
+import { lifecycleRow, publishLogRows, runningRows, writerOwnedCatchUp } from '#machines/chat-projection.fixture.js';
+import type { ChatTurn, ChatTurnGesture } from '#machines/chat-session.machine.js';
+import { publishChatTurnAdmission, resetChatTurnServices } from '#chat-clients/_internal/chat-host-binding.js';
+import type { ChatSessionStore } from '#services/chat-session-store.js';
+import { projectSessionsStandIn } from '#services/project-sessions.fixture.js';
+
+/** The live project sessions every store in this file follows, as the runtime hands it the registry's (A7c). */
+const liveSessions = projectSessionsStandIn();
+
+const queueMutex = new KeyedMutex<string>();
+vi.mock('@taucad/chat-ui/db/chat-message-queue-store', async (importOriginal) => {
+  const original = await importOriginal<typeof ChatMessageQueueModule>();
+  return {
+    ...original,
+    createChatMessageQueueStore: (...[client, path]: Parameters<typeof original.createChatMessageQueueStore>) =>
+      original.createChatMessageQueueStore(client, path, queueMutex.run.bind(queueMutex)),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Hoisted test harness
 //
-// The store-based architecture wires the AI SDK `Chat` constructor's
-// `onFinish` / `onError` callbacks into the persistence machine inside
-// `ChatSessionStore.#createSession`. To exercise that wiring end-to-end
-// without a real network, we mock `@ai-sdk/react`'s `Chat` class so the
-// tests can:
-//
-// 1. Capture the per-chat `onFinish` / `onError` closures the store passes
-//    to `new Chat({...})`.
-// 2. Drive `~registerMessagesCallback` / `~registerStatusCallback`
-//    listeners deterministically.
-// 3. Spy on `sendMessage` / `regenerate` / `stop`.
-// 4. Mutate the public `messages` field so the dispatch emits flowing out
-//    of `chatPersistenceMachine` (which assign `chat.messages = next`)
-//    visibly update the snapshot.
-//
-// Each `new Chat({ id, ... })` registers itself in `harness.created` so
-// tests scoped to multiple chatIds can drive each one independently.
+// A minimal SDK Chat stand-in lets the provider tests read status, messages,
+// and selection without invoking a real host transport. Host commands and
+// projection-driven transcript behavior are covered by their owning suites.
 // ---------------------------------------------------------------------------
 
 type FakeChat = {
@@ -41,6 +52,9 @@ type FakeChat = {
   // Private in AI SDK source; chat-session-store uses a typed shim. Exposed
   // as a public spy here so we can assert continuation flows.
   makeRequest: ReturnType<typeof vi.fn>;
+  resumeStream: ReturnType<typeof vi.fn>;
+  emitMessages: () => void;
+  emitStatus: () => void;
   onFinish: (event: { messages: MyUIMessage[]; isAbort: boolean; isError: boolean; isDisconnect: boolean }) => void;
   onError: (error: Error) => void;
 };
@@ -48,9 +62,10 @@ type FakeChat = {
 const harness = vi.hoisted(() => ({
   created: [] as FakeChat[],
   patchChat: vi.fn(),
-  setMessageEdit: vi.fn(),
-  clearMessageEdit: vi.fn(),
+  touchChatRecency: vi.fn(),
   getChat: vi.fn(),
+  consumeChatStartupRequest: vi.fn(),
+  commitCancelledDraftRestore: vi.fn(),
 }));
 
 function getFake(chatId: string): FakeChat {
@@ -72,6 +87,7 @@ vi.mock('@ai-sdk/react', () => ({
     public regenerate = vi.fn().mockResolvedValue(undefined);
     public stop = vi.fn().mockResolvedValue(undefined);
     public makeRequest = vi.fn().mockResolvedValue(undefined);
+    public resumeStream = vi.fn().mockResolvedValue(undefined);
     readonly #messagesListeners = new Set<() => void>();
     readonly #statusListeners = new Set<() => void>();
     readonly #errorListeners = new Set<() => void>();
@@ -118,12 +134,26 @@ vi.mock('@ai-sdk/react', () => ({
         this.#errorListeners.delete(onChange);
       };
     };
+
+    public emitMessages = (): void => {
+      for (const listener of this.#messagesListeners) {
+        listener();
+      }
+    };
+
+    public emitStatus = (): void => {
+      for (const listener of this.#statusListeners) {
+        listener();
+      }
+    };
   },
 }));
 
-vi.mock('ai', () => ({
+vi.mock('ai', async (importOriginal) => ({
+  ...(await importOriginal()),
   // oxlint-disable-next-line typescript-eslint/no-extraneous-class -- mock requires a `new`able value
   DefaultChatTransport: class {},
+  lastAssistantMessageIsCompleteWithApprovalResponses: vi.fn(() => false),
 }));
 
 vi.mock('#environment.config.js', () => ({
@@ -134,7 +164,7 @@ vi.mock('#machines/inspector.js', () => ({
   inspect: undefined,
 }));
 
-vi.mock('#utils/error.utils.js', () => ({
+vi.mock('@taucad/chat-ui/utils/error.utils', () => ({
   parseErrorForPersistence: (error: Error): ChatError => ({
     category: 'generic',
     title: 'Stub error',
@@ -143,12 +173,65 @@ vi.mock('#utils/error.utils.js', () => ({
   }),
 }));
 
+// The session store and the composer provider reach composer records and
+// attachments through the worker filesystem client; an in-memory one stands
+// in for it, starting empty.
+const fileManager = vi.hoisted(() => {
+  const files = new Map<string, Uint8Array<ArrayBuffer>>();
+  const notFound = (path: string): Error => Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+  const under = (path: string): string[] =>
+    [...files.keys()].filter((entry) => entry.startsWith(`${path}/`)).map((entry) => entry.slice(path.length + 1));
+  return {
+    clear: () => {
+      files.clear();
+    },
+    client: {
+      async readFile(path: string) {
+        const bytes = files.get(path);
+        if (bytes === undefined) {
+          throw notFound(path);
+        }
+        return bytes;
+      },
+      async writeFile(path: string, data: Uint8Array<ArrayBuffer>) {
+        files.set(path, data);
+      },
+      exists: async (path: string) => files.has(path),
+      async readdir(path: string) {
+        const names = under(path);
+        if (names.length === 0) {
+          throw notFound(path);
+        }
+        return names;
+      },
+      async unlink(path: string) {
+        files.delete(path);
+      },
+      async rmdir(path: string) {
+        for (const name of under(path)) {
+          files.delete(`${path}/${name}`);
+        }
+      },
+    },
+  };
+});
+
+beforeEach(() => {
+  fileManager.clear();
+});
+
+vi.mock('#hooks/use-file-manager.js', () => ({
+  useFileManager: () => ({ ...fileManager, recordFiles: fileManager.client }),
+  useOptionalFileManager: () => ({ ...fileManager, recordFiles: fileManager.client }),
+}));
+
 vi.mock('#hooks/use-project-manager.js', () => ({
   useProjectManager: () => ({
     patchChat: harness.patchChat,
-    setMessageEdit: harness.setMessageEdit,
-    clearMessageEdit: harness.clearMessageEdit,
+    touchChatRecency: harness.touchChatRecency,
     getChat: harness.getChat,
+    consumeChatStartupRequest: harness.consumeChatStartupRequest,
+    commitCancelledDraftRestore: harness.commitCancelledDraftRestore,
   }),
 }));
 
@@ -163,6 +246,8 @@ vi.mock('#hooks/use-models.js', () => ({
   useModels: () => ({
     selectedModelId: 'cookie-model',
     setSelectedModelId: vi.fn(),
+    defaultExecution: { kind: 'tau', model: 'cookie-model' },
+    rememberExecution: vi.fn(),
     selectedModel: { id: 'cookie-model', name: 'Cookie Model', isResolved: true },
     resolveModel: (id: string) => ({ id, name: id, isResolved: false }),
     data: [],
@@ -178,7 +263,10 @@ vi.mock('#hooks/use-kernel.js', () => ({
   }),
 }));
 
-const { ChatSessionStoreProvider, useChatSessionStore } = await import('#hooks/chat-session-store-provider.js');
+const { useChatSessionStore } = await import('#hooks/chat-session-store-provider.js');
+/* The pre-A2 mirror over the mocked project and file managers; production's store is the runtime's. */
+const { MirroredChatSessionStoreProvider: ChatSessionStoreProvider } =
+  await import('#hooks/chat-session-store.fixture.js');
 const { ActiveChatProvider, ChatComposerProvider } = await import('#hooks/active-chat-provider.js');
 const { useChatActions, useChatContext, useChatSelector, useChatById, useDraftActions, useDraftSelector } =
   await import('#hooks/use-chat.js');
@@ -192,20 +280,6 @@ function makeUserMessage(id: string, text: string): MyUIMessage {
   };
 }
 
-/**
- * `loadChatActor` auto-regenerates when the trailing user message is
- * `pending`, which would unintentionally clear `persistedError` mid-test.
- * Tests that pre-load a chat use this `success`-status variant instead.
- */
-function makeLoadedUserMessage(id: string, text: string): MyUIMessage {
-  return {
-    id,
-    role: 'user',
-    parts: [{ type: 'text', text }],
-    metadata: { createdAt: 0, status: 'success' },
-  };
-}
-
 function makeAssistantMessage(id: string, text: string): MyUIMessage {
   return {
     id,
@@ -215,17 +289,10 @@ function makeAssistantMessage(id: string, text: string): MyUIMessage {
   };
 }
 
-const sampleChatError: ChatError = {
-  category: 'generic',
-  title: 'Boom',
-  message: 'Something failed',
-  code: 'INTERNAL_ERROR',
-};
-
 const defaultTestChatId = 'chat_test_default';
 
 /**
- * Mounts the full new-architecture stack: `<ChatSessionStoreProvider>`
+ * Mounts the full new-architecture stack: `<ChatSessionStoreProvider projectSessions={liveSessions}>`
  * (singleton vanilla store) → `<ActiveChatProvider>` (per-subtree active
  * chat + draft binding which acquires the session from the store).
  *
@@ -236,8 +303,10 @@ const defaultTestChatId = 'chat_test_default';
 function createWrapper(chatId: string = defaultTestChatId) {
   return function Wrapper({ children }: { readonly children: ReactNode }) {
     return (
-      <ChatSessionStoreProvider>
-        <ActiveChatProvider chatId={chatId}>{children}</ActiveChatProvider>
+      <ChatSessionStoreProvider projectSessions={liveSessions}>
+        <ActiveChatProvider chatId={chatId} projectId={testProjectId}>
+          {children}
+        </ActiveChatProvider>
       </ChatSessionStoreProvider>
     );
   };
@@ -251,590 +320,170 @@ function createWrapper(chatId: string = defaultTestChatId) {
 function createComposerWrapper() {
   return function Wrapper({ children }: { readonly children: ReactNode }) {
     return (
-      <ChatSessionStoreProvider>
-        <ChatComposerProvider>{children}</ChatComposerProvider>
+      <ChatSessionStoreProvider projectSessions={liveSessions}>
+        <ChatComposerProvider surface='library'>{children}</ChatComposerProvider>
       </ChatSessionStoreProvider>
     );
   };
 }
 
-function renderProvider(chatId: string | undefined = defaultTestChatId) {
-  return renderHook(
-    () => ({
-      actions: useChatActions(),
-      context: useChatContext(),
+const testProjectId = 'proj_test';
+
+/** The admission the route publishes for the provider's gesture tests. */
+const testAdmission = async (gesture: ChatTurnGesture): Promise<ChatTurn> => ({
+  runId: gesture.kind === 'send' ? gesture.requestId : `run_${gesture.kind}`,
+  leaseTurnId: undefined,
+  request:
+    gesture.kind === 'send'
+      ? {
+          kind: 'send',
+          message: gesture.message,
+          queueId: gesture.queueId,
+          command: {
+            type: 'start',
+            commandId: gesture.requestId!,
+            payload: {
+              chatId: defaultTestChatId,
+              runId: gesture.requestId!,
+              trigger: 'submit',
+              message: { id: gesture.message.id, role: 'user', content: 'activity' },
+            },
+          },
+        }
+      : gesture.kind === 'edit'
+        ? { kind: 'edit', messageId: gesture.messageId, content: gesture.text }
+        : gesture.kind === 'continue'
+          ? { kind: 'continue' }
+          : { kind: 'regenerate' },
+});
+
+/**
+ * Give the chat a turn owner.
+ *
+ * Every verb now goes through `chat-session.machine`'s `run` region (C3), so a
+ * test that drives a verb has to give the chat the actor that owns its turn —
+ * a real project session with a real chat session under it, and the route's
+ * admission published through the same seam production uses.
+ */
+function startTurnOwner(store: ChatSessionStore, chatId: string, admit = testAdmission): () => void {
+  const session = createActor(projectSessionMachine, { input: { projectId: testProjectId } });
+  session.start();
+  const unpublish = publishChatTurnAdmission(chatId, admit);
+  const disconnect = store.publishProjectHostConnector(testProjectId, async () =>
+    mock<AgentHostClient>({
+      catchUp: writerOwnedCatchUp,
+      hostCommand: async (command) => ({
+        commandId: command.commandId,
+        generation: 1,
+        status: 'applied',
+        effect: 'durable',
+        cursor: 1,
+      }),
+      close: async () => undefined,
     }),
-    { wrapper: createWrapper(chatId) },
   );
+  publishLogRows(store, chatId, []);
+  liveSessions.set(testProjectId, session);
+  return () => {
+    unpublish();
+    disconnect();
+    liveSessions.set(testProjectId, undefined);
+    session.stop();
+  };
 }
+
+/** Torn down in `afterEach` so one test's project session never binds the next one's chat. */
+let stopTurnOwner: (() => void) | undefined;
+
+/* PL1: the chat's AI SDK loads once per page; once it has, a session builds its `Chat` at acquire, as these cases
+ * read it. The deferred path before that load is `services/deferred-chat.test.ts`. */
+beforeAll(async () => {
+  await loadChatSdk();
+});
 
 describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
   beforeEach(() => {
     harness.created = [];
     harness.getChat.mockReset().mockResolvedValue(undefined);
     harness.patchChat.mockReset().mockResolvedValue(undefined);
-    harness.setMessageEdit.mockReset().mockResolvedValue(undefined);
-    harness.clearMessageEdit.mockReset().mockResolvedValue(undefined);
+    harness.touchChatRecency.mockReset().mockResolvedValue(undefined);
+    harness.consumeChatStartupRequest.mockReset().mockResolvedValue(undefined);
+    harness.commitCancelledDraftRestore.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
+    stopTurnOwner?.();
+    stopTurnOwner = undefined;
+    resetChatTurnServices();
     vi.restoreAllMocks();
   });
 
-  // ===========================================================================
-  // Direct emit listener wiring: each request kind lands on the correct AI
-  // SDK call. These tests anchor the contract that `requestLifecycle` emits
-  // are translated faithfully by the store-side dispatch listeners.
-  // ===========================================================================
+  // Host-command routing is exercised by chat-session-store and turn-host tests.
 
-  it('routes a `send` request through to chat.sendMessage', async () => {
-    const { result } = renderProvider();
-    const message = makeUserMessage('msg_1', 'hello');
-
-    act(() => {
-      result.current.actions.sendMessage(message);
-    });
-    // `dispatchRequest` defers the AI SDK call onto a microtask to dodge
-    // the preempt-clobber bug (see chat-session-store.ts docstring).
-    await Promise.resolve();
-
-    const fake = getFake(defaultTestChatId);
-    expect(fake.sendMessage).toHaveBeenCalledTimes(1);
-    expect(fake.sendMessage).toHaveBeenCalledWith(message);
-    expect(fake.regenerate).not.toHaveBeenCalled();
-    expect(fake.stop).not.toHaveBeenCalled();
-  });
-
-  it('routes a `regenerate` request through to chat.regenerate', async () => {
-    const { result } = renderProvider();
-
-    act(() => {
-      result.current.actions.regenerate();
-    });
-    await Promise.resolve();
-
-    const fake = getFake(defaultTestChatId);
-    expect(fake.regenerate).toHaveBeenCalledTimes(1);
-    expect(fake.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it('routes a `continueChat` request through to chat.makeRequest({ trigger: "submit-message" })', async () => {
-    const { result } = renderProvider();
-
-    act(() => {
-      result.current.actions.continueChat();
-    });
-    await Promise.resolve();
-
-    const fake = getFake(defaultTestChatId);
-    expect(fake.makeRequest).toHaveBeenCalledTimes(1);
-    expect(fake.makeRequest).toHaveBeenCalledWith({ trigger: 'submit-message' });
-    expect(fake.regenerate).not.toHaveBeenCalled();
-    expect(fake.sendMessage).not.toHaveBeenCalled();
-  });
-
-  /**
-   * Regression for the "Unable to reach Tau" Retry banner: when the resumed
-   * stream re-issues the POST it MUST carry the per-turn `agent` block that
-   * the active chat-client published via `setLatestAgentBody`. Otherwise the
-   * API rejects the retry with `agent: expected object, received undefined`.
-   */
-  it('threads latestAgentBody onto the resumed makeRequest body for continueChat', async () => {
-    const { result } = renderHook(
-      () => ({
-        actions: useChatActions(),
-        store: useChatSessionStore(),
-      }),
-      { wrapper: createWrapper(defaultTestChatId) },
-    );
-
-    const latestBody = { agent: { profile: 'cad', model: 'cad-default', kernel: 'replicad' } };
-    act(() => {
-      result.current.store.setLatestAgentBody(defaultTestChatId, latestBody);
-    });
-
-    act(() => {
-      result.current.actions.continueChat();
-    });
-    await Promise.resolve();
-
-    const fake = getFake(defaultTestChatId);
-    expect(fake.makeRequest).toHaveBeenCalledTimes(1);
-    expect(fake.makeRequest).toHaveBeenCalledWith({ trigger: 'submit-message', body: latestBody });
-  });
-
-  it('routes a `stop` request through to chat.stop', async () => {
-    const { result } = renderProvider();
-
-    // Need an in-flight request so stopRequest is accepted by the lifecycle.
-    act(() => {
-      result.current.actions.regenerate();
-    });
-    await Promise.resolve();
-
-    act(() => {
-      result.current.actions.stop();
-    });
-
-    const fake = getFake(defaultTestChatId);
-    expect(fake.stop).toHaveBeenCalledTimes(1);
-  });
-
-  it('replaces the message tail and regenerates on edit', async () => {
-    const original = makeUserMessage('msg_1', 'first try');
-    const { result } = renderProvider();
-    const fake = getFake(defaultTestChatId);
-    fake.messages = [original];
-
-    act(() => {
-      result.current.actions.editMessage('msg_1', 'second try');
-    });
-    await Promise.resolve();
-
-    expect(fake.messages).toHaveLength(1);
-    expect(fake.messages[0]!.id).toBe('msg_1');
-    expect(fake.messages[0]!.parts[0]).toMatchObject({ type: 'text', text: 'second try' });
-    expect(fake.regenerate).toHaveBeenCalledTimes(1);
-  });
-
-  it('skips edit dispatch when the target message is no longer present', async () => {
-    const { result } = renderProvider();
-
-    act(() => {
-      result.current.actions.editMessage('msg_missing', 'edit');
-    });
-    await Promise.resolve();
-
-    const fake = getFake(defaultTestChatId);
-    expect(fake.regenerate).not.toHaveBeenCalled();
-    expect(result.current.context.persistenceActorRef!.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
-  });
-
-  it('rolls back to the previous user turn on retry', async () => {
-    const userMessage = makeUserMessage('msg_user', 'do thing');
-    const assistantMessage = makeAssistantMessage('msg_assistant', 'reply');
-    const { result } = renderProvider();
-    const fake = getFake(defaultTestChatId);
-    fake.messages = [userMessage, assistantMessage];
-
-    act(() => {
-      result.current.actions.retryMessage('msg_assistant');
-    });
-    await Promise.resolve();
-
-    expect(fake.messages).toHaveLength(1);
-    expect(fake.messages[0]!.id).toBe('msg_user');
-    expect(fake.regenerate).toHaveBeenCalledTimes(1);
-    expect(fake.makeRequest).not.toHaveBeenCalled();
-  });
-
-  it('skips retry dispatch when the target message is missing', () => {
-    const { result } = renderProvider();
-
-    act(() => {
-      result.current.actions.retryMessage('msg_ghost');
-    });
-
-    const fake = getFake(defaultTestChatId);
-    expect(fake.regenerate).not.toHaveBeenCalled();
-  });
-
-  // ===========================================================================
-  // No-flicker contract — when a user kicks off a new request from the error
-  // state, both the AI SDK error AND the persisted error must reset in a
-  // single React frame. We measure this by snapshotting `persistedError`
-  // immediately after the synchronous action() call.
-  // ===========================================================================
-
-  describe('no-flicker contract', () => {
-    it('clears persistedError synchronously when sendMessage starts', async () => {
-      harness.getChat.mockResolvedValue({
-        id: 'chat_abc',
-        resourceId: 'resource_1',
-        name: '',
-        messages: [],
-        createdAt: 0,
-        updatedAt: 0,
-        error: sampleChatError,
+  it.each([{}, { afterTerminalRunId: 'run-stopped' }])(
+    'preserves captured queue intent %j through send actions',
+    async (queueIntent) => {
+      const { result } = renderHook(() => ({ actions: useChatActions(), store: useChatSessionStore() }), {
+        wrapper: createWrapper(defaultTestChatId),
       });
-
-      const { result } = renderProvider('chat_abc');
-      const persistenceActorRef = result.current.context.persistenceActorRef!;
-
-      // Wait for loadChatActor to populate persistedError from the loaded chat.
-      await waitFor(() => {
-        expect(persistenceActorRef.getSnapshot().context.persistedError).toEqual(sampleChatError);
-      });
-
-      act(() => {
-        result.current.actions.sendMessage(makeUserMessage('msg_1', 'next attempt'));
-      });
-
-      expect(persistenceActorRef.getSnapshot().context.persistedError).toBeUndefined();
-      await Promise.resolve();
-      expect(getFake('chat_abc').sendMessage).toHaveBeenCalledTimes(1);
-    });
-
-    it('clears persistedError synchronously when editMessage starts', async () => {
-      const original = makeLoadedUserMessage('msg_1', 'first');
-      harness.getChat.mockResolvedValue({
-        id: 'chat_abc',
-        resourceId: 'resource_1',
-        name: '',
-        messages: [original],
-        createdAt: 0,
-        updatedAt: 0,
-        error: sampleChatError,
-      });
-
-      const { result } = renderProvider('chat_abc');
-      const persistenceActorRef = result.current.context.persistenceActorRef!;
-
-      await waitFor(() => {
-        expect(persistenceActorRef.getSnapshot().context.persistedError).toEqual(sampleChatError);
-      });
-
-      act(() => {
-        result.current.actions.editMessage('msg_1', 'edited');
-      });
-
-      expect(persistenceActorRef.getSnapshot().context.persistedError).toBeUndefined();
-      await Promise.resolve();
-      expect(getFake('chat_abc').regenerate).toHaveBeenCalledTimes(1);
-    });
-
-    it('clears persistedError synchronously when retryMessage starts', async () => {
-      const userMessage = makeLoadedUserMessage('msg_user', 'q');
-      const assistantMessage = makeAssistantMessage('msg_assistant', 'a');
-      harness.getChat.mockResolvedValue({
-        id: 'chat_abc',
-        resourceId: 'resource_1',
-        name: '',
-        messages: [userMessage, assistantMessage],
-        createdAt: 0,
-        updatedAt: 0,
-        error: sampleChatError,
-      });
-
-      const { result } = renderProvider('chat_abc');
-      const persistenceActorRef = result.current.context.persistenceActorRef!;
-
-      await waitFor(() => {
-        expect(persistenceActorRef.getSnapshot().context.persistedError).toEqual(sampleChatError);
-      });
-
-      act(() => {
-        result.current.actions.retryMessage('msg_assistant');
-      });
-
-      expect(persistenceActorRef.getSnapshot().context.persistedError).toBeUndefined();
-      await Promise.resolve();
-      expect(getFake('chat_abc').regenerate).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // ===========================================================================
-  // Queue-while-streaming flow: starting a second request while one is in
-  // flight should stop the current request, then once onFinish fires with
-  // isAbort, transparently dispatch the queued request.
-  // ===========================================================================
-
-  it('queues a second request, stops the first, then dispatches on abort', async () => {
-    const { result } = renderProvider();
-    const first = makeUserMessage('msg_first', 'one');
-    const second = makeUserMessage('msg_second', 'two');
-
-    act(() => {
-      result.current.actions.sendMessage(first);
-    });
-    await Promise.resolve();
-
-    act(() => {
-      result.current.actions.sendMessage(second);
-    });
-
-    const fake = getFake(defaultTestChatId);
-    expect(fake.sendMessage).toHaveBeenCalledTimes(1);
-    expect(fake.sendMessage).toHaveBeenLastCalledWith(first);
-    expect(fake.stop).toHaveBeenCalledTimes(1);
-
-    // Simulate the AI SDK aborting and calling onFinish — the store wired
-    // this callback into `persistenceActorRef.send({ type: 'requestFinished', ... })`.
-    act(() => {
-      fake.onFinish({ messages: [first], isAbort: true, isError: false, isDisconnect: false });
-    });
-    await Promise.resolve();
-
-    expect(fake.sendMessage).toHaveBeenCalledTimes(2);
-    expect(fake.sendMessage).toHaveBeenLastCalledWith(second);
-    expect(result.current.context.persistenceActorRef!.getSnapshot().matches({ requestLifecycle: 'invoking' })).toBe(
-      true,
-    );
-  });
-
-  // ===========================================================================
-  // Pure-stop cancellation: stopping with no queued request marks the trailing
-  // pending user message as `cancelled` so reload doesn't auto-regenerate.
-  // ===========================================================================
-
-  it('marks the trailing pending user message as cancelled on a pure stop', async () => {
-    const pending = makeUserMessage('msg_pending', 'in flight');
-    const { result } = renderProvider();
-
-    act(() => {
-      result.current.actions.sendMessage(pending);
-    });
-
-    const fake = getFake(defaultTestChatId);
-    // The store seeds chat.messages from the AI SDK's view; in our mock
-    // sendMessage doesn't update messages, so we mirror that the trailing
-    // pending user is what onFinish will report.
-    fake.messages = [pending];
-
-    act(() => {
-      result.current.actions.stop();
-    });
-
-    expect(fake.stop).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      fake.onFinish({ messages: [pending], isAbort: true, isError: false, isDisconnect: false });
-    });
-    await Promise.resolve();
-
-    // Store's `applyStoppedRequest` listener marks the trailing pending
-    // user message as `cancelled` and writes back to chat.messages.
-    expect(fake.messages).toHaveLength(1);
-    expect(fake.messages[0]!.metadata?.status).toBe('cancelled');
-    expect(result.current.context.persistenceActorRef!.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
-  });
-
-  // ===========================================================================
-  // Mid-stream error path: onError must surface the persisted error and that
-  // error must survive `requestFinished` so the banner stays visible until the
-  // user takes a new action.
-  // ===========================================================================
-
-  it('preserves persistedError when onFinish reports isError after onError', async () => {
-    const { result } = renderProvider('chat_abc');
-    const persistenceActorRef = result.current.context.persistenceActorRef!;
-
-    await waitFor(() => {
-      expect(persistenceActorRef.getSnapshot().matches({ chatLoading: 'idle' })).toBe(true);
-    });
-
-    act(() => {
-      result.current.actions.sendMessage(makeUserMessage('msg_1', 'go'));
-    });
-
-    const fake = getFake('chat_abc');
-
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    act(() => {
-      fake.onError(new Error('network died'));
-    });
-    consoleErrorSpy.mockRestore();
-
-    expect(persistenceActorRef.getSnapshot().context.persistedError).toMatchObject({
-      message: 'network died',
-    });
-
-    act(() => {
-      fake.onFinish({ messages: [], isAbort: false, isError: true, isDisconnect: false });
-    });
-
-    expect(persistenceActorRef.getSnapshot().context.persistedError).toMatchObject({
-      message: 'network died',
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // R4: onFinish forwards `isDisconnect` to the persistence machine.
-  // The machine then opens its `retrying` substate to drive transparent
-  // auto-retry. The store is the only seam between the AI SDK callback and
-  // the actor event so this test pins the wiring at the public boundary.
-  // ---------------------------------------------------------------------------
-
-  it('forwards isDisconnect=true into the requestFinished event so requestLifecycle enters `retrying`', async () => {
-    const { result } = renderProvider('chat_disco');
-    const persistenceActorRef = result.current.context.persistenceActorRef!;
-
-    await waitFor(() => {
-      expect(persistenceActorRef.getSnapshot().matches({ chatLoading: 'idle' })).toBe(true);
-    });
-
-    act(() => {
-      result.current.actions.sendMessage(makeUserMessage('msg_send', 'go'));
-    });
-
-    const fake = getFake('chat_disco');
-
-    act(() => {
-      fake.onFinish({ messages: [], isAbort: false, isError: true, isDisconnect: true });
-    });
-
-    expect(persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'retrying' })).toBe(true);
-    expect(persistenceActorRef.getSnapshot().context.retryAttempt).toBe(1);
-  });
-
-  it('forwards isDisconnect=false (e.g. structured 4xx) so requestLifecycle settles in `idle`', async () => {
-    const { result } = renderProvider('chat_no_disco');
-    const persistenceActorRef = result.current.context.persistenceActorRef!;
-
-    await waitFor(() => {
-      expect(persistenceActorRef.getSnapshot().matches({ chatLoading: 'idle' })).toBe(true);
-    });
-
-    act(() => {
-      result.current.actions.sendMessage(makeUserMessage('msg_send', 'go'));
-    });
-
-    const fake = getFake('chat_no_disco');
-
-    act(() => {
-      fake.onFinish({ messages: [], isAbort: false, isError: true, isDisconnect: false });
-    });
-
-    expect(persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
-    expect(persistenceActorRef.getSnapshot().context.retryAttempt).toBe(0);
-  });
-
-  // ---------------------------------------------------------------------------
-  // T15 / T16: full integration cycles for transparent auto-retry.
-  //
-  // These exercise the end-to-end wiring across:
-  //   onFinish (R4) -> requestFinished -> retrying -> backoff -> dispatchRequest
-  //                 -> chat.makeRequest -> onFinish (success) -> idle
-  //
-  // Both paths assert that chat.messages is preserved across the cycle so
-  // the user never sees the partial-assistant flicker that prompted this work.
-  // ---------------------------------------------------------------------------
-
-  it('full cycle: success after one retry preserves chat.messages and never trips the banner', async () => {
-    const { result } = renderProvider('chat_t15');
-    const persistenceActorRef = result.current.context.persistenceActorRef!;
-
-    await waitFor(() => {
-      expect(persistenceActorRef.getSnapshot().matches({ chatLoading: 'idle' })).toBe(true);
-    });
-
-    // Switch to fake timers AFTER loading so loadChatActor microtasks settle
-    // first; otherwise the actor never reaches `chatLoading.idle` and every
-    // following waitFor times out.
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-    try {
-      const userMessage = makeUserMessage('msg_user', 'render a cube');
-      act(() => {
-        result.current.actions.sendMessage(userMessage);
-      });
-
-      const fake = getFake('chat_t15');
-      fake.messages = [
-        userMessage,
-        // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal test message
-        {
-          id: 'msg_assistant',
-          role: 'assistant',
-          parts: [{ type: 'text', text: 'thinking', state: 'streaming' }],
-          metadata: { createdAt: 0 },
-        } as MyUIMessage,
-      ];
-      const partialMessagesRef = fake.messages;
-
-      act(() => {
-        fake.onFinish({ messages: fake.messages, isAbort: false, isError: true, isDisconnect: true });
-      });
-
-      expect(persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'retrying' })).toBe(true);
-      expect(persistenceActorRef.getSnapshot().context.retryAttempt).toBe(1);
-      expect(fake.messages).toBe(partialMessagesRef);
-
+      const request = vi.spyOn(result.current.store, 'requestTurn').mockResolvedValue(undefined);
+      const message = makeUserMessage('queued-with-intent', 'Preserve my original intent');
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(700);
+        await result.current.actions.sendMessage(message, { queueIntent });
       });
+      expect(request).toHaveBeenCalledExactlyOnceWith(defaultTestChatId, { kind: 'send', message, queueIntent });
+    },
+  );
 
-      expect(fake.makeRequest).toHaveBeenCalledTimes(1);
-      expect(fake.makeRequest).toHaveBeenCalledWith({ trigger: 'submit-message' });
-      expect(persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'invoking' })).toBe(true);
-
-      act(() => {
-        fake.onFinish({ messages: fake.messages, isAbort: false, isError: false, isDisconnect: false });
-      });
-
-      expect(persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
-      expect(persistenceActorRef.getSnapshot().context.retryAttempt).toBe(0);
-      expect(persistenceActorRef.getSnapshot().context.persistedError).toBeUndefined();
-      expect(fake.messages).toBe(partialMessagesRef);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('full cycle: budget exhaustion preserves chat.messages and surfaces persistedError', async () => {
-    const { result } = renderProvider('chat_t16');
-    const persistenceActorRef = result.current.context.persistenceActorRef!;
-
-    await waitFor(() => {
-      expect(persistenceActorRef.getSnapshot().matches({ chatLoading: 'idle' })).toBe(true);
+  it('records an accepted send once and ignores invalid targets and stop', async () => {
+    const { result } = renderHook(() => ({ actions: useChatActions(), store: useChatSessionStore() }), {
+      wrapper: createWrapper(defaultTestChatId),
+    });
+    const user = makeUserMessage('msg_user_activity', 'activity');
+    const assistant = makeAssistantMessage('msg_assistant_activity', 'answer');
+    getFake(defaultTestChatId).messages = [user, assistant];
+    expect(assistant.id).toBeDefined();
+    act(() => {
+      stopTurnOwner = startTurnOwner(result.current.store, defaultTestChatId);
     });
 
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-    try {
-      const userMessage = makeUserMessage('msg_user', 'render a cube');
-      act(() => {
-        result.current.actions.sendMessage(userMessage);
-      });
+    await act(async () => {
+      await result.current.actions.sendMessage(user);
+    });
+    await waitFor(() => {
+      expect(harness.touchChatRecency).toHaveBeenCalledOnce();
+    });
+    act(() => {
+      result.current.actions.stop('stop-button');
+      result.current.actions.editMessage('missing-edit', 'ignored');
+    });
 
-      const fake = getFake('chat_t16');
-      fake.messages = [
-        userMessage,
-        // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal test message
-        {
-          id: 'msg_assistant',
-          role: 'assistant',
-          parts: [{ type: 'text', text: 'partial...', state: 'streaming' }],
-          metadata: { createdAt: 0 },
-        } as MyUIMessage,
-      ];
-      const partialMessagesRef = fake.messages;
-      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    /* Once, when the turn is taken (PV-S6), at the message's own time. */
+    expect(harness.touchChatRecency).toHaveBeenCalledOnce();
+    expect(harness.touchChatRecency).toHaveBeenCalledWith(defaultTestChatId, user.metadata?.createdAt);
+  });
 
-      act(() => {
-        fake.onError(new Error('Failed to fetch'));
-      });
+  /* L3 D16, LT08: recency counts a taken gesture. A send the admission refuses never became a turn. */
+  it('leaves recency alone when the admission refuses a send (PV-S6)', async () => {
+    const { result } = renderHook(() => ({ actions: useChatActions(), store: useChatSessionStore() }), {
+      wrapper: createWrapper(defaultTestChatId),
+    });
+    const refuse = vi.fn(async () => {
+      throw new Error('No credit left for this turn.');
+    });
+    act(() => {
+      stopTurnOwner = startTurnOwner(result.current.store, defaultTestChatId, refuse);
+    });
 
-      for (let attempt = 1; attempt <= 5; attempt++) {
-        act(() => {
-          fake.onFinish({ messages: fake.messages, isAbort: false, isError: true, isDisconnect: true });
-        });
-        expect(persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'retrying' })).toBe(true);
-        expect(persistenceActorRef.getSnapshot().context.retryAttempt).toBe(attempt);
+    await act(async () => {
+      await result.current.actions.sendMessage(makeUserMessage('msg_refused', 'refused'));
+    });
+    await waitFor(() => {
+      expect(refuse).toHaveBeenCalledOnce();
+    });
 
-        // oxlint-disable-next-line no-await-in-loop -- sequential timer advancement is the entire point of this loop; parallelising would race the actor transitions
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(60_000);
-        });
-        expect(persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'invoking' })).toBe(true);
-      }
-
-      // 6th disconnect: budget exhausted -> idle, persistedError preserved.
-      act(() => {
-        fake.onFinish({ messages: fake.messages, isAbort: false, isError: true, isDisconnect: true });
-      });
-
-      consoleErrorSpy.mockRestore();
-      expect(persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
-      expect(persistenceActorRef.getSnapshot().context.persistedError).toMatchObject({
-        message: 'Failed to fetch',
-      });
-      // Critical: across the entire 5-retry chain plus exhaustion, the
-      // partial assistant tail in chat.messages is untouched.
-      expect(fake.messages).toBe(partialMessagesRef);
-      expect(fake.regenerate).not.toHaveBeenCalled();
-      expect(fake.sendMessage).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(getFake(defaultTestChatId).sendMessage).not.toHaveBeenCalled();
+    expect(harness.touchChatRecency).not.toHaveBeenCalled();
   });
 });
 
@@ -852,8 +501,8 @@ describe('hooks resolution rules', () => {
     harness.created = [];
     harness.getChat.mockReset().mockResolvedValue(undefined);
     harness.patchChat.mockReset().mockResolvedValue(undefined);
-    harness.setMessageEdit.mockReset().mockResolvedValue(undefined);
-    harness.clearMessageEdit.mockReset().mockResolvedValue(undefined);
+    harness.consumeChatStartupRequest.mockReset().mockResolvedValue(undefined);
+    harness.commitCancelledDraftRestore.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -891,11 +540,13 @@ describe('hooks resolution rules', () => {
   it('useChatById reads a non-active chat by explicit id', () => {
     function MultiChatWrapper({ children }: { readonly children: ReactNode }) {
       return (
-        <ChatSessionStoreProvider>
+        <ChatSessionStoreProvider projectSessions={liveSessions}>
           {/* Background session: ActiveChatProvider acquires chat_background from the store. */}
-          <ActiveChatProvider chatId='chat_background'>
+          <ActiveChatProvider chatId='chat_background' projectId={testProjectId}>
             {/* Inner foreground binding: ActiveChatProvider acquires chat_foreground. */}
-            <ActiveChatProvider chatId='chat_foreground'>{children}</ActiveChatProvider>
+            <ActiveChatProvider chatId='chat_foreground' projectId={testProjectId}>
+              {children}
+            </ActiveChatProvider>
           </ActiveChatProvider>
         </ChatSessionStoreProvider>
       );
@@ -921,19 +572,127 @@ describe('hooks resolution rules', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it('does not re-render a status selector for message-only streaming updates', async () => {
+    let renderCount = 0;
+    const { result } = renderHook(
+      () => {
+        renderCount++;
+        return useChatSelector((state) => state.status);
+      },
+      { wrapper: createWrapper('chat_selector_stability') },
+    );
+    await waitFor(() => {
+      expect(result.current).toBe('ready');
+    });
+    const fake = getFake('chat_selector_stability');
+    const beforeMessageUpdate = renderCount;
+
+    act(() => {
+      fake.messages = [makeAssistantMessage('assistant_1', 'streaming')];
+      fake.emitMessages();
+    });
+    expect(renderCount).toBe(beforeMessageUpdate);
+
+    act(() => {
+      fake.status = 'streaming';
+      fake.emitStatus();
+    });
+    expect(result.current).toBe('streaming');
+    expect(renderCount).toBe(beforeMessageUpdate + 1);
+  });
+
+  it('shows Stop status for a reattached host run when the SDK is ready', () => {
+    const { result } = renderHook(
+      () => ({ status: useChatSelector((state) => state.status), store: useChatSessionStore() }),
+      { wrapper: createWrapper('chat_reattached_stop') },
+    );
+    expect(result.current.status).toBe('ready');
+    act(() => {
+      publishLogRows(result.current.store, 'chat_reattached_stop', runningRows());
+    });
+    expect(result.current.status).toBe('streaming');
+    act(() => {
+      publishLogRows(result.current.store, 'chat_reattached_stop', [lifecycleRow(2, 'completed')], 2);
+    });
+    expect(result.current.status).toBe('ready');
+  });
+
+  it('does not hide same-sized message order and map replacements', async () => {
+    const { result } = renderHook(
+      () =>
+        useChatSelector((state) => ({
+          order: state.messageOrder,
+          messagesById: state.messagesById,
+        })),
+      { wrapper: createWrapper('chat_selector_structure') },
+    );
+    await waitFor(() => {
+      expect(getFake('chat_selector_structure')).toBeDefined();
+    });
+    const fake = getFake('chat_selector_structure');
+
+    act(() => {
+      fake.messages = [
+        makeAssistantMessage('assistant_1', 'ready'),
+        makeAssistantMessage('assistant_2', 'ready'),
+        makeAssistantMessage('assistant_3', 'ready'),
+      ];
+      fake.emitMessages();
+    });
+    expect(result.current.order).toEqual(['assistant_1', 'assistant_2', 'assistant_3']);
+
+    act(() => {
+      fake.messages = [
+        makeAssistantMessage('assistant_1', 'ready'),
+        makeAssistantMessage('assistant_changed', 'ready'),
+        makeAssistantMessage('assistant_3', 'ready'),
+      ];
+      fake.emitMessages();
+    });
+    expect(result.current.order).toEqual(['assistant_1', 'assistant_changed', 'assistant_3']);
+    expect(result.current.messagesById.has('assistant_changed')).toBe(true);
+    expect(result.current.messagesById.has('assistant_2')).toBe(false);
+  });
+
+  it('refreshes the middle-message index when actions replace a transcript without changing its ends', () => {
+    const { result } = renderHook(
+      () => ({
+        actions: useChatActions(),
+        order: useChatSelector((state) => state.messageOrder),
+        messagesById: useChatSelector((state) => state.messagesById),
+      }),
+      { wrapper: createWrapper('chat_middle_replace') },
+    );
+    const first = makeUserMessage('first', 'first');
+    const last = makeAssistantMessage('last', 'last');
+    act(() => {
+      result.current.actions.setMessages([first, makeAssistantMessage('middle-old', 'old'), last]);
+      getFake('chat_middle_replace').emitMessages();
+    });
+    expect(result.current.order).toEqual(['first', 'middle-old', 'last']);
+
+    act(() => {
+      result.current.actions.setMessages([first, makeAssistantMessage('middle-new', 'new'), last]);
+      getFake('chat_middle_replace').emitMessages();
+    });
+    expect(result.current.order).toEqual(['first', 'middle-new', 'last']);
+    expect(result.current.messagesById.has('middle-old')).toBe(false);
+    expect(result.current.messagesById.get('middle-new')?.parts[0]).toMatchObject({ text: 'new' });
+  });
+
   // =========================================================================
-  // activeModel / activeKernel surfaced through CombinedChatState so
+  // activeExecution / activeKernel surfaced through CombinedChatState so
   // chat-scoped consumers can read them without poking the persistence
   // machine directly.
   // =========================================================================
 
-  it('surfaces activeModel and activeKernel on the chat snapshot once the persistence machine reports them', async () => {
+  it('surfaces activeExecution and activeKernel on the chat snapshot once persistence reports them', async () => {
     harness.getChat.mockResolvedValue({
       id: 'chat_active_selection',
-      resourceId: 'resource_1',
+      resourceId: testProjectId,
       name: '',
       messages: [],
-      activeModel: 'gpt-5.4-medium',
+      activeExecution: { kind: 'tau', model: 'gpt-5.4-medium' },
       activeKernel: 'manifold',
       createdAt: 0,
       updatedAt: 0,
@@ -941,22 +700,22 @@ describe('hooks resolution rules', () => {
 
     const { result } = renderHook(
       () => ({
-        activeModel: useChatSelector((s) => s.activeModel),
+        activeExecution: useChatSelector((s) => s.activeExecution),
         activeKernel: useChatSelector((s) => s.activeKernel),
       }),
       { wrapper: createWrapper('chat_active_selection') },
     );
 
     await waitFor(() => {
-      expect(result.current.activeModel).toBe('gpt-5.4-medium');
+      expect(result.current.activeExecution).toEqual({ kind: 'tau', model: 'gpt-5.4-medium' });
       expect(result.current.activeKernel).toBe('manifold');
     });
   });
 
-  it('returns undefined activeModel/activeKernel for chats with no chat-scoped selection', async () => {
+  it('returns undefined activeExecution/activeKernel for chats with no chat-scoped selection', async () => {
     harness.getChat.mockResolvedValue({
       id: 'chat_no_selection',
-      resourceId: 'resource_1',
+      resourceId: testProjectId,
       name: '',
       messages: [],
       createdAt: 0,
@@ -965,7 +724,7 @@ describe('hooks resolution rules', () => {
 
     const { result } = renderHook(
       () => ({
-        activeModel: useChatSelector((s) => s.activeModel),
+        activeExecution: useChatSelector((s) => s.activeExecution),
         activeKernel: useChatSelector((s) => s.activeKernel),
       }),
       { wrapper: createWrapper('chat_no_selection') },
@@ -974,7 +733,7 @@ describe('hooks resolution rules', () => {
     await waitFor(() => {
       // Wait for the load to settle so the snapshot reflects the persisted
       // (undefined) values rather than the pre-load default.
-      expect(result.current.activeModel).toBeUndefined();
+      expect(result.current.activeExecution).toBeUndefined();
     });
     expect(result.current.activeKernel).toBeUndefined();
   });

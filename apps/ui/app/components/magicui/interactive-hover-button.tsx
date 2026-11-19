@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowRight } from 'lucide-react';
 import { Slot as SlotPrimitive } from 'radix-ui';
-import { cn } from '#utils/ui.utils.js';
+import { cn } from '@taucad/ui/utils/cn';
 
 type InteractiveHoverButtonProps = {
   readonly asChild?: boolean;
@@ -19,7 +19,7 @@ export function InteractiveHoverButton({
   return (
     <Comp
       className={cn(
-        'group relative w-auto cursor-pointer overflow-hidden rounded-full border bg-background p-2 px-6 text-center font-semibold',
+        'group relative w-auto overflow-hidden rounded-full border bg-background p-2 px-6 text-center font-semibold',
         className,
       )}
       {...props}

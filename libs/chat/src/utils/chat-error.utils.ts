@@ -16,7 +16,9 @@ export function httpStatusToCategory(status: number): ErrorCategory {
       return errorCategory.auth;
     }
 
-    case 403: {
+    // 402 Payment Required is the first-party ledger's status (InsufficientCreditsError
+    // and friends). 403 is a refusal, not a balance problem, so it stays generic.
+    case 402: {
       return errorCategory.credits;
     }
 

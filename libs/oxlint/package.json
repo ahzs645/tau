@@ -4,14 +4,32 @@
   "description": "Shared oxlint plugins and lint configurations for the Tau monorepo",
   "type": "module",
   "private": true,
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@typescript-eslint/types": "^8.61.1",
+    "typescript": "catalog:"
+  },
+  "devDependencies": {
+    "@taucad/nx": "workspace:*",
+    "@types/estree": "^1.0.9"
+  },
   "exports": {
     "./tau-lint": {
       "import": "./src/tau-lint.js",
       "default": "./src/tau-lint.js"
     },
+    "./private-runtime-packages": {
+      "import": "./src/private-runtime-packages.js",
+      "default": "./src/private-runtime-packages.js"
+    },
     "./mdx-parser": {
       "import": "./src/mdx-parser.js",
       "default": "./src/mdx-parser.js"
+    },
+    "./react-event-layer": {
+      "types": "./src/react-event-layer.ts",
+      "import": "./src/react-event-layer.ts",
+      "default": "./src/react-event-layer.ts"
     }
   }
 }

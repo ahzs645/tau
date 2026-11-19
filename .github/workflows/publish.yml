@@ -1,0 +1,120 @@
+name: Publish Packages
+
+# CI does not publish npm packages on its own: a pushed `v*.*.*` tag no longer
+# starts this workflow. It is a manual, operator-dispatched path, run on a `v*`
+# package release tag or on `main`; application releases go through release.yml.
+#
+# The publish job runs in the `npm-publish` environment, which admits only
+# `main` and the `v*` tags (tau-cloud `stacks/repo/tau`). The `@taucad/*`
+# trusted publishers on npm name this repository, `publish.yml` and that
+# environment, so a dispatch on any other ref cannot obtain a publish token,
+# even after editing its own copy of this workflow. A binding that names no
+# environment would admit any ref; `npm trust list <name>` shows which it is.
+on:
+  workflow_dispatch:
+
+env:
+  pnpm_config_verify_deps_before_run: warn
+
+jobs:
+  publish:
+    if: ${{ github.repository == 'taucad/tau' }}
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GEOSPEC_WORKERS: 1
+      NPM_CONFIG_PROVENANCE: true
+      # Nx remote cache, provisioned by tau-cloud `tau-ci-cache`. The server is set only when a
+      # token is present (fork and Dependabot runs get none, and Nx fails on a tokenless 403).
+      NX_SELF_HOSTED_REMOTE_CACHE_SERVER: ${{ secrets.NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN != '' && vars.NX_SELF_HOSTED_REMOTE_CACHE_SERVER || '' }}
+      NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ secrets.NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      # The release gate runs every package's tests, which the CI test lanes run with
+      # the Linux sandbox toolchain (Bubblewrap, ripgrep, uv for build123d wheels),
+      # and check-pack-install drives the installed consumer in Chromium.
+      - name: Setup Linux sandbox prerequisites
+        uses: ./.github/actions/setup-linux-sandbox
+
+      - name: Install Chromium (system dependencies)
+        uses: ./.github/actions/apt-install
+        with:
+          playwright-browsers: chromium
+      - name: Install Chromium
+        run: pnpm exec playwright install chromium
+
+      # A native plugin's tau-plugin.json is published with the package; every URL it
+      # pins must already serve exactly the pinned bytes (charter I13, DEL-20).
+      - name: Prove every pinned dependency file URL serves its bytes
+        run: node scripts/src/check-dependency-urls.ts packages/plugins/*/tau-plugin.json
+
+      # The GeoSpec engine is the published `geospec-engine` catalog pin, installed
+      # from npm with the workspace; the release gate prepares its installed consumer.
+      - name: Run the release gate
+        run: pnpm nx run scripts:release-gate
+
+      # Nx delegates `nx-release-publish` to the workspace package manager, and only
+      # pnpm applies `publishConfig` field overrides. Under npm every package would
+      # ship `exports` pointing at `./src/*.ts`, which `files` excludes.
+      - name: Assert pnpm is the publisher
+        run: |
+          pnpm --version
+          test -f pnpm-lock.yaml
+          node -e "if (!require('./package.json').packageManager.startsWith('pnpm@')) process.exit(1)"
+
+      # No batches: Nx synthesises `nx-release-publish` for every publishable with
+      # `dependsOn: ['^nx-release-publish', 'pkgcheck']` (the second from nx.json
+      # targetDefaults), so one command orders the whole fixed group, gates each
+      # package on its own pkgcheck, and skips the dependents of a failed publish.
+      - name: Dry-run the dependency-ordered publish
+        run: pnpm nx release publish --dry-run --tag=beta
+
+      - name: Publish the release train
+        run: pnpm nx release publish --tag=beta
+
+  # What users get from the registry, checked once it serves the train (every `@taucad/*` pin of the CLI and
+  # the `beta` tag): the CLI installed with npm 11 and its install scripts blocked, then with npm 12's default
+  # script policy, each started through the published plugin's launcher with an `npx` that fails first on PATH,
+  # so the installed `tau` must serve it, and asked to evaluate a replicad block; versions must match across the
+  # CLI, the server and the plugin's manifests; and on Node.js 22 the launcher must exit 2. It installs from npm
+  # only and needs no workspace install.
+  verify-published:
+    if: ${{ github.repository == 'taucad/tau' }}
+    name: Install and start the published packages
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22 for the launcher's exit check
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22.22.0'
+
+      - name: Record the Node.js 22 binary
+        run: echo "NODE22=$(command -v node)" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js 24 with its npm 11
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24.20.0'
+
+      - name: Install the published CLI and plugin and start them
+        run: node scripts/src/verify-published-packages.ts --node22 "$NODE22"

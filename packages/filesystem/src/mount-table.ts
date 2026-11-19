@@ -10,6 +10,21 @@
 
 import type { FileSystemBackend } from '@taucad/types';
 import type { FileSystemProvider } from '#types.js';
+import { assertRootedPath, joinRelativePath, resolveAuthorityPath } from '@taucad/utils/path';
+import type { RouteKind } from '#project-routes.js';
+import { parseRoute } from '#project-routes.js';
+
+/**
+ * What the bytes behind one mount are to a revision: `authored` content a
+ * revision carries, `derived` content a producer regenerates, or
+ * `authority-metadata` an authority owns.
+ *
+ * @public
+ */
+export type MountPathClass = 'authored' | 'derived' | 'authority-metadata';
+
+/** Every admitted mount class, for the fail-closed registration check. @public */
+export const mountPathClasses: readonly MountPathClass[] = Object.freeze(['authored', 'derived', 'authority-metadata']);
 
 /**
  * Common option fields shared by every {@link MountConfig} variant.
@@ -17,12 +32,16 @@ import type { FileSystemProvider } from '#types.js';
  */
 export type MountConfigCommon = {
   /**
-   * When true, the full absolute path is passed to the provider unchanged
-   * instead of stripping the mount prefix. Use for mounts where the provider
-   * shares storage with the root and stores data at full paths (e.g. project
-   * mounts on the same IndexedDB database).
+   * Root-relative provider directory represented by the mount prefix.
+   * Defaults to `''` for a provider rooted at the mount itself.
    */
-  readonly preservePath?: boolean;
+  readonly providerBasePath?: string;
+  /**
+   * Required, with no default: an unclassified mount is a compile error, and
+   * {@link MountTable.mount} refuses one at runtime. A mount whose class is a
+   * guess is how derived bytes reach a revision (RC6 / S5 work 2).
+   */
+  readonly class: MountPathClass;
 };
 
 /**
@@ -43,13 +62,244 @@ export type MountConfig =
       readonly workspaceId: string;
     })
   | (MountConfigCommon & {
-      readonly backend: 'indexeddb' | 'opfs' | 'memory';
+      readonly backend: 'indexeddb' | 'opfs';
+    })
+  | (MountConfigCommon & {
+      readonly backend: 'memory';
+      readonly storageRootKey: string;
+    })
+  | (MountConfigCommon & {
+      readonly backend: 'node';
+      /** Absolute host directory; the physical identity of a node root. */
+      readonly path: string;
     });
 
 /**
- * Workspace scope passed to standalone-provider operations via the
- * `{ scope }` options bag on `readFile`, `unlink`, `rmdir`,
- * `getZippedDirectory`, and `readShallowDirectory`. Mirrors
+ * Cloneable persisted route from a virtual project id to a physical root directory.
+ * WebAccess handles live once in {@link ProjectRootConfiguration.roots}; project
+ * routes reference that root by `workspaceId` instead of cloning the same native
+ * handle once per project.
+ * @public
+ */
+export type ProjectRootConfig =
+  | {
+      readonly projectId: string;
+      readonly backend: 'webaccess';
+      readonly workspaceId: string;
+      /** Physical project directory: an immediate, non-dot-prefixed child of the workspace root (`<slug>`). */
+      readonly providerBasePath: string;
+    }
+  | {
+      readonly projectId: string;
+      readonly backend: 'indexeddb' | 'opfs';
+      readonly providerBasePath: string;
+    }
+  | {
+      readonly projectId: string;
+      readonly backend: 'memory';
+      readonly storageRootKey: string;
+      readonly providerBasePath: string;
+    }
+  | {
+      readonly projectId: string;
+      readonly backend: 'node';
+      /** Absolute host directory of the node root this project lives in. */
+      readonly path: string;
+      readonly providerBasePath: string;
+    };
+
+/**
+ * Physical root scanned for project manifests, independent of existing project routes.
+ * @public
+ */
+export type StorageRootConfig =
+  | {
+      readonly backend: 'webaccess';
+      readonly directoryHandle: FileSystemDirectoryHandle;
+      readonly workspaceId: string;
+    }
+  | {
+      readonly backend: 'indexeddb' | 'opfs';
+    }
+  | {
+      readonly backend: 'node';
+      /** Absolute host directory scanned for project manifests. */
+      readonly path: string;
+    };
+
+/**
+ * Persisted route for one linked checkout: git's worktree made addressable
+ * (charter D4, blueprint S4).
+ *
+ * It rides the *project's* storage root at `.tau/checkouts/<projectId>/<id>`,
+ * so `createRootedFileSystem('/checkouts/<id>')` needs no new capability and
+ * Rule 15's boundary is untouched. It is installed explicitly and is never a
+ * discovery candidate: `.tau` is dot-prefixed, so a scan skips it by the same
+ * rule that keeps app state out of project discovery.
+ *
+ * @public
+ */
+export type CheckoutRootConfig = ProjectRootConfig & {
+  readonly checkoutId: string;
+};
+
+/** Complete persisted project-route, checkout-route and discovery-root configuration. @public */
+export type ProjectRootConfiguration = {
+  readonly projects: readonly ProjectRootConfig[];
+  /** Linked checkouts of those projects. Absent means none; the call replaces the whole set. */
+  readonly checkouts?: readonly CheckoutRootConfig[];
+  readonly roots: readonly StorageRootConfig[];
+};
+
+/**
+ * Where one configured root stands (blueprint D1). `available` is the only
+ * state whose routes mount; every other state is a status, never a rejection.
+ * @public
+ */
+export type RootState = 'available' | 'notFound' | 'permission' | 'unreachable' | 'conflict' | 'error';
+
+/**
+ * One configured root's published status. It carries a code and never a path
+ * or a message, so it can be reported as it is.
+ * @public
+ */
+export type RootStatus = {
+  /** `resolveStorageRootKey()`: `node:<path>`, `webaccess:<workspaceId>`, … */
+  readonly storageRootKey: string;
+  readonly backend: StorageRootConfig['backend'];
+  readonly state: RootState;
+  /** An errno or Tau code (`ENOENT`, `EACCES`, `AUTHORITY_ROOT_OVERLAP`, `ROOT_DEADLINE`); absent when available. */
+  readonly code?: string;
+};
+
+/**
+ * One configuration entry the authority skipped instead of rejecting the call.
+ * @public
+ */
+export type SkippedConfigurationEntry = {
+  readonly kind: 'root' | 'project' | 'checkout';
+  readonly reason:
+    | 'duplicate-root'
+    | 'invalid-project-id'
+    | 'duplicate-route'
+    | 'non-canonical-path'
+    | 'checkout-rule'
+    | 'duplicate-physical-route'
+    | 'root-unavailable'
+    | 'provider-unavailable';
+  readonly projectId?: string;
+  readonly storageRootKey?: string;
+};
+
+/**
+ * What `configureProjectRoots` resolves with: one status per configured root,
+ * in configuration order, and every entry it skipped.
+ * @public
+ */
+export type ProjectRootConfigurationResult = {
+  readonly roots: readonly RootStatus[];
+  readonly skipped: readonly SkippedConfigurationEntry[];
+};
+
+/** The code a configuration rejects with when Home itself cannot be staged or admitted. @public */
+export const homeRootUnavailableCode = 'HOME_ROOT_UNAVAILABLE';
+
+/** The code of a root that missed its admission deadline. @public */
+export const rootDeadlineCode = 'ROOT_DEADLINE';
+
+const rootStateByCode: ReadonlyMap<string, RootState> = new Map<string, RootState>([
+  ['ENOENT', 'notFound'],
+  ['ENOTDIR', 'notFound'],
+  ['EACCES', 'permission'],
+  ['EPERM', 'permission'],
+  [rootDeadlineCode, 'unreachable'],
+  ['ETIMEDOUT', 'unreachable'],
+  ['EIO', 'unreachable'],
+  ['ESTALE', 'unreachable'],
+  ['EHOSTDOWN', 'unreachable'],
+  ['AUTHORITY_ROOT_OVERLAP', 'conflict'],
+]);
+
+/**
+ * The state and code one admission failure maps to (blueprint D1's error
+ * mapping). The code is the error's own `code`, or its `name` when it has none.
+ *
+ * @param error - What the root's provider or admission threw.
+ * @returns The state and the code to publish; never the message.
+ * @public
+ */
+export function rootStateForError(error: unknown): { readonly state: RootState; readonly code: string } {
+  const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown };
+  const resolved = typeof code === 'string' && code !== '' ? code : typeof name === 'string' ? name : 'Error';
+  return { state: rootStateByCode.get(resolved) ?? 'error', code: resolved };
+}
+
+/**
+ * Stable locator for a discovered project directory. `relativeDirectory` is the
+ * physical directory relative to the workspace root (`<slug>`), never the
+ * logical `/projects/<projectId>` route.
+ * @public
+ */
+export type ProjectLocator =
+  | {
+      readonly backend: 'indexeddb' | 'opfs';
+      readonly storageRootKey: string;
+      readonly relativeDirectory: string;
+    }
+  | {
+      readonly backend: 'webaccess';
+      readonly storageRootKey: string;
+      readonly relativeDirectory: string;
+      readonly workspaceId: string;
+    }
+  | {
+      readonly backend: 'node';
+      readonly storageRootKey: string;
+      readonly relativeDirectory: string;
+      readonly path: string;
+    };
+
+/** Exact scoped request for permanently removing one project directory. @public */
+export type PermanentDeleteProjectDirectoryInput = {
+  readonly projectId: string;
+  readonly providerBasePath: string;
+  readonly scope: StorageRootConfig;
+};
+
+/** Identity-safe outcome of permanent project-directory deletion. @public */
+export type PermanentDeleteProjectDirectoryResult =
+  | { readonly status: 'deleted' | 'absent' }
+  | { readonly status: 'identity-mismatch'; readonly actualProjectId: string }
+  | { readonly status: 'unidentifiable' };
+
+/** Exact scoped request for committing one journal-backed project directory. @public */
+export type CommitPendingProjectDirectoryInput = {
+  readonly projectId: string;
+  readonly providerBasePath: string;
+  readonly scope: StorageRootConfig;
+  readonly files: Readonly<
+    Record<string, { readonly content: Uint8Array<ArrayBuffer>; readonly mode?: '100644' | '100755' }>
+  >;
+  readonly manifest: Uint8Array<ArrayBuffer>;
+  /**
+   * An import staged on the same storage root (charter D12): its staged files
+   * move into the project before `files` and the manifest are written, so the
+   * journal carries this locator instead of the bytes. `files` then holds only
+   * what the create adds beside the import.
+   */
+  readonly staging?: { readonly operationId: string };
+};
+
+/** Identity-safe outcome of committing one journal-backed project directory. @public */
+export type CommitPendingProjectDirectoryResult =
+  | { readonly status: 'committed' | 'already-committed' }
+  | { readonly status: 'identity-mismatch'; readonly actualProjectId: string }
+  | { readonly status: 'unidentifiable-manifest' };
+
+/**
+ * Workspace scope passed to standalone-provider read operations via the
+ * `{ scope }` options bag on `readFile`, `getZippedDirectory`, and
+ * `readShallowDirectory`. Mirrors
  * {@link MountConfig} but without mount-only options.
  *
  * @public
@@ -61,8 +311,31 @@ export type WorkspaceScope =
       readonly workspaceId: string;
     }
   | {
-      readonly backend: 'indexeddb' | 'opfs' | 'memory';
+      readonly backend: 'indexeddb' | 'opfs';
+    }
+  | {
+      readonly backend: 'memory';
+      readonly storageRootKey: string;
+    }
+  | {
+      readonly backend: 'node';
+      readonly path: string;
     };
+
+/** Authority-resolved metadata installed in the low-level mount table. @public */
+export type MountMetadata = {
+  readonly backend: FileSystemBackend;
+  readonly storageRootKey?: string;
+  readonly providerBasePath?: string;
+  /** Required; {@link MountTable.mount} refuses an unclassified mount. */
+  readonly class: MountPathClass;
+  /**
+   * What this mount is to the product. Defaults to the route its prefix
+   * spells; declare it to install a mount the route grammar would otherwise
+   * claim (charter D10).
+   */
+  readonly kind?: RouteKind;
+};
 
 /**
  * A single mount entry mapping a path prefix to a provider.
@@ -72,14 +345,16 @@ export type MountEntry = {
   readonly prefix: string;
   readonly provider: FileSystemProvider;
   readonly backend: FileSystemBackend;
-  readonly preservePath?: boolean;
+  readonly storageRootKey?: string;
+  readonly providerBasePath: string;
+  readonly class: MountPathClass;
   /**
-   * Workspace identity for `webaccess` mounts only. Stable id minted from
-   * `generatePrefixedId(idPrefix.workspace)`; identifies the workspace
-   * row whose handle backs this mount. `undefined` for IDB / OPFS /
-   * memory mounts.
+   * What this mount is to the product, so a classifier reads the kind instead
+   * of re-parsing the prefix (charter D10).
    */
-  readonly workspaceId?: string;
+  readonly kind: RouteKind;
+  /** Route identity carried by the prefix: project id, checkout id or preview instance. */
+  readonly routeId?: string;
 };
 
 /**
@@ -88,10 +363,12 @@ export type MountEntry = {
  */
 export type MountResolution = {
   readonly provider: FileSystemProvider;
-  /** Path relative to the mount point (always starts with `/`). */
+  /** Root-relative path inside the selected provider. */
   readonly path: string;
   /** Backend type of the matching mount. */
   readonly backend: FileSystemBackend;
+  /** Exact mount entry that admitted the operation. Undefined only for named physical operations. */
+  readonly entry?: MountEntry;
 };
 
 /**
@@ -100,6 +377,7 @@ export type MountResolution = {
  * @public
  * @example <caption>Multi-backend routing</caption>
  * ```typescript
+ * // Internal to the bundled runtime; not part of its published surface.
  * import { MountTable } from '@taucad/filesystem';
  * import type { FileSystemProvider } from '@taucad/filesystem';
  *
@@ -107,49 +385,57 @@ export type MountResolution = {
  * declare const opfsProvider: FileSystemProvider;
  *
  * const table = new MountTable();
- * table.mount('/', projectProvider, { backend: 'indexeddb' });
- * table.mount('/node_modules', opfsProvider, { backend: 'opfs' });
+ * table.mount('/', projectProvider, { backend: 'indexeddb', class: 'authored' });
+ * table.mount('/node_modules', opfsProvider, { backend: 'opfs', class: 'derived' });
  *
  * const { provider, path } = table.resolve('/node_modules/lodash/index.js');
- * // provider === opfsProvider, path === '/lodash/index.js'
+ * // provider === opfsProvider, path === 'lodash/index.js'
  * ```
  */
 export class MountTable {
   private _mounts: MountEntry[] = [];
+  /** Derived view of {@link _mounts}, rebuilt on the next read after a change. */
+  private _prefixes: readonly string[] | undefined;
 
   /**
    * Add a mount point. Re-sorts the table by prefix length (longest first).
-   * If a mount already exists at the same prefix, the old provider is disposed
-   * before replacement.
+   * If a mount already exists at the same prefix, it is replaced. Providers
+   * are registry-owned and mounts never dispose them.
    *
    * @param prefix - Absolute path prefix (e.g. `/`, `/node_modules`).
    * @param provider - Provider to handle paths under this prefix.
    * @param config - Backend identifier and additional mount options.
    */
-  public mount(prefix: string, provider: FileSystemProvider, config: MountConfig): void {
+  public mount(prefix: string, provider: FileSystemProvider, config: MountMetadata): void {
+    if (!mountPathClasses.includes(config.class)) {
+      throw new TypeError(`Mount ${prefix} must declare authored | derived | authority-metadata.`);
+    }
     const normalized = this._normalizePrefix(prefix);
 
     const existingIndex = this._mounts.findIndex((m) => m.prefix === normalized);
     if (existingIndex !== -1) {
-      const existing = this._mounts[existingIndex]!;
-      existing.provider.dispose();
       this._mounts.splice(existingIndex, 1);
     }
 
-    const workspaceId = config.backend === 'webaccess' ? config.workspaceId : undefined;
+    const providerBasePath = assertRootedPath(config.providerBasePath ?? '');
+    const route = parseRoute(normalized);
     this._mounts.push({
       prefix: normalized,
       provider,
       backend: config.backend,
-      preservePath: config.preservePath,
-      workspaceId,
+      storageRootKey: config.storageRootKey,
+      providerBasePath,
+      class: config.class,
+      kind: config.kind ?? route.kind,
+      routeId: route.id,
     });
     this._mounts.sort((a, b) => b.prefix.length - a.prefix.length);
+    this._prefixes = undefined;
   }
 
   /**
    * Remove a mount point. Does not dispose the provider —
-   * `WorkspaceFileService.unmount` owns disposal. Subsequent reads under
+   * `ProviderRegistry` is its sole owner. Subsequent reads under
    * the prefix fall through to whichever broader mount covers the path
    * (typically the root mount), matching POSIX-like `umount` semantics.
    *
@@ -158,6 +444,21 @@ export class MountTable {
   public unmount(prefix: string): void {
     const normalized = this._normalizePrefix(prefix);
     this._mounts = this._mounts.filter((m) => m.prefix !== normalized);
+    this._prefixes = undefined;
+  }
+
+  /**
+   * Every live mount prefix, longest first.
+   *
+   * Cached because the index's boundary check reads it once per open root per
+   * mutation fact, and this table is the only thing that can know when it
+   * changed.
+   *
+   * @returns The live prefixes; the same array until the next mount change.
+   */
+  public get prefixes(): readonly string[] {
+    this._prefixes ??= this._mounts.map((mount) => mount.prefix);
+    return this._prefixes;
   }
 
   /**
@@ -168,42 +469,36 @@ export class MountTable {
    * @throws When no mount matches the path.
    */
   public resolve(absolutePath: string): MountResolution {
-    const normalized = absolutePath.endsWith('/') && absolutePath.length > 1 ? absolutePath.slice(0, -1) : absolutePath;
+    const normalized = resolveAuthorityPath(absolutePath);
 
     for (const entry of this._mounts) {
       if (entry.prefix === '/') {
-        return { provider: entry.provider, path: normalized, backend: entry.backend };
+        const suffix = normalized === '/' ? '' : normalized.slice(1);
+        return {
+          provider: entry.provider,
+          path: this._resolveProviderPath(entry.providerBasePath, suffix),
+          backend: entry.backend,
+          entry,
+        };
       }
 
       if (normalized === entry.prefix) {
         return {
           provider: entry.provider,
-          path: entry.preservePath ? normalized : '/',
+          path: entry.providerBasePath,
           backend: entry.backend,
+          entry,
         };
       }
 
       if (normalized.startsWith(entry.prefix + '/')) {
-        const resolvedPath = entry.preservePath ? normalized : normalized.slice(entry.prefix.length) || '/';
-        return { provider: entry.provider, path: resolvedPath, backend: entry.backend };
+        const suffix = normalized.slice(entry.prefix.length + 1);
+        const resolvedPath = this._resolveProviderPath(entry.providerBasePath, suffix);
+        return { provider: entry.provider, path: resolvedPath, backend: entry.backend, entry };
       }
     }
 
     throw new Error(`[MountTable] No mount matches path: ${absolutePath}`);
-  }
-
-  /**
-   * Resolve the backend identifier for the mount that handles a given path.
-   *
-   * @param absolutePath - Absolute virtual path.
-   * @returns Backend identifier, or `undefined` if no mount matches.
-   */
-  public resolveBackend(absolutePath: string): FileSystemBackend | undefined {
-    try {
-      return this.resolve(absolutePath).backend;
-    } catch {
-      return undefined;
-    }
   }
 
   /**
@@ -214,6 +509,17 @@ export class MountTable {
    */
   public listMounts(): readonly MountEntry[] {
     return this._mounts;
+  }
+
+  /**
+   * Return the exact installed mount entry at `prefix`, if present.
+   *
+   * @param prefix - Absolute virtual mount prefix.
+   * @returns The exact entry or `undefined` when no exact mount exists.
+   */
+  public getExactMount(prefix: string): MountEntry | undefined {
+    const normalized = this._normalizePrefix(prefix);
+    return this._mounts.find((mount) => mount.prefix === normalized);
   }
 
   /**
@@ -245,12 +551,14 @@ export class MountTable {
   /** Clear all mount points. */
   public dispose(): void {
     this._mounts = [];
+    this._prefixes = undefined;
+  }
+
+  private _resolveProviderPath(basePath: string, suffix: string): string {
+    return assertRootedPath(joinRelativePath(basePath, suffix));
   }
 
   private _normalizePrefix(prefix: string): string {
-    if (prefix === '/') {
-      return '/';
-    }
-    return prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+    return resolveAuthorityPath(prefix);
   }
 }

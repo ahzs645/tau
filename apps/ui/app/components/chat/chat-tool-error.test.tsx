@@ -15,7 +15,7 @@ const createError = (
   errorCode: ToolExecutionError['errorCode'],
   overrides: Partial<ToolExecutionError> = {},
 ): ToolExecutionError => {
-  // oxlint-disable-next-line typescript-eslint(consistent-type-assertions) -- test factory for discriminated union
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- test factory for discriminated union
   return {
     errorCode,
     message: 'Test error message',
@@ -96,7 +96,7 @@ describe('ChatToolError parsed errors', () => {
     expect(labelWrapper?.tagName).toBe('SPAN');
 
     const description = screen.getByText('web visit');
-    expect(description).toHaveClass('text-foreground/50');
+    expect(description).toHaveClass('text-muted-foreground');
     expect(description.className).not.toContain('font-mono');
 
     expect(labelWrapper?.textContent).toBe('Attempted web visit');
@@ -129,6 +129,34 @@ describe('ChatToolError parsed errors', () => {
 });
 
 describe('ChatToolError unparseable fallback', () => {
+  it('should display the persisted amplifier refusal without losing the chat', async () => {
+    const errorText = JSON.stringify({
+      errorCode: 'TOOL_INPUT_VALIDATION_FAILED',
+      message: '✖ Unrecognized key: "toolCallId"',
+    });
+    render(<ChatToolError errorText={errorText} icon={TriangleAlert} noun='model export' />);
+    expect(screen.getByText('tool input validation failed')).toBeInTheDocument();
+    expect(screen.getByText('model export')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button'));
+    expect(screen.getByText(errorText)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['UNKNOWN', 'unknown'],
+    ['AUTHENTICATION_ERROR', 'authentication error'],
+    ['IO_ERROR', 'io error'],
+    ['MCP_TRANSPORT_ERROR', 'mcp transport error'],
+  ])('shows the preserved %s category on the tool row', (errorCode, label) => {
+    render(
+      <ChatToolError
+        errorText={JSON.stringify({ errorCode, message: 'Failed.' })}
+        icon={TriangleAlert}
+        noun='screenshot'
+      />,
+    );
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
   it('should render Attempted with caller noun in the header', () => {
     render(<ChatToolError errorText='not json at all' icon={TriangleAlert} noun='file read' />);
 

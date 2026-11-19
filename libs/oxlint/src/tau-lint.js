@@ -23,17 +23,44 @@ import { noHardcodedColorRule } from './rules/no-hardcoded-color.js';
 import { noTimeUnitSuffixRule } from './rules/no-time-unit-suffix.js';
 import { noBareTimeIdentifierRule } from './rules/no-bare-time-identifier.js';
 import { noAsyncIifeRule } from './rules/no-async-iife.js';
-import { noMonacoCreateModelRule } from './rules/no-monaco-create-model.js';
+import { noBareRandomUuidRule } from './rules/no-bare-random-uuid.js';
+import { noDirectIndexeddbRule } from './rules/no-direct-indexeddb.js';
+import { noCloudImportOutsideLoaderRule } from './rules/no-cloud-import-outside-loader.js';
+import { noBareRpcErrorCodeRule } from './rules/no-bare-rpc-error-code.js';
 import { noHandrolledFanoutRule } from './rules/no-handrolled-fanout.js';
+import { noAwaitedMutationInLoopRule } from './rules/no-awaited-mutation-in-loop.js';
 import { noSceneOverrideMaterialRule } from './rules/no-scene-override-material.js';
 import { staticImportMetaUrlRule } from './rules/static-import-meta-url.js';
 import { requireUsingOnDisposableRule } from './rules/require-using-on-disposable.js';
+import { noImplInIndexRule } from './rules/no-impl-in-index.js';
+import { noTestBridgeRedeclarationRule } from './rules/no-test-bridge-redeclaration.js';
+import { pluginCapabilityFilenameRule } from './rules/plugin-capability-filename.js';
+import { noAuthoredPointerCursorRule } from './rules/no-authored-pointer-cursor.js';
+import { noInlineActorSelectorRule } from './rules/no-inline-actor-selector.js';
+import { noEngineeringVocabularyInCopyRule } from './rules/no-engineering-vocabulary-in-copy.js';
+import { noSaveRevisionInCopyRule } from './rules/no-save-revision-in-copy.js';
+import { noAuthInstanceOutsideApiAuthRule } from './rules/no-auth-instance-outside-api-auth.js';
+import { noStaticHeavyImportRule } from './rules/no-static-heavy-import.js';
+import { xstateContractRule } from './rules/xstate-contract.js';
+import { xstateOwnerMachineRule } from './rules/xstate-owner-machine.js';
+import { noAsciiEllipsisRule } from './rules/no-ascii-ellipsis.js';
+import { requireAccessibleNameRule } from './rules/require-accessible-name.js';
+import { noLabelReplacingLoaderRule } from './rules/no-label-replacing-loader.js';
+import { noArbitraryPixelSizeRule } from './rules/no-arbitrary-pixel-size.js';
+import { noAccentHoverRule } from './rules/no-accent-hover.js';
+import { noButtonSizeOverrideRule } from './rules/no-button-size-override.js';
+import { noRawHeadingTypeRule } from './rules/no-raw-heading-type.js';
+import { noRaisedOverlayLayerRule } from './rules/no-raised-overlay-layer.js';
+import { noPluginDefaultExportRule } from './rules/no-plugin-default-export.js';
+import { noPluginDefaultImportRule } from './rules/no-plugin-default-import.js';
+import { requirePluginPackageBindingRule } from './rules/require-plugin-package-binding.js';
+import { noKernelTypeAssertionRule } from './rules/no-kernel-type-assertion.js';
 
 /** @type {Plugin} */
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.14.0',
+    version: '1.33.0',
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
@@ -52,11 +79,38 @@ const plugin = {
     'no-time-unit-suffix': noTimeUnitSuffixRule,
     'no-bare-time-identifier': noBareTimeIdentifierRule,
     'no-async-iife': noAsyncIifeRule,
-    'no-monaco-create-model': noMonacoCreateModelRule,
+    'no-bare-random-uuid': noBareRandomUuidRule,
+    'no-direct-indexeddb': noDirectIndexeddbRule,
+    'no-cloud-import-outside-loader': noCloudImportOutsideLoaderRule,
+    'no-bare-rpc-error-code': noBareRpcErrorCodeRule,
     'no-handrolled-fanout': noHandrolledFanoutRule,
+    'no-awaited-mutation-in-loop': noAwaitedMutationInLoopRule,
     'no-scene-override-material': noSceneOverrideMaterialRule,
     'static-import-meta-url': staticImportMetaUrlRule,
     'require-using-on-disposable': requireUsingOnDisposableRule,
+    'no-impl-in-index': noImplInIndexRule,
+    'no-test-bridge-redeclaration': noTestBridgeRedeclarationRule,
+    'plugin-capability-filename': pluginCapabilityFilenameRule,
+    'no-authored-pointer-cursor': noAuthoredPointerCursorRule,
+    'no-inline-actor-selector': noInlineActorSelectorRule,
+    'no-engineering-vocabulary-in-copy': noEngineeringVocabularyInCopyRule,
+    'no-save-revision-in-copy': noSaveRevisionInCopyRule,
+    'no-auth-instance-outside-api-auth': noAuthInstanceOutsideApiAuthRule,
+    'no-static-heavy-import': noStaticHeavyImportRule,
+    'xstate-contract': xstateContractRule,
+    'xstate-owner-machine': xstateOwnerMachineRule,
+    'no-ascii-ellipsis': noAsciiEllipsisRule,
+    'require-accessible-name': requireAccessibleNameRule,
+    'no-label-replacing-loader': noLabelReplacingLoaderRule,
+    'no-arbitrary-pixel-size': noArbitraryPixelSizeRule,
+    'no-accent-hover': noAccentHoverRule,
+    'no-button-size-override': noButtonSizeOverrideRule,
+    'no-raw-heading-type': noRawHeadingTypeRule,
+    'no-raised-overlay-layer': noRaisedOverlayLayerRule,
+    'no-plugin-default-export': noPluginDefaultExportRule,
+    'no-plugin-default-import': noPluginDefaultImportRule,
+    'require-plugin-package-binding': requirePluginPackageBindingRule,
+    'no-kernel-type-assertion': noKernelTypeAssertionRule,
   },
 };
 

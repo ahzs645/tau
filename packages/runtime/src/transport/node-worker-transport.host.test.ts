@@ -4,8 +4,7 @@
  * Mirrors `web-worker-transport.host.test.ts` for the Node side: the
  * host owns `parentPort` acquisition from `node:worker_threads`, the
  * dispatcher wiring, and the crash trap. Consumers compose the worker
- * entry by importing `@taucad/runtime/worker/node` and never touch
- * `parentPort` directly.
+ * entry with `nodeWorkerHost()` and never touch `parentPort` directly.
  *
  * The test runs in the default Node vitest env (no jsdom) so we have a
  * real Worker scope. We use a `MessageChannel.port1` as a parentPort
@@ -13,32 +12,43 @@
  * it via a transport-internal acquirer hook.
  */
 
-import { MessageChannel } from 'node:worker_threads';
+import { MessageChannel, Worker as NodeWorker } from 'node:worker_threads';
+import type { WorkerOptions } from 'node:worker_threads';
 import { describe, it, expect, vi } from 'vitest';
+import { createRuntimeClient } from '#client/runtime-document-client-core.js';
+import { fromMemoryFs } from '#filesystem/runtime-filesystem.js';
 import type { KernelWorker } from '#framework/kernel-worker.js';
 import { nodeWorkerHost } from '#transport/node-worker-host.js';
+import { nodeWorkerTransport } from '#transport/node-worker-transport.js';
 import * as nodeParentPortModule from '#transport/_internal/node-parent-port.js';
 
 const createMockKernelWorker = (): KernelWorker => {
   const base = {
     initialize: vi.fn().mockResolvedValue(undefined),
-    render: vi.fn().mockResolvedValue({ success: true, data: [] }),
-    exportGeometry: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    describe: vi.fn().mockResolvedValue({ success: true, data: { parameters: {} }, issues: [] }),
+    exportDocument: vi.fn().mockResolvedValue({ success: true, data: [], issues: [] }),
+    snapshotSource: vi.fn().mockResolvedValue({ success: true, data: { files: [] }, issues: [] }),
+    transcode: vi.fn().mockResolvedValue({ success: true, data: [], issues: [] }),
     cleanup: vi.fn().mockResolvedValue(undefined),
     notifyFileChanged: vi.fn().mockResolvedValue(undefined),
-    handleOpenFile: vi.fn(),
-    handleStageAndOpenFile: vi.fn().mockResolvedValue(undefined),
-    handleUpdateParameters: vi.fn(),
-    handleSetOptions: vi.fn(),
-    configureMiddleware: vi.fn().mockResolvedValue(undefined),
+    handleOpenDocument: vi.fn(),
+    handleUpdateDocument: vi.fn(),
+    handleCloseDocument: vi.fn(),
+    handleOpenView: vi.fn(),
+    handleUpdateView: vi.fn(),
+    handleCloseView: vi.fn(),
+    handleOperationAbort: vi.fn(),
     ensureLoadedBundler: vi.fn().mockResolvedValue(undefined),
     setTelemetrySend: vi.fn(),
-    flushTelemetry: vi.fn(),
+    setDevtoolsTelemetryEnabled: vi.fn(),
+    setCompiledWasmModules: vi.fn(),
+    afterTerminalReply: vi.fn(),
+    setObservation: vi.fn(),
+    setRealm: vi.fn(),
     setSignalBuffer: vi.fn(),
-    setGeometryPoolBuffer: vi.fn(),
-    setFilePoolBuffer: vi.fn(),
-    handleWireAbort: vi.fn(),
-    capabilitiesManifest: { routes: [], renderSchemas: {} },
+    setComputeBinding: vi.fn(),
+    permitComputePublication: vi.fn(),
+    capabilitiesManifest: { routes: [], renderCapabilities: {} },
   };
   return base as unknown as KernelWorker;
 };
@@ -58,8 +68,6 @@ describe('nodeWorkerHost — real port acquisition (R3)', () => {
       expect(host.id).toBe('node-worker');
       expect(typeof host.open).toBe('function');
       expect(typeof host.adoptInitialize).toBe('function');
-      expect(typeof host.encodeGeometry).toBe('function');
-      expect(typeof host.encodeFile).toBe('function');
       expect(host.closed).toBeInstanceOf(Promise);
     } finally {
       acquireSpy.mockRestore();
@@ -120,4 +128,42 @@ describe('nodeWorkerHost — real port acquisition (R3)', () => {
       acquireSpy.mockRestore();
     }
   });
+});
+
+/** Runs the `.ts` fixture entry under tsx; the transport's own `workerCtor` seam. */
+class TsxWorker extends NodeWorker {
+  public constructor(url: string | URL, options?: WorkerOptions) {
+    super(url, { ...options, execArgv: ['--import', 'tsx'] });
+  }
+}
+
+describe('nodeWorkerTransport — workerData', () => {
+  it('should hand the consumer workerData to the worker entry', async () => {
+    const client = createRuntimeClient({
+      transport: nodeWorkerTransport({
+        url: new URL('node-worker-transport.fixture.ts', import.meta.url),
+        workerCtor: TsxWorker,
+        workerData: { projectRoot: '/projects/a', nested: { depth: 2 } },
+        fileSystem: fromMemoryFs({ 'main.fixture': 'workerData' }),
+      }),
+    });
+    const document = client.open({ source: { path: 'main.fixture' }, watch: false });
+    const view = document.view('model');
+    try {
+      const outcome = await view.rendering();
+      if (outcome.superseded || !outcome.rendering.success) {
+        throw new Error(`Expected one successful rendering: ${JSON.stringify(outcome)}`);
+      }
+      const report = JSON.parse(
+        new TextDecoder().decode(outcome.rendering.artifact.content as Uint8Array<ArrayBuffer>),
+      ) as {
+        workerData: unknown;
+      };
+      expect(report.workerData).toEqual({ projectRoot: '/projects/a', nested: { depth: 2 } });
+    } finally {
+      view.close();
+      document.close();
+      await client.shutdown();
+    }
+  }, 30_000);
 });

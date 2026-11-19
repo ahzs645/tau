@@ -1,0 +1,256 @@
+import { describe, expect, it } from 'vitest';
+
+import { desktopEnvironment } from '#main/environment.js';
+import { appOrigin } from '#main/app-protocol.js';
+import {
+  contentSecurityPolicy,
+  isMicrophonePermissionGranted,
+  isPermissionGranted,
+  isRendererUrl,
+  isTrustedSender,
+  navigationDecision,
+  navigationLogTarget,
+  postHogConnectOrigins,
+  rendererOrigins,
+} from '#main/navigation-policy.js';
+
+const production = rendererOrigins({ appOrigin });
+const development = rendererOrigins({ appOrigin, devServerUrl: 'http://localhost:3001' });
+
+describe('rendererOrigins', () => {
+  it('is exactly the app origin in production', () => {
+    expect(production).toEqual(['app://tau']);
+  });
+
+  it('admits the dev server when one is running', () => {
+    expect(development).toEqual(['app://tau', 'http://localhost:3001']);
+  });
+
+  it('grants nothing extra for a malformed dev URL', () => {
+    expect(rendererOrigins({ appOrigin, devServerUrl: 'not-a-url' })).toEqual(['app://tau']);
+  });
+});
+
+describe('isRendererUrl', () => {
+  it('accepts the app origin and rejects everything else', () => {
+    expect(isRendererUrl('app://tau/w/acme/widget', production)).toBe(true);
+    expect(isRendererUrl('https://example.com', production)).toBe(false);
+    /* A lookalike must not pass a prefix-style test. */
+    expect(isRendererUrl('app://tau.evil.example/', production)).toBe(false);
+    expect(isRendererUrl('http://localhost:3001/', production)).toBe(false);
+    expect(isRendererUrl('garbage', production)).toBe(false);
+  });
+});
+
+describe('navigationDecision', () => {
+  it('allows navigation inside the app', () => {
+    expect(navigationDecision('app://tau/settings', production)).toBe('allow');
+  });
+
+  it('sends real links to the user browser instead of loading them in-window', () => {
+    /* Loading a foreign origin in-window would hand it the preload bridge:
+     * requestServicesPort, tauAuth, the kernel bridge — and main would keep
+     * attaching the bearer to API-origin requests it makes. */
+    expect(navigationDecision('https://example.com/docs', production)).toBe('open-externally');
+    expect(navigationDecision('http://example.com', production)).toBe('open-externally');
+    expect(navigationDecision('mailto:someone@example.com', production)).toBe('open-externally');
+  });
+
+  it('refuses everything else outright rather than handing it to the OS', () => {
+    // oxlint-disable-next-line eslint/no-script-url -- the point of the test is that this is refused
+    for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'tau://auth/callback', 'not a url']) {
+      expect([url, navigationDecision(url, production)]).toEqual([url, 'deny']);
+    }
+  });
+});
+
+describe('navigationLogTarget', () => {
+  it('should log only the origin of a link, never its path, query or fragment', () => {
+    /* A vendor sign-in URL Cmd+clicked in the sign-in tab carries its OAuth state in the query. */
+    expect(navigationLogTarget('https://vendor.example/oauth/authorize?code=abc&state=xyz#frag')).toBe(
+      'https://vendor.example',
+    );
+  });
+
+  it('should log only the scheme of a URL without a host', () => {
+    expect(navigationLogTarget('mailto:someone@example.com')).toBe('mailto:');
+  });
+
+  it('should log nothing of a string that is not a URL', () => {
+    expect(navigationLogTarget('not a url')).toBe('invalid');
+  });
+});
+
+describe('isTrustedSender', () => {
+  it('accepts the app top-level document only', () => {
+    expect(isTrustedSender({ url: 'app://tau/' }, production)).toBe(true);
+  });
+
+  it('refuses a nested frame, which still holds the preload bridge', () => {
+    expect(isTrustedSender({ url: 'app://tau/', parent: {} }, production)).toBe(false);
+  });
+
+  it('refuses a document that navigated away, and an absent frame', () => {
+    expect(isTrustedSender({ url: 'https://example.com/' }, production)).toBe(false);
+    expect(isTrustedSender(undefined, production)).toBe(false);
+  });
+});
+
+describe('postHogConnectOrigins', () => {
+  it.each([
+    ['https://us.i.posthog.com', ['https://us.i.posthog.com', 'https://us-assets.i.posthog.com']],
+    ['https://eu.i.posthog.com/', ['https://eu.i.posthog.com', 'https://eu-assets.i.posthog.com']],
+    ['https://ph.example.com/ingest', ['https://ph.example.com']],
+  ] as const)('should grant %s and the host its remote config comes from', (apiHost, origins) => {
+    expect(postHogConnectOrigins(apiHost)).toEqual(origins);
+    const sources = contentSecurityPolicy(postHogConnectOrigins(apiHost))
+      .split('; ')
+      .find((entry) => entry.startsWith('connect-src '))!
+      .split(' ');
+    expect(sources).toEqual(expect.arrayContaining([...origins]));
+  });
+
+  it('should grant nothing for a missing or unusable host', () => {
+    expect(postHogConnectOrigins(undefined)).toEqual([]);
+    expect(postHogConnectOrigins('not a url')).toEqual([]);
+  });
+});
+
+describe('contentSecurityPolicy', () => {
+  const policy = contentSecurityPolicy(['http://localhost:4000', 'ws://localhost:4001']);
+  const directive = (name: string): string =>
+    policy.split('; ').find((entry) => entry.startsWith(`${name} `)) ?? `${name} <absent>`;
+
+  it.each(['staging', 'production'] as const)(
+    'should allow only the %s bucket origin for signed transfers',
+    (channel) => {
+      const environment = desktopEnvironment({}, { locked: true, channel });
+      const storage = new URL(environment['TAU_S3_ENDPOINT']!).origin;
+      const sources = contentSecurityPolicy([storage])
+        .split('; ')
+        .find((entry) => entry.startsWith('connect-src '))!
+        .split(' ');
+      const bucket = channel === 'staging' ? 'tau-staging-au-content-private' : 'tau-prod-content-private';
+      const signedAction = new URL(
+        `https://${bucket}.271cffba9907a76320b6a4993f756601.r2.cloudflarestorage.com/tenant/object?signature=fixture`,
+      );
+      expect(sources).toContain(signedAction.origin);
+      expect(sources.filter((source) => source.includes('cloudflarestorage.com'))).toEqual([signedAction.origin]);
+    },
+  );
+
+  it.each([
+    ['staging', 'https://files.taucad.dev'],
+    ['production', 'https://files.tau.new'],
+  ] as const)('should reach the %s files service origin for signed LFS downloads', (channel, files) => {
+    const environment = desktopEnvironment({}, { locked: true, channel });
+    expect(environment['TAU_FILES_ORIGIN']).toBe(files);
+    const sources = contentSecurityPolicy([new URL(environment['TAU_FILES_ORIGIN']!).origin])
+      .split('; ')
+      .find((entry) => entry.startsWith('connect-src '))!
+      .split(' ');
+    expect(sources).toContain(files);
+  });
+
+  it('starts from deny-all so every directive is an explicit grant', () => {
+    expect(policy.startsWith("default-src 'none'; ")).toBe(true);
+  });
+
+  it('reaches the npm registry, the API and WebSocket origins, a handed-over loopback daemon, plus GitHub public reads for Import, and nothing else', () => {
+    /* The Import page reads repository metadata and trees from api.github.com without credentials, as the
+     * web app's policy (apps/ui/netlify.toml) already allows; archives still come through the API. */
+    expect(directive('connect-src')).toBe(
+      "connect-src 'self' data: blob: https://api.github.com https://registry.npmjs.org http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:* http://localhost:4000 ws://localhost:4001",
+    );
+  });
+
+  it('loads images from the app and GitHub avatars only', () => {
+    /* Import and GitHub connections show the repository owner's picture from GitHub's avatar host. */
+    expect(directive('img-src')).toBe("img-src 'self' data: blob: https://avatars.githubusercontent.com");
+  });
+
+  it('admits no remote script origin, while allowing what the SPA measurably needs', () => {
+    /* React Router's built index.html carries five inline scripts; without
+     * 'unsafe-inline' the app does not boot. What the directive still buys is
+     * the part that matters: no remote origin can supply code. */
+    const scriptSource = directive('script-src');
+    expect(scriptSource).toContain("'self'");
+    expect(scriptSource).toContain("'unsafe-inline'");
+    expect(scriptSource).toContain("'wasm-unsafe-eval'");
+    expect(scriptSource.split(' ')).not.toContain("'unsafe-eval'");
+    expect(scriptSource).not.toContain('http://');
+    expect(scriptSource).not.toContain('https://');
+  });
+
+  it('allows blob workers and closes the redirect-style escapes', () => {
+    expect(directive('worker-src')).toBe("worker-src 'self' blob:");
+    for (const closed of ['object-src', 'base-uri', 'form-action', 'frame-ancestors']) {
+      expect([closed, directive(closed)]).toEqual([closed, `${closed} 'none'`]);
+    }
+  });
+});
+
+describe('isPermissionGranted', () => {
+  it('grants persistent storage, because evictable storage is data loss on a native app', () => {
+    /* The file manager mounts `/node_modules` on OPFS and keeps its file pool
+     * there; denying this leaves all of it evictable. */
+    expect(isPermissionGranted('persistent-storage')).toBe(true);
+  });
+
+  it('grants the sanitized clipboard write every Copy button needs', () => {
+    /* Chromium asks for this on every `navigator.clipboard.writeText`. Denying
+     * it rejected all nine of the app's clipboard writes with
+     * `NotAllowedError: Write permission denied.` */
+    expect(isPermissionGranted('clipboard-sanitized-write')).toBe(true);
+  });
+
+  it('should grant user-initiated native viewer fullscreen', () => {
+    expect(isPermissionGranted('fullscreen')).toBe(true);
+  });
+
+  it('denies everything the app never asks for', () => {
+    for (const permission of [
+      'media',
+      'geolocation',
+      'notifications',
+      'clipboard-read',
+      'background-sync',
+      'web-app-installation',
+      'openExternal',
+      'automatic-fullscreen',
+      'pointerLock',
+      'keyboardLock',
+    ]) {
+      expect([permission, isPermissionGranted(permission)]).toEqual([permission, false]);
+    }
+  });
+});
+
+describe('isMicrophonePermissionGranted', () => {
+  const dictation = {
+    permission: 'media',
+    frame: { url: 'app://tau/index.html' },
+    requester: 'app://tau/index.html',
+    mainFrame: true,
+    mediaTypes: ['audio'],
+    origins: production,
+  };
+
+  it('should grant audio-only capture to the trusted top-level renderer for dictation', () => {
+    expect(isMicrophonePermissionGranted(dictation)).toBe(true);
+  });
+
+  it('should refuse foreign, framed, camera, mixed and unattributed media requests', () => {
+    for (const request of [
+      { ...dictation, requester: 'https://foreign.example' },
+      { ...dictation, mainFrame: false },
+      { ...dictation, frame: { url: 'https://foreign.example' } },
+      { ...dictation, mediaTypes: ['video'] },
+      { ...dictation, mediaTypes: ['audio', 'video'] },
+      { ...dictation, requester: undefined },
+      { ...dictation, permission: 'geolocation' },
+    ]) {
+      expect(isMicrophonePermissionGranted(request)).toBe(false);
+    }
+  });
+});

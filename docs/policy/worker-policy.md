@@ -1,11 +1,14 @@
 ---
 title: 'Worker Lifecycle Policy'
-description: 'Standard patterns for creating, managing, and terminating Web Workers in Tau. Covers lazy creation, termination guarantees, resource cleanup, mobile budgets, XState/React integration.'
+description: 'Standard patterns for creating, managing, and terminating Web Workers in Tau, plus worker topology: when a feature warrants its own worker, runtime-client consumers, and bridge writes. Covers lazy creation, termination, cleanup, mobile budgets, XState/React integration.'
 status: active
 created: '2026-03-04'
-updated: '2026-03-05'
+updated: '2026-09-23'
 related:
+  - docs/policy/compatibility-policy.md
+  - docs/policy/runtime-architecture-policy.md
   - docs/research/worker-management.md
+  - docs/research/headless-thumbnail-rendering-architecture-v4.md
 ---
 
 # Worker Lifecycle Policy
@@ -22,6 +25,7 @@ Workers consume significant memory (120+ MB each for WASM kernels). Unmanaged wo
 2. **Termination must be guaranteed** — cleanup must survive errors, aborts, and race conditions
 3. **Resources must be explicitly released** — workers, MessagePorts, Blob URLs, event listeners
 4. **Mobile-first worker budgets** — design for constrained devices; desktop gets the surplus
+5. **Worker-per-feature isolation** — independent compute features get independent workers; orchestration and authoritative project writes remain with the owner (Rules 13–15)
 
 ## Worker Lifecycle Phases
 
@@ -93,6 +97,8 @@ URL.revokeObjectURL(url); // Worker has already loaded the script
 | Desktop (8+ cores) | `hardwareConcurrency`  | Default                              |
 
 Kernel workers consume 120+ MB each (WASM heap). On mobile Safari, exceeding ~200 MB total page memory causes silent tab crashes.
+
+The headless image feature is one lazy worker shared by thumbnails and plain image captures. Its owner terminates it after 60 seconds without queued or active work. This is the budget control for the initial implementation; measuring whether a shorter adaptive timeout is worthwhile is post-implementation work, not a prerequisite abstraction.
 
 ---
 
@@ -204,12 +210,14 @@ entry: ({ context }) => {
 
 // CORRECT (XState): Invoked promise actor — cancelled on state exit
 invoke: {
-  src: fromPromise(async ({ signal }) => {
-    const worker = await createExpensiveWorker();
-    signal.throwIfAborted();
-    return worker;
+  src: createAsyncLogic({
+    run: async ({ signal }) => {
+      const worker = await createExpensiveWorker();
+      signal.throwIfAborted();
+      return worker;
+    },
   }),
-  onDone: assign({ worker: ({ event }) => event.output }),
+  onDone: { context: ({ event }) => ({ worker: event.output }) },
 }
 
 // CORRECT (React): Cancelled flag in useEffect
@@ -265,7 +273,7 @@ Check the flag at every yield point (after every `await`).
 Best for workers tied to a specific machine state. Cleanup is automatic on state exit.
 
 ```typescript
-const workerActor = fromCallback(({ sendBack }) => {
+const workerActor = createCallbackLogic(({ sendBack }) => {
   const worker = new Worker(workerUrl, { type: 'module' });
 
   worker.onmessage = (event) => {
@@ -287,71 +295,87 @@ states: {
 }
 ```
 
-### Pattern B: Worker in machine context with exit cleanup
+### Pattern B: Machine-lifetime worker as a callback child
 
-Best for workers whose lifecycle spans the entire machine (not tied to a single state).
+Best for workers whose lifecycle spans the entire machine. Let a callback child own abrupt disposal; use explicit closing states and acknowledgements before stopping when writes or other effects must drain.
 
 ```typescript
-setup({
-  actions: {
-    destroyWorker({ context }) {
-      context.destroyed = true;
-      if (context.worker) {
-        context.worker.terminate();
-        context.worker = undefined;
-      }
-    },
-  },
-}).createMachine({
-  exit: ['destroyWorker'],
-  // ...
+const machineWorker = createCallbackLogic(() => {
+  const worker = new Worker(workerUrl, { type: 'module' });
+  return () => worker.terminate();
+});
+
+const machine = setup({ actors: { machineWorker } }).createMachine({
+  context: ({ spawn, actors }) => ({ workerRef: spawn(actors.machineWorker) }),
 });
 ```
 
-**Critical**: `exit` actions on the root machine config run when the machine receives `XSTATE_STOP`. This is the last-resort cleanup.
+**Critical**: Abrupt root `actor.stop()` stops child actors and runs their callback cleanup; it does not run the root machine's `exit`. Stopping or aborting cannot undo an external effect that already escaped.
 
-### Pattern C: Async worker initialization as invoked promise
+### Pattern C: Async worker initialization inside a callback actor
 
 Best for workers that require async setup (WASM compilation, filesystem connection).
 
 ```typescript
-const initWorkerActor = fromPromise<Worker>(async ({ signal }) => {
+const initWorkerActor = createCallbackLogic(({ sendBack }) => {
+  const controller = new AbortController();
   const worker = new Worker(workerUrl, { type: 'module' });
-  await waitForWorkerReady(worker, signal);
-  signal.throwIfAborted();
-  return worker;
+
+  waitForWorkerReady(worker, controller.signal).then(
+    () => {
+      if (!controller.signal.aborted) {
+        sendBack({ type: 'workerReady' });
+      }
+    },
+    (error) => {
+      if (!controller.signal.aborted) {
+        sendBack({ type: 'workerFailed', error });
+      }
+    },
+  );
+
+  return () => {
+    controller.abort();
+    worker.terminate();
+  };
 });
 
 // In machine:
+initial: 'active',
 states: {
-  initializing: {
+  active: {
     invoke: {
       src: 'initWorkerActor',
-      onDone: {
-        target: 'ready',
-        actions: assign({ worker: ({ event }) => event.output }),
+    },
+    initial: 'initializing',
+    states: {
+      initializing: {
+        on: { workerReady: { target: 'ready' } },
       },
-      onError: {
-        target: 'error',
-        // Worker creation failed; no cleanup needed (worker.terminate() on error)
-      },
+      ready: {},
+    },
+    on: {
+      workerFailed: { target: 'error' },
+      close: { target: 'closed' },
     },
   },
+  error: {},
+  closed: {},
 }
 ```
 
-**Key property**: `fromPromise` receives an `AbortController.signal`. When the state exits (e.g., machine stops during initialization), the signal is aborted and the promise is rejected.
+**Key property**: The parent `active` state owns the callback through both `initializing` and `ready`. Leaving `active` after close or failure, or stopping the root actor, aborts initialization and terminates the worker. Abort guards suppress late ready/failure events.
 
 ### XState cleanup guarantees
 
-| Mechanism                      | Cleanup guarantee                                 | Use case                         |
-| ------------------------------ | ------------------------------------------------- | -------------------------------- |
-| `fromCallback` return function | Called on actor stop (state exit or machine stop) | Worker lifecycle tied to a state |
-| `fromPromise` abort signal     | Aborted on actor stop                             | Async initialization             |
-| Machine `exit` action          | Runs on `XSTATE_STOP`                             | Machine-wide cleanup             |
-| `stopChild(ref)`               | Sends `XSTATE_STOP` to the child                  | Dynamic child actor cleanup      |
+| Mechanism                             | Cleanup guarantee                                 | Use case                         |
+| ------------------------------------- | ------------------------------------------------- | -------------------------------- |
+| `createCallbackLogic` return function | Called on actor stop (state exit or machine stop) | Worker lifecycle tied to a state |
+| `createAsyncLogic` abort signal       | Aborted on actor stop                             | Async initialization             |
+| Root machine `exit`                   | Does not run on abrupt root stop                  | Never an abrupt cleanup owner    |
+| `enq.stop(ref)`                       | Stops the child and runs its cleanup              | Dynamic child actor cleanup      |
 
-**Known limitation**: The XState v5 source contains a TODO noting that if exit actions or `stopChildren` throw, child actors may be orphaned. Always use error-isolated cleanup (Rule 5).
+**Known limitation**: if an exit effect or a child's stop throws, later children may be orphaned. Always use error-isolated cleanup (Rule 5).
 
 ---
 
@@ -441,6 +465,67 @@ function createBridge(worker: Worker): BridgeHandle {
 
 ---
 
+## Worker Topology Rules
+
+### Rule 13: Worker-per-feature — when a new worker is mandatory
+
+Adding a worker is always acceptable. It is **mandatory** when any row below says so; reuse an existing worker only when none does:
+
+| Situation                                                                                                          | Verdict                               |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| The feature's compute would serialize behind another feature's compute (thumbnail render vs parameter-edit render) | New worker                            |
+| An agent-facing capability must stay responsive during interactive compute                                         | New worker                            |
+| Byte processing (encode/decode/transcode) would otherwise land on the main thread                                  | New worker                            |
+| Sequential phases of one feature (a kernel's build → mesh → export pipeline)                                       | Reuse                                 |
+| Same feature, too infrequent to justify a resident worker                                                          | Reuse, or lazy spawn + idle terminate |
+
+Worker count is the cheap resource; main-thread latency and interactive-render latency are the scarce ones. Budgets (Rule 4) still bound totals on constrained devices — pair every new worker with lazy creation (Rule 1) and idle termination.
+
+Thumbnails and plain agent captures are two requests of the same infrequent **headless image** feature. They share one serialized queue, runtime client, file-pool buffer, lazy worker, and idle timeout. They do not justify separate WASM workers merely because their callers differ.
+
+**Why**: JavaScript is single-threaded per realm; two features sharing a worker serialize even when logically independent.
+
+### Rule 14: Feature workers may embed a full runtime client
+
+A feature worker may consume `createRuntimeClient` with the shared runtime definition (kernels + middleware), becoming a peer of the interactive worker rather than a bespoke pipeline. Cache identity includes kernel inputs and the selected **mutative** middleware participants for the phase and route: stable plugin ID, version, options, and selected order. Non-mutative per-client taps (`mutates: false`) are allowed because they cannot alter cached bytes and are excluded from artifact identity. A mutative middleware that participates in a selected phase or route must be hashed even when it happens to make no byte change for one request.
+
+**Why**: Dogfooding the runtime keeps one pathway across browser/CLI/agent hosts; any chain difference silently forks the cache instead of hitting it.
+
+### Rule 15: Encoded results return to the authoritative writer
+
+A feature worker may return a bounded, owned encoded artifact (`Uint8Array<ArrayBuffer>`) to its main-thread orchestrator with ownership transfer. The orchestrator writes that artifact through the one authoritative `FileManager` instance, and consumers learn of it through ordinary filesystem change events. Geometry buffers and intermediate kernel state must not make this hop.
+
+**Why**: Encoding stays off the main thread while durable project mutation stays behind one filesystem authority. The bounded transfer avoids copying, and the authoritative write ensures watchers, cross-tab propagation, caches, and activity rules observe one mutation path.
+
+CORRECT:
+
+```typescript
+// Worker: export through the composed runtime, then transfer the owned result
+const result = await client.export('webp', {
+  source: { path: sourcePath },
+  content: { includeEdges: true },
+  exportOptions,
+});
+if (!result.success || result.data.length !== 1) {
+  throw new Error('Image export failed');
+}
+const file = result.data[0];
+postMessage({ type: 'imageReady', file }, [file.bytes.buffer]);
+
+// Main-thread owner: one authoritative project write
+const receivedFile = event.data.file;
+await fileManager.client.writeFile(thumbnailPath, receivedFile.bytes);
+```
+
+INCORRECT:
+
+```typescript
+// Incorrect: a feature worker creates a second durable project writer
+await bridgedFilesystem.writeFile(thumbnailPath, webp);
+```
+
+---
+
 ## Diagnostics
 
 ### Development-time worker audit
@@ -496,8 +581,8 @@ if (crossOriginIsolated && performance.measureUserAgentSpecificMemory) {
 - [MDN: Transferable objects](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Transferable_objects)
 - [Chrome: Transferable objects – Lightning fast](https://developer.chrome.com/blog/transferable-objects-lightning-fast)
 - [HTML Living Standard: Workers](https://html.spec.whatwg.org/dev/workers.html)
-- [XState v5: Callback actors](https://stately.ai/docs/callback-actors)
-- [XState v5: Invoked actors](https://stately.ai/docs/invoke)
+- [XState: Callback actors](https://stately.ai/docs/callback-actors)
+- [XState: Invoked actors](https://stately.ai/docs/invoke)
 - [web.dev: Off the Main Thread](https://web.dev/articles/off-main-thread)
 - [ES Module Asset Injection Policy](./es-module-policy.md)
 - [Worker Management Research](../research/worker-management.md)

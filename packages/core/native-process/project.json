@@ -1,0 +1,28 @@
+{
+  "name": "native-process-core",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/core/native-process",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:package", "ci:shell"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build"],
+      "options": {
+        "command": "tsdown",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "test:native-sandbox-integration": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "The kernel worker's native sandbox as the packaged app runs it: a NativeProcessSession launched through the OS sandbox, its children sampled and torn down. Skips without a usable sandbox unless CI=1, which forbids the skip (the Linux shell conformance guests run it). Never cached: it proves the machine it runs on."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/packages/core/native-process",
+        "command": "vitest run --config vitest.config.ts src/native-sandbox.integration.test.ts"
+      }
+    }
+  }
+}

@@ -1,26 +1,33 @@
+import { z } from 'zod';
 import type { ToolExecutionError } from '#types/tool.types.js';
 import type { RpcExecutionError, RpcValidationError } from '#types/rpc.types.js';
 import type { RpcClientError } from '#schemas/rpc.schema.js';
 import { isRpcExecutionError, isRpcClientError } from '#types/rpc.types.js';
 
-/**
- * All possible tool execution error codes.
- * @public
- */
-export const toolErrorCodes = [
-  'TOOL_EXECUTION_TIMEOUT',
-  'CLIENT_DISCONNECTED',
-  'NO_CLIENT_CONNECTION',
-  'TOOL_INPUT_VALIDATION_FAILED',
-  'TOOL_OUTPUT_VALIDATION_FAILED',
-  'TOOL_EXECUTION_ERROR',
-  'USER_INTERRUPTED',
-  'STREAM_ERROR',
-  'TOOL_NO_RESULTS',
-] as const;
+import { toolExecutionErrorSchema } from '#schemas/tool-error.schema.js';
+import type { toolErrorCodes } from '#schemas/tool-error.schema.js';
 
 /** @public */
 export type ToolErrorCode = (typeof toolErrorCodes)[number];
+
+/** Shared envelope for structured tool-result errors. @public */
+export const toolErrorEnvelopeSchema = z.looseObject({
+  errorCode: z.string(),
+  message: z.unknown().optional(),
+});
+
+/** @public */
+export type ToolErrorEnvelope = z.infer<typeof toolErrorEnvelopeSchema>;
+
+/** Parse a JSON tool-result error envelope, returning undefined for opaque results. @public */
+export const parseToolErrorEnvelope = (content: string): ToolErrorEnvelope | undefined => {
+  try {
+    const result = toolErrorEnvelopeSchema.safeParse(JSON.parse(content));
+    return result.success ? result.data : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Type guard to check if a value is a ToolExecutionError.
@@ -28,13 +35,7 @@ export type ToolErrorCode = (typeof toolErrorCodes)[number];
  * @public
  */
 export function isToolExecutionError(value: unknown): value is ToolExecutionError {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'errorCode' in value &&
-    typeof (value as { errorCode: unknown }).errorCode === 'string' &&
-    toolErrorCodes.includes((value as { errorCode: string }).errorCode as ToolErrorCode)
-  );
+  return toolExecutionErrorSchema.safeParse(value).success;
 }
 
 /**
@@ -169,6 +170,10 @@ export function getToolErrorTitle(errorCode: ToolErrorCode): string {
       return 'Stream interrupted during';
     }
 
+    case 'ORPHANED_TOOL_CALL': {
+      return 'Incomplete tool call for';
+    }
+
     case 'TOOL_NO_RESULTS': {
       return 'No results from';
     }
@@ -211,6 +216,10 @@ export function getToolErrorDescription(errorCode: ToolErrorCode): string {
 
     case 'STREAM_ERROR': {
       return 'The chat stream ended before this tool could finish.';
+    }
+
+    case 'ORPHANED_TOOL_CALL': {
+      return 'The chat stream ended before this tool produced a result.';
     }
 
     case 'TOOL_NO_RESULTS': {

@@ -1,0 +1,19 @@
+[
+  {
+    "name": "Tall rack",
+    "parameters": {
+      "rack_height": 140,
+      "rack_depth": 92,
+      "vent_spacing": 7
+    }
+  },
+  {
+    "name": "Mini rack",
+    "parameters": {
+      "rack_width": 90,
+      "rack_depth": 65,
+      "rack_height": 72,
+      "vent_spacing": 10
+    }
+  }
+]

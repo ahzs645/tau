@@ -1,0 +1,91 @@
+{
+  "//": "PicoGK runtime closure (D6, R2 Variant B): Microsoft's .NET runtime archive verbatim, pinned by the sha256 of the bytes whose sha512 releases.json publishes (prepare-picogk-dotnet.mts --layer checks both), so a locked prepare reads it from the dependency hosts' blobs/sha256/<hex>, plus the Tau framework-dependent layer (ReadyToRun worker, patched PicoGK.dll, Roslyn, SkiaSharp, the Tau-built engine) that the macOS release job builds, ad-hoc signs, digests and uploads to the dependencies.tau.new blobs/ and an immutable GitHub Release. `dotnet/` and `tau-worker/` are siblings under the closure root. The worker pin is rewritten from a published layer's record (tau-layer.json on its picogk-layer-<16 hex> release) by scripts/compose-tau-plugin.mts, never by hand; publish.yml proves both URLs serve the pinned bytes.",
+  "schemaVersion": 1,
+  "kernels": {
+    "picogk": {
+      "requires": ["runtime"],
+      "extensions": ["cs"]
+    }
+  },
+  "dependencies": {
+    "runtime": [
+      {
+        "target": {
+          "runtime": "native",
+          "os": "darwin",
+          "arch": "arm64",
+          "minimumOsVersion": "14.0"
+        },
+        "files": [
+          {
+            "name": "dotnet",
+            "integrity": "sha256-iEek8zIaXEKmgs34VRSJ2+1uvlLATxvlhJTsDVaHJAM=",
+            "byteLength": 33246120,
+            "format": "tar.gz",
+            "origin": {
+              "kind": "url",
+              "urls": [
+                "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.11/dotnet-runtime-10.0.11-osx-arm64.tar.gz"
+              ]
+            },
+            "destination": "dotnet"
+          },
+          {
+            "name": "worker",
+            "integrity": "sha256-93Z9I2dF/TFveekrjiOUl+qdRL+xzpV8jLPOBduc3IE=",
+            "byteLength": 24488520,
+            "format": "tar.gz",
+            "origin": {
+              "kind": "url",
+              "urls": [
+                "https://dependencies.tau.new/blobs/sha256/f7767d236745fd316f79e92b8e239497ea9d44bfb1ce957c8cb3ce05db9cdc81",
+                "https://github.com/taucad/tau/releases/download/picogk-layer-f7767d236745fd31/tau-picogk-layer-darwin-arm64.tar.gz"
+              ]
+            },
+            "destination": "tau-worker",
+            "unpackedByteLength": 67040278
+          }
+        ]
+      },
+      {
+        "target": {
+          "runtime": "native",
+          "os": "linux",
+          "arch": "x64",
+          "libc": "glibc",
+          "minimumLibcVersion": "2.28"
+        },
+        "files": [
+          {
+            "name": "dotnet",
+            "integrity": "sha256-fYR+yqEj765AsRTF1FZB5Fa0zWXlEUtGEgldRdfHGmM=",
+            "byteLength": 36639275,
+            "format": "tar.gz",
+            "origin": {
+              "kind": "url",
+              "urls": [
+                "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.11/dotnet-runtime-10.0.11-linux-x64.tar.gz"
+              ]
+            },
+            "destination": "dotnet"
+          },
+          {
+            "name": "worker",
+            "integrity": "sha256-mKUHJ8IUNFbNlD+QeY7ucCr7IH58pQXeT6Y1NnlRm6o=",
+            "byteLength": 22739529,
+            "format": "tar.gz",
+            "origin": {
+              "kind": "url",
+              "urls": [
+                "https://dependencies.tau.new/blobs/sha256/98a50727c2143456cd943f90798eee702afb207e7ca505de4fa6353679519baa",
+                "https://github.com/taucad/tau/releases/download/picogk-layer-98a50727c2143456/tau-picogk-layer-linux-x64.tar.gz"
+              ]
+            },
+            "destination": "tau-worker",
+            "unpackedByteLength": 56900096
+          }
+        ]
+      }
+    ]
+  }
+}

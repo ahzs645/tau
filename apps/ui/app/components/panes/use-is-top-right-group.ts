@@ -1,201 +1,92 @@
-import { useEffect, useState } from 'react';
-import type { DockviewApi, DockviewGroupPanel, DockviewPanelApi } from 'dockview-react';
+import { useCallback, useSyncExternalStore } from 'react';
+import type { DockviewApi, DockviewGroupPanel } from 'dockview-react';
 
-/**
- * Tolerance (px) when comparing bounding-rect edges.
- * Accounts for sub-pixel rounding differences between elements.
- */
-export const edgeTolerance = 2;
-
-/** CSS selector for an open floating panel. */
-const floatingPanelSelector = '[data-slot="floating-panel"][data-state="open"]';
-
-/**
- * Synchronously checks whether a Dockview group occupies the top-right
- * corner of its nearest ancestor floating panel.
- *
- * Exported for unit testing.  The companion hook {@link useIsTopRightGroup}
- * calls this inside a `ResizeObserver` / `onDidLayoutChange` callback.
- *
- * A group is considered "top-right" when:
- * 1. It is in the grid (not floating / popout).
- * 2. It is inside an open floating panel (`data-state="open"`).
- * 3. Its right edge aligns with the floating panel's right edge.
- * 4. Its top edge aligns with the floating panel's top edge.
- */
-export function checkGroupIsTopRight(group: DockviewGroupPanel): boolean {
-  if (group.api.location.type !== 'grid') {
-    return false;
+/** Dockview keeps branch wrappers visible even when every leaf beneath them is hidden. */
+function hasVisibleGroup(view: Element): boolean {
+  if (view.querySelector(':scope > .dv-groupview')) {
+    return true;
   }
 
-  const floatingPanel = group.element.closest(floatingPanelSelector);
-
-  if (!floatingPanel) {
-    return false;
-  }
-
-  const panelRect = floatingPanel.getBoundingClientRect();
-  const groupRect = group.element.getBoundingClientRect();
-
-  if (groupRect.width === 0 || groupRect.height === 0) {
-    return false;
-  }
-
-  const isAtRight = Math.abs(groupRect.right - panelRect.right) < edgeTolerance;
-  const isAtTop = Math.abs(groupRect.top - panelRect.top) < edgeTolerance;
-
-  return isAtRight && isAtTop;
+  return [
+    ...view.querySelectorAll(
+      ':scope > .dv-branch-node > .dv-split-view-container > .dv-view-container > .dv-view.visible',
+    ),
+  ].some((child) => hasVisibleGroup(child));
 }
 
 /**
- * Determines whether a Dockview group occupies the top-right corner of its
- * nearest ancestor floating panel.
- *
- * The check is re-evaluated whenever the group element resizes (via
- * `ResizeObserver`) or the Dockview layout changes.  Using `ResizeObserver`
- * ensures reliable timing: the parent Allotment pane uses a double-RAF
- * pattern to finalise layout, and a simple single-RAF would fire too early.
- * `ResizeObserver` fires after layout, so the group has its correct size.
+ * Resolve a corner from Dockview's split topology, without measuring pixels.
+ * Outer lane resizing and hiding cannot transfer ownership between groups.
+ * Stop at this Dockview so nested Dockviews own their corners independently.
  */
-export function useIsTopRightGroup(group: DockviewGroupPanel, containerApi: DockviewApi): boolean {
-  const [isTopRight, setIsTopRight] = useState(false);
-
-  useEffect(() => {
-    let rafId: number | undefined;
-
-    function scheduleCheck(): void {
-      if (rafId !== undefined) {
-        cancelAnimationFrame(rafId);
-      }
-
-      rafId = requestAnimationFrame(check);
-    }
-
-    function check(): void {
-      rafId = undefined;
-      setIsTopRight(checkGroupIsTopRight(group));
-    }
-
-    // Re-check when the group element resizes.  This covers:
-    //  - initial mount (observer fires immediately on observe)
-    //  - parent panel open/close (Allotment visibility changes)
-    //  - container resize (Allotment sash drag, window resize)
-    const resizeObserver = new ResizeObserver(scheduleCheck);
-    resizeObserver.observe(group.element);
-
-    // Re-check when the dockview layout changes (split, move, panel add/remove)
-    const disposable = containerApi.onDidLayoutChange(scheduleCheck);
-
-    return () => {
-      if (rafId !== undefined) {
-        cancelAnimationFrame(rafId);
-      }
-
-      resizeObserver.disconnect();
-      disposable.dispose();
-    };
-  }, [group, containerApi]);
-
-  return isTopRight;
-}
-
-/**
- * Synchronously checks whether a Dockview panel's group occupies the
- * top-right corner of its nearest `.dv-dockview` ancestor.
- *
- * Exported for unit testing.  The companion hook {@link useIsTopRightPanel}
- * calls this inside a `ResizeObserver` / `onDidLayoutChange` callback.
- */
-export function checkPanelIsTopRight(panelApi: DockviewPanelApi): boolean {
-  const { group } = panelApi;
-
-  if (group.api.location.type !== 'grid') {
+export function checkGroupIsTopCorner(group: DockviewGroupPanel, side: 'left' | 'right'): boolean {
+  if (group.api.location.type !== 'grid' || !group.api.isVisible) {
     return false;
   }
 
-  const dockviewContainer = group.element.closest('.dv-dockview');
-
-  if (!dockviewContainer) {
+  const root = group.element.closest('.dv-dockview');
+  if (!root) {
     return false;
   }
 
-  const containerRect = dockviewContainer.getBoundingClientRect();
-  const groupRect = group.element.getBoundingClientRect();
-
-  if (groupRect.width === 0 || groupRect.height === 0) {
-    return false;
+  if (group.api.isMaximized()) {
+    return true;
   }
 
-  const isAtRight = Math.abs(groupRect.right - containerRect.right) < edgeTolerance;
-  const isAtTop = Math.abs(groupRect.top - containerRect.top) < edgeTolerance;
+  let hasView = false;
+  for (let ancestor = group.element.parentElement; ancestor && ancestor !== root; ancestor = ancestor.parentElement) {
+    if (!ancestor.classList.contains('dv-view')) {
+      continue;
+    }
 
-  return isAtRight && isAtTop;
+    hasView = true;
+    if (!ancestor.classList.contains('visible')) {
+      return false;
+    }
+
+    const views = ancestor.parentElement;
+    const split = views?.parentElement;
+    if (!views?.classList.contains('dv-view-container') || !split?.classList.contains('dv-split-view-container')) {
+      return false;
+    }
+
+    const siblings = [...views.children].filter((view) => view.matches('.dv-view.visible') && hasVisibleGroup(view));
+    const corner = side === 'right' && split.classList.contains('dv-horizontal') ? siblings.at(-1) : siblings[0];
+    if (ancestor !== corner) {
+      return false;
+    }
+  }
+
+  return hasView;
 }
 
-/**
- * Determines whether a Dockview panel's group occupies the top-right corner
- * of its dockview container.
- *
- * Similar to {@link useIsTopRightGroup} but designed for use inside panel
- * content components that receive a `DockviewPanelApi` rather than a raw
- * `DockviewGroupPanel`.  It compares the group's bounding rect against the
- * nearest `.dv-dockview` ancestor (the dockview root element).
- *
- * The check re-runs when:
- * - The group element resizes (ResizeObserver)
- * - The dockview layout changes (split, move, panel add/remove)
- * - The panel moves to a different group (`onDidGroupChange`)
- */
-export function useIsTopRightPanel(panelApi: DockviewPanelApi, containerApi: DockviewApi): boolean {
-  const [isTopRight, setIsTopRight] = useState(false);
+/** {@link checkGroupIsTopCorner} for the top-right corner. */
+export const checkGroupIsTopRight = (group: DockviewGroupPanel): boolean => checkGroupIsTopCorner(group, 'right');
 
-  useEffect(() => {
-    let rafId: number | undefined;
-    let resizeObserver: ResizeObserver | undefined;
+const getServerSnapshot = (): boolean => false;
 
-    function scheduleCheck(): void {
-      if (rafId !== undefined) {
-        cancelAnimationFrame(rafId);
-      }
-
-      rafId = requestAnimationFrame(check);
-    }
-
-    function check(): void {
-      rafId = undefined;
-      setIsTopRight(checkPanelIsTopRight(panelApi));
-    }
-
-    // Observe the current group element for resize.
-    // When the panel moves to a different group, we disconnect the old
-    // observer and create a new one for the new group element.
-    function observeGroup(): void {
-      resizeObserver?.disconnect();
-      resizeObserver = new ResizeObserver(scheduleCheck);
-      resizeObserver.observe(panelApi.group.element);
-    }
-
-    observeGroup();
-
-    // Re-check when the dockview layout changes (split, move, panel add/remove)
-    const layoutDisposable = containerApi.onDidLayoutChange(scheduleCheck);
-
-    // Re-check when the panel moves to a different group
-    const groupChangeDisposable = panelApi.onDidGroupChange(() => {
-      observeGroup();
-      scheduleCheck();
-    });
-
-    return () => {
-      if (rafId !== undefined) {
-        cancelAnimationFrame(rafId);
-      }
-
-      resizeObserver?.disconnect();
-      layoutDisposable.dispose();
-      groupChangeDisposable.dispose();
-    };
-  }, [panelApi, containerApi]);
-
-  return isTopRight;
+function useIsTopCornerGroup(group: DockviewGroupPanel, containerApi: DockviewApi, side: 'left' | 'right'): boolean {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      // Dockview publishes completed structural changes in a microtask. No
+      // resize observer or later animation frame is needed to read its tree.
+      const layout = containerApi.onDidLayoutChange(onChange);
+      const maximized = containerApi.onDidMaximizedGroupChange(onChange);
+      return () => {
+        layout.dispose();
+        maximized.dispose();
+      };
+    },
+    [containerApi],
+  );
+  const getSnapshot = useCallback(() => checkGroupIsTopCorner(group, side), [group, side]);
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
+
+/** Whether a Dockview group holds its container's top-right corner. */
+export const useIsTopRightGroup = (group: DockviewGroupPanel, containerApi: DockviewApi): boolean =>
+  useIsTopCornerGroup(group, containerApi, 'right');
+
+/** Whether a Dockview group holds its container's top-left corner. */
+export const useIsTopLeftGroup = (group: DockviewGroupPanel, containerApi: DockviewApi): boolean =>
+  useIsTopCornerGroup(group, containerApi, 'left');

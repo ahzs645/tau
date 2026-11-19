@@ -1,0 +1,124 @@
+---
+title: Installation
+description: Install @taucad/runtime and wire it into your framework.
+docType: tutorial
+icon: lucide:download
+---
+
+Install the runtime framework, one kernel, and one bundler, then wire the runtime into your framework.
+
+## Prerequisites
+
+- Node.js 24 or later
+- A package manager: npm, pnpm, or yarn
+
+## Install the Packages
+
+The runtime ships no kernels, so install at least one kernel plugin (`@taucad/replicad`) and the `@taucad/esbuild` bundler that compiles TypeScript model code. `zod` is a required peer dependency.
+
+```bash tab="pnpm"
+pnpm add @taucad/runtime @taucad/replicad @taucad/esbuild zod
+```
+
+```bash tab="npm"
+npm install @taucad/runtime @taucad/replicad @taucad/esbuild zod
+```
+
+```bash tab="yarn"
+yarn add @taucad/runtime @taucad/replicad @taucad/esbuild zod
+```
+
+Add other plugins the same way when you need them — see [Choose a Kernel](../guides/choosing-a-kernel).
+
+### Native Build123d and SMLibPy
+
+`@taucad/build123d` and `@taucad/smlibpy` are not browser plugins, and a global Python does not make them usable: `tau prepare build123d` and `tau prepare smlibpy` seal each pinned CPython and wheels. Read [Build123d](../reference/build123d) or [SMLibPy](../reference/smlibpy) first.
+
+### SMLib
+
+For NURBS BRep models, install `@taucad/smlib` with the runtime, bundler, and Zod; Vite needs one [bundler setting](../guides/bundler-configuration).
+
+```bash
+npm install @taucad/runtime @taucad/esbuild @taucad/smlib zod
+```
+
+### tscircuit
+
+To use TSX electronics boards, install `@taucad/tscircuit` with the runtime, bundler, and Zod. Its bundled engine needs no package-manager hook or bundler alias. See [tscircuit](../reference/tscircuit) for the authoring contract.
+
+```bash
+npm install @taucad/runtime @taucad/esbuild @taucad/tscircuit zod
+```
+
+## Framework Configuration
+
+### Vite and React Router
+
+Add the runtime's Vite integration beside the framework plugins. Vite flattens the plugin array returned by `tauRuntime()`, so do not spread it:
+
+```typescript
+import { reactRouter } from '@react-router/dev/vite';
+import { tauRuntime } from '@taucad/runtime/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [tauRuntime(), reactRouter()],
+});
+```
+
+For plain Vite, omit `reactRouter()`. The same `tauRuntime()` call supports Vite 7 and 8.
+
+### Next.js
+
+```typescript
+import { withTauRuntime } from '@taucad/runtime/nextjs/config';
+
+export default withTauRuntime();
+```
+
+The composer supports Next.js 15/Webpack and Next.js 16/Turbopack without a version branch.
+
+### Electron
+
+```typescript
+import { electronRuntimeConfig } from '@taucad/runtime/electron/vite';
+
+export default electronRuntimeConfig({
+  main: {},
+  preload: {},
+  renderer: {},
+});
+```
+
+Continue with [Bundling](../guides/bundling#electron) for utility-process entries and the [Framework Integrations API](../api/frameworks) for every process helper.
+
+### Node.js
+
+No build configuration is needed on the server. Compose a runtime, and use `fromNodeFs` to read model files from disk:
+
+```typescript
+import { createRuntimeClient } from '@taucad/runtime';
+import { fromNodeFs } from '@taucad/runtime/filesystem/node';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { replicad } from '@taucad/replicad';
+import { esbuild } from '@taucad/esbuild';
+
+const runtime = defineRuntime({
+  plugins: [replicad(), esbuild()],
+});
+
+const client = createRuntimeClient({
+  transport: inProcessTransport({ runtime, fileSystem: fromNodeFs('/path/to/project') }),
+});
+```
+
+## Subpath Imports
+
+The package splits its API across subpaths so bundles carry only what they import: the client from `@taucad/runtime`, transports from `/transport/*`, filesystems from `/filesystem` (with platform backends behind `/node` and `/browser`), and authoring entries from `/kernel`, `/middleware`, and `/bundler`. Each [API Reference](../api/client) page names the subpath that exports its symbols.
+
+## What's Next
+
+- [Quick Start](./quick-start) — Render your first 3D model
+- [LLMs.txt](./llms-txt) — Feed Runtime docs into AI tools
+- [API Reference: Client](../api/client) — Full API documentation for `createRuntimeClient`

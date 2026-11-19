@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Wide",
+    "parameters": {
+      "plate": [
+        90,
+        42,
+        6
+      ],
+      "post_radius": 9,
+      "hole_radius": 3.4
+    }
+  },
+  {
+    "name": "Compact",
+    "parameters": {
+      "plate": [
+        54,
+        32,
+        5
+      ],
+      "post_radius": 6.5,
+      "hole_radius": 2.8
+    }
+  }
+]

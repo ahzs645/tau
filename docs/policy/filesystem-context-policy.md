@@ -3,10 +3,14 @@ title: 'Filesystem Context Policy'
 description: 'Rules for the filesystem-backed context management pipeline: transcripts, tool offloading, skills, memory, compaction, and middleware ordering.'
 status: active
 created: '2026-03-24'
-updated: '2026-05-12'
+updated: '2026-11-10'
 related:
+  - docs/research/provider-reasoning-replay-contract.md
   - docs/policy/context-engineering-policy.md
+  - docs/policy/filesystem-authority-policy.md
+  - docs/research/client-host-topology-and-filesystem-authority.md
   - docs/research/transcript-search-architecture.md
+  - docs/research/chat-compaction-safety-blueprint.md
 ---
 
 # Filesystem Context Policy
@@ -21,68 +25,22 @@ Tau implements dynamic context discovery (see `docs/policy/context-engineering-p
 
 ### 1. Unified Append-Only Transcripts
 
-Store all conversation events in a single append-only JSONL file per chat session at `.tau/transcripts/{chatId}.jsonl`.
+Store authoritative portable host events at `<workspace>/.tau/chats/<chatId>/events.jsonl` through that workspace's filesystem authority. Reuse the canonical `AgentLogEvent` schema and `EventLogAppender`. Await the storage owner's qualified append/flush acknowledgement before committing the corresponding durable event, publishing its replay cursor or claiming durable completion. A remote execution host uses the same authority; unreachable or uncertain writes are explicit refusal/buffered state, not a successful local shadow log. The host-owned write path is protected by filesystem authority Rule 15.
 
-**Why**: A unified, append-only file enables grep-based recall without loading full history into context. Separate files or overwrite semantics lose prior data.
+There is no separate transcript projection: `.tau/transcripts/**` never had a writer (W17, 2026-09-13), so `.tau/chats/<chatId>/events.jsonl` — with per-device segments under `events/<deviceId>.jsonl` when more than one device writes — is the only chat log and the only grep target. Filter its `AgentLogEvent` lines by `type`; there is no role-based diagnostic schema and no second replay authority.
 
-#### JSONL Schema
+**Why**: Authority-owned append-only events preserve truthful replay; one log means one truth (I3), and a grep over it is bounded recall without a second copy.
 
-Every line has a top-level `role` field for fast filtering (`rg '"role":"user"'`):
-
-| Role                   | Fields                                                                            | Content                                  |
-| ---------------------- | --------------------------------------------------------------------------------- | ---------------------------------------- |
-| `user`                 | `role, content, timestamp`                                                        | Full user message text                   |
-| `assistant`            | `role, content, timestamp`                                                        | Full assistant text response             |
-| `assistant` (thinking) | `role, type, content, timestamp`                                                  | Thinking block text (`type: "thinking"`) |
-| `tool`                 | `role, toolName, toolCallId, contentLength, timestamp`                            | Metadata only — no full output           |
-| `compaction`           | `role, messagesEvicted, tokensBeforeCompaction, tokensAfterCompaction, timestamp` | Compaction event marker                  |
-
-#### Content Block Rules
-
-When an AI message contains structured content blocks (thinking + text + tool_use):
-
-- **Split into separate lines**: Each thinking and text block becomes its own JSONL line
-- **Drop signatures**: Opaque binary data, not greppable, wastes storage
-- **Drop index fields**: Positional metadata, not useful for search
-- **Skip tool_use blocks**: Captured separately by `wrapToolCall` as `role: "tool"` lines
-
-CORRECT:
-
-```jsonl
-{"role":"assistant","type":"thinking","content":"The user wants a cube with 20mm sides.","timestamp":"..."}
-{"role":"assistant","content":"I'll create a cube for you using OpenSCAD.","timestamp":"..."}
-```
-
-INCORRECT:
-
-```jsonl
-{
-  "role": "assistant",
-  "content": "[{\"type\":\"thinking\",\"thinking\":\"...\",\"signature\":\"Et0BCkY...\"}]"
-}
-```
-
-### 2. Adding Transcript Event Types
-
-When adding a new event type to the transcript:
-
-1. Add a new `role` value or use an existing role with a distinguishing `type` field
-2. Include only fields useful for agent grep — no opaque data, no full tool output
-3. Always include `timestamp`
-4. Append via `appendTranscriptLine()` — fire-and-forget, never blocks the agent loop
-5. Update the JSONL schema table in Rule 1
-6. Add tests in `transcript.middleware.test.ts`
-
-### 3. Transcript Search Prompt
+### 2. Transcript Search Prompt
 
 The system prompt includes a `<transcript_search>` section (`cad-agent.prompt.ts`) that teaches the agent grep-first retrieval. When modifying this section:
 
 - Keep under 10 lines — the agent already knows `grep` and `read_file`
-- Mention the path pattern (`.tau/transcripts/{chatId}.jsonl`)
+- Mention the path pattern (`.tau/chats/<chatId>/events.jsonl`)
 - Emphasize grep-first, windowed reads — never linear scanning
-- List available `role` values so the agent can filter effectively
+- List the `AgentLogEvent` `type` values the agent can filter on
 
-### 4. Tool Result Offloading
+### 3. Tool Result Offloading
 
 Large tool results are written to `.tau/tool-results/<chatId>/<toolCallId>.{json,txt}` via the tool offloading middleware, then replaced in-context with a generic `<persisted-output>` envelope that preserves the head of the original payload.
 
@@ -90,54 +48,58 @@ Large tool results are written to `.tau/tool-results/<chatId>/<toolCallId>.{json
 
 Never increase the offloading threshold without measuring the impact on context window utilization.
 
-### 5. Skills and Memory via Filesystem
+### 4. Skills and Memory via Filesystem
 
-| Feature | Path             | Middleware               | Loading                        |
-| ------- | ---------------- | ------------------------ | ------------------------------ |
-| Skills  | `.tau/skills/`   | `createSkillsMiddleware` | Per-invocation from filesystem |
-| Memory  | `.tau/AGENTS.md` | `createMemoryMiddleware` | Per-invocation from filesystem |
+| Feature       | Source                                        | Loading                                                             |
+| ------------- | --------------------------------------------- | ------------------------------------------------------------------- |
+| Skills        | `.agents/skills/` (client-assembled catalog)  | Metadata in the turn context; body on `use_skill` activation        |
+| Memory        | Client-assembled AGENTS.md payload (`memory`) | User-role `<system-reminder>` message in the turn context           |
+| Recent skills | `RecentSkillsPort`, per-chat                  | Fingerprint-reconciled; content restored after a compaction summary |
 
-Do not add static skill or memory content to the system prompt. Let the middleware load it from files so users can edit, version, and customize it.
+`createTurnContextSnapshot` (`packages/agent-host/src/harness/cad-middleware.ts`) resolves all three once per turn, and the session commits the result with `turn.history-projection-committed` before the first model call, so a replay sees the exact context the model saw.
 
-### 6. Context Compaction Pipeline
+Do not add static skill or memory content to the system prompt. Let the turn context load it from the client payload / filesystem so users can edit, version, and customize it.
 
-Compaction fires when estimated token count exceeds 85% of the model's context window:
+### 5. Context Compaction Pipeline
 
-1. **Truncate tool args** in old messages (lightweight, no API call)
-2. **Proactive compaction** via summarization service (evict + summarize older messages)
-3. **Emergency re-compaction** on `ContextOverflowError` (calibrates estimation multiplier)
+`packages/agent-host/src/harness/compaction.ts` owns compaction for Tau-hosted sessions. It runs before the first model call of a prompt or resume, between agent turns, and once more if the provider still reports a context overflow. The escalation order is tool-result clearing, then summarizing compaction, per `docs/policy/context-engineering-policy.md`.
 
-When compaction fires:
+Invariants:
 
-- Evicted messages are **appended** (not overwritten) to the unified transcript file
-- A `role: "compaction"` marker event is appended to the transcript
-- A `data-context-compaction` SSE event is emitted to the UI
-- The model call proceeds with compacted messages — the stream is never interrupted
+- **Decide over the durable log, never the live array.** Every lane compacts a fresh projection of the session log (the same hydration a reload performs) and then replaces the agent's in-memory history with the result. Do not resolve durable ids from in-memory message objects: the model-call middleware clones messages, so object identity is not message identity. Request-shaped copies (trimmed tool results, rewritten assistant text) never enter durable-facing state.
+- **Compaction wraps the model call outermost**, so an overflow retry re-enters every request-shaping middleware.
+- **One compaction pass per model call.** No ephemeral per-call lane or memo beside the durable lanes.
+- **The log is append-only and a refused compaction leaves it byte-identical.** Run every check before the first append. A pass writes either tool-result clearings or one `history.compacted`, never both, and never a clearing for a row it evicts.
+- **A cut always evicts when more than one message exists.** Tool results are never cut points, retained tool results keep their calls, whole turn clusters are evicted together, and the retained tail is checked against the budget the trigger computed (window − reserve − measured overhead). A summary that leaves the request within the keep-recent budget of the trigger threshold escalates the cut in the same pass, so the next message does not compact again.
+- **Both tiers land at a fifth of the window.** A pass rewrites the provider's cached prefix from its first change and makes the reasoning behind that point unreplayable, so what it buys is the distance to the next pass. A summary keeps at most a fifth of the window of the newest history, or less when the measured overhead leaves less. Landing just under the trigger freed 26,000 tokens for 112,000 rewritten on recorded long chats (`docs/research/provider-reasoning-replay-contract.md`, Finding 11 and ruling U15).
+- **Accept tool-result clearing only when it reaches that landing point by itself.** Otherwise go straight to a summary and persist no clearings. The emergency clearings below are the exception.
+- **Degrade, do not refuse.** A summarizer that fails, returns nothing or cannot fit its input yields a placeholder summary that names the evicted range and points at the project files, and the attempt records why. The run's own abort stops compaction before anything is written. A tool result the model has not answered yet that alone exceeds the budget is cleared, with a marker telling the model to narrow its request, before any wider eviction is considered, because the only cut after it evicts every earlier turn; so is any result larger than a whole request, which no summarizer can read. A result the model already answered is evicted and summarized with its turn. Tau never sends the same unreduced history again, and never partially reconstructs a native provider turn without its provider-required signatures and ids.
+- **Pinned content survives verbatim**: the person's newest message and every `<safety>` block are preserved; for the other `keepContextTags` tags the newest instance is preserved and older instances are evictable, so reminders cannot accumulate into an unevictable history.
+- **A compaction failure is a resumable turn failure, not a dead chat.** Compaction codes are resumable, Resume keeps the turn's work, and every attempt records its lane, tier, token counts, eviction count and any discarded overflow response in the existing log events.
+- **A compaction that evicted everything it could is kept, not refused.** The fixed-overhead figure also absorbs token-estimate error, so the provider is the judge of whether the request fits. The circuit breaker counts only completed summaries that remain over budget, which is how a chat that truly cannot be rescued ends.
 
-All compaction writes use `append`, never `write` (overwrite). Overwrite semantics lose prior transcript data.
+Tests for this pipeline drive `createAgentSession` through the real middleware chain; they do not hand-populate `MessageIdentities` (`compaction.safety.test.ts`). Evidence: `docs/research/chat-compaction-safety-blueprint.md`.
 
-### 7. Middleware Ordering
+### 6. Model-Call Middleware Ordering
 
-The middleware chain order in `chat.service.ts` is load-bearing:
+`packages/agent-host/src/harness/session.ts` composes pi's single `streamFn` slot with `composeModelCallMiddleware`; the first entry is outermost:
 
 ```
-1. Tool metrics + error handling     (observe tool calls)
-2. Tool offloading + result trimmer  (reduce context before compaction)
-3. Compaction                        (compress if needed)
-4. Message sanitization              (clean content)
-5. Prompt caching                    (must follow compaction)
-6. Logging + observability           (observe final state)
-7. Transcript                        (capture final events)
-8. Skills + memory                   (load from filesystem)
+1. Compaction            (outermost: an overflow retry re-enters every request-shaping middleware)
+2. Tool-result trimmer   (shapes structured results for the model)
+3. Safeguards            (loop and repetition guards; also owns `transformContext`)
+4. LaTeX delimiters      (normalises the final assistant text)
 ```
 
-**Why**: Transcript middleware must run after compaction and observability — it captures the final state of each model turn. Moving it earlier would miss compaction events or record pre-sanitized content.
+**Why**: model-call middleware rewrites only the request copy, or the returned assistant message, and never history already in the log (Rule 5). Durable changes take their own channel: tool results through `afterToolCall`, compaction through clearing rows or one `history.compacted`, turn context through `turn.history-projection-committed`. Pick the channel by the durability the change needs; never rely on a request rewrite to persist.
 
-### 8. All Writes Are Non-Blocking
+### 7. Most Context Writes Are Non-Blocking
 
-Every transcript and offloading write uses fire-and-forget (`void promise`). Context persistence must never block or delay the agent loop.
+Routine optional offloading writes may be non-blocking when they are only observability or recall enhancements; observe their failures. Do not return a persisted-output reference before its referenced bytes are available. Authoritative host event appends are awaited under Rule 1, not fire-and-forget diagnostics.
 
-**Why**: A filesystem or RPC failure during write should not prevent the agent from responding. Transcript loss is acceptable; agent hang is not.
+**Why**: An optional diagnostic failure need not prevent a response, but missing authoritative history or a false persisted-output receipt is not successful persistence.
+
+Required compaction commits are the exception. When compaction is the gate that makes a provider request valid and small enough to send, the transcript append and state rewrite are part of the request contract. Failure blocks provider dispatch and is surfaced noisily instead of being hidden behind a degraded continuation.
 
 ## Anti-Patterns
 
@@ -158,13 +120,19 @@ Every transcript and offloading write uses fire-and-forget (`void promise`). Con
 
 ### 4. Blocking Writes
 
-- INCORRECT: `await appendTranscriptLine(...)` in the middleware hot path
-- CORRECT: `void appendTranscriptLine(...)` — fire-and-forget
+- INCORRECT: Treating optional diagnostic persistence as a mandatory provider-dispatch gate
+- CORRECT: Observe optional diagnostic writes without blocking ordinary capture
+- REQUIRED: Await authoritative host events and referenced-output publication; required compaction commits fail closed before provider dispatch
 
-### 5. Static Injection of Dynamic Context
+### 5. Implicit Compaction Fallbacks
+
+- INCORRECT: On required compaction failure, sending truncated old messages, tail-only history, or partially cloned tool-call turns to the provider
+- CORRECT: Throw a typed pre-provider compaction or replay-metadata error with structured diagnostics
+
+### 6. Static Injection of Dynamic Context
 
 - INCORRECT: Hardcoding skill content or memory in the system prompt string
-- CORRECT: Let `createSkillsMiddleware` / `createMemoryMiddleware` load from filesystem
+- CORRECT: Let `createTurnContextSnapshot` load them from the client payload
 
 ## Summary Checklist
 
@@ -173,11 +141,10 @@ When adding or modifying filesystem-based context:
 - [ ] Data is greppable by the agent (full text, no opaque binary)
 - [ ] No duplication with another middleware hook
 - [ ] Uses append-only semantics (not overwrite)
-- [ ] Writes are fire-and-forget (void the promise)
+- [ ] Optional diagnostics are non-blocking; authoritative events, referenced output publication and required compaction have truthful awaited commit boundaries
 - [ ] `timestamp` is included on every JSONL line
-- [ ] Schema table in Rule 1 is updated for new event types
 - [ ] Tests added in the corresponding middleware test file
-- [ ] Middleware ordering in `chat.service.ts` is preserved
+- [ ] Model-call middleware ordering in `packages/agent-host/src/harness/session.ts` is preserved
 
 ## References
 

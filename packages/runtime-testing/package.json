@@ -1,0 +1,102 @@
+{
+  "name": "@taucad/runtime-testing",
+  "version": "0.1.0-beta.9",
+  "description": "Runtime and geometry test utilities for Tau plugin authors",
+  "type": "module",
+  "sideEffects": false,
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/runtime-testing"
+  },
+  "homepage": "https://github.com/taucad/tau/tree/main/packages/runtime-testing#readme",
+  "bugs": {
+    "url": "https://github.com/taucad/tau/issues"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "cad",
+    "testing",
+    "typescript"
+  ],
+  "author": "Richard Fontein",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser/three-renderer-output": "./src/browser/three-renderer-output.ts",
+    "./preparation": "./src/preparation/index.ts",
+    "./roster": "./src/roster/kernel-roster-coverage.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
+      },
+      "./browser/three-renderer-output": {
+        "types": "./dist/browser/three-renderer-output.d.mts",
+        "import": "./dist/browser/three-renderer-output.mjs",
+        "default": "./dist/browser/three-renderer-output.mjs"
+      },
+      "./preparation": {
+        "types": "./dist/preparation/index.d.mts",
+        "import": "./dist/preparation/index.mjs",
+        "default": "./dist/preparation/index.mjs"
+      },
+      "./roster": {
+        "types": "./dist/roster/kernel-roster-coverage.d.mts",
+        "import": "./dist/roster/kernel-roster-coverage.mjs",
+        "default": "./dist/roster/kernel-roster-coverage.mjs"
+      },
+      "./package.json": "./package.json"
+    },
+    "imports": {}
+  },
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "catalog:",
+    "@gltf-transform/functions": "catalog:",
+    "@taucad/cache-core": "workspace:*",
+    "@taucad/geometry-core": "workspace:*",
+    "@taucad/parameters": "workspace:*",
+    "deepmerge": "catalog:"
+  },
+  "peerDependencies": {
+    "@taucad/runtime": "^0.1.0-beta.0",
+    "three": "^0.184.0",
+    "vitest": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "three": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@taucad/runtime": "workspace:*",
+    "@types/three": "catalog:",
+    "jsdom": "catalog:",
+    "three": "catalog:",
+    "vitest": "catalog:",
+    "vitest-mock-extended": "catalog:"
+  },
+  "taucad": {
+    "hostTarget": "browser"
+  }
+}

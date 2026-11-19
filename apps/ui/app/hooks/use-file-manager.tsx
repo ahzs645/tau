@@ -1,107 +1,118 @@
+import { observeHomeProjectSaves } from '@taucad/files-ui/filesystem/observe-home-project-saves';
+import { FileServicesProvider } from '@taucad/files-ui/hooks/use-file-services';
+import type { FileServices } from '@taucad/files-ui/hooks/use-file-services';
+import type { ObservationWatch } from '@taucad/fs-client/observation-service';
+import { MachineSettingsStore } from '#components/print/machine-settings-store.js';
+import { machineSettingsPath } from '@taucad/runtime/machine/settings';
+import type { FileSystemBridgeRootedProxy, RootedBridgeConsumer } from '@taucad/fs-bridge';
 import type { ReactNode } from 'react';
-import { createContext, useContext, useMemo, useCallback, useEffect, useRef } from 'react';
-import { useActorRef, useSelector } from '@xstate/react';
-import { waitFor } from 'xstate';
-import type { SnapshotFrom } from 'xstate';
-import type { FileTreeEntry, FileSystemBackend, FileStatEntry, FileStat } from '@taucad/types';
-import { fileManagerMachine } from '#machines/file-manager.machine.js';
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
+import { useSelector } from '@xstate/react';
+import type { ActorOptions, AnyActorLogic } from 'xstate';
+import { OctagonAlert, RefreshCw } from 'lucide-react';
+import { Button } from '@taucad/ui/components/button';
+import { PanelEmptyState } from '@taucad/ui/components/panel-empty-state';
+import { recoveryActions } from '#lib/recovery-actions.js';
+import type { RecoveryActionId } from '#lib/recovery-actions.js';
+import type { FileSystemBackend, FileStatEntry, FileStat } from '@taucad/types';
 import type { FileWriteSource } from '@taucad/fs-client/file-write-source';
-import type { BulkMoveEdit, BulkMoveResult, FileSystemClient } from '@taucad/fs-client/file-system-client';
+import type {
+  BulkMoveEdit,
+  BulkMoveResult,
+  FileSystemClient,
+  ScopedStorageClient,
+} from '@taucad/fs-client/file-system-client';
+import type { ComposedViewClient } from '@taucad/fs-client/composed-view-client';
+import type { RootedContentClient } from '@taucad/fs-client/rooted-content-client';
+import { recordConnectionsOf } from '#runtime/file-manager-record-connections.js';
+import {
+  createAuthorityClient,
+  createDuplicateProjectReader,
+  createRecordWatch,
+  createScopedStorage,
+  createWorkspaceFacade,
+  readied,
+  selectActiveWorkspaceId,
+  selectBridgeOpener,
+  selectProxy,
+  selectSafeMode,
+  servicesBound,
+  servicesOf,
+} from '#runtime/file-manager-facade.js';
+import type { RootFileFacade } from '#runtime/file-manager-facade.js';
 import type { FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
-import type { MountConfig, WorkspaceMutationError } from '@taucad/filesystem';
-import { setProjectFileSystemConfig } from '#filesystem/handle-store.js';
+import type { MountConfig, WorkspaceMutationError, WatchEvent } from '@taucad/filesystem';
+import type { ContentExportFilter } from '@taucad/filesystem/content-ops';
+import { setProjectFileSystemConfig } from '@taucad/files-ui/filesystem/handle-store';
+import { readRootConfigurationOnly } from '#runtime/root-configuration.js';
+import type { HomeStorageBackend, WorkspaceEntry } from '@taucad/files-ui/filesystem/handle-store';
+import {
+  selectRuntimeFileManagerHost,
+  selectRuntimeFiles,
+  selectRuntimeRootFileFacade,
+  selectRuntimeRootFiles,
+} from '#runtime/app-runtime.js';
+import { useAppRuntime, useOptionalAppRuntime } from '#runtime/app-runtime-provider.js';
+import { selectHomeBackend, selectHomeBackendFailure, selectSharedWorkerPresent } from '#runtime/file-manager-host.js';
+import type { FileManagerActor, FileManagerSpec } from '#runtime/file-manager-host.js';
+import { awaitFileManager } from '#runtime/file-manager-host.wait.js';
+import type { LeaseEntry } from '#runtime/leases.js';
+import { sessionFileManagerOf } from '#runtime/session-file-manager.js';
+import type { FileManagerOwner } from '#runtime/session-file-manager.js';
 import type { WorkspaceUnavailableReason } from '#machines/file-manager.machine.js';
 import { useWorkspaceTelemetry } from '#utils/workspace-telemetry.utils.js';
 import type { FileContentService } from '@taucad/fs-client/file-content-service';
 import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
-import { FileManagerNotReadyError } from '#filesystem/workspace-errors.js';
-
-type FileManagerSnapshot = SnapshotFrom<typeof fileManagerMachine>;
+import type { WorkerChangeChannel } from '@taucad/fs-client/worker-change-channel';
+import { FileManagerNotReadyError } from '@taucad/ui-core/filesystem/workspace-errors';
+import { reprovideAgentHostProjects } from '#services/agent-host-client.js';
+import { fromFileSystemBridge } from '@taucad/runtime/filesystem';
+import type { RuntimeFileSystem } from '@taucad/runtime/filesystem';
 
 /**
- * Default timeout for {@link waitForFileManagerServices} and the proxy
- * gate inside `useFileManager`. Closes Finding 8 of the explicit-
- * workspace blueprint — without a timeout the hook hangs the whole UI
- * (chat composer, project creation) when the FM machine gets stuck in
- * `connectingWorker`/`initializingServices`. 30s matches the worker
- * boot budget tracked in `runtime-blueprint-v5-implementation-audit`.
+ * Wait for a file manager's content and tree services, up to the ready bound.
+ *
+ * For a caller outside a provider. In the app, a caller uses its scope's `whenServicesReady`, which waits on the
+ * runtime's clock (row S18); this wait runs on `options.clock`, or the default clock without one.
+ *
+ * @param fileManagerRef - The file manager to wait for.
+ * @param options - The bound in milliseconds, and the clock to wait on.
+ * @returns The services.
+ * @throws {FileManagerNotReadyError} When the bound passes first, or the file manager is in `error`.
+ * @public
  */
-export const fileManagerReadyTimeout = 30_000;
-
-function createErrorAwareWaitPredicate(
-  predicate: (state: FileManagerSnapshot) => boolean,
-): (state: FileManagerSnapshot) => boolean {
-  return (state: FileManagerSnapshot) => {
-    if (state.matches('error')) {
-      return true;
-    }
-
-    return predicate(state);
-  };
-}
-
-function assertNotErrorState(snapshot: FileManagerSnapshot): void {
-  if (snapshot.matches('error')) {
-    throw new FileManagerNotReadyError('machine-error', { cause: snapshot.context.error });
-  }
-}
-
 export async function waitForFileManagerServices(
   fileManagerRef: FileManagerRef,
   options?: {
     /** Milliseconds. */
     readyTimeout?: number;
+    clock?: ActorOptions<AnyActorLogic>['clock'];
   },
-): Promise<{ contentService: FileContentService; treeService: FileTreeService }> {
-  const snapshot = fileManagerRef.getSnapshot();
-  const { contentService: content, treeService: tree } = snapshot.context;
-  if (content && tree) {
-    return { contentService: content, treeService: tree };
+): Promise<{
+  contentService: FileContentService;
+  treeService: FileTreeService;
+}> {
+  const known = servicesBound(fileManagerRef);
+  if (known !== undefined) {
+    return known;
   }
-
-  const settled = await waitForWithTimeout({
-    fileManagerRef,
-    predicate: createErrorAwareWaitPredicate(
-      (state) => state.context.contentService !== undefined && state.context.treeService !== undefined,
-    ),
-    readyTimeout: options?.readyTimeout ?? fileManagerReadyTimeout,
+  const settled = await awaitFileManager(fileManagerRef, 'services', {
     reason: 'services-timeout',
+    ...(options?.readyTimeout === undefined ? {} : { timeoutMilliseconds: options.readyTimeout }),
+    ...(options?.clock === undefined ? {} : { clock: options.clock }),
   });
-  assertNotErrorState(settled);
-  const readyContent = settled.context.contentService;
-  const readyTree = settled.context.treeService;
-  if (!readyContent || !readyTree) {
-    throw new FileManagerNotReadyError('services-timeout');
-  }
-
-  return { contentService: readyContent, treeService: readyTree };
-}
-
-type WaitForWithTimeoutOptions = {
-  readonly fileManagerRef: FileManagerRef;
-  readonly predicate: (state: FileManagerSnapshot) => boolean;
-  /** Milliseconds. */
-  readonly readyTimeout: number;
-  readonly reason: 'proxy-timeout' | 'services-timeout';
-};
-
-async function waitForWithTimeout({
-  fileManagerRef,
-  predicate,
-  readyTimeout,
-  reason,
-}: WaitForWithTimeoutOptions): Promise<FileManagerSnapshot> {
-  return Promise.race([
-    waitFor(fileManagerRef, predicate),
-    new Promise<FileManagerSnapshot>((_resolve, reject) => {
-      const id = setTimeout(() => {
-        reject(new FileManagerNotReadyError(reason));
-      }, readyTimeout);
-      // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- access guarded below
-      const unrefable = id as unknown as { unref?: () => void };
-      unrefable.unref?.();
-    }),
-  ]);
+  return servicesOf(settled);
 }
 
 type WriteFileOptions = {
@@ -113,98 +124,116 @@ type DeleteFileOptions = {
 };
 
 /**
- * Typed proxy dispatch facade. Mirrors the worker {@link FileSystemClient}
- * one-to-one. Each method gates on the FM machine becoming `ready`
- * before forwarding to the worker — no per-method `useCallback`
- * ceremony.
+ * What the record stores write through the root that owns the path (W6, H8).
  *
- * Use this surface for:
+ * The whole {@link RootedContentClient} is the unmasked working copy, so it is
+ * not what the context carries: a record store reads, writes, lists and removes
+ * one path at a time, and never relocates one or writes under a precondition.
  *
- * - **Cross-workspace writes** that target prefixes outside this provider's
- *   `rootDirectory`. Keys are interpreted in the worker's filesystem
- *   namespace and routed by the mount table (longest-prefix match), so
- *   absolute paths like `/projects/<id>/main.scad` land in the matching
- *   mounted backend regardless of the FM provider's scope. This is the
- *   documented escape hatch for the project bootstrap mount-write-unmount
- *   transaction in `use-project-manager.tsx` — passing absolute keys
- *   through the cache-bound `writeFile`/`writeFiles` callbacks below would
- *   trip `WorkspaceScopeViolationError` (and previously spammed the tree
- *   service with `WorkspacePathEscapeError`).
- * - **Cache-free / scope-routed reads** for `/files`-style cross-workspace
- *   dispatch and admin tooling.
+ * @public
+ */
+export type RecordFilesClient = Pick<
+  RootedContentClient,
+  'readFile' | 'writeFile' | 'readdir' | 'stat' | 'exists' | 'unlink' | 'rmdir'
+>;
+
+/**
+ * What the parameter sidecar writes through the root that owns the path (W6, H8).
  *
- * The cache-bound editor flows continue to use the dedicated `readFile` /
- * `writeFile` / `renameFile` callbacks below; those enforce workspace-
- * relative keys at the boundary.
+ * `createParameterSetService`'s own slice: checked single-file writes, the
+ * relocation a renamed target needs, and the directory bookkeeping around them.
+ *
+ * @public
+ */
+export type ParameterFilesClient = Pick<
+  RootedContentClient,
+  'exists' | 'readFile' | 'writeFileChecked' | 'move' | 'unlink' | 'rmdir' | 'mkdir'
+>;
+
+/** Checked workbench record mutations through the existing working-copy root. */
+export type WorkbenchFilesClient = Pick<RootedContentClient, 'writeFileChecked' | 'deleteFileChecked'>;
+
+/**
+ * What an ephemeral preview mount takes (W6, H8).
+ *
+ * One batch per mount, so the preview's whole snapshot lands under one lock set.
+ *
+ * @public
+ */
+export type PreviewFilesClient = Pick<RootedContentClient, 'writeFiles'>;
+
+/**
+ * The authority's **topology** surface (charter D5, O1.2).
+ *
+ * Project discovery and the project-directory lifecycle: the four calls whose
+ * subject is a *project directory*, not a file inside one. Mount, unmount and
+ * storage-root teardown are {@link WorkspaceFacade}'s; content belongs to the
+ * root that owns the path ({@link RecordFilesClient} and its siblings); a
+ * physical scope the mount table does not route is {@link ScopedStorageClient}'s.
+ *
+ * No content method may reappear here. The authority-global surface walks the
+ * raw provider, so any content call on it is an unmasked read or write of a
+ * project tree — which is exactly what the reserved layout refuses everywhere
+ * else (authority Rule 16). `use-file-manager.test-d.ts` pins the absence.
  *
  * @public
  */
 export type FileSystemClientFacade = Pick<
   FileSystemClient,
-  | 'readFile'
-  | 'readFiles'
-  | 'writeFile'
-  | 'writeFiles'
-  | 'mkdir'
-  | 'readdir'
-  | 'stat'
-  | 'lstat'
-  | 'rename'
-  | 'move'
-  | 'bulkMove'
-  | 'canMove'
-  | 'canRename'
-  | 'canCreate'
-  | 'canDelete'
-  | 'unlink'
-  | 'rmdir'
-  | 'exists'
-  | 'batchExists'
-  | 'ensureDirectoryExists'
-  | 'getDirectoryStat'
-  | 'getDirectoryContents'
-  | 'duplicateFile'
-  | 'copyDirectory'
-  | 'getZippedDirectory'
-  | 'readShallowDirectory'
-  | 'readDirectory'
+  | 'listProjectManifests'
+  | 'verifyProjectRoute'
+  | 'commitPendingProjectDirectory'
+  | 'permanentlyDeleteProjectDirectory'
+  | 'adoptProjectDirectory'
 >;
 
 /**
  * Workspace lifecycle facade. Groups admin operations that are not
  * per-call FS dispatch — mount/unmount and standalone-provider
- * invalidation. Each call gates on the FM machine becoming `ready`.
+ * invalidation. Ordinary calls gate on `ready`; handle replacement also
+ * accepts the connected worker in `webAccessUnavailable` so recovery can run.
  *
  * @public
  */
 export type WorkspaceFacade = {
   mount: (prefix: string, config: MountConfig) => Promise<void>;
   unmount: (prefix: string) => void;
-  /**
-   * Drop the cached standalone provider for the supplied backend /
-   * workspace pair. Used by `/files` "Change Folder" and recovery
-   * binding so the next standalone call picks up the new handle.
-   */
-  invalidateStandaloneProvider: (
-    backend: 'webaccess' | 'indexeddb' | 'opfs' | 'memory',
-    workspaceId?: string,
-  ) => Promise<void>;
+  /** Dispose a physical storage root after an explicit handle rebind. */
+  disposeStorageRoot: (storageRootKey: string) => Promise<void>;
+  /** Push the persisted locator set to the worker after a config change. */
+  syncProjectRoots: () => Promise<void>;
+  /** Replace a workspace handle and synchronize this tab before resolving. */
+  replaceWorkspaceHandle: (workspaceId: string, handle: FileSystemDirectoryHandle) => Promise<void>;
+  /** Remove retained folder authority while preserving workspace identity and project bindings. */
+  disconnectWorkspace: (workspaceId: string) => Promise<WorkspaceEntry | undefined>;
+  /** Restore an Undo handle only while the workspace remains disconnected. */
+  restoreWorkspaceHandle: (workspaceId: string, handle: FileSystemDirectoryHandle) => Promise<boolean>;
 };
 
 type FileManagerContextType = {
   fileManagerRef: FileManagerRef;
-  backendType: FileSystemBackend;
+  backendType: FileSystemBackend | undefined;
   contentService: FileContentService | undefined;
   treeService: FileTreeService | undefined;
+  workerChangeChannel: WorkerChangeChannel | undefined;
+  /** Observe one workbench record in the live project while code may follow a checkout. */
+  watchRecordFile: (
+    path: string,
+    listener: (event: WatchEvent) => void,
+    options?: { recursive?: boolean },
+  ) => ObservationWatch;
   /** Resolves once both content and tree facades are bound (or rejects if the machine enters `error`). */
-  whenServicesReady: () => Promise<{ contentService: FileContentService; treeService: FileTreeService }>;
+  whenServicesReady: () => Promise<{
+    contentService: FileContentService;
+    treeService: FileTreeService;
+  }>;
   /**
    * Write a single file through the per-FM `FileContentService` cache.
    *
    * `path` **MUST** be workspace-relative to this provider's
    * `rootDirectory`; absolute keys that escape the workspace root throw
-   * `WorkspaceScopeViolationError` synchronously. Use `client.writeFile`
-   * for cross-workspace writes (worker namespace, no resolver).
+   * `WorkspaceScopeViolationError` synchronously. Use `files.writeFile`
+   * for a write outside this FM's root (the owning root's own connection).
    */
   writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions) => Promise<void>;
   /**
@@ -212,11 +241,22 @@ type FileManagerContextType = {
    *
    * Map keys **MUST** be workspace-relative to this provider's
    * `rootDirectory`; absolute keys that escape the workspace root throw
-   * `WorkspaceScopeViolationError` synchronously. Use `client.writeFiles`
-   * for cross-workspace bootstrap (mount-write-unmount transactions).
+   * `WorkspaceScopeViolationError` synchronously. Use `files.writeFiles`
+   * for a bootstrap outside this FM's root (mount-write-unmount transactions).
    */
   writeFiles: (files: Record<string, { content: Uint8Array<ArrayBuffer> }>) => Promise<void>;
+  /**
+   * Text bytes through the editor's content cache: refuses a binary file or one
+   * past the open-time limit. A caller that wants a file's bytes as they are
+   * (an export, an artifact, an agent read) uses `readRawBytes`.
+   */
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
+  /**
+   * A file's bytes as they are, text or binary (charter D17, L3 D-3), up to
+   * `sizeLimit` (the open-time limit when omitted). An incidental read: it
+   * never enters or reorders the editor's content cache.
+   */
+  readRawBytes: (path: string, options?: { sizeLimit?: number }) => Promise<Uint8Array<ArrayBuffer>>;
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   /**
    * Move a file or directory through the per-FM `FileContentService` cache.
@@ -227,64 +267,112 @@ type FileManagerContextType = {
    * `rootDirectory`; absolute keys that escape the workspace root throw
    * `WorkspaceScopeViolationError` synchronously.
    */
-  moveFile: (source: string, target: string, options?: { overwrite?: boolean }) => Promise<void>;
+  moveFile: (source: string, target: string) => Promise<void>;
   /**
-   * Move many paths in a single batch. On mid-flight failure every prior
-   * move within this batch is reversed by the worker so the workspace
-   * returns to the pre-batch state. See {@link BulkMoveResult}.
+   * Move many paths sequentially and report each completed or failed edit.
    */
-  bulkMove: (edits: readonly BulkMoveEdit[], options?: { overwrite?: boolean }) => Promise<BulkMoveResult>;
+  bulkMove: (edits: readonly BulkMoveEdit[]) => Promise<BulkMoveResult>;
   /**
    * Preflight {@link moveFile}. Returns `true` if safe to issue, or a
    * structured {@link WorkspaceMutationError} otherwise. Use to gate UI
    * actions (drag/drop, rename) on a typed error code rather than
    * letting the mutation fail with a less actionable message.
    */
-  canMove: (
-    source: string,
-    target: string,
-    options?: { overwrite?: boolean },
-  ) => Promise<true | WorkspaceMutationError>;
+  canMove: (source: string, target: string) => Promise<true | WorkspaceMutationError>;
   /**
    * Preflight rename within a single parent directory.
    */
   canRename: (source: string, newName: string) => Promise<true | WorkspaceMutationError>;
   /**
-   * Preflight create (`'file'` for `writeFile`, `'directory'` for `mkdir`).
+   * Preflight create (`'file'` for `writeFile`, `'directory'` for `createDirectory`).
    */
   canCreate: (path: string, kind: 'file' | 'directory') => Promise<true | WorkspaceMutationError>;
   /**
-   * Preflight delete (`unlink` for files, `rmdir` for directories).
+   * Preflight delete (`deleteFile` for files, `deleteDirectory` for directories).
    */
   canDelete: (path: string) => Promise<true | WorkspaceMutationError>;
   /**
-   * Create a directory through the worker mount. Pass `{ recursive: true }`
-   * to create intermediate directories.
+   * Create a directory through the project-scoped content facade.
    */
-  mkdir: (path: string, options?: { recursive?: boolean }) => Promise<void>;
+  createDirectory: (path: string, options?: { recursive?: boolean }) => Promise<void>;
   /**
-   * Remove a directory through the worker mount. Pass `{ recursive: true }`
-   * to drop a non-empty subtree (mount-routed; no scope required for the
-   * default workspace).
+   * Remove a directory through the project-scoped content facade.
    */
-  rmdir: (path: string, options?: { recursive?: boolean }) => Promise<void>;
+  deleteDirectory: (path: string, options?: { recursive?: boolean }) => Promise<void>;
   duplicateFile: (sourcePath: string, destinationPath: string) => Promise<void>;
+  /**
+   * Place a whole overlay unit into the project so the project owns it (ruling
+   * P11). `unitRoot` is checkout-relative, like the tree paths the Files pane
+   * speaks — the one write the composed view allows under a read-only overlay.
+   */
+  overrideUnit: (unitRoot: string) => Promise<void>;
   deleteFile: (path: string, options: DeleteFileOptions) => Promise<void>;
   stat: (path: string) => Promise<FileStat>;
   exists: (path: string) => Promise<boolean>;
   readdir: (path: string) => Promise<string[]>;
   getDirectoryStat: (path: string) => Promise<FileStatEntry[]>;
-  getZippedDirectory: (path: string) => Promise<Blob>;
-  copyDirectory: (sourcePath: string, destinationPath: string) => Promise<void>;
   /**
-   * Typed proxy dispatch facade. Use for cache-free reads/writes and
-   * cross-workspace operations whose keys lie outside this provider's
-   * `rootDirectory` (e.g. the project bootstrap mount-write-unmount
-   * transaction in `use-project-manager.tsx`, which writes
-   * `/projects/<id>/...` keys through the root FM at `/`). Routes through
-   * the worker mount table by absolute path prefix — backend selection
-   * (indexeddb / webaccess with handle+workspaceId / opfs / memory) is
-   * owned by the mount registration, never by the write call.
+   * Zip a directory through the project-scoped content facade. `''` is this
+   * provider's own root — the whole-project export — and it follows the FM's
+   * current root, so an archive taken while a linked checkout is selected is
+   * the checkout the workbench is showing.
+   */
+  getZippedDirectory: (path: string, options?: ContentExportFilter) => Promise<Blob>;
+  /**
+   * One project's versioned bytes and agent-writable records, read through
+   * that project's own composed view — the snapshot a duplicate journals.
+   *
+   * Not `client.getDirectoryContents`: the project read here is usually not the
+   * one this FM is rooted at. The read opens that project's own rooted `user`
+   * connection; the view refuses `.git/**` before provider I/O, while the
+   * registry selects record subtrees without reading chats or cache bytes.
+   */
+  readDuplicateProjectFiles: (projectRoot: string) => Promise<Record<string, Uint8Array<ArrayBuffer>>>;
+  /**
+   * The record stores' slice of the root that owns the path (charter D5, D12).
+   *
+   * Composer records, chat records and their attachments, thumbnails, `tau.json`
+   * and the project library file. Absolute paths as everywhere else in the UI;
+   * each call classifies the path's route and issues the operation on that
+   * root's own `'working-copy'` connection, because host record writers read and
+   * write the checkout itself and never the overlays above it (architecture V6,
+   * D8).
+   *
+   * Not {@link FileManagerContextType.client}: the authority-global surface is
+   * topology and owns no content. Not the whole rooted surface either — that is
+   * the unmasked working copy, and no component takes more of it than its own
+   * store family writes (H8/EQ4).
+   */
+  recordFiles: RecordFilesClient;
+  /**
+   * The parameter sidecar's slice (`parameter-set-service.ts`).
+   *
+   * One file at a time, under its own precondition, and relocated when a
+   * parameter set's target moves — never a batch and never a listing.
+   */
+  parameterFiles: ParameterFilesClient;
+  machineSettings: MachineSettingsStore;
+  workbenchFiles: WorkbenchFilesClient;
+  /**
+   * The ephemeral preview mount's slice (`use-cad-preview.tsx`).
+   *
+   * One `/previews/<instance>` memory mount, written whole on every mount and
+   * never read back through here.
+   */
+  previewFiles: PreviewFilesClient;
+  /**
+   * Physical-scope reads for the `/files` workspace browser (charter D5).
+   *
+   * The one surface whose paths the mount table does not route, so the
+   * authority — not a rooted view — answers them. `scope` is required.
+   */
+  scopedStorage: ScopedStorageClient;
+  /**
+   * Typed proxy dispatch facade for the authority's **topology** (charter D5):
+   * project discovery and the project-directory lifecycle. Mount, unmount and
+   * storage-root teardown are on {@link FileManagerContextType.workspace}, and
+   * content is on {@link FileManagerContextType.files} — the global surface
+   * serves none.
    */
   client: FileSystemClientFacade;
   /**
@@ -316,43 +404,372 @@ type FileManagerContextType = {
    * (`projectId === undefined`).
    */
   bindProjectToWorkspace: (workspaceId: string) => Promise<void>;
+  /** Opaque, fully writable filesystem rooted at this provider's project. */
+  runtimeFileSystem: RuntimeFileSystem;
 };
 
 const FileManagerContext = createContext<FileManagerContextType | undefined>(undefined);
 
-const SharedWorkerContext = createContext<Worker | undefined>(undefined);
+/** The file-manager host's ref, outside a runtime `undefined` (a component test that renders a gate alone). */
+function useOptionalFileManagerHost() {
+  const runtime = useOptionalAppRuntime();
+  return runtime === undefined ? undefined : selectRuntimeFileManagerHost(runtime);
+}
 
 /**
- * Carries the root FileManagerProvider's file-pool SharedArrayBuffer down to
- * nested providers. Nested machines reuse this SAB instead of allocating
- * their own 50 MiB pool, avoiding duplicate `postMessage({ type: 'filePool' })`
- * traffic to the shared worker.
+ * Physical engine selected for the system-owned Home workspace (row S37): the file-manager host's, once it resolved.
+ *
+ * @returns The engine, or `undefined` while it resolves or after it failed.
+ * @public
  */
-const SharedFilePoolBufferContext = createContext<SharedArrayBuffer | undefined>(undefined);
+export function useHomeStorageBackend(): HomeStorageBackend | undefined {
+  const host = useOptionalFileManagerHost();
+  if (host === undefined) {
+    throw new Error('useHomeStorageBackend must be used within <AppRuntimeProvider>');
+  }
+  return useSelector(host, selectHomeBackend);
+}
+
+/** Whether the shared worker is up, read from `rootFiles`; `false` outside a runtime, where no file manager has one. */
+function useSharedWorkerPresent(): boolean {
+  const runtime = useOptionalAppRuntime();
+  const rootFiles = runtime === undefined ? undefined : selectRuntimeRootFiles(runtime);
+  return useSelector(rootFiles, (snapshot) => (snapshot === undefined ? false : selectSharedWorkerPresent(snapshot)));
+}
+
+/** Home's backend failure, outside a runtime `undefined`. */
+function useHomeBackendFailure(): string | undefined {
+  const host = useOptionalFileManagerHost();
+  return useSelector(host, (snapshot) => (snapshot === undefined ? undefined : selectHomeBackendFailure(snapshot)));
+}
+
+/** What a classified start failure says and offers (desktop resilient startup blueprint D3). */
+type StartFailureCopy = Readonly<{
+  title: string;
+  description: string;
+  actions: readonly RecoveryActionId[];
+  /** A retry replays the same start; offered beside an action that changes the input, never alone for a deterministic failure. */
+  offersRetry: boolean;
+}>;
+
+const transientFailureCopy: StartFailureCopy = {
+  title: "Couldn't start the file service",
+  description: "Tau's file service did not start, so your files aren't available yet. Try again to restart it.",
+  actions: [],
+  offersRetry: true,
+};
 
 /**
- * Gate component that defers rendering until the parent FileManagerProvider's
- * worker is available via SharedWorkerContext. Prevents nested
- * FileManagerProviders from creating duplicate workers during the window
- * between root mount and root worker initialization.
+ * The panel for a start failure, by its class and code (D3): a transient failure offers Try again; a deterministic one
+ * offers the action that changes what failed, with the logs and the recovery entry beside it.
+ *
+ * @param errorClass - The machine's class for the failure.
+ * @param errorCode - The machine's code for the failure.
+ * @returns The panel's copy and actions.
  */
-export function SharedWorkerGate({ children }: { readonly children: ReactNode }): React.ReactNode | undefined {
-  const worker = useContext(SharedWorkerContext);
+function startFailureCopy(errorClass: string | undefined, errorCode: string | undefined): StartFailureCopy {
+  if (errorClass !== 'deterministic') {
+    return transientFailureCopy;
+  }
+  switch (errorCode) {
+    case 'VersionError': {
+      return {
+        title: 'A newer Tau opened your local database',
+        description: 'This copy of Tau is older than the one that last opened its database. Update Tau to open it.',
+        actions: ['updateTau', 'showLogs', 'troubleshooting'],
+        offersRetry: false,
+      };
+    }
+    case 'StorageUpgradeBlockedError': {
+      return {
+        title: 'Another Tau window is holding the database',
+        description: 'Close the other Tau window or tab, then try again.',
+        actions: ['showLogs', 'troubleshooting'],
+        offersRetry: true,
+      };
+    }
+    case 'DatabaseOpenTimeoutError': {
+      return {
+        title: "Tau's local database did not open",
+        description:
+          'Tau’s storage on this device didn’t answer. Restart in safe mode, or open Troubleshooting to reset it.',
+        actions: ['restartInSafeMode', 'troubleshooting', 'showLogs'],
+        offersRetry: true,
+      };
+    }
+    case 'SERVICES_UNAVAILABLE': {
+      return {
+        title: "Tau's file services did not start",
+        description:
+          'The part of Tau that reads your folders keeps stopping. Restart in safe mode or check for an update.',
+        actions: ['restartInSafeMode', 'checkForUpdates', 'showLogs'],
+        offersRetry: false,
+      };
+    }
+    default: {
+      return {
+        title: "Couldn't start the file service",
+        description:
+          "Tau's file service failed the same way twice. Restart in safe mode, or open Troubleshooting for the logs and an update.",
+        actions: ['restartInSafeMode', 'troubleshooting', 'showLogs', 'checkForUpdates'],
+        offersRetry: true,
+      };
+    }
+  }
+}
 
-  if (!worker) {
-    return undefined;
+/**
+ * What the gate shows when the root mount has no worker (blueprint R7).
+ *
+ * "No worker" means one of two things and the gate must not confuse them: the
+ * root mount is still connecting one, which is progress and shows the caller's
+ * placeholder, or its machine gave up, which used to be an unexplained blank.
+ * `initialize` takes the machine's `error` state back to `connectingWorker`, so
+ * Try again is a real retry rather than a page reload. When the file-manager
+ * host could not read Home's engine (row S37), the notice says so and its retry
+ * sends the host `retry`; nothing ever selects a fallback engine.
+ *
+ * Soft-error tone, not destructive red: nothing was lost, the service just did
+ * not start.
+ *
+ * @param properties - The root mount's machine, for the failure check and the
+ *   retry, and what to show while the worker is still on its way.
+ * @returns The notice, or the placeholder.
+ */
+function SharedWorkerFallback({
+  fileManagerRef,
+  placeholder,
+  isInline = false,
+}: {
+  readonly isInline?: boolean;
+  readonly fileManagerRef: FileManagerRef;
+  readonly placeholder: ReactNode;
+}): React.ReactNode {
+  const hasFailed = useSelector(fileManagerRef, (state) => state.matches('error'));
+  const errorClass = useSelector(fileManagerRef, (state) => state.context.errorClass);
+  const errorCode = useSelector(fileManagerRef, (state) => state.context.errorCode);
+  const isBackendPending = useSelector(fileManagerRef, (state) => state.context.backendType === undefined);
+  const host = useOptionalFileManagerHost();
+  const homeFailure = useHomeBackendFailure();
+  const homeFailed = isBackendPending && homeFailure !== undefined;
+
+  if (!hasFailed && !homeFailed) {
+    return placeholder;
   }
 
-  return children;
+  const copy: StartFailureCopy = homeFailed
+    ? {
+        title: "Couldn't open Home",
+        description: "Tau couldn't read your Home storage selection. Try again to open your existing files.",
+        actions: [],
+        offersRetry: true,
+      }
+    : startFailureCopy(errorClass, errorCode);
+  const { title, description } = copy;
+  const actions = recoveryActions(copy.actions);
+  const retryButton = (
+    <Button
+      type='button'
+      onClick={() => {
+        if (homeFailed) {
+          host?.send({ type: 'retry' });
+        } else {
+          fileManagerRef.send({ type: 'initialize' });
+        }
+      }}
+    >
+      <RefreshCw />
+      Try again
+    </Button>
+  );
+  /* Never a lone retry of a deterministic failure (D3): where none of its actions is available here, retry stays. */
+  const retry = (
+    <>
+      {actions.map((action) =>
+        action.kind === 'link' ? (
+          <Button key={action.id} asChild variant='outline'>
+            <a href={action.href}>{action.label}</a>
+          </Button>
+        ) : (
+          <Button
+            key={action.id}
+            type='button'
+            variant='outline'
+            onClick={() => {
+              void action.run();
+            }}
+          >
+            {action.label}
+          </Button>
+        ),
+      )}
+      {copy.offersRetry || actions.length === 0 ? retryButton : undefined}
+    </>
+  );
+  if (isInline) {
+    return (
+      <div role='alert' aria-label={title} className='flex flex-wrap items-center gap-3 border-b p-4'>
+        <OctagonAlert aria-hidden className='size-4 shrink-0 text-feature' />
+        <p className='min-w-0 flex-1 text-sm'>{description}</p>
+        {retry}
+      </div>
+    );
+  }
+  return (
+    <div role='alert' className='size-full'>
+      <PanelEmptyState
+        icon={OctagonAlert}
+        iconClassName='text-feature'
+        title={title}
+        description={description}
+        className='p-6 [&_[data-slot=panel-empty-state-copy]]:mt-6'
+      >
+        {retry}
+      </PanelEmptyState>
+    </div>
+  );
+}
+
+/**
+ * Hold `children` until this document's file-manager worker exists.
+ *
+ * The worker is `rootFiles`'s, which the file-manager host watches; a nested
+ * file manager built before it would start a worker of its own.
+ *
+ * @param properties - The gated subtree, and the `placeholder` to show while
+ *   the worker connects. A route that knows what it is opening passes its own
+ *   loading state; without one the gate waits invisibly, as it always did.
+ *   The failure notice fills the gate's own region: the app shell is never
+ *   below a gate (D24).
+ * @returns The children, the placeholder, or the failure notice.
+ */
+export function SharedWorkerGate({
+  children,
+  placeholder,
+  shouldReportFailure = true,
+}: {
+  readonly shouldReportFailure?: boolean;
+  readonly children: ReactNode;
+  readonly placeholder?: ReactNode;
+}): React.ReactNode {
+  const isWorkerPresent = useSharedWorkerPresent();
+  const fileManager = useOptionalFileManager();
+
+  if (isWorkerPresent) {
+    return children;
+  }
+
+  /* Outside a provider there is no machine to report on, so the gate stays silent. */
+  return fileManager === undefined || !shouldReportFailure ? (
+    placeholder
+  ) : (
+    <SharedWorkerFallback fileManagerRef={fileManager.fileManagerRef} placeholder={placeholder} />
+  );
+}
+
+/** What the database panel says and offers for the failure that left the start without its records (D3, R7). */
+function databaseNoticeCopy(errorName: string): Readonly<{
+  description: string;
+  actions: readonly RecoveryActionId[];
+  offersRetry: boolean;
+}> {
+  switch (errorName) {
+    case 'VersionError': {
+      return {
+        description:
+          'A newer Tau opened the database this device keeps. Home is open and your files are safe. Update Tau to bring back your folders, or reset the database.',
+        actions: ['updateTau', 'resetLocalDatabase', 'resetFolderList', 'showLogs'],
+        offersRetry: false,
+      };
+    }
+    case 'StorageUpgradeBlockedError': {
+      return {
+        description:
+          'Another Tau window or tab is holding the database this device keeps. Home is open. Close the other Tau window, then try again.',
+        actions: ['showLogs'],
+        offersRetry: true,
+      };
+    }
+    default: {
+      return {
+        description:
+          "Tau couldn't open the database this device keeps. Home is open and your files are safe. Reset the database to bring back your folders; their projects return from disk.",
+        actions: ['resetLocalDatabase', 'resetFolderList', 'showLogs', 'troubleshooting'],
+        offersRetry: true,
+      };
+    }
+  }
+}
+
+/**
+ * The database panel (desktop resilient startup blueprint D1, D3, R7): the start went on with Home alone because its
+ * records could not be read, so Home is open and the folders are missing. It says so beside Home and offers the action
+ * for the cause: Update Tau for a newer database, closing the other window when one holds it, and the reset, which is
+ * the shell's quarantine on the desktop and, on the web, offered only when Home's engine mirror exists. Try again
+ * reloads the page, which opens the database afresh.
+ */
+function DatabaseNotice({ fileManagerRef }: { readonly fileManagerRef: FileManagerRef }): React.ReactNode {
+  const degraded = useSelector(fileManagerRef, (state) => state.context.degraded);
+  if (degraded?.input !== 'records') {
+    return undefined;
+  }
+  const title = "Tau's local database is unavailable";
+  const copy = databaseNoticeCopy(degraded.errorName);
+  const actions = recoveryActions(copy.actions);
+  return (
+    <div role='alert' aria-label={title} className='flex flex-wrap items-center gap-3 border-b p-4'>
+      <OctagonAlert aria-hidden className='size-4 shrink-0 text-feature' />
+      <p className='min-w-0 flex-1 text-sm'>{copy.description}</p>
+      {actions.map((action) =>
+        action.kind === 'link' ? (
+          <Button key={action.id} asChild variant='outline'>
+            <a href={action.href}>{action.label}</a>
+          </Button>
+        ) : (
+          <Button
+            key={action.id}
+            type='button'
+            variant='outline'
+            onClick={() => {
+              void action.run();
+            }}
+          >
+            {action.label}
+          </Button>
+        ),
+      )}
+      {copy.offersRetry || actions.length === 0 ? (
+        <Button
+          type='button'
+          onClick={() => {
+            globalThis.location.reload();
+          }}
+        >
+          <RefreshCw />
+          Try again
+        </Button>
+      ) : undefined}
+    </div>
+  );
+}
+
+/** Keep storage recovery inside the available page instead of displacing its shell. */
+export function HomeFileManagerNotice(): React.ReactNode {
+  const fileManager = useOptionalFileManager();
+  return fileManager ? (
+    <>
+      <SharedWorkerFallback fileManagerRef={fileManager.fileManagerRef} placeholder={undefined} isInline />
+      <DatabaseNotice fileManagerRef={fileManager.fileManagerRef} />
+    </>
+  ) : undefined;
 }
 
 /**
  * Common props shared by every {@link FileManagerProvider} mount.
  * `initialBackend` is required (Audit R4 / Finding 7) — the call site
  * must commit to a backend explicitly so the FM machine can bootstrap
- * deterministically. The cookie used to be consulted inside the hook;
- * that read now lives in `apps/ui/app/root.tsx` where the policy
- * decision is centralized.
+ * deterministically. Product mount sites use {@link HomeFileManagerProvider}
+ * so the profile's pinned Home engine is resolved once, by the file-manager host.
  */
 type FileManagerProviderCommonProps = {
   readonly children: ReactNode;
@@ -371,55 +788,234 @@ export type FileManagerProviderProps = FileManagerProviderCommonProps &
   (
     | { readonly initialBackend: 'webaccess'; readonly projectId: string }
     | {
-        readonly initialBackend: 'indexeddb' | 'opfs' | 'memory';
+        readonly initialBackend: 'indexeddb' | 'opfs' | 'memory' | 'node';
         readonly projectId?: string;
       }
   );
 
+export type HomeFileManagerProviderProps = FileManagerProviderCommonProps & {
+  readonly projectId?: string;
+};
+
+/**
+ * Lease this mount's file manager (D6): read in render, idempotent per key, and retained once the mount commits.
+ *
+ * The key is the mount's own (`useId`, stable across StrictMode's double render and its remount, and between the
+ * server render and hydration) with its root, project and backend, so a mount that changes its root leases a fresh
+ * file manager built for it, where it used to send `setRoot`. The store starts the actor on the first retain; a
+ * release starts the grace, so StrictMode's remount keeps the lease and an unmount releases it after the grace (B3).
+ * No ref callback: a context provider renders no element to hold one, so the retain is the commit's passive effect.
+ * Not a layout effect: React cleans those up when a revealed Suspense boundary re-suspends and hides the subtree, which
+ * would release a mounted lease and drop it after the grace; a passive effect lives as long as the mount, as
+ * `useActorRef`'s actor did. It neither sends, subscribes nor times; the store does (I1, I16).
+ *
+ * A render that commits after its entry's grace (a transition held by a slow lazy chunk) finds the entry dropped: the
+ * mount renders again, and the store builds a fresh one for the key. The leased providers key their scope by the
+ * actor, so nothing below keeps the stopped one.
+ */
+function useLeasedFileManager(spec: FileManagerSpec): LeaseEntry<FileManagerActor> {
+  const runtime = useAppRuntime();
+  const mount = useId();
+  const key = JSON.stringify([mount, spec.rootDirectory, spec.projectId ?? null, spec.backend]);
+  const lease = selectRuntimeFiles(runtime).leaseFileManager(key, spec);
+  const [, renew] = useReducer((generation: number) => generation + 1, 0);
+  useEffect(() => {
+    const release = lease.retain();
+    if (lease.isDropped()) {
+      renew();
+    }
+    return release;
+  }, [lease]);
+  return lease;
+}
+
+/**
+ * The root layout's file manager: a context provider over the runtime's `rootFiles`, the file manager for `/`
+ * (R2-F2). It exists, unstarted, in the first render and on the server, and the runtime starts it.
+ *
+ * @param props - The app below the root layout.
+ * @returns The provider element.
+ * @public
+ */
+export function RootFileManagerProvider({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  const runtime = useAppRuntime();
+  return (
+    <FileManagerScope
+      fileManagerRef={selectRuntimeRootFiles(runtime)}
+      rootDirectory='/'
+      isRoot
+      rootFacade={selectRuntimeRootFileFacade(runtime)}
+    >
+      {children}
+    </FileManagerScope>
+  );
+}
+
+/**
+ * A file manager on Home's engine, which the file-manager host resolves once (row S37): leased for this mount.
+ *
+ * @param props - The root, the project and whether the actor initializes on start.
+ * @returns The provider element.
+ * @public
+ */
+export function HomeFileManagerProvider({
+  children,
+  rootDirectory,
+  projectId,
+  shouldInitializeOnStart,
+}: HomeFileManagerProviderProps): React.ReactNode {
+  const lease = useLeasedFileManager({
+    backend: 'home',
+    rootDirectory,
+    ...(projectId === undefined ? {} : { projectId }),
+    ...(shouldInitializeOnStart === undefined ? {} : { shouldInitializeOnStart }),
+  });
+  return (
+    <FileManagerScope
+      key={lease.actor.sessionId}
+      fileManagerRef={lease.actor}
+      rootDirectory={rootDirectory}
+      projectId={projectId}
+      owner={lease}
+    >
+      {children}
+    </FileManagerScope>
+  );
+}
+
+/**
+ * A project session's file manager: a provider over the actor the session's `fileManager` child built through the
+ * host for `/projects/<id>` (A6c). It creates, starts and stops nothing: the child owns the actor, its connections and
+ * its working-copy client, and the session stops the child when it closes (I1, I23). Until the child reports an
+ * actor (once `rootFiles` holds the shared worker), and while it rebuilds one on a new worker, the provider renders
+ * nothing.
+ *
+ * @param props - The session's file manager, its root and project, and the subtree.
+ * @returns The provider element, or nothing before the session has a file manager.
+ * @public
+ */
+export function SessionFileManagerProvider({
+  children,
+  fileManagerRef,
+  rootDirectory,
+  projectId,
+  isView = false,
+}: {
+  readonly children: ReactNode;
+  /** The session's file manager (`selectProjectSessionFileManager`). */
+  readonly fileManagerRef: FileManagerRef | undefined;
+  readonly rootDirectory: string;
+  readonly projectId: string;
+  /**
+   * A second view over a file manager whose session subtree already provides it (the focused project's view, A11).
+   * It serves its subtree the same way but leaves the file manager's own reports (workspace telemetry, Home's save
+   * observer) to the session's scope, which outlives it, so each fires once.
+   */
+  readonly isView?: boolean;
+}): React.ReactNode {
+  if (fileManagerRef === undefined) {
+    return null;
+  }
+  const opened = sessionFileManagerOf(fileManagerRef);
+  return (
+    <FileManagerScope
+      key={opened?.key}
+      fileManagerRef={fileManagerRef}
+      rootDirectory={rootDirectory}
+      projectId={projectId}
+      owner={opened?.owner}
+      isOwnerReporter={!isView}
+    >
+      {children}
+    </FileManagerScope>
+  );
+}
+
+/** A resolved caller must still select an engine explicitly. Home alone owns deferred selection. */
 export function FileManagerProvider({
   children,
   rootDirectory,
   projectId,
   initialBackend,
-  shouldInitializeOnStart = true,
+  shouldInitializeOnStart,
 }: FileManagerProviderProps): React.JSX.Element {
-  const parentWorker = useContext(SharedWorkerContext);
-  const parentFilePoolBuffer = useContext(SharedFilePoolBufferContext);
+  const lease = useLeasedFileManager({
+    backend: initialBackend,
+    rootDirectory,
+    ...(projectId === undefined ? {} : { projectId }),
+    ...(shouldInitializeOnStart === undefined ? {} : { shouldInitializeOnStart }),
+  });
+  return (
+    <FileManagerScope
+      key={lease.actor.sessionId}
+      fileManagerRef={lease.actor}
+      rootDirectory={rootDirectory}
+      projectId={projectId}
+      owner={lease}
+    >
+      {children}
+    </FileManagerScope>
+  );
+}
+
+/** The external store of a scope whose owner holds no working-copy client: nothing to hear, nothing to read. */
+const subscribeToNothing = (): (() => void) => () => undefined;
+const readNothing = (): undefined => undefined;
+
+function FileManagerScope({
+  children,
+  fileManagerRef,
+  rootDirectory,
+  projectId,
+  isRoot = false,
+  owner,
+  rootFacade,
+  isOwnerReporter = true,
+}: {
+  readonly children: ReactNode;
+  readonly fileManagerRef: FileManagerRef;
+  readonly rootDirectory: string;
+  readonly projectId?: string;
+  /** The root layout's scope over `rootFiles`, whose worker every other file manager shares. */
+  readonly isRoot?: boolean;
+  /**
+   * What owns this scope's file manager: its lease, or its session child (A6c). `rootFiles` has none and outlives
+   * every scope.
+   */
+  readonly owner?: FileManagerOwner | undefined;
+  /** The runtime's root facade, for the root layout's scope only: the scope reads it instead of building its own. */
+  readonly rootFacade?: RootFileFacade;
+  /** Whether this scope sends the file manager's own reports; false for a second view over a session's (A11). */
+  readonly isOwnerReporter?: boolean;
+}): React.JSX.Element {
+  const files = selectRuntimeFiles(useAppRuntime());
+  /* A scope over an owner that ends, before or during a wait (a lease's late-commit case, a session's close), ends the
+   * wait then, not at the bound. */
+  const gone = owner?.dropped;
 
   const workspaceTelemetry = useWorkspaceTelemetry();
 
-  const fileManagerRef = useActorRef(fileManagerMachine, {
-    input: {
-      rootDirectory,
-      shouldInitializeOnStart,
-      initialBackend,
-      projectId,
-      sharedWorker: parentWorker,
-      sharedFilePoolBuffer: parentFilePoolBuffer,
-    },
-  });
-
-  const rootDirectoryRef = useRef(rootDirectory);
-  rootDirectoryRef.current = rootDirectory;
-
-  useEffect(() => {
-    fileManagerRef.send({ type: 'setRoot', path: rootDirectory, projectId });
-  }, [fileManagerRef, rootDirectory, projectId]);
-
   const contentService = useSelector(fileManagerRef, (state) => state.context.contentService);
   const treeService = useSelector(fileManagerRef, (state) => state.context.treeService);
+  const workerChangeChannel = useSelector(fileManagerRef, (state) => state.context.workerChangeChannel);
   const backendType = useSelector(fileManagerRef, (state) => state.context.backendType);
   const activeWorkspaceId = useSelector(fileManagerRef, (state) => state.context.activeWorkspaceId);
   const activeWorkspaceName = useSelector(fileManagerRef, (state) => state.context.activeWorkspaceName);
   const unavailableReason = useSelector(fileManagerRef, (state) => state.context.unavailableReason);
+
+  useEffect(() => {
+    if (!isOwnerReporter || !contentService || !workerChangeChannel || backendType === undefined) {
+      return;
+    }
+    return observeHomeProjectSaves({ projectId, backend: backendType, contentService, channel: workerChangeChannel });
+  }, [isOwnerReporter, projectId, backendType, contentService, workerChangeChannel]);
 
   const bindProjectToWorkspace = useCallback(
     async (workspaceId: string): Promise<void> => {
       if (!projectId) {
         throw new Error('bindProjectToWorkspace requires a project scope (provider mounted without projectId)');
       }
-      const previousWorkspaceId = fileManagerRef.getSnapshot().context.activeWorkspaceId;
-      await setProjectFileSystemConfig({ projectId, backend: 'webaccess', workspaceId });
+      const previousWorkspaceId = selectActiveWorkspaceId(fileManagerRef);
 
       // Drop the worker-side standalone cache before reload (Audit R6
       // / Finding 9). The previous workspace's cached provider must go
@@ -428,24 +1024,53 @@ export function FileManagerProvider({
       // user has swapped away from. We also invalidate the new
       // workspaceId so a freshly-granted handle replaces any cached
       // provider that was created while permission was missing.
-      const snapshot = fileManagerRef.getSnapshot();
-      const { proxy } = snapshot.context;
-      if (proxy) {
-        if (previousWorkspaceId && previousWorkspaceId !== workspaceId) {
-          proxy.invalidateStandaloneProvider('webaccess', previousWorkspaceId);
-        }
-        proxy.invalidateStandaloneProvider('webaccess', workspaceId);
+      const proxy = selectProxy(fileManagerRef);
+      if (!proxy) {
+        throw new Error('File manager is not ready');
       }
 
-      workspaceTelemetry.workspaceSwap({ previousWorkspaceId, nextWorkspaceId: workspaceId });
+      if (previousWorkspaceId && previousWorkspaceId !== workspaceId) {
+        proxy.disposeStorageRoot(`webaccess:${previousWorkspaceId}`);
+      }
+      proxy.disposeStorageRoot(`webaccess:${workspaceId}`);
+      await proxy.configureProjectRoots(await readRootConfigurationOnly(selectSafeMode(fileManagerRef)));
+      const discovery = await proxy.listProjectManifests();
+      const matches = discovery.entries.filter(
+        (entry) =>
+          entry.status === 'valid' &&
+          entry.projectId === projectId &&
+          entry.locator.backend === 'webaccess' &&
+          entry.locator.workspaceId === workspaceId,
+      );
+      if (matches.length !== 1) {
+        throw new Error(`Workspace must contain exactly one valid manifest for project ${projectId}`);
+      }
+      const match = matches[0]!;
+      await setProjectFileSystemConfig({
+        projectId,
+        backend: 'webaccess',
+        workspaceId,
+        providerBasePath: match.locator.relativeDirectory,
+      });
+      await proxy.configureProjectRoots(await readRootConfigurationOnly(selectSafeMode(fileManagerRef)));
+
+      workspaceTelemetry.workspaceSwap({
+        previousWorkspaceId,
+        nextWorkspaceId: workspaceId,
+      });
       fileManagerRef.send({ type: 'reloadWorkspace' });
     },
     [fileManagerRef, projectId, workspaceTelemetry],
   );
 
   useEffect(() => {
+    if (!isOwnerReporter) {
+      return;
+    }
     if (unavailableReason === 'permission' && activeWorkspaceId) {
-      workspaceTelemetry.workspacePermissionRevoked({ workspaceId: activeWorkspaceId });
+      workspaceTelemetry.workspacePermissionRevoked({
+        workspaceId: activeWorkspaceId,
+      });
     }
     if (unavailableReason) {
       workspaceTelemetry.workspaceOpenFailed({
@@ -453,7 +1078,7 @@ export function FileManagerProvider({
         reason: unavailableReason,
       });
     }
-  }, [activeWorkspaceId, unavailableReason, workspaceTelemetry]);
+  }, [isOwnerReporter, activeWorkspaceId, unavailableReason, workspaceTelemetry]);
 
   /**
    * Wait for the FM machine to enter `ready` and return the typed
@@ -461,14 +1086,7 @@ export function FileManagerProvider({
    * on the hook value.
    */
   const getReadiedProxy = useCallback(async (): Promise<FileManagerProxy> => {
-    const snapshot = await waitForWithTimeout({
-      fileManagerRef,
-      predicate: createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      readyTimeout: fileManagerReadyTimeout,
-      reason: 'proxy-timeout',
-    });
-
-    assertNotErrorState(snapshot);
+    const snapshot = await readied(files, fileManagerRef, { readiness: 'ready', gone });
 
     const { proxy } = snapshot.context;
     if (!proxy) {
@@ -476,11 +1094,187 @@ export function FileManagerProvider({
     }
 
     return proxy;
-  }, [fileManagerRef]);
+  }, [files, fileManagerRef, gone]);
 
-  const whenServicesReady = useCallback(async () => {
-    return waitForFileManagerServices(fileManagerRef);
-  }, [fileManagerRef]);
+  /** The composed view client the FM machine builds once the services are up. */
+  const getReadiedClient = useCallback(async (): Promise<ComposedViewClient> => {
+    const snapshot = await readied(files, fileManagerRef, { readiness: 'viewClient', gone });
+
+    const { viewClient } = snapshot.context;
+    if (!viewClient) {
+      throw new FileManagerNotReadyError('proxy-timeout');
+    }
+
+    return viewClient;
+  }, [files, fileManagerRef, gone]);
+
+  const whenServicesReady = useCallback(
+    async () =>
+      servicesBound(fileManagerRef) ??
+      servicesOf(
+        await files.awaitFileManager(fileManagerRef, 'services', {
+          reason: 'services-timeout',
+          ...(gone === undefined ? {} : { gone }),
+        }),
+      ),
+    [files, fileManagerRef, gone],
+  );
+
+  /* `setRoot` destroys the worker, so its opener identity releases old rooted ports. */
+  const bridgeOpener = useSelector(fileManagerRef, (state) => state.context.openFileSystemBridge);
+
+  /* RV1-F1: when the root mount's worker is replaced, each open agent project host swaps in fresh bridges and keeps
+   * its runs. Only a change from an earlier opener counts: a provider's first worker (the share page's mount among
+   * them) has no host whose bridges it replaced. */
+  const lastBridgeOpener = useRef(bridgeOpener);
+  useEffect(() => {
+    if (bridgeOpener === undefined || !isRoot) {
+      return;
+    }
+    const previous = lastBridgeOpener.current;
+    lastBridgeOpener.current = bridgeOpener;
+    if (previous === undefined || previous === bridgeOpener) {
+      return;
+    }
+    // async-iife: bootstrap -- an effect cannot await; a failed re-broker is reported and the host's liveness recovers.
+    void (async (): Promise<void> => {
+      try {
+        await reprovideAgentHostProjects();
+      } catch (error) {
+        console.error('[FileManager] the agent host could not take the new file service', error);
+      }
+    })();
+  }, [bridgeOpener, isRoot]);
+
+  const openRootedFileSystemBridge = useCallback(
+    (root: string, consumer: RootedBridgeConsumer) => {
+      /* An early record read may wait for services across the first render. Read
+       * the current opener after that wait, not the undefined one it captured. */
+      const opener = selectBridgeOpener(fileManagerRef);
+      if (!opener) {
+        throw new FileManagerNotReadyError('proxy-timeout', {
+          cause: new Error('File Manager filesystem bridge is not ready.'),
+        });
+      }
+      return opener(root, consumer);
+    },
+    [fileManagerRef],
+  );
+
+  const machineSettings = useMemo(() => {
+    const connection: { proxy?: FileSystemBridgeRootedProxy } = {};
+    const service = async (): Promise<FileSystemBridgeRootedProxy> => {
+      await whenServicesReady();
+      const { createFileSystemBridgeProxy } = await import('@taucad/fs-bridge');
+      // A known opener belongs to this store incarnation; the first undefined opener waits for the current one.
+      const proxy = createFileSystemBridgeProxy((bridgeOpener ?? openRootedFileSystemBridge)(rootDirectory, 'user'));
+      connection.proxy = proxy;
+      await proxy.ready;
+      return proxy;
+    };
+    return new MachineSettingsStore(
+      service,
+      (typeId, onEvent) => {
+        if (!contentService) {
+          throw new Error('Machine settings content service is unavailable.');
+        }
+        return contentService.watchReady({ paths: [machineSettingsPath({ typeId })] }, onEvent);
+      },
+      () => connection.proxy?.dispose(),
+    );
+  }, [bridgeOpener, rootDirectory, openRootedFileSystemBridge, whenServicesReady, contentService]);
+  useEffect(
+    () => () => {
+      machineSettings.dispose();
+    },
+    [machineSettings],
+  );
+
+  /* The one-shot read a duplicate journals, on its own connection (`createDuplicateProjectReader`). */
+  const ownReadDuplicateProjectFiles = useMemo(
+    () => createDuplicateProjectReader(openRootedFileSystemBridge, whenServicesReady),
+    [openRootedFileSystemBridge, whenServicesReady],
+  );
+
+  /**
+   * One owner for open, reuse and dispose, per `(root, consumer)` (charter D12, W6).
+   *
+   * A connection opens the first time a trusted store touches a path under its
+   * root and is held until the worker is replaced: the commit that installs a
+   * replacement releases what the replaced owner opened, and the file manager's
+   * lease releases the last one when it ends (D6), so neither StrictMode's
+   * remount nor any other remount releases it. The consumer is half the key
+   * because it is half the capability — an `'agent'` caller must never be
+   * answered with the unmasked handle a record store opened first.
+   *
+   * A session's file manager (A6c) brings its own: its child holds the
+   * connections, installs each replacement and releases the last when it stops,
+   * and the scope reads the child's working-copy client instead.
+   */
+  const ownedWorkingCopy = owner?.workingCopyFiles ?? rootFacade?.workingCopyFiles;
+  const connections = useMemo(
+    () => recordConnectionsOf(fileManagerRef, openRootedFileSystemBridge, whenServicesReady),
+    [fileManagerRef, openRootedFileSystemBridge, whenServicesReady],
+  );
+  const rootedConnections = useMemo(
+    () => (ownedWorkingCopy === undefined ? connections.ownerFor(bridgeOpener) : undefined),
+    [bridgeOpener, connections, ownedWorkingCopy],
+  );
+
+  useLayoutEffect(() => {
+    if (rootedConnections !== undefined) {
+      connections.install(rootedConnections);
+    }
+  }, [connections, rootedConnections]);
+
+  useLayoutEffect(() => {
+    if (ownedWorkingCopy === undefined) {
+      owner?.attach(connections.dispose);
+    }
+  }, [connections, owner, ownedWorkingCopy]);
+
+  const childWorkingCopy = useSyncExternalStore(
+    ownedWorkingCopy?.subscribe ?? subscribeToNothing,
+    ownedWorkingCopy?.get ?? readNothing,
+    ownedWorkingCopy?.get ?? readNothing,
+  );
+
+  /*
+   * The trusted stores' working copy, handed out one narrowed slice at a time
+   * (H8/EQ4). Host record writers read and write the checkout itself and never
+   * the overlays above it (architecture V6, charter D8), so all three slices come
+   * off the one `'working-copy'` client and each carries only what its own family
+   * does — the context never exposes the whole surface.
+   */
+  const workingCopyFiles = useMemo(
+    () => childWorkingCopy ?? (rootedConnections ?? connections.ownerFor(bridgeOpener)).files('working-copy'),
+    [bridgeOpener, childWorkingCopy, connections, rootedConnections],
+  );
+
+  const ownWatchRecordFile = useMemo(
+    () => createRecordWatch(bridgeOpener ?? openRootedFileSystemBridge, whenServicesReady),
+    [bridgeOpener, openRootedFileSystemBridge, whenServicesReady],
+  );
+
+  /* The `/files` browser's scoped reads (charter D5; `createScopedStorage`). */
+  const ownScopedStorage = useMemo(() => createScopedStorage(getReadiedProxy), [getReadiedProxy]);
+
+  const runtimeFileSystem = useMemo(
+    () =>
+      fromFileSystemBridge(() => {
+        if (contentService === undefined) {
+          throw new FileManagerNotReadyError('proxy-timeout');
+        }
+        /* Quick Look and the RPC handlers run this runtime over project code the
+         * agent wrote, so it reads the agent's view, not the working copy (CI1, W14). */
+        return openRootedFileSystemBridge(rootDirectory, 'agent');
+      }),
+    // A successful service initialization is the host's existing binding
+    // identity. Rotating the opaque filesystem here makes every owner keyed
+    // by RuntimeFileSystem identity capture the replacement mount instead of
+    // trying to retarget an already-materialized rooted capability.
+    [contentService, openRootedFileSystemBridge, rootDirectory],
+  );
 
   const writeFile = useCallback(
     async (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions): Promise<void> => {
@@ -506,6 +1300,14 @@ export function FileManagerProvider({
     [whenServicesReady],
   );
 
+  const readRawBytes = useCallback(
+    async (path: string, options?: { sizeLimit?: number }): Promise<Uint8Array<ArrayBuffer>> => {
+      const { contentService } = await whenServicesReady();
+      return contentService.readRawBytes(path, options);
+    },
+    [whenServicesReady],
+  );
+
   const renameFile = useCallback(
     async (oldPath: string, newPath: string): Promise<void> => {
       if (oldPath === newPath) {
@@ -518,35 +1320,31 @@ export function FileManagerProvider({
   );
 
   const moveFile = useCallback(
-    async (source: string, target: string, options?: { overwrite?: boolean }): Promise<void> => {
+    async (source: string, target: string): Promise<void> => {
       if (source === target) {
         return;
       }
       const { contentService } = await whenServicesReady();
-      await contentService.move(source, target, options);
+      await contentService.move(source, target);
     },
     [whenServicesReady],
   );
 
   const bulkMove = useCallback(
-    async (edits: readonly BulkMoveEdit[], options?: { overwrite?: boolean }): Promise<BulkMoveResult> => {
+    async (edits: readonly BulkMoveEdit[]): Promise<BulkMoveResult> => {
       if (edits.length === 0) {
         return { moved: [], failed: [] };
       }
       const { contentService } = await whenServicesReady();
-      return contentService.bulkMove(edits, options);
+      return contentService.bulkMove(edits);
     },
     [whenServicesReady],
   );
 
   const canMove = useCallback(
-    async (
-      source: string,
-      target: string,
-      options?: { overwrite?: boolean },
-    ): Promise<true | WorkspaceMutationError> => {
+    async (source: string, target: string): Promise<true | WorkspaceMutationError> => {
       const { contentService } = await whenServicesReady();
-      return contentService.canMove(source, target, options);
+      return contentService.canMove(source, target);
     },
     [whenServicesReady],
   );
@@ -575,20 +1373,20 @@ export function FileManagerProvider({
     [whenServicesReady],
   );
 
-  const mkdir = useCallback(
+  const createDirectory = useCallback(
     async (path: string, options?: { recursive?: boolean }): Promise<void> => {
-      const proxy = await getReadiedProxy();
-      await proxy.mkdir(path, options);
+      const { contentService } = await whenServicesReady();
+      await contentService.createDirectory(path, options);
     },
-    [getReadiedProxy],
+    [whenServicesReady],
   );
 
-  const rmdir = useCallback(
+  const deleteDirectory = useCallback(
     async (path: string, options?: { recursive?: boolean }): Promise<void> => {
-      const proxy = await getReadiedProxy();
-      await proxy.rmdir(path, options);
+      const { contentService } = await whenServicesReady();
+      await contentService.deleteDirectory(path, options);
     },
-    [getReadiedProxy],
+    [whenServicesReady],
   );
 
   const duplicateFile = useCallback(
@@ -641,105 +1439,82 @@ export function FileManagerProvider({
   );
 
   const getZippedDirectory = useCallback(
-    async (path: string): Promise<Blob> => {
+    async (path: string, options?: ContentExportFilter): Promise<Blob> => {
       const { contentService } = await whenServicesReady();
-      return contentService.getZippedDirectory(path);
+      return contentService.getZippedDirectory(path, options);
     },
     [whenServicesReady],
   );
 
-  const copyDirectory = useCallback(
-    async (sourcePath: string, destinationPath: string): Promise<void> => {
-      const { contentService } = await whenServicesReady();
-      await contentService.copyDirectory(sourcePath, destinationPath);
+  /**
+   * Place a whole overlay unit into the project so the project owns it
+   * (ruling P11, architecture V8).
+   *
+   * The composed view's own gesture, not the authority's: it reads the unit's
+   * subtree through the view and writes it back whole, which is why it takes a
+   * checkout-relative path and is not on {@link FileSystemClientFacade}.
+   */
+  const overrideUnit = useCallback(
+    async (unitRoot: string): Promise<void> => {
+      const viewClient = await getReadiedClient();
+      await viewClient.overrideUnit(unitRoot);
     },
-    [whenServicesReady],
+    [getReadiedClient],
   );
 
-  const client = useMemo<FileSystemClientFacade>(() => {
-    const gated = <K extends keyof FileSystemClientFacade>(method: K): FileSystemClientFacade[K] =>
-      // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- pass-through gate, runtime types preserved by FileSystemClientFacade
-      (async (...args: unknown[]) => {
-        const proxy = await getReadiedProxy();
-        // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- forward through to the typed proxy method
-        return (proxy[method] as (...rest: unknown[]) => unknown)(...args);
-      }) as FileSystemClientFacade[K];
+  /* The authority's topology, gated on the machine becoming `ready` (charter D5; `createAuthorityClient`). */
+  const ownClient = useMemo(() => createAuthorityClient(getReadiedProxy), [getReadiedProxy]);
 
-    return {
-      readFile: gated('readFile'),
-      readFiles: gated('readFiles'),
-      writeFile: gated('writeFile'),
-      writeFiles: gated('writeFiles'),
-      mkdir: gated('mkdir'),
-      readdir: gated('readdir'),
-      stat: gated('stat'),
-      lstat: gated('lstat'),
-      rename: gated('rename'),
-      move: gated('move'),
-      bulkMove: gated('bulkMove'),
-      canMove: gated('canMove'),
-      canRename: gated('canRename'),
-      canCreate: gated('canCreate'),
-      canDelete: gated('canDelete'),
-      unlink: gated('unlink'),
-      rmdir: gated('rmdir'),
-      exists: gated('exists'),
-      batchExists: gated('batchExists'),
-      ensureDirectoryExists: gated('ensureDirectoryExists'),
-      getDirectoryStat: gated('getDirectoryStat'),
-      getDirectoryContents: gated('getDirectoryContents'),
-      duplicateFile: gated('duplicateFile'),
-      copyDirectory: gated('copyDirectory'),
-      getZippedDirectory: gated('getZippedDirectory'),
-      readShallowDirectory: gated('readShallowDirectory'),
-      readDirectory: gated('readDirectory'),
-    };
-  }, [getReadiedProxy]);
-
-  const workspace = useMemo<WorkspaceFacade>(
-    () => ({
-      mount: async (prefix, config) => {
-        const proxy = await getReadiedProxy();
-        await proxy.mount(prefix, config);
-      },
-      unmount: (prefix) => {
-        // async-iife: bootstrap. Errors here are non-fatal but worth
-        // surfacing — `workspace.unmount_failed` lights up the metrics
-        // dashboard when an unmount step fails to dispose cleanly
-        // (Audit Finding 10).
-        void (async () => {
-          try {
-            const proxy = await getReadiedProxy();
-            proxy.unmount(prefix);
-          } catch (error) {
-            const snapshot = fileManagerRef.getSnapshot();
-            workspaceTelemetry.workspaceUnmountFailed({
-              workspaceId: snapshot.context.activeWorkspaceId,
-              prefix,
-              reason: 'dispose-failed',
-            });
-            console.warn(`[FileManager] unmount('${prefix}') failed`, error);
+  const { workspace: ownWorkspace, activateRootSync } = useMemo(
+    () =>
+      createWorkspaceFacade({
+        fileManagerRef,
+        getReadiedProxy,
+        getConnectedProxy: async () => {
+          const snapshot = await readied(files, fileManagerRef, { readiness: 'proxy', gone });
+          const { proxy } = snapshot.context;
+          if (!proxy) {
+            throw new FileManagerNotReadyError('proxy-timeout');
           }
-        })();
-      },
-      invalidateStandaloneProvider: async (backend, workspaceId) => {
-        const proxy = await getReadiedProxy();
-        proxy.invalidateStandaloneProvider(backend, workspaceId);
-      },
-    }),
-    [getReadiedProxy, fileManagerRef, workspaceTelemetry],
+          return proxy;
+        },
+        whenServicesReady,
+        telemetry: workspaceTelemetry,
+      }),
+    [getReadiedProxy, files, fileManagerRef, gone, whenServicesReady, workspaceTelemetry],
   );
+
+  /*
+   * The root's scope is a view of the runtime's root facade (A4b): the facade owns the root's record connections, its
+   * root synchronisation passes, its watch and its topology client, which the project library reads too.
+   */
+  const rootValue = useSyncExternalStore(
+    rootFacade?.subscribe ?? subscribeToNothing,
+    rootFacade?.get ?? readNothing,
+    rootFacade?.get ?? readNothing,
+  );
+  const watchRecordFile = rootValue?.watchRecordFile ?? ownWatchRecordFile;
+  const readDuplicateProjectFiles = rootValue?.readDuplicateProjectFiles ?? ownReadDuplicateProjectFiles;
+  const scopedStorage = rootValue?.scopedStorage ?? ownScopedStorage;
+  const client = rootValue?.client ?? ownClient;
+  const workspace = rootValue?.workspace ?? ownWorkspace;
+
+  useLayoutEffect(() => (rootFacade === undefined ? activateRootSync() : undefined), [activateRootSync, rootFacade]);
 
   const value = useMemo<FileManagerContextType>(
     () => ({
       fileManagerRef,
+      machineSettings,
       backendType,
       contentService,
       treeService,
+      workerChangeChannel,
+      watchRecordFile,
       whenServicesReady,
       writeFile,
       writeFiles,
       readFile,
+      readRawBytes,
       renameFile,
       moveFile,
       bulkMove,
@@ -747,32 +1522,43 @@ export function FileManagerProvider({
       canRename,
       canCreate,
       canDelete,
-      mkdir,
-      rmdir,
+      createDirectory,
+      deleteDirectory,
       duplicateFile,
+      overrideUnit,
       deleteFile,
       stat,
       exists,
       readdir,
       getDirectoryStat,
       getZippedDirectory,
-      copyDirectory,
+      readDuplicateProjectFiles,
+      recordFiles: workingCopyFiles,
+      parameterFiles: workingCopyFiles,
+      workbenchFiles: workingCopyFiles,
+      previewFiles: workingCopyFiles,
+      scopedStorage,
       client,
       workspace,
       activeWorkspaceName,
       activeWorkspaceId,
       unavailableReason,
       bindProjectToWorkspace,
+      runtimeFileSystem,
     }),
     [
       fileManagerRef,
+      machineSettings,
       backendType,
       contentService,
       treeService,
+      workerChangeChannel,
+      watchRecordFile,
       whenServicesReady,
       writeFile,
       writeFiles,
       readFile,
+      readRawBytes,
       renameFile,
       moveFile,
       bulkMove,
@@ -780,42 +1566,37 @@ export function FileManagerProvider({
       canRename,
       canCreate,
       canDelete,
-      mkdir,
-      rmdir,
+      createDirectory,
+      deleteDirectory,
       duplicateFile,
+      overrideUnit,
       deleteFile,
       stat,
       exists,
       readdir,
       getDirectoryStat,
       getZippedDirectory,
-      copyDirectory,
+      readDuplicateProjectFiles,
+      workingCopyFiles,
+      scopedStorage,
       client,
       workspace,
       activeWorkspaceName,
       activeWorkspaceId,
       unavailableReason,
       bindProjectToWorkspace,
+      runtimeFileSystem,
     ],
   );
 
-  const isRoot = parentWorker === undefined;
-  const workerForChildren = useSelector(fileManagerRef, (state) => state.context.worker);
-  const filePoolBufferForChildren = useSelector(fileManagerRef, (state) => state.context.filePoolBuffer);
+  /* The files feature's hooks (`@taucad/files-ui/hooks/*`) read the two services from their own context. */
+  const fileServices = useMemo<FileServices>(() => ({ contentService, treeService }), [contentService, treeService]);
 
-  const provider = <FileManagerContext.Provider value={value}>{children}</FileManagerContext.Provider>;
-
-  if (isRoot) {
-    return (
-      <SharedWorkerContext.Provider value={workerForChildren}>
-        <SharedFilePoolBufferContext.Provider value={filePoolBufferForChildren}>
-          {provider}
-        </SharedFilePoolBufferContext.Provider>
-      </SharedWorkerContext.Provider>
-    );
-  }
-
-  return provider;
+  return (
+    <FileManagerContext.Provider value={value}>
+      <FileServicesProvider value={fileServices}>{children}</FileServicesProvider>
+    </FileManagerContext.Provider>
+  );
 }
 
 export function useFileManager(): FileManagerContextType {
@@ -842,22 +1623,3 @@ export function useOptionalFileManager(): FileManagerContextType | undefined {
  *
  * @returns Array of file entries, or undefined if the file manager is not ready
  */
-export function useFileTree(): FileTreeEntry[] | undefined {
-  const { treeService } = useFileManager();
-
-  if (!treeService) {
-    return undefined;
-  }
-
-  const tree = treeService.getTreeSnapshot();
-  if (tree.size === 0) {
-    return undefined;
-  }
-
-  return [...tree.values()].map(({ path, name, type, size }) => ({
-    path,
-    name,
-    type,
-    size,
-  }));
-}

@@ -1,8 +1,6 @@
 import { defineConfig } from 'vitest/config';
-import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 export default defineConfig({
-  plugins: [nxViteTsPaths()],
   test: {
     environment: 'node',
     // Vitest's typecheck uses TypeScript 5.9.3, which crashes (TS internal bug in
@@ -20,7 +18,7 @@ export default defineConfig({
     reporters: ['verbose'],
     coverage: {
       provider: 'v8',
-      reportsDirectory: '../../coverage/packages/rpc',
+      reportsDirectory: '../../out/reports/coverage/packages/rpc',
       include: ['src/**/*'],
       exclude: ['src/**/*.{test,spec,test-d}.ts', 'src/index.ts'],
       // V8: optional chains and branch coverage on the wire handler; keep a high floor.

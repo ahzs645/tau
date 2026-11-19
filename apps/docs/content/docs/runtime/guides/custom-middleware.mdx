@@ -1,0 +1,115 @@
+---
+title: Create Custom Middleware
+description: Build middleware with defineMiddleware to intercept and transform kernel operations.
+docType: how-to
+icon: lucide:git-branch-plus
+---
+
+Build middleware with `defineMiddleware` from `@taucad/runtime/middleware`. Middleware uses an onion-model wrap pattern: code before `handler(input)` runs on the way down, code after it runs on the return journey, and returning without calling `handler` short-circuits the chain.
+
+## Prerequisites
+
+- [Use Middleware](./using-middleware) — add built-in middleware to your runtime
+- [Middleware Model](../concepts/middleware-model) — the onion model
+
+## Steps
+
+### 1. Wrap an operation
+
+Implement `wrapEvaluate` (or `wrapDescribe`, `wrapExport`). The third argument is the operation runtime — destructure `logger`, `filesystem`, `dependencyHash`, `signal`, `state`, and `options` from it as needed:
+
+```typescript
+import { defineMiddleware } from '@taucad/runtime/middleware';
+
+const loggingMiddleware = defineMiddleware({
+  id: 'logging',
+  name: 'Logging',
+  async wrapEvaluate(input, handler, { logger }) {
+    logger.debug('Computing geometry...');
+    const result = await handler(input);
+    logger.debug('Geometry computed');
+    return result;
+  },
+});
+```
+
+### 2. Add inferred options
+
+An `optionsSchema` validates registration input and provides defaults. Hooks receive its parsed output. This factory lives in `examples/my-logging.middleware.ts`:
+
+```typescript
+import { defineMiddleware } from '@taucad/runtime/middleware';
+import { z } from 'zod';
+
+export const myLogging = defineMiddleware({
+  id: 'my-logging',
+  name: 'MyLogging',
+  optionsSchema: z.object({ enabled: z.boolean().default(true) }),
+  async wrapEvaluate(input, next, { logger, options }) {
+    const result = await next(input);
+    if (options.enabled) logger.debug('Evaluation completed');
+    return result;
+  },
+});
+```
+
+Forward the complete result. Evaluation handles have lifetimes owned by the runtime; retaining whole results in a global map can return a released handle or cross document ownership. Use the bundled cache middleware for runtime-managed reuse instead of implementing an unbounded result cache.
+
+### 3. Register the factory
+
+Keep executable middleware with the runtime definition in its worker or host process. A browser client can type-import that definition without loading its implementation:
+
+```typescript
+import { createRuntimeClient } from '@taucad/runtime';
+import { defineRuntime } from '@taucad/runtime/worker';
+import { replicad } from '@taucad/replicad';
+import { esbuild } from '@taucad/esbuild';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
+import { myLogging } from './examples/my-logging.middleware';
+
+const runtime = defineRuntime({
+  plugins: [replicad(), esbuild()],
+  middleware: [myLogging({ enabled: true })],
+});
+const client = createRuntimeClient({
+  transport: inProcessTransport({ runtime, fileSystem: fromMemoryFs() }),
+});
+await client.connect();
+await client.shutdown();
+```
+
+### 4. Declare operation-scoped dependencies
+
+Use `resolve` when a file affects an operation. `affects` is required; list only the operations whose result changes when the file changes:
+
+```typescript
+import { defineMiddleware } from '@taucad/runtime/middleware';
+
+const metadataMiddleware = defineMiddleware({
+  id: 'metadata',
+  name: 'Metadata',
+  resolve({ entryPath }) {
+    return [
+      {
+        path: `${entryPath}.metadata.json`,
+        affects: ['evaluate'],
+        watchDebounce: 100,
+      },
+    ];
+  },
+});
+```
+
+Dependency scope is not inferred from wrap hooks. The available operation names are `describe`, `evaluate`, `render`, and `export`.
+
+## Variations
+
+- **Cancellation**: Destructure the fresh operation `signal`, pass it to cancellable APIs, and never retain it after the hook settles — see [Cooperate with Cancellation](./cooperate-with-cancellation).
+- **Other hooks**: Implement `wrapDescribe`, `wrapRender`, or `wrapExport` for the corresponding operation. `wrapRender` receives a selected `view` and `mimeType`; `wrapExport` receives a selected `exportId`, `mimeType`, and `extension`. Declare middleware content under `content.views[mimeType]` or `content.exports[extension]`; only that selected route’s keys reach its hook.
+
+## Related
+
+- [Middleware Model](../concepts/middleware-model) — Onion model and execution order
+- [Use Middleware](./using-middleware) — Add built-in middleware
+- [API Reference: Middleware](../api/middleware) — defineMiddleware and types

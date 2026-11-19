@@ -3,7 +3,7 @@ title: 'React Testing Policy'
 description: 'Patterns for testing React hooks and components in apps/ui: renderHook, harness components, fake timers, mocks, cleanup.'
 status: active
 created: '2026-03-09'
-updated: '2026-03-09'
+updated: '2026-09-29'
 related:
   - docs/policy/testing-policy.md
 ---
@@ -23,6 +23,7 @@ Hooks encapsulate stateful logic that is difficult to test via component renderi
 - **Library**: `@testing-library/react` — use `renderHook`, `act`, `render`, `screen`
 - **Globals**: `globals: true` is enabled; `describe`, `it`, `expect`, `vi` are available via `import { … } from 'vitest'`
 - **Setup**: `vitest.setup.ts` provides `@testing-library/jest-dom` matchers and mocks for `matchMedia`, `ResizeObserver`, `IntersectionObserver`
+- **Node 24**: Run UI jsdom tests with `NODE_OPTIONS=--no-experimental-webstorage` so Node's native WebStorage accessor does not prevent jsdom from installing `localStorage`. Keep this process-local; do not change application storage to repair the test environment.
 
 ## 1. Hook Testing Strategy
 
@@ -133,6 +134,8 @@ beforeEach(() => {
 ```
 
 For complex dependencies, extract a `createMock*` factory (see Testing Policy § 5).
+
+Keep real Radix collapsible and portal behavior when diagnosing an initial-state failure. Inspect the rendered state and correct the owning state/lifecycle contract; do not mock away that behavior to make a failing assertion pass.
 
 ## 5. Testing `useEffect` Cleanup
 

@@ -1,0 +1,150 @@
+import type { Route } from './+types/route.js';
+import { getEnvironment } from '#environment.config.js';
+import { sentryEnvelopeUrl } from '#lib/sentry-event.lib.js';
+import { clientOf, createClientRateLimiter, readCapped } from '#lib/request.server.js';
+import type { ClientRateLimiter } from '#lib/request.server.js';
+
+/**
+ * Same-origin tunnel for Sentry envelopes (browser observability SB5), so a content blocker that
+ * refuses the Sentry ingest host does not drop UI errors. Both delivery paths post here on the web
+ * (the SDK's `tunnel` option and `sendSentryEventDirectly`); desktop posts to the DSN directly.
+ *
+ * It forwards only envelopes whose header names the configured `SENTRY_DSN`'s host and project, to
+ * that DSN's own ingest endpoint, with only `Content-Type`: no cookies, no client IP, no other
+ * header. Bodies are capped ({@link tunnelBodyLimit}) and each client address is rate limited
+ * ({@link tunnelRateLimit}). Unlike the PostHog proxy it does not drop on `Sec-GPC`: error reporting
+ * is not tracking (D1).
+ */
+
+/** Largest envelope forwarded, in bytes: Sentry's own limit for one event (1 MiB). */
+export const tunnelBodyLimit = 1024 * 1024;
+
+/** Envelopes one client address may send per window, and the window in milliseconds. */
+export const tunnelRateLimit = { envelopes: 60, windowMilliseconds: 60_000 } as const;
+
+/** A fixed-window counter per client address (see {@link createClientRateLimiter}). */
+export type TunnelRateLimiter = ClientRateLimiter;
+
+/**
+ * Create the tunnel's per-client limiter.
+ *
+ * @param limit - Envelopes per window and the window's length.
+ * @returns `true` while a client is within its window's allowance.
+ */
+export const createTunnelRateLimiter = (
+  limit: Readonly<{ envelopes: number; windowMilliseconds: number }> = tunnelRateLimit,
+): TunnelRateLimiter => createClientRateLimiter(limit);
+
+/** The host, path prefix and project of a DSN, as the envelope endpoint is built from them. */
+const dsnTarget = (dsn: string): { readonly host: string; readonly path: string } | undefined => {
+  try {
+    const url = new URL(dsn);
+    return url.username === '' ? undefined : { host: url.host, path: url.pathname.replace(/\/+$/u, '') };
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Whether an envelope's header DSN names the configured DSN's host and project (its key may
+ * differ: Sentry checks it).
+ *
+ * @param body - The envelope as posted.
+ * @param configured - The configured `SENTRY_DSN`.
+ * @returns `true` when the envelope is for the configured project on the configured host.
+ */
+export const isEnvelopeForDsn = (body: string, configured: string): boolean => {
+  const newline = body.indexOf('\n');
+  const headerLine = newline === -1 ? body : body.slice(0, newline);
+  let header: unknown;
+  try {
+    header = JSON.parse(headerLine);
+  } catch {
+    return false;
+  }
+  if (typeof header !== 'object' || header === null || !('dsn' in header) || typeof header.dsn !== 'string') {
+    return false;
+  }
+  const expected = dsnTarget(configured);
+  const actual = dsnTarget(header.dsn);
+  if (expected === undefined || actual === undefined) {
+    return false;
+  }
+  return expected.host === actual.host && expected.path === actual.path;
+};
+
+/** Response headers the SDK reads from Sentry's answer (its rate limits). */
+const forwardedResponseHeaders = ['content-type', 'retry-after', 'x-sentry-rate-limits'] as const;
+
+type TunnelOptions = Readonly<{
+  dsn: string | undefined;
+  isAllowed: TunnelRateLimiter;
+  now?: () => number;
+  fetchUpstream?: typeof fetch;
+}>;
+
+/**
+ * Validate and forward one envelope.
+ *
+ * @param request - The browser's request.
+ * @param options - The configured DSN, the limiter, and stand-ins for tests.
+ * @returns Sentry's answer, or this route's refusal.
+ */
+export const sentryTunnel = async (
+  request: Request,
+  { dsn, isAllowed, now = Date.now, fetchUpstream = fetch }: TunnelOptions,
+): Promise<Response> => {
+  if (request.method !== 'POST') {
+    return new Response(null, { status: 405, headers: { allow: 'POST' } });
+  }
+  const endpoint = dsn ? sentryEnvelopeUrl(dsn) : undefined;
+  if (!dsn || endpoint === undefined) {
+    return new Response(null, { status: 404 });
+  }
+  if (!isAllowed(clientOf(request), now())) {
+    return new Response(null, {
+      status: 429,
+      headers: { 'retry-after': String(Math.ceil(tunnelRateLimit.windowMilliseconds / 1000)) },
+    });
+  }
+  const body = await readCapped(request, tunnelBodyLimit);
+  if (body === undefined) {
+    return new Response(null, { status: 413 });
+  }
+  if (!isEnvelopeForDsn(body, dsn)) {
+    return new Response(null, { status: 400 });
+  }
+  let upstream: Response;
+  try {
+    upstream = await fetchUpstream(endpoint, {
+      method: 'POST',
+      body,
+      headers: { 'content-type': request.headers.get('content-type') ?? 'text/plain;charset=UTF-8' },
+      redirect: 'error',
+    });
+  } catch {
+    return new Response(null, { status: 502 });
+  }
+  const headers = new Headers();
+  for (const name of forwardedResponseHeaders) {
+    const value = upstream.headers.get(name);
+    if (value !== null) {
+      headers.set(name, value);
+    }
+  }
+  // Null body statuses (204, 205, 304) cannot carry a body.
+  const isNullBody = [204, 205, 304].includes(upstream.status);
+  return new Response(isNullBody ? null : await upstream.text(), { status: upstream.status, headers });
+};
+
+/** This server process's limiter: per instance, so a best effort bound, not a global quota. */
+const isAllowed = createTunnelRateLimiter();
+
+export async function action({ request }: Route.ActionArgs): Promise<Response> {
+  const environment = await getEnvironment();
+  return sentryTunnel(request, { dsn: environment.SENTRY_DSN, isAllowed });
+}
+
+export function loader(): Response {
+  return new Response(null, { status: 405, headers: { allow: 'POST' } });
+}

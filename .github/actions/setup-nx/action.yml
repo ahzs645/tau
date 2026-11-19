@@ -1,44 +1,184 @@
 name: 'Setup Nx Environment'
 description: 'Sets up Node.js, pnpm, dependencies, and Nx SHAs for CI workflows'
 
+inputs:
+  node-version:
+    description: 'Node.js version used by this job. 24.21 segfaults Nx as it exits, so the default stays on 24.20.0.'
+    required: false
+    default: '24.20.0'
+  save-pnpm-store:
+    description: "'false' restores the pnpm store and the cached Node.js without saving them after the job, for jobs whose end gates a workflow"
+    required: false
+    default: 'true'
+  affected-base:
+    description: "A commit `nx affected` diffs against in place of the one `nx-set-shas` finds: `queue-verdict`'s `affected-base` (`HEAD^1`, the merge queue's own base, on a push whose commit has a merge-group run). '' keeps `nx-set-shas`."
+    required: false
+    default: ''
+
 runs:
   using: 'composite'
   steps:
-    # This enables task distribution via Nx Cloud
-    # Run this command as early as possible, before dependencies are installed
-    # Learn more at https://nx.dev/ci/reference/nx-cloud-cli#npx-nxcloud-startcirun
-    # Connect your workspace by running "nx connect" and uncomment this
-    # - run: npx nx-cloud start-ci-run --distribute-on="3 linux-medium-js" --stop-agents-after="build"
+    # The pinned Node is not in the hosted images' toolcache, so `setup-node` downloaded it
+    # in every job (13–42 s, including a 504 and its retry; Brain
+    # research/ci-decomposition-blueprint.md, X9). Its toolcache folder (the version's
+    # directory and `.complete` marker) is cached by version, and `setup-node` then finds
+    # it installed. Saved and restored like the pnpm store below.
+    - name: Cache the pinned Node.js
+      if: inputs.save-pnpm-store == 'true'
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ${{ runner.tool_cache }}/node/${{ inputs.node-version }}
+        key: ${{ runner.os }}-${{ runner.arch }}-node-toolcache-${{ inputs.node-version }}
+
+    - name: Restore the pinned Node.js
+      if: inputs.save-pnpm-store != 'true'
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ${{ runner.tool_cache }}/node/${{ inputs.node-version }}
+        key: ${{ runner.os }}-${{ runner.arch }}-node-toolcache-${{ inputs.node-version }}
 
     - name: Setup Node.js
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
       with:
-        # FORK: pinned rather than floating on '24'. 24.18.0 — what `24` resolves
-        # to on ubuntu-latest — segfaults during Nx startup, which is why the
-        # Pages deploy pins the same patch (see .github/workflows/github-pages.yml).
-        node-version: '24.16.0'
+        node-version: ${{ inputs.node-version }}
         registry-url: 'https://registry.npmjs.org'
 
     - name: Enable corepack
       run: corepack enable
       shell: bash
 
+    # Nx's native PTY command runner intermittently segfaults a few seconds into
+    # `nx run-many`, before any task output (SIGSEGV, seen on Node 24.10 and
+    # 24.20). Child-process execution keeps Nx caching and orchestration.
+    - name: Run Nx tasks without the native PTY runner
+      run: echo 'NX_NATIVE_COMMAND_RUNNER=false' >> "$GITHUB_ENV"
+      shell: bash
+
+    # Native revision suites, the CLI and every disk host record with `git` and
+    # `git lfs` (`resolveGitToolchain`). The GitHub-hosted images ship git-lfs;
+    # this states that dependency and fails here, by name, on an image without it,
+    # rather than as product-shaped test failures later.
+    - name: Require git-lfs
+      run: git lfs version
+      shell: bash
+
+    # The first `pnpm` call of the job makes corepack download the pinned pnpm
+    # from the npm registry, and that is the flakiest network call here: in run
+    # 41670839293 it reset mid-stream (`TypeError: terminated` / `read
+    # ECONNRESET`) and took the job with it. Do the download in a step of its
+    # own, with retries, so a reset costs seconds instead of a CI round.
+    - name: Download pnpm through corepack
+      shell: bash
+      run: |
+        for attempt in 1 2 3; do
+          if pnpm --version; then exit 0; fi
+          echo "::warning title=corepack download failed::pnpm download attempt $attempt failed; retrying" >&2
+          sleep $((attempt * 5))
+        done
+        pnpm --version
+
     - name: Get pnpm store directory
       shell: bash
       run: |
-        echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+        # An empty store path fails the cache step after this one as "Input
+        # required and not supplied: path", which names neither pnpm nor the
+        # download that actually broke. Fail here instead, by name.
+        store="$(pnpm store path --silent)"
+        if [ -z "$store" ]; then
+          echo "::error title=No pnpm store path::pnpm store path printed nothing" >&2
+          exit 1
+        fi
+        echo "STORE_PATH=$store" >> "$GITHUB_ENV"
 
     - name: Setup pnpm cache
+      if: inputs.save-pnpm-store == 'true'
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ${{ env.STORE_PATH }}
-        key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
         restore-keys: |
-          ${{ runner.os }}-pnpm-store-
+          ${{ runner.os }}-${{ runner.arch }}-pnpm-store-
 
+    # Saving a missed store is a post step of about 2.5 minutes on macOS (1.1 GB), which
+    # holds back every job that needs this one.
+    - name: Restore pnpm cache
+      if: inputs.save-pnpm-store != 'true'
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ${{ env.STORE_PATH }}
+        key: ${{ runner.os }}-${{ runner.arch }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-pnpm-store-
+
+    # Postinstall scripts fetch release binaries (Electron) from GitHub, which can answer 504 for
+    # minutes at a time. A frozen install is idempotent, so retry it a bounded number of times.
+    # Each attempt is also bounded in time: a cold install on `macos-26-intel` takes 5–11 minutes,
+    # and three Intel jobs that stalled in this setup on 2026-11-16 (runs 43801415465 and
+    # 43813916763) held it until the job's timeout or a lost runner. Outside Windows a watchdog ends
+    # an attempt's process group after `INSTALL_ATTEMPT_SECONDS`, so the next attempt runs instead.
     - name: Install dependencies
-      run: pnpm install --frozen-lockfile
+      env:
+        INSTALL_ATTEMPT_SECONDS: '900'
+      run: |
+        bounded() {
+          if [ "$RUNNER_OS" = Windows ] || ! command -v perl > /dev/null; then "$@"; return; fi
+          perl -e '
+            my $seconds = shift;
+            my $pid = fork() // die "fork: $!";
+            if ($pid == 0) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV or die "exec: $!"; }
+            local $SIG{ALRM} = sub {
+              print STDERR "::warning title=pnpm install stalled::no result after ${seconds}s; stopping this attempt\n";
+              kill "TERM", -$pid; sleep 10; kill "KILL", -$pid; waitpid($pid, 0); exit 124;
+            };
+            alarm $seconds;
+            waitpid($pid, 0);
+            exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+          ' "$INSTALL_ATTEMPT_SECONDS" "$@"
+        }
+        for attempt in 1 2 3; do
+          bounded pnpm install --frozen-lockfile && exit 0
+          if [ "$attempt" -lt 3 ]; then
+            echo "::warning title=pnpm install failed::attempt $attempt failed; retrying" >&2
+            sleep $((attempt * 30))
+          fi
+        done
+        exit 1
       shell: bash
 
+    # Every `pnpm nx` call goes through `nx-guard.ts`: it reruns a command once
+    # when Nx dies from SIGSEGV, and points Nx at a local relay to the remote
+    # cache that turns cache faults, oversize entries and refused writes into
+    # misses (with a rerun with the cache off as the fallback; see the file
+    # header). Every other exit status passes through unchanged.
+    - name: Guard Nx against segfaults and remote cache faults
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        GUARD: ${{ github.action_path }}/nx-guard.ts
+      run: |
+        bin=node_modules/.bin
+        if [ -e "$bin/nx-segv-guarded" ]; then exit 0; fi
+        mv "$bin/nx" "$bin/nx-segv-guarded"
+        real="$(cd "$bin" && pwd)/nx-segv-guarded"
+        printf '#!/bin/sh\nexec node --disable-warning=ExperimentalWarning "%s" "%s" "$@"\n' "$GUARD" "$real" > "$bin/nx"
+        chmod +x "$bin/nx"
+
     - name: Set NX SHAs
+      if: inputs.affected-base == ''
       uses: nrwl/nx-set-shas@afb73a62d26e41464e9254689e1fd6122ee683c1 # v5.0.1
+
+    # A push to `main` whose commit has a merge-group run diffs against the queue's own base,
+    # so `nx affected` selects exactly the lanes the queue selected (`queue-verdict`).
+    - name: Set NX SHAs to the given base
+      if: inputs.affected-base != ''
+      shell: bash
+      env:
+        BASE: ${{ inputs.affected-base }}
+      run: |
+        set -euo pipefail
+        base=$(git rev-parse --verify "$BASE^{commit}")
+        {
+          echo "NX_BASE=$base"
+          echo "NX_HEAD=$(git rev-parse --verify HEAD)"
+        } >> "$GITHUB_ENV"
+        echo "nx affected diffs against $BASE ($base)."

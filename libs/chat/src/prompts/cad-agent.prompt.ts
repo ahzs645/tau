@@ -1,0 +1,526 @@
+// === Prompt Change Log ===
+// Every change to this prompt must cite before/after eval evidence.
+// Format: // EVAL(<case>): <before> → <after> via <change description>
+// Example: // EVAL(cube-20mm): 80% → 95% via anti-gold-plating rules
+// EVAL(geospec-direct-parameters): 99% mean / 12-of-12 geometry / 37.5s / $0.423 → 99% mean / 12-of-12 geometry / 32.8s / $0.345 across all 12 active model-harness pairs via one canonical default/direct-parameters example. A confirmation run followed one MiniMax malformed-OpenSCAD outlier (98%, 11-of-12 geometry) and restored full geometry parity.
+// EVAL(geospec-first-testing): pending benchmark — replaces legacy requirement-file editing with GeoSpec files (`*.geospec.ts` / `*.geospec.js`) and browser-runner `test_model`. Validates the agent creates executable GeoSpec tests before implementation and no longer attempts legacy test-file edits.
+// EVAL(diagnose-before-switching): pending benchmark-2026-04-20 — replaces "stop after 1-2 retries" with claude-code's diagnose-before-switching guidance in <error_handling>. Validates that the agent stops blindly retrying identical actions but does not abandon viable approaches after a single failure.
+// EVAL(faithful-reporting): pending benchmark-2026-04-20 — adds faithful-reporting bullet to <constraints>. Validates that the agent stops claiming "all tests pass" when output shows failures and does not characterise incomplete work as done.
+// EVAL(tool-usage-policy): pending benchmark-2026-04-20 — new <tool_usage_policy> static section codifies parallel-vs-sequential calls and bans placeholder values. Validates fewer wasted sequential reads and zero placeholder-arg tool calls.
+// EVAL(screenshot-cap): pending benchmark-2026-04-20 — caps screenshots at 2 per inspection cycle and bans chaining a single screenshot after multi_angle in <visual_inspection>. Validates lower screenshot tool-call counts per task.
+// EVAL(top-level-export-positive): pending benchmark-2026-04-20 — replaces the OpenSCAD-only "do not add module-only library files" warning with a kernel-aware <test_requirements> directive that pushes the agent to ADD a top-level export (via KernelConfig.topLevelExportExample) rather than skip a test. The block now states the requirement once with a single canonical example; the imperative "Add ..." recovery sentence is reserved for the test_model tool error so the system prompt no longer dual-states. Validates that the agent patches the source file with edit_file instead of dropping GeoSpec coverage. Follow-up 2026-04-21: removed the test_model tool description pre-warning that duplicated this block, single-source-of-truth fix.
+// EVAL(transcript-search-dedup): pending benchmark-2026-04-21 — drops the trailing one-liner inside <transcript_search> that re-stated the <system-reminder> identity already established by <error_handling>/<system_reminder_contract>. Single-source-of-truth fix (context-engineering policy). Validates no regression in <system-reminder> handling on the agent-loop-safeguards benchmark.
+// EVAL(tone): pending benchmark-2026-04-20 — new <tone> static section (objectivity, no time estimates, no colon-before-tool-call, no emojis). Validates a measurable drop in flattery/filler tokens per turn.
+// EVAL(plan-mode-strict): pending benchmark-2026-04-20 — tightens <plan_mode> to forbid non-readonly tool calls except .plan.md edit, mirroring claude-code's system-reminder-plan-mode-is-active-iterative.md. Validates zero non-readonly tool calls during plan mode.
+// EVAL(workflow-decompose): pending benchmark-2026-04-20 — prepends workflow step 0 (Decompose) for multi-component models with a skip-when-trivial escape hatch. Validates fewer dropped components in benchmark fixtures with reference images / BOMs.
+// EVAL(iterate-on-defect): pending benchmark-2026-04-20 — rewrites workflow inspect step to require re-render on any defect found and continue iterating until no defects remain. Validates fewer single-render-then-done failures.
+// EVAL(self-grounded-verification): pending benchmark-2026-04-20 — prepends "predict expected properties before screenshot" guidance to <visual_inspection>. Validates fewer "looks right"-style false positives by anchoring screenshot review against an explicit prediction.
+// EVAL(system-rules): pending benchmark-2026-04-20 — new <system_rules> static section codifies no-identical-retry on permission denial and bans URL hallucination. Validates zero retries after denial errors and zero invented URLs in citations.
+// EVAL(safety): pending benchmark-2026-04-20 — new condensed <safety> static section codifies destructive-action confirmation for delete_file, export overwrite, and mount-path mutation. Validates zero un-confirmed destructive operations.
+// EVAL(when-not-to-use-trim): pending benchmark-2026-04-21 — removes universal "When NOT to use" sections from 11 tool descriptions (6 dropped entirely, 5 collapsed to a single positive trailing redirect), keeps trimmed single-bullet form on high-overuse-risk tools only. Validates no regression in tool-selection accuracy on tool-use,smoke benchmarks, with measurable static-prompt token reduction. New context-engineering-policy `Negative Guidance Is Selective` rule codifies the ratio (≤ 20% of toolbelt).
+// EVAL(cad-reference-reply): pending benchmark-2026-10-11 — one sentence in <workbench> says a `@cad[...]` token in a reply lets the person select that component in the viewer (blueprint W6, agent→viewer highlight). Validates the agent names a component it discusses by its token rather than by prose alone.
+// EVAL(cad-reference-ids): pending benchmark-2026-10-11 — one sentence in <workbench> says a `@cad[<path>#<componentId>]` token and <viewer_selection> name components by the ids `arrange_workbench` entry `components` lists take (blueprint D6/W5). Validates the agent hides or isolates a referenced component by that id instead of searching the model tree.
+// EVAL(export-model-workflow): pending benchmark — surfaces export_model as an optional interchange deliverables step distinct from iterative verification; validates fewer wrong-format guesses and aligns with MIME-registry extensions only.
+// EVAL(export-evidence): before board benchmark recorded in W9-AGENT-PARITY-1; permits text/JSON evidence reads while binary/mixed deliverables still require a user export request.
+// EVAL(multi-file-pattern): pending benchmark — adds a per-kernel <multi_file_pattern> static section sourced from KernelConfig.multiFileExample. Each kernel ships a minimal entry+library pair demonstrating the correct import idiom (OpenSCAD `use <…>` not `include`, TS-based kernels relative `./lib/x.js`, KCL flat `import x from "x.kcl"`). Validates the dollhouse `include`-duplicate failure mode (a copy of every imported component re-rendered next to the assembly) disappears on tool-use,smoke and that non-OpenSCAD-language kernels also stop guessing import paths.
+// EVAL(production-grade-role): pending benchmark — rewrites <role> to communicate audience (architects/engineers/product designers handing output to manufacturing) and the production-grade quality bar (dimensionally faithful, fully detailed, manufacturable as-is; not a hobbyist sketch; model visible features that would exist on the real part). Closes the deferred R11/F9 "<complex_task> override" from docs/research/system-prompt-audit.md by baking the quality bar into the persistent identity (universal reframe) rather than a conditional section. Addresses Finding 6 of docs/research/complex-task-agent-gap-analysis.md ("Anti-Gold-Plating Rules Conflict with Engineering Detail"). Validates closer feature-count and proportion fidelity on detail-demanding reference-image prompts (rocket engine, mechanical assemblies) on tool-use,smoke benchmarks.
+// EVAL(constraints-code-scope): pending benchmark — rescopes <constraints> bullet 1 anti-gold-plating from "no features beyond what was asked" to "code-level over-engineering only", explicitly carving out geometric/engineering detail as part of the implicit CAD deliverable. Resolves the gold-plating-vs-detail conflict (Finding 6 of docs/research/complex-task-agent-gap-analysis.md) without introducing a conditional <complex_task> override. Validates no regression on anti-gold-plating code-level benchmarks (no defensive validation, no unused abstractions) and measurable lift on detail-demanding geometry prompts.
+// EVAL(node-modules-bullet-drop): cached API dump and examples in Block 1 / no mounted-typings pointer → no dump in Block 1 / mounted-typings pointer one layer down in each activated `cad-*` skill via KS-5 progressive disclosure. SUPERSEDES the prior entry because its premise expired when the dump left the prefix; W5 flat-or-better evidence is orchestrator-run post-landing.
+// EVAL(geometry-fidelity-global): pending benchmark — new global <geometry_fidelity> static section (between <safety> and <canonical_example>) codifies analytical-curve-over-polyline-sampling, construction-strategy economy (revolve/loft/sweep), boolean ordering, fillet ordering, and a for-loop self-detection heuristic. Closes the helical-gear smoking gun (involuteSamples=9 polyline tooth construction, GPT-5.5, May 2026) per docs/research/code-cad-topology-best-practices.md F1, F3-F5, F9. Validates on tool-use,smoke + curve-heavy fixtures (gear, NACA airfoil, Archimedean spiral, Rao bell).
+// EVAL(topology-hints-per-kernel): pending benchmark — new per-kernel <topology_hints> static section sourced from KernelConfig.topologyHints (slotted after <code_standards>), mapping the global geometry-fidelity principle to each kernel's actual primitive vocabulary (Replicad: drawPointsInterpolation/draw()-pen arcs; OCCT: Geom2dAPI_PointsToBSpline/GC_MakeArcOfCircle; KCL: tangentialArc/bezierCurve; Manifold/JSCAD: segment-count heuristic; OpenSCAD: $fa/$fs adaptive tessellation). Resolves the B-rep-vs-mesh kernel divide per docs/research/code-cad-topology-best-practices.md Kernel Capability Matrix.
+// EVAL(decompose-design-brief): pending benchmark — strengthens workflow step 0 from generic component enumeration to a mini design brief for multi-component / real-world / reference-based / high-fidelity / spec requests. Validates fewer dropped named features and better assembly-tree recall on Orion, gearbox, hydraulic hinge, and architectural facade fixtures.
+// EVAL(geospec-coverage-floor): pending benchmark — adds explicit GeoSpec coverage floor: whole-model bounding box plus physical properties is never sufficient for high-fidelity assemblies; tests must cover major components/named features and disclose unsupported coverage. Validates that agents no longer stop after basic geometric tests on hyper-real assembly prompts.
+// EVAL(task-tracking): measured 2026-11-08 on anthropic-claude-haiku-5.5 (`task-tracking.live.test.ts`, 16 passes): list written before the first change 12/16 (75%); no item named a project, the list path or the chat id, so deploy-cut finding P2 did not reproduce. Two rewordings that called the list this request's progress, not a project, measured 5/13 and 6/10 and were not adopted (D11). On anthropic-claude-opus-5.5 (`TAU_LIVE_MODEL`, 10 passes each) the current wording and both rewordings all scored 10/10 with no P2 naming, so Opus cannot tell them apart and Haiku decides. Section unchanged: new static <task_tracking> section (after <transcript_search>) asks the agent to keep the person's task list through `update_todos` on work with three or more steps (design-to-print workbench blueprint D8). Validates that multi-step turns write `.tau/chats/<chatId>/todo.yaml` before the first step and mark items done as they finish, with no scratchpad notes in titles.
+// EVAL(asking-questions): measured 2026-11-08 on anthropic-claude-haiku-5.5 (`ask-questions.live.test.ts`, 6 passes per row): precise request built without asking 6/6; open-form request asked before writing 0/6 (it picks a design and writes it), so tokens before the first `ask_questions` has no value on Haiku. On anthropic-claude-opus-5.5 (10 passes per row) the open-form request asks 10/10 after a median of about 590 output tokens over 2 steps (range 556–951), and the precise request builds without asking 10/10. Still pending a prompt change — the workflow Plan step names `ask_questions` for hard forks only the person can decide (agent questions blueprint D9); the tool description carries the full rules (recommendation first, never for permission, continue on a defaulted answer). The parallel-tool-call bullet of <tool_usage_policy> was compressed to the same instruction to keep the core budget. Validates fewer prose multiple-choice questions, no permission questions, and turns that keep working after a default.
+// EVAL(display-name-title-case): pending benchmark — adds <display_names> as the single CAD-prompt source of truth for agent-authored visible labels. Validates fewer PascalCase/snake_case part labels in generated model code while preserving kernel-native code identifier casing.
+// EVAL(export-model-content): pending benchmark-2026-10-17 — export_model takes an optional content { includeEdges?, includeTopology? }; a key set to true that the chosen route cannot carry is refused with the exports of that source that carry it. Validates the agent asks for includeTopology only for a GLB or glTF that must carry the mechanism, and after a refusal exports to a named format or omits the key.
+// EVAL(screenshot-section-metres): pending benchmark-2026-10-21 — screenshot section.offset is metres in tau:root, as in arrange_workbench; offsetMm is removed and refused (LRP-8b), and both screenshot descriptions show { plane: 'xy', offset: 0.006 }. Validates the agent sends offset in metres for a cut it measured in millimetres and never sends offsetMm.
+// EVAL(geospec-typed-limits): pending benchmark — `test_model` rows refused by a limit carry a typed `limit` (kind, name, declared and measured values in its unit, operation, subject, source, and the `workUnitLimit` retry that can still decide the claim), of the limit rows only work-budget rows suggest `workUnitLimit`, and a load refused admission leaves its test inconclusive instead of failed. Validates that on over-limit models (the 1M- and 2M-triangle heavy-mesh sweep) the agent reports the claim as not decided at this capacity, raises `workUnitLimit` only where a work-budget row gives a retry, and never weakens the assertion or reduces the model to fit.
+// EVAL(project-root-reported): pending benchmark-2026-10-17 — tau mcp CAD results carry projectRoot; a loadModel file the root lacks refuses as GEOSPEC_MODEL_SOURCE_NOT_FOUND naming the root and rootDir. Validates the agent fixes the suite's path or passes rootDir instead of editing the model or its export route.
+// EVAL(evaluate-model-summary): pending benchmark-2026-10-17 — evaluate_model returns summary { bounds, componentCount, triangles, vertices, admission }. Validates the agent checks size and part count before writing GeoSpec and reports an over-admission load as not decided rather than shrinking the model.
+// EVAL(mcp-identity-sentence): pending benchmark-2026-10-18 — tau mcp's initialize instructions end with one sentence naming the serving CLI, its launcher rung, the plugin and Node.js versions and the server version (INS-2). Validates the agent names the CLI and rung when asked what serves it, and reads the sentence as proof the chat has the Tau tools rather than searching for them.
+// EVAL(test-model-identity-progress): pending benchmark-2026-10-18 — test_model results carry engine { name, version, protocol, numericProfile, qualification } and, over tau mcp, runtime { version, launch? }; tau mcp sends notifications/progress as the run and each test start. Validates the agent reports which engine and CLI decided a verdict and waits on a long run instead of re-calling test_model.
+// EVAL(snapshot-supersession): pending benchmark-2026-11-09 — <system_reminder_contract> says a workspace-state reminder is a dated snapshot that the newest one supersedes, since each turn's context now stays before its own message (prompt-prefix identity fix, I1/I2) instead of moving to the tail; the loop-nudge rules were compressed to keep the core budget. Validates the agent reads the latest <active_file>/<project_layout> and never cites a stale earlier one.
+// EVAL(evaluate-model-mechanism): pending benchmark — evaluate_model returns mechanism { declared, admitted, links, joints, couplings, animations, issues } and show_model returns mechanism { preserved, joints, animations }. Validates the agent reports geometry and motion separately, fixes the mechanism issue path when declared is true and admitted false instead of editing geometry, and does not claim playable motion when preserved is false.
+// EVAL(geospec-truthful-summary): pending benchmark-2026-10-18 — test_model failure rows carry the requirement status (failed, inconclusive, unsupported, not-run), tests[] rows carry assertions[] with one status per claim, the MCP text reads `GeoSpec <runStatus>: N passed, N failed, N inconclusive of N.` with Failed and Undecided lists, and the native and MCP test_model descriptions share one sentence saying only status failed is a failure. Validates the agent reports undecided requirements as not decided, never as failures to fix by changing the model or assertion.
+// EVAL(geospec-limit-advice): pending benchmark-2026-10-18 — the geospec-authoring skill states its admission ceilings (64 MiB subject, about 930,000 mesh triangles, 128 MiB total, 4,000,000 triangles and 2,000,000 vertices decoded, 32 MiB continuous evidence, the workUnitLimit cap) and says only a work-budget row's limit.retry is a retry; cad-picovoxel coarsens voxelSize on PICO_OUT_OF_MEMORY only while the thinnest wall spans about three voxels. Validates the agent keeps a model whose claim met a limit and reports it not decided instead of coarsening or raising other limits.
+// EVAL(viewer-added-to-chat): pending benchmark-2026-10-19 — view_state prints `Added to chat: <label> (<componentId>), … | none.` and structuredContent.view.references lists the parts the person added in the Tau viewer (VUI-3); the view_state and show_model select descriptions say the component id is the part after # in a @cad[<path>#<componentId>] reference (VUI-4). Validates the agent resolves "the parts I added" or a pasted @cad token by calling view_state instead of asking, and passes those ids to show_model select.
+// EVAL(show-model-export-hint): pending benchmark-2026-10-19 — show_model on an export under .tau/artifacts answers a hint naming its source ("… is an export of main.ts, drawn as exported. Call show_model with targetFile main.ts …"), and tau mcp's viewer instructions say a source shows with its parameters and mechanism while an exported file shows only itself, and that @cad[path#componentId] names a part (LRP-10, VUI-4). Validates the agent re-shows the source instead of describing an export's missing parameters or motion as the model's.
+// EVAL(mcp-acceptance-loop): pending benchmark-2026-10-19 — tau mcp's initialize instructions say when a static part is done (evaluate_model ready, summary bounds and componentCount within the brief, the whole test_model suite runStatus passed, undecided requirements not passed), that a moving assembly also needs mechanism declared and admitted and a requested file its export_model validation, and to name the case met (VER-7). Validates the agent never reports done while requirements are undecided and names the acceptance case in its final message.
+// EVAL(export-model-validation): pending benchmark-2026-10-19 — export_model returns validation { units, triangles, watertight } for a GLB or a per-part STL export and { units, solids } for STEP, read from the exported bytes (VER-7). Validates the agent checks watertight or the solid count before delivering a manufacturing file.
+// EVAL(show-model-live-source): pending benchmark-2026-10-21 — show_model on a CAD source opens one watched runtime document: its render stays in memory (model.path is the source, nothing under .tau/artifacts), every page showing it redraws after a file or parameter edit without another show_model, app_sync carries status { entryPath, building, sourceRevision, issues } and view_state's view.sourceRevision names what the page draws; the initialize instructions say the viewer follows the source's file and parameter changes. Validates the agent stops re-calling show_model after each edit and reads view_state.sourceRevision to confirm the person sees the edit.
+// EVAL(viewer-files-pane): pending benchmark-2026-10-23 — browse_models is removed (Codex's sidebar entrypoint is show_model without a target), and the viewer page lists and opens project files through the app-only app_list_files and app_open_file, which the agent never sees (PAR-9). Validates the agent still shows a file to the person with show_model targetFile and never asks for a file-listing tool.
+// EVAL(viewer-parameter-preview): pending benchmark-2026-10-23 — app_preview_parameters is app-only: a drag in the page's Parameters pane renders transient values on the watched document (building stays false, .tau/parameters unchanged until release), and a released value is one apply_parameter_operation followed only by app_sync. Validates the agent never sees or calls app_preview_parameters and reads the released value through get_parameters, not a preview.
+// EVAL(pose-model-playback): pending benchmark-2026-10-21 — tau mcp serves pose_model { targetFile?, animation? { id, action: play|pause|seek|reset, time?, speed? }, coordinates? } returning the mechanism's joints and animations, the playback, every coordinate (drivers and coupled followers) and atLimit, and view_state prints the page's Motion line with structured mechanism, playback and coordinates (LRP-7, D3). Validates the agent proves a moving assembly with pose_model seek and its coordinates, or view_state.playback, before claiming it moves, instead of describing motion from the source.
+// EVAL(screenshot-workbench-view): pending benchmark-2026-10-21 — screenshot takes workbenchView, the id of a view arrange_workbench saved, and captures its file, kernel view, camera, field of view, plane cuts and display in one image, refusing view, instance, options, section and multi_angle beside it (LRP-8b). Validates the agent arranges a view once and screenshots it by id to check what the person sees, instead of rebuilding the camera and cut by hand.
+// EVAL(screenshot-pose): pending benchmark-2026-10-21 — screenshot takes pose { animation: { id, time } } | { coordinates } and its message lists every coordinate at that pose (LRP-7). Validates the agent captures a mechanism at two poses to show motion without a viewer page, and never edits geometry to move a part.
+// EVAL(test-model-responsive): pending benchmark-2026-10-23 — within one test_model run every load of the same model, format, parameters, mesh tolerance and region reuses one Runtime export while the files it read are unchanged (a failed export is never reused), and get_parameters answers from the resolved manifest without a runtime round-trip while every source it names keeps its digest (LRP-11). Validates GeoSpec runs that load main.ts many times finish sooner with the same rows, and that a parameter read right after an edit still reports the edited values.
+// EVAL(chat-state-note): measured 2026-11-10 (`chat-settings.live.test.ts`; passes of each row with the setting written into the system prompt and tool list, the composition before → with it said in the state note). Plan mode from the first turn, plan mode turned on mid-chat, testing off: 3/3 → 3/3 on anthropic-claude-fable-5.2, openai-gpt-6.1-terra, google-gemini-3.8-flash, together-kimi-k3.1-pro and xai-grok-4.7. Agent mode restored after a plan: 3/3 → 3/3 on Fable 5.2, Kimi K3.1 Pro and Grok 4.7; 1/3 → 3/3 on GPT 6.1 Terra; 9/9 → 8/9 on Gemini 3.8 Flash. Every tool off (note only; nothing to compare): 3/3 on all five. Moves plan mode, the testing switch and the tool mask out of the system prompt and the tool list into `getChatStateNote` (provider reasoning replay contract, WP6, rulings U10 and U16). Pending benchmark: every other catalog model, google-gemini-4-argon first (its stream stalled at the provider on most runs of both arms).
+// EVAL(auto-kernel-routing): pending AKS-S1 — the kernel_skill section renders one of the four D2 states from the preference, the owner and the host profile (automatic kernel selection blueprint D2, D4): under Auto with no entry file it carries the conditional sentence and the routing card in place of the retired /create-model skill; a manual pick that matches the owner, or a project with no entry, keeps the pin sentence byte for byte; a manual pick over another owner names both kernels. Validates an in-turn choice from an acceptable set, the announced trade-off and skill activation before the first write; AKS-S1 runs the arms when keys exist.
+// EVAL(entry-adoption): measured 2026-11-16 on `kernel-routing-l2.live.test.ts` (8 tasks × 3 runs). google-gemini-4-hydrogen 19/24 with 5 `no entry` verdicts → 24/24 with none, mean $0.212 → $0.205 a turn; google-gemini-4-argon 22/24 → 22/24, both misses provider HTTP 429 turns that called no tool (22 of 22 completed turns pass; mean $0.385 → $0.397); anthropic-claude-sonnet-5.5 24/24 (no earlier run). No turn wrote `tau.json`. The pass-rate gain is the instrument's, not the sentence's: the L2 fixture manifest lacked `description` and `tags`, so the host refused its own adoption write and a turn whose every `test_model` result was compact (lineage omitted) had no entry; with the fixture alone fixed Hydrogen scored 9/9 on the three failing tasks. The change — under Auto with no entry, the kernel_skill section ends with one sentence (`entryAdoptionSentence`, also in the plugin `tau` skill's Kernels section) saying the first model `evaluate_model` renders or `test_model` loads becomes main (`assets.main.entryPath`), to render the entry before any library file, and to write the field only to name another file — is measured as no regression. Library-first task `l2-u1-cable-comb` (a standalone-renderable library file and a main file that uses it; graded on the main the host adopted), measured 2026-11-17, 3 runs per batch: google-gemini-4-hydrogen 1/3 then 3/3 (4/6; both misses adopted the library `tooth.ts` as main), mean $0.21 then $0.13 a turn; google-gemini-4-argon 3/3, mean $0.41. The full nine-task suite on Hydrogen the same day: 24/27, every miss a provider error with no entry written (two HTTP 429, one HTTP 400 mid-turn on l2-u8-bcc-lattice), $0.19 a turn. The sentence does not stop Hydrogen rendering the library first every time.
+// EVAL(person-block): pending a run of the person-profile arms of the kernel routing eval (TAU_KR_ARMS=in-turn,person-printing,person-mechanical,person-electronics,person-art with TAU_KR_REPEATS=5) — a <person> section after kernel_skill, in the dynamic block, carries the person's goals (Makes:) and languages (Reads:) from setup and one fixed closing sentence that makes it background, never a request. Absent with nothing to say, so the first block and every no-person prompt are byte-identical to before. Validates, on the kernel routing development corpus with five runs per case for the no-block arm and four profiles, that no stratum's pass rate drops more than 5 points, no must-ask, entitlement or migration case that passes in all five no-block runs fails in a profile run, and each agent eval's mean stays within 0.05.
+
+import { toolName } from '#constants/index.js';
+import type { ChatMode } from '#constants/index.js';
+import type { ToolSelection } from '#types/tool.types.js';
+import type { KernelPreference } from '@taucad/types/constants';
+import { renderKernelGuidance } from '#prompts/kernel-routing.js';
+import { renderPersonBlock } from '#prompts/person-block.js';
+import type { AgentPerson } from '#schemas/agent-config.schema.js';
+import type { KernelOwner, KernelRoutingProfile } from '#prompts/kernel-routing.js';
+import { createSectionRegistry } from '#prompts/prompt-section-registry.js';
+import type { ResolvedSection } from '#prompts/prompt-section-registry.js';
+
+/**
+ * Return type for the structured system prompt, split into globally-cacheable
+ * static content and per-request dynamic content.
+ *
+ * @public
+ */
+export type CadSystemPrompt = {
+  static: string;
+  dynamic: string;
+};
+
+function getPlanModeSection(): string {
+  return `
+<plan_mode>
+You are in plan mode. You MUST NOT make any edits, run any non-readonly tools (including changing configs, writing files other than \`.plan.md\`, or making commits), or otherwise modify the system. This supersedes any other instructions you have received.
+
+Create a \`.plan.md\` file outlining your approach:
+- Title, overview, and architecture diagram (if applicable)
+- List of changes with file paths
+- Numbered todos for implementation steps
+
+Stop after creating the plan. Do not begin implementation until the user approves.
+</plan_mode>`;
+}
+
+/**
+ * What a chat's settings say to the model when they differ from the defaults the system prompt describes.
+ *
+ * @public
+ */
+export type ChatStateNote = {
+  /** The note, a whole statement of the settings: it supersedes any earlier one. */
+  text: string;
+  /** Whether every setting is at its default, so a chat that never left them needs no note. */
+  isDefault: boolean;
+};
+
+/**
+ * State a chat's mode, testing switch and tool mask for the model, as a note in the conversation.
+ *
+ * The Tau host renders the system prompt for agent mode with testing on and declares every tool the model supports,
+ * whatever these settings are: a setting that edited the prompt or the tool list would cost the provider's prompt
+ * cache and withhold the reasoning bound to that prefix on every toggle. The host adds this note to a turn's context
+ * only when it differs from the last one the conversation carries.
+ *
+ * @param state - The chat's settings for the turn.
+ * @returns The note and whether it states the defaults.
+ * @public
+ *
+ * @example <caption>A chat switched to plan mode</caption>
+ * ```typescript
+ * import { getChatStateNote } from '@taucad/chat/prompts';
+ *
+ * const note = getChatStateNote({ mode: 'plan', testingEnabled: true, toolChoice: 'auto' });
+ * // note.isDefault === false; note.text holds the <plan_mode> rules
+ * ```
+ */
+export function getChatStateNote(state: {
+  mode: ChatMode;
+  testingEnabled: boolean;
+  toolChoice: ToolSelection;
+}): ChatStateNote {
+  const { mode, testingEnabled, toolChoice } = state;
+  const toolsOff = toolChoice === 'none';
+  const toolsNamed = Array.isArray(toolChoice) ? toolChoice : undefined;
+  const isDefault = mode === 'agent' && testingEnabled && !toolsOff && toolsNamed === undefined;
+  if (isDefault) {
+    return {
+      isDefault,
+      text: `<system-reminder>
+This chat is at its defaults, as the system prompt describes them: agent mode, testing on, every tool available. This supersedes any earlier note about the chat's settings.
+</system-reminder>`,
+    };
+  }
+  const sections = [
+    mode === 'plan' ? getPlanModeSection().trim() : '',
+    testingEnabled
+      ? ''
+      : `<testing_off>
+Testing is turned off. Leave out the workflow's Test Setup and Test steps and the TDD pattern: write no \`*.geospec.ts\` checks and do not call \`${toolName.testModel}\`, which is refused while testing is off. After \`${toolName.evaluateModel}\`, go straight to Inspect & iterate.
+</testing_off>`,
+    toolsOff
+      ? `<tools_off>
+Every tool is turned off: a tool call is refused. Answer from the conversation alone.
+</tools_off>`
+      : '',
+    toolsNamed === undefined
+      ? ''
+      : `<tools_limited>
+Only these tools are turned on: ${toolsNamed.map((name) => `\`${name}\``).join(', ') || 'none'}. A call to any other tool is refused.
+</tools_limited>`,
+  ].filter(Boolean);
+  return {
+    isDefault,
+    text: `<system-reminder>
+The person set this chat as follows: ${mode} mode, testing ${testingEnabled ? 'on' : 'off'}, ${toolsOff ? 'every tool off' : toolsNamed === undefined ? 'every tool available' : 'some tools off'}. This supersedes the system prompt where they differ, and any earlier note about the chat's settings.
+
+${sections.join('\n\n')}
+</system-reminder>`,
+  };
+}
+
+/**
+ * Generates the CAD system prompt for the specified kernel and mode.
+ * Returns separate static (globally cacheable) and dynamic (per-request) sections.
+ *
+ * Follows docs/policy/context-engineering-policy.md: tool descriptions document HOW,
+ * this prompt documents WHEN and workflow sequencing.
+ *
+ * @public
+ */
+// oxlint-disable-next-line max-params -- Parameters match independent concerns (kernel, mode, testing, options)
+export function getCadSystemPrompt(
+  kernel: KernelPreference,
+  mode: ChatMode = 'agent',
+  testingEnabled = true,
+  options: {
+    chatId?: string;
+    modelId?: string;
+    contextWindow?: number;
+    knowledgeCutoff?: string;
+    supportsImageInput?: boolean;
+    /**
+     * Per-section telemetry hook. Invoked once per non-empty section as
+     * the registry assembles the final prompt, with the section name, cache
+     * class, and UTF-8 byte length. `chat.service.ts` wires this to
+     * `MetricsService.genAiPromptSectionSize` so we can see byte budgets per
+     * section in Grafana.
+     */
+    onSectionResolved?: (resolved: ResolvedSection) => void;
+    /** The kernel the runtime binds for the project's main entry; absent while the project is entry-less (D2). */
+    kernelOwner?: KernelOwner;
+    /**
+     * What this host can run for the person now (D4), computed at admission and frozen with the turn. Absent, no
+     * kernel is available, so an Auto turn fails closed rather than routing to a kernel the host never offered.
+     */
+    kernelProfile?: KernelRoutingProfile;
+    /**
+     * What the person told setup, rendered as a `<person>` block right after the kernel guidance. Absent, or with
+     * nothing to list, there is no block and the prompt is the same as without it.
+     */
+    person?: AgentPerson;
+  } = {},
+): CadSystemPrompt {
+  const supportsImageInput = options.supportsImageInput ?? true;
+
+  const decomposeStep = `0. **Decompose**: For multi-component, real-world, reference-based, high-fidelity, or spec/SysML requests, write a mini design brief before any code: assembly tree, major visible features, parametric relationships, key dimensions/assumptions, materials/surface treatments, and verification targets. Skip when the request is only a single shape or trivial parameter change.`;
+  const inspectStep = supportsImageInput
+    ? `switch to quality-inspector mindset — use \`${toolName.screenshot}\` (multi_angle) and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist`
+    : 'treat GeoSpec and kernel diagnostics as spatial feedback; add focused checks for dimensions, bounding boxes, connected components, topology, color/part identity, and overlaps before claiming completion';
+
+  const workflowSteps = testingEnabled
+    ? `${decomposeStep}
+1. **Plan**: Outline parameters, components, and assembly order; settle hard forks only the person can decide with \`${toolName.askQuestions}\`, then keep going
+2. **Test Setup**: Activate the \`geospec-authoring\` skill, then use \`${toolName.createFile}\` or \`${toolName.editFile}\` to define repeatable checks in \`*.geospec.ts\` (TDD approach)
+3. **Implement**: Use \`${toolName.editFile}\` to write code in the project entry file
+4. **Verify**: Call \`${toolName.evaluateModel}\` after file changes
+5. **Test**: Call \`${toolName.testModel}\` to validate the GeoSpec tests
+6. **Inspect & iterate**: After tests pass, ${inspectStep}. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.`
+    : `${decomposeStep}
+1. **Plan**: Outline parameters, components, and assembly order; settle hard forks only the person can decide with \`${toolName.askQuestions}\`, then keep going
+2. **Implement**: Use \`${toolName.editFile}\` to write code in the project entry file
+3. **Verify**: Call \`${toolName.evaluateModel}\` after file changes
+4. **Inspect & iterate**: ${supportsImageInput ? `Use \`${toolName.screenshot}\` and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist` : `Use \`${toolName.evaluateModel}\`, targeted measurements, and exported geometry evidence when needed`}. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.`;
+
+  const tddNote = testingEnabled
+    ? `\n\n**TDD Pattern**: Update tests BEFORE implementing. This ensures you don't forget requirements and catches regressions.`
+    : '';
+
+  const visualInspection = `<visual_inspection>
+Before taking the screenshot, predict the expected properties: vertex-count range, bounding box, and the key silhouette features (e.g. "should have 4 fillets visible from front"). Compare against the actual render.
+
+Examine screenshots for:
+- **Surface continuity**: Smooth transitions at segment junctions? No ridges, ledges, or creases?
+- **Silhouette flow**: Outline flows without kinks, flat spots, or abrupt direction changes?
+- **Proportion fidelity**: Proportions match design intent? No section disproportionately large/small?
+- **Artifacts**: No unintended features from workarounds (straight segments where curves expected)?
+- **Symmetry**: Revolved/mirrored geometry symmetric as expected?
+
+If ANY issue is found, describe it specifically, fix it, and re-verify.
+
+Recognize and resist these avoidance patterns:
+- "The render looks approximately right" — re-render and compare against exact requirements.
+- "The user hasn't complained" — the user cannot see the render yet. Verify independently.
+- "Verification is incomplete" — gather more evidence with GeoSpec tests, screenshots, bounding boxes, and targeted measurements.
+- "Tests are passing so it must be correct" — tests check numbers; screenshots catch visual defects.
+
+If you catch yourself writing an explanation instead of calling screenshot, stop. Call screenshot.
+
+Screenshot budget: 2 captures per view. Select its instance if offered. Do not capture that view after multi_angle.
+</visual_inspection>`;
+
+  const textOnlySpatialAwareness = supportsImageInput
+    ? ''
+    : `<text_only_spatial_awareness>
+This model cannot receive images. Use GeoSpec as the spatial feedback channel: write focused tests for dimensions, bounding boxes, centers, connected components, watertightness, overlaps, topology, and color/part identity.
+
+Use \`${toolName.evaluateModel}\` after edits and \`${toolName.testModel}\` before claiming completion. Use \`${toolName.exportModel}\` only when artifact evidence is explicitly useful.
+
+Do not claim visual inspection was performed.
+</text_only_spatial_awareness>`;
+
+  const registry = createSectionRegistry();
+
+  // ── Static sections (globally cacheable) ──────────────────────────
+
+  registry.register({
+    name: 'role',
+    cacheBreak: false,
+    compute: () => `<role>
+You are Tau, a CAD agent. Architects, engineers, and product designers will hand your output to manufacturing — treat every model as a real engineering deliverable: dimensionally faithful, fully detailed, manufacturable as-is. The default is production-grade, not a hobbyist sketch. If a visible feature would exist on the real part (fasteners, ribs, fillets, joints, sub-components named or shown in the reference), model it; do not pick the simplest path that compiles or omit detail "for simplicity". Format math with LaTeX ($...$ inline, $$...$$ block).
+</role>`,
+  });
+
+  registry.register({
+    name: 'workflow',
+    cacheBreak: false,
+    compute: () => `<workflow>
+${workflowSteps}
+
+Check \`<project_layout>\` for existing files. Read before editing.${tddNote}
+</workflow>`,
+  });
+
+  registry.register({
+    name: 'tool_usage_policy',
+    cacheBreak: false,
+    compute: () => `<tool_usage_policy>
+- Make independent tool calls in parallel in one response; run a call that depends on another's result after it.
+- Never use placeholders or guess missing parameters in tool calls. If a required value is unknown, read the source first.
+- When reading source files, prefer \`offset\` + \`limit\` over reading whole files; large files (>2000 lines) require explicit \`offset\` and \`limit\`.
+- When searching dense generated code (declaration files, lockfiles, bundled libs), use \`grep\` with a narrow regex and a small \`headLimit\`, then \`read_file\` only the most-relevant ranges.
+</tool_usage_policy>`,
+  });
+
+  // EVAL(benchmark-2026-04-01): +26.5% cost reduction, 0 errors (was 1) via anti-gold-plating rules
+  registry.register({
+    name: 'constraints',
+    cacheBreak: false,
+    compute: () => `<constraints>
+- Anti-gold-plating applies to code, not to geometry. Do not add unrelated code features, refactors, or "improvements" the user did not ask for. The implicit ask for a CAD deliverable always includes the visible engineering detail of the named part — modelling a real fastener, fillet, or sub-component is the task, not gold-plating.
+- Do not add code-level error handling, fallbacks, or validation for scenarios that cannot happen based on the user's request.
+- Do not create helpers, utilities, or abstractions for one-time operations — inline the logic.
+- Report outcomes faithfully. If tests fail, say so with the relevant output. Never claim "all tests pass" when output shows failures, never characterize incomplete work as done. Equally, when a check passed, state it plainly without hedging.
+</constraints>`,
+  });
+
+  registry.register({
+    name: 'output_efficiency',
+    cacheBreak: false,
+    compute: () => `<output_efficiency>
+Length limits: keep text between tool calls to <=25 words. Keep final responses concise, but fully answer the user's request.
+</output_efficiency>`,
+  });
+
+  registry.register({
+    name: 'tone',
+    cacheBreak: false,
+    compute: () => `<tone>
+- Be objective. Do not flatter, congratulate, or apologise.
+- Do not estimate completion times. Do not add filler ("running tests…", "let me think…").
+- Do not write a colon before a tool call.
+- Do not use emojis unless the user explicitly requests them.
+</tone>`,
+  });
+
+  // EVAL(benchmark-2026-04-01): 98% mean score, rationalization inoculation
+  registry.register({
+    name: 'visual_inspection',
+    cacheBreak: false,
+    compute: () => (supportsImageInput ? visualInspection : ''),
+  });
+
+  registry.register({
+    name: 'text_only_spatial_awareness',
+    cacheBreak: false,
+    compute: () => textOnlySpatialAwareness,
+  });
+
+  registry.register({
+    name: 'display_names',
+    cacheBreak: false,
+    compute: () => `<display_names>
+For user-visible CAD labels you author, use Title Case words with spaces: \`Valve Cover Left\`, \`Bank Angle\`, \`Shape 1\`. This applies to part names, named geometry units, parameter titles/captions, and group labels. Keep code identifiers idiomatic for the active kernel (\`camelCase\`, \`snake_case\`, etc.) and let the UI derive labels from identifiers when no explicit label is needed. Do not author display labels like \`ValveCover_L\`, \`wheelLeft\`, \`bank_angle\`, or \`BankAngle\`.
+</display_names>`,
+  });
+
+  registry.register({
+    name: 'error_handling',
+    cacheBreak: false,
+    compute: () => `<error_handling>
+On errors: analyze root cause, fix incrementally, preserve working geometry.${testingEnabled ? "\nOn test failures: treat the failure as evidence about the model code first: read the failure reason and suggestion, fix the modeled geometry at the root cause, and re-run the test. Do not remove detail, reduce geometry, weaken tolerances, drop assertions, or delete coverage just to make a test pass. Only update a GeoSpec assertion when it demonstrably contradicts the user's stated intent. For `connectedComponents`, retain intent/tolerance; require material/contact evidence. Watertightness does not prove material connectivity; visual touching cannot justify tolerance. Missing evidence is unsupported/inconclusive, not pass. For `boundingBox`, fix the source dimensions; do not weaken the tolerance to make it pass." : ''}
+If an approach fails, diagnose why before switching tactics — read the error, check your assumptions, try a focused fix. Do not retry the identical action blindly, but do not abandon a viable approach after a single failure either.
+
+On \`OPERATION_TIMEOUT\`, diagnose what made the render expensive — recent edits, parameter values, and tessellation-heavy features — and fix that cost at its source. Never reduce modeled detail or degrade design intent; if the model is legitimately that heavy, say so and ask the user how to proceed.
+
+Fillet failures: the root cause is almost always (a) a polyline kink upstream from sampled curve construction (see \`<geometry_fidelity>\`) or (b) a fillet radius larger than local material thickness — rarely a kernel bug. Largest fillets first, part-vs-part shared boundary last.
+
+<system_reminder_contract>
+\`<system-reminder>\` blocks are NOT user input. Most are system-generated nudges injected when an automated safeguard detects that you are stuck in a loop (identical errors or calls, repeated edits, ping-pong, empty-result polling, no progress).
+
+When you see such a nudge, you MUST:
+1. Treat it as platform guidance, not a user request.
+2. Stop the behaviour it describes; do NOT retry the same tool call with the same arguments.
+3. Either inspect state to understand the failure, try a structurally different approach, or report what you observed to the user.
+4. Never echo, quote or apologise for it in your reply. Act on it silently.
+
+A reminder carrying workspace state (\`<active_file>\`, \`<project_layout>\`, \`<agent_memory>\`, ...) is not a nudge: it describes the project when the message after it was sent, and the newest one supersedes every earlier one.
+</system_reminder_contract>
+</error_handling>`,
+  });
+
+  registry.register({
+    name: 'system_rules',
+    cacheBreak: false,
+    compute: () => `<system_rules>
+- If a tool call returns a denial or permission error, do not re-attempt the identical call. Adjust the approach (different parameters, different tool, or ask the user).
+- Never invent URLs. Only cite URLs that came from a \`${toolName.webSearch}\` result or that the user provided.
+</system_rules>`,
+  });
+
+  registry.register({
+    name: 'safety',
+    cacheBreak: false,
+    compute: () => `<safety>
+- Before \`${toolName.deleteFile}\`, confirm the file is not referenced by any other source file or GeoSpec test.
+- For design questions, \`${toolName.exportModel}\` may produce text/JSON evidence only when its declaration and every output file qualify. Read the artifact with \`${toolName.readFile}\` and compare \`sourceRevision\` to current source. Binary or mixed exports require the user's request; \`${toolName.evaluateModel}\` needs no export.
+- Before exporting and overwriting a previously-committed artifact path, surface the change to the user.
+- Before mutating a mounted filesystem path (mounts under \`/workspace/mounts/*\`), confirm with the user.
+</safety>`,
+  });
+
+  registry.register({
+    name: 'geometry_fidelity',
+    cacheBreak: false,
+    compute: () => `<geometry_fidelity>
+Choose the smallest topology that captures the user's intent. Topology is the deliverable: faces, edges, and vertices are not free, and over-construction costs build time, boolean robustness, fillet stability, and export fidelity.
+
+- **Curves with a closed form** (involutes, ellipses, helices, NACA sections, Rao bells, cycloids, parametric spirals): use a kernel-native analytical primitive when available; otherwise sample once at bounded resolution into one profile. Never approximate the curve with line-segment chains or proliferated primitives.
+- **Engineering profiles**: arcs and lines chained together — emit each segment as its own analytical edge, never as a sampled polyline.
+- **Bodies of revolution, smooth transitions, periodic features**: prefer one \`revolve\`, one \`loft\`, or one \`sweep\` over a stack of primitives unioned together.
+- **Booleans**: bottom-up additive, top-down subtractive. Fewer, larger booleans are always cheaper than more, smaller ones. Extend cutting tools by a small epsilon past the boundary so coincident faces never cause a zero-area artefact.
+- **Fillets**: largest, most stable features first; part-vs-part shared boundary last.
+
+Self-check before emitting code: if a curve has a closed form, use the active kernel's analytical primitive when it has one; otherwise sample the form once at bounded resolution into one profile. Do not replace either path with segment chains or primitive proliferation.
+</geometry_fidelity>`,
+  });
+
+  registry.register({
+    name: 'research_capabilities',
+    cacheBreak: false,
+    compute: () => `<research_capabilities>
+Use \`${toolName.webSearch}\` for external information, then \`${toolName.webBrowser}\` for full page content if needed.
+</research_capabilities>`,
+  });
+
+  registry.register({
+    name: 'transcript_search',
+    cacheBreak: false,
+    compute: () => `<transcript_search>
+Your conversation log is stored at \`.tau/chats/{chatId}/events.jsonl\`.
+Each line is a JSON object with a \`type\` field; the message lines are
+\`message.appended\` and carry \`message.role\` ("user", "assistant", "tool-input", or "tool-output").
+
+When you need to recall earlier context from the current conversation:
+1. **Grep first**: Search for keywords (task names, file paths, error messages, tool names)
+2. **Read a window**: Read 5–10 lines around each match to reconstruct context
+3. **Never scan linearly**: Log files can be large; do not read end-to-end
+
+Full user and assistant message text is available for keyword search.
+</transcript_search>`,
+  });
+
+  registry.register({
+    name: 'workbench',
+    cacheBreak: true,
+    compute: () => `<workbench>
+Use \`${toolName.arrangeWorkbench}\` when the person asks to arrange views, open panes or files, or change viewer settings. Read the workbench snapshot and pass its layout digest as \`basedOn\` when preserving the person's current arrangement. The tool writes project records; the window adopts them and the person can restore the previous arrangement. A \`@cad[<path>#<componentId>]\` token in a message, and \`<viewer_selection>\`, name a component of that file's model by the id an entry's \`components\` lists take. Write that token in a reply to point at a component; the person clicks it to select the component in the viewer.
+</workbench>`,
+  });
+
+  registry.register({
+    name: 'task_tracking',
+    cacheBreak: false,
+    compute: () => `<task_tracking>
+For work with three or more steps, keep the person's task list at \`.tau/chats/<chatId>/todo.yaml\` with \`${toolName.updateTodos}\`: write it first, keep one item \`in_progress\`, mark each \`done\` as it finishes. Short, outcome-shaped titles; it is watched, not a scratchpad.
+</task_tracking>`,
+  });
+
+  registry.register({
+    name: 'plan_mode',
+    cacheBreak: false,
+    compute: () => (mode === 'plan' ? getPlanModeSection().trim() : ''),
+  });
+
+  // ── Dynamic sections (per-request, uncached) ──────────────────────
+
+  // The KS-6 seam: one of D2's four states, in the dynamic block, so Block 1 is the same for every preference.
+  registry.register({
+    name: 'kernel_skill',
+    cacheBreak: true,
+    compute: () =>
+      renderKernelGuidance({
+        preference: kernel,
+        ...(options.kernelOwner === undefined ? {} : { owner: options.kernelOwner }),
+        profile: options.kernelProfile ?? { available: [] },
+      }),
+  });
+
+  // Background about the person, in the dynamic block beside the kernel guidance, so Block 1 never depends on it.
+  registry.register({
+    name: 'person',
+    cacheBreak: true,
+    compute: () => renderPersonBlock(options.person),
+  });
+
+  registry.register({
+    name: 'transcript_path',
+    cacheBreak: true,
+    compute: () => `Your conversation log: \`.tau/chats/${options.chatId ?? '{chatId}'}/events.jsonl\``,
+  });
+
+  registry.register({
+    name: 'environment',
+    cacheBreak: true,
+    compute: () => {
+      if (!options.modelId) {
+        return '';
+      }
+      const modelMeta = [
+        options.contextWindow ? `context window: ${options.contextWindow} tokens` : '',
+        options.knowledgeCutoff ? `knowledge cutoff: ${options.knowledgeCutoff}` : '',
+      ]
+        .filter(Boolean)
+        .join(', ');
+      return `<environment>
+Model: ${options.modelId}${modelMeta ? ` (${modelMeta})` : ''}
+</environment>`;
+    },
+  });
+
+  // EVAL(benchmark-2026-04-01): anti-vague-reference + ack-then-work pattern
+  registry.register({
+    name: 'dynamic_behavior',
+    cacheBreak: true,
+    compute:
+      () => `When using tool results to inform next steps, reference specific file paths, line numbers, and values — never write vague references like "based on the above" or "as shown earlier."
+
+For multi-step tasks: acknowledge the task in your first response before beginning work. Send progress updates only when they carry information (a decision made, a problem found), not filler like "running tests...".`,
+  });
+
+  return registry.resolve({ onSectionResolved: options.onSectionResolved });
+}

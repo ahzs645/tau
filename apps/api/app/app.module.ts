@@ -1,28 +1,23 @@
 import { Module } from '@nestjs/common';
-import type { MiddlewareConsumer, NestModule } from '@nestjs/common';
+import type { DynamicModule, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
-import { DatabaseModule } from '#database/database.module.js';
-import { AuthModule } from '#auth/auth.module.js';
-import { getEnvironment } from '#config/environment.config.js';
+import { DatabaseModule } from '@taucad/api-database';
+import { StorageModule } from '@taucad/api-object-storage/module';
+import { StorageSeedModule } from '#storage/storage-seed.module.js';
+import { AuthModule } from '@taucad/api-auth/module';
+import { AuthExtensionsModule } from '#composition/auth-extensions.module.js';
+import type { Environment } from '@taucad/api-core';
 import { ApiModule } from '#api/api.module.js';
-import { LoggerModule } from '#logger/logger.module.js';
-import { RedisModule } from '#redis/redis.module.js';
-import { TelemetryModule } from '#telemetry/telemetry.module.js';
+import { LoggerModule } from '@taucad/api-observability/logger-module';
+import { RedisModule } from '@taucad/api-redis';
+import { TelemetryModule } from '@taucad/api-observability';
+import { LifecycleModule } from '@taucad/api-lifecycle';
 import { RequestIdMiddleware } from '#middlewares/request-id.middleware.js';
 import { HttpExceptionFilter } from '#filters/http-exception.filter.js';
 
 @Module({
-  imports: [
-    ApiModule,
-    DatabaseModule,
-    TelemetryModule, // @Global() — must precede RedisModule (RedisService depends on MetricsService)
-    RedisModule, // @Global() — makes RedisService available everywhere
-    AuthModule.forRootAsync(),
-    ConfigModule.forRoot({ validate: getEnvironment, isGlobal: true }),
-    LoggerModule,
-  ],
   controllers: [],
   providers: [
     {
@@ -40,6 +35,26 @@ import { HttpExceptionFilter } from '#filters/http-exception.filter.js';
   ],
 })
 export class AppModule implements NestModule {
+  public static forRoot(environment: Environment): DynamicModule {
+    const mode = { tauCloudEnabled: environment.TAU_CLOUD_ENABLED };
+    return {
+      module: AppModule,
+      imports: [
+        ConfigModule.forRoot({ validate: () => environment, isGlobal: true }),
+        DatabaseModule,
+        TelemetryModule,
+        LifecycleModule,
+        RedisModule,
+        AuthExtensionsModule.forRoot(mode),
+        AuthModule.forRootAsync(mode),
+        ApiModule.forRoot(mode),
+        StorageModule,
+        StorageSeedModule,
+        LoggerModule,
+      ],
+    };
+  }
+
   public configure(consumer: MiddlewareConsumer): void {
     consumer.apply(RequestIdMiddleware).forRoutes('*');
   }

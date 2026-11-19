@@ -1,0 +1,34 @@
+{
+  "extends": "../../tools/typescript/base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "types": ["node", "vitest"],
+    "paths": {
+      "#support/*.js": ["./src/support/*.ts"],
+      "@taucad/runtime-testing": ["../../packages/runtime-testing/src/index.ts"],
+      "@taucad/workbench": ["../../packages/workbench/src/index.ts"],
+      "#components/geometry/debug/workspace-renderer-diagnostics.js": [
+        "../ui/app/components/geometry/debug/workspace-renderer-diagnostics.ts"
+      ],
+      "@taucad/app/test-bridges/section-view": ["../ui/app/components/geometry/debug/section-view-test-bridge-api.ts"]
+    }
+  },
+  "include": [
+    "../ui/app/components/geometry/debug/section-view-test-bridge-api.ts",
+    "../ui/app/components/geometry/debug/workspace-renderer-diagnostics.ts",
+    "vitest.config.ts",
+    "vitest.unit.config.ts",
+    "global-setup.ts",
+    "scripts/**/*.mts",
+    "src/**/*.ts",
+    "vitest.machine-profiles.config.ts",
+    "vitest.record-recovery.config.ts",
+    "vitest.shell.config.ts"
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "name": "@taucad/host",
+  "version": "0.1.0-beta.9",
+  "description": "Tau Host daemon for pairing browsers with supervised remote CAD runtimes",
+  "type": "module",
+  "sideEffects": false,
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/host"
+  },
+  "homepage": "https://github.com/taucad/tau/tree/main/packages/host#readme",
+  "bugs": {
+    "url": "https://github.com/taucad/tau/issues"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "cad",
+    "typescript"
+  ],
+  "author": "Richard Fontein",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent-tools": "./src/agent-tools.ts",
+    "./runtime-host": "./src/runtime-host.ts",
+    "./telemetry": "./src/telemetry.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
+      },
+      "./agent-tools": {
+        "types": "./dist/agent-tools.d.mts",
+        "import": "./dist/agent-tools.mjs",
+        "default": "./dist/agent-tools.mjs"
+      },
+      "./runtime-host": {
+        "types": "./dist/runtime-host.d.mts",
+        "import": "./dist/runtime-host.mjs",
+        "default": "./dist/runtime-host.mjs"
+      },
+      "./telemetry": {
+        "types": "./dist/telemetry.d.mts",
+        "import": "./dist/telemetry.mjs",
+        "default": "./dist/telemetry.mjs"
+      },
+      "./package.json": "./package.json"
+    },
+    "imports": {}
+  },
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
+    "@parcel/watcher": "catalog:",
+    "@taucad/agent-host": "workspace:*",
+    "@taucad/bambu": "workspace:*",
+    "@taucad/bundler-core": "workspace:*",
+    "@taucad/carvera": "workspace:*",
+    "@taucad/esbuild": "workspace:*",
+    "@taucad/filesystem": "workspace:*",
+    "@taucad/grbl": "workspace:*",
+    "@taucad/jobs": "workspace:*",
+    "@taucad/kinematics": "workspace:*",
+    "@taucad/mcp": "workspace:*",
+    "@taucad/native-process-core": "workspace:*",
+    "@taucad/parameters": "workspace:*",
+    "@taucad/project-core": "workspace:*",
+    "@taucad/slicer": "workspace:*",
+    "@taucad/units": "workspace:*",
+    "@taucad/workbench": "workspace:*",
+    "@taucad/zoo": "workspace:*",
+    "basic-ftp": "catalog:",
+    "diff": "^8.0.4",
+    "fflate": "catalog:",
+    "js-yaml": "catalog:",
+    "minimatch": "^10.2.5",
+    "nanoid": "catalog:",
+    "safe-regex": "^2.1.1",
+    "smol-toml": "catalog:",
+    "ws": "catalog:"
+  },
+  "peerDependencies": {
+    "@taucad/revisions": "^0.1.0-beta.0",
+    "@taucad/runtime": "^0.1.0-beta.0",
+    "geospec": "0.6.0",
+    "geospec-engine": "0.6.0",
+    "xstate": "^6.0.0-alpha.59",
+    "zod": "^4.1.0"
+  },
+  "peerDependenciesMeta": {
+    "geospec": {
+      "optional": true
+    },
+    "geospec-engine": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@taucad/agent-tools": "workspace:*",
+    "@taucad/chat": "workspace:*",
+    "@taucad/formal": "workspace:*",
+    "@taucad/revisions": "workspace:*",
+    "@taucad/runtime": "workspace:*",
+    "@taucad/sandbox": "workspace:*",
+    "@taucad/shell-service": "workspace:*",
+    "@taucad/telemetry": "workspace:*",
+    "@taucad/types": "workspace:*",
+    "@taucad/utils": "workspace:*",
+    "@taucad/xstate-testing": "workspace:*",
+    "@types/ws": "^8.18.1",
+    "geospec": "catalog:",
+    "geospec-engine": "catalog:",
+    "xstate": "catalog:",
+    "zod": "catalog:"
+  }
+}

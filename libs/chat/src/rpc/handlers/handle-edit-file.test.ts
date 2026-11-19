@@ -1,13 +1,63 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
-import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
+import { rpcClientErrorCode, rpcSchemasRegistry } from '#schemas/rpc.schema.js';
+import { rpcName } from '#constants/rpc.constants.js';
 import { handleEditFile } from '#rpc/handlers/handle-edit-file.js';
 
+/** `expect.stringMatching` is untyped, so the matcher is named once and typed at its declaration. */
+const anyContentDigest = expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) as unknown as string;
+
 describe('handleEditFile', () => {
+  it('passes reviewed input canonically and makes failures non-blind-retryable', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    const input = {
+      targetFile: 'main.ts',
+      oldString: 'foo',
+      newString: 'bar',
+      expectedDigest: `sha256:${'a'.repeat(64)}`,
+    };
+    fileSystem.editFile.mockRejectedValue(
+      Object.assign(new Error('Reviewed bytes changed. Read and review the file again.'), { code: 'EDIT_CONFLICT' }),
+    );
+    const refusal = await handleEditFile(input, fileSystem);
+    expect(rpcSchemasRegistry[rpcName.editFile].resultSchema.safeParse(refusal).success).toBe(true);
+    expect(refusal).toMatchObject({
+      success: false,
+      errorCode: 'EDIT_CONFLICT',
+    });
+    expect(refusal).not.toHaveProperty('retryable');
+    expect(refusal.message).toContain('Read and review');
+    expect(rpcSchemasRegistry[rpcName.editFile].resultSchema.safeParse({ ...refusal, retryable: false }).success).toBe(
+      false,
+    );
+    expect(fileSystem.editFile).toHaveBeenCalledWith(input);
+    fileSystem.editFile.mockResolvedValue({
+      occurrences: 1,
+      diffStats: { linesAdded: 1, linesRemoved: 1, originalContent: 'foo', modifiedContent: 'bar' },
+    });
+    const unproved = await handleEditFile(input, fileSystem);
+    expect(unproved).toMatchObject({ success: false, errorCode: 'IO_ERROR' });
+    expect(unproved).not.toHaveProperty('retryable');
+    expect(rpcSchemasRegistry[rpcName.editFile].resultSchema.safeParse(unproved).success).toBe(true);
+    fileSystem.editFile.mockRejectedValue(
+      Object.assign(new Error('Atomic checked write unavailable'), {
+        code: 'CHECKED_WRITE_UNSUPPORTED',
+        applicationState: 'known-not-applied',
+      }),
+    );
+    const unsupported = await handleEditFile(input, fileSystem);
+    expect(unsupported).toMatchObject({ success: false, errorCode: 'IO_ERROR' });
+    expect(unsupported).not.toHaveProperty('retryable');
+    expect(rpcSchemasRegistry[rpcName.editFile].resultSchema.safeParse(unsupported).success).toBe(true);
+  });
   it('should replace a single occurrence and return count', async () => {
     const fileSystem = mock<RpcFileSystem>();
-    fileSystem.editFile.mockResolvedValue({ occurrences: 1 });
+    fileSystem.editFile.mockResolvedValue({
+      occurrences: 1,
+      diffStats: { linesAdded: 1, linesRemoved: 1, originalContent: 'foo', modifiedContent: 'bar' },
+    });
 
     const result = await handleEditFile({ targetFile: 'main.ts', oldString: 'foo', newString: 'bar' }, fileSystem);
 
@@ -15,13 +65,19 @@ describe('handleEditFile', () => {
       success: true,
       message: 'Replaced 1 occurrence in main.ts',
       occurrences: 1,
+      diffStats: { linesAdded: 1, linesRemoved: 1, originalContent: 'foo', modifiedContent: 'bar' },
+      revision: { path: 'main.ts', digest: anyContentDigest },
     });
-    expect(fileSystem.editFile).toHaveBeenCalledWith('main.ts', 'foo', 'bar', undefined);
+    expect(fileSystem.editFile).toHaveBeenCalledWith({ targetFile: 'main.ts', oldString: 'foo', newString: 'bar' });
+    expect(fileSystem.readFile).not.toHaveBeenCalled();
   });
 
   it('should pass replaceAll flag to filesystem', async () => {
     const fileSystem = mock<RpcFileSystem>();
-    fileSystem.editFile.mockResolvedValue({ occurrences: 3 });
+    fileSystem.editFile.mockResolvedValue({
+      occurrences: 3,
+      diffStats: { linesAdded: 1, linesRemoved: 1, originalContent: 'xxx', modifiedContent: 'yyy' },
+    });
 
     const result = await handleEditFile(
       { targetFile: 'main.ts', oldString: 'x', newString: 'y', replaceAll: true },
@@ -32,8 +88,55 @@ describe('handleEditFile', () => {
       success: true,
       message: 'Replaced 3 occurrences in main.ts',
       occurrences: 3,
+      diffStats: { linesAdded: 1, linesRemoved: 1, originalContent: 'xxx', modifiedContent: 'yyy' },
+      revision: { path: 'main.ts', digest: anyContentDigest },
     });
-    expect(fileSystem.editFile).toHaveBeenCalledWith('main.ts', 'x', 'y', true);
+    expect(fileSystem.editFile).toHaveBeenCalledWith({
+      targetFile: 'main.ts',
+      oldString: 'x',
+      newString: 'y',
+      replaceAll: true,
+    });
+    expect(fileSystem.readFile).not.toHaveBeenCalled();
+  });
+
+  it('should report the digest of the file the edit left behind, not of the replacement text (R4)', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    const modifiedContent = 'const a = 1;\nconst b = 2;\n';
+    fileSystem.editFile.mockResolvedValue({
+      occurrences: 1,
+      diffStats: { linesAdded: 1, linesRemoved: 1, originalContent: 'const a = 0;\nconst b = 2;\n', modifiedContent },
+    });
+
+    const result = await handleEditFile({ targetFile: 'main.ts', oldString: '0', newString: '1' }, fileSystem);
+
+    expect(result).toMatchObject({
+      revision: {
+        path: 'main.ts',
+        digest: `sha256:${createHash('sha256').update(modifiedContent, 'utf8').digest('hex')}`,
+      },
+    });
+  });
+
+  it('prefers the digest of the committed bytes over a hash of the decoded text (R4, BOM files)', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    /* The adapter proved these bytes committed: a UTF-8 BOM the decoded `modifiedContent` no longer carries. */
+    const committed = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('const a = 1;\n', 'utf8')]);
+    const digest = `sha256:${createHash('sha256').update(committed).digest('hex')}`;
+    fileSystem.editFile.mockResolvedValue({
+      occurrences: 1,
+      diffStats: {
+        linesAdded: 1,
+        linesRemoved: 1,
+        originalContent: 'const a = 0;\n',
+        modifiedContent: 'const a = 1;\n',
+      },
+      digest,
+    });
+
+    const result = await handleEditFile({ targetFile: 'main.ts', oldString: '0', newString: '1' }, fileSystem);
+
+    expect(result).toMatchObject({ revision: { path: 'main.ts', digest } });
   });
 
   it('should return FILE_NOT_FOUND when file does not exist', async () => {
@@ -45,6 +148,7 @@ describe('handleEditFile', () => {
     const result = await handleEditFile({ targetFile: 'missing.ts', oldString: 'a', newString: 'b' }, fileSystem);
 
     expect(result).toMatchObject({ success: false, errorCode: rpcClientErrorCode.fileNotFound });
+    expect(result).toMatchObject({ retryable: true });
   });
 
   it('should return IO_ERROR for generic filesystem errors', async () => {
@@ -54,5 +158,39 @@ describe('handleEditFile', () => {
     const result = await handleEditFile({ targetFile: 'main.ts', oldString: 'a', newString: 'b' }, fileSystem);
 
     expect(result).toMatchObject({ success: false, errorCode: rpcClientErrorCode.ioError });
+    expect(result).toMatchObject({ retryable: true });
+  });
+
+  it('requires deterministic diffStats without falling back to whole-file reads', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Intentionally violate the typed contract to exercise the runtime boundary.
+    fileSystem.editFile.mockResolvedValue({ occurrences: 1 } as unknown as Awaited<
+      ReturnType<RpcFileSystem['editFile']>
+    >);
+
+    const result = await handleEditFile({ targetFile: 'main.ts', oldString: 'a', newString: 'b' }, fileSystem);
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCode: rpcClientErrorCode.ioError,
+      message: 'Deterministic editFile implementations must return diffStats.',
+    });
+    expect(fileSystem.readFile).not.toHaveBeenCalled();
+  });
+
+  it('preserves deterministic edit error codes as retryable client failures', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    fileSystem.editFile.mockRejectedValue(
+      Object.assign(new Error('oldString matched 2 locations.'), { code: rpcClientErrorCode.ambiguousMatch }),
+    );
+
+    const result = await handleEditFile({ targetFile: 'main.ts', oldString: 'x', newString: 'y' }, fileSystem);
+
+    expect(result).toEqual({
+      success: false,
+      errorCode: rpcClientErrorCode.ambiguousMatch,
+      message: 'oldString matched 2 locations.',
+      retryable: true,
+    });
   });
 });

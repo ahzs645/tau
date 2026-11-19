@@ -1,0 +1,86 @@
+/* oxlint-disable new-cap -- NestJS decorators are factories */
+import { Module } from '@nestjs/common';
+import type { MiddlewareConsumer, NestModule, OnModuleInit } from '@nestjs/common';
+import { HttpAdapterHost } from '@nestjs/core';
+import type { FastifyInstance } from 'fastify';
+import { DatabaseModule } from '@taucad/api-database';
+import { ProjectAccessModule } from '@taucad/api-projects/collaboration/project-access.module';
+import { DurableEventsModule } from '#api/durable-events/durable-events.module.js';
+import { repositoryStoreKey } from '@taucad/api-git-core/git.constants';
+import { GitBasicAuthMiddleware, registerGitContentTypeParsers } from '#api/git/git-transport.js';
+import { GitCatalogueController } from '#api/git/catalogue.controller.js';
+import { GitController } from '#api/git/git.controller.js';
+import { GitLfsService } from '#api/git/git-lfs.service.js';
+import { GitProxyController } from '#api/git/git-proxy.controller.js';
+import { GitPushesController } from '#api/git/pushes.controller.js';
+import { GitRepositoryService } from '#api/git/git.service.js';
+import { ownerInFlightGateProvider } from '@taucad/api-git-core/admission/owner-in-flight.providers';
+import { DeriveScheduler } from '#api/git/forwarding/derive-scheduler.js';
+import {
+  gitExecutionProvider,
+  gitExecutorProvider,
+  receiptVerificationProvider,
+} from '#api/git/forwarding/forwarding.providers.js';
+import { gitExecutorKey } from '@taucad/api-git-core/forwarding/git-executor';
+import { StorageReceiptsController } from '#api/git/forwarding/receipts.controller.js';
+import { repositoryRouteGuardProvider } from '@taucad/api-git-core/routing/routing.providers';
+import { RevisionSaltController } from '#api/git/revision-salt.controller.js';
+import { UsageController } from '#api/git/usage.controller.js';
+import { PublicationRateLimiterService } from '@taucad/api-redis';
+import { S3RepositoryStore } from '@taucad/api-git-core/store/s3-repository-store';
+
+/**
+ * The Tau Hosted Remote. StorageModule is `@Global()`, so `ObjectStorageService`
+ * (LFS objects, the repository store's driver) needs no explicit import.
+ *
+ * The adapter is bound to `repositoryStoreKey` here and nowhere else, which is
+ * the whole of NI14 in the container: every injection site above the adapter
+ * asks for the port and cannot name a provider.
+ */
+@Module({
+  imports: [DatabaseModule, ProjectAccessModule, DurableEventsModule],
+  controllers: [
+    GitController,
+    GitCatalogueController,
+    GitPushesController,
+    GitProxyController,
+    RevisionSaltController,
+    UsageController,
+    StorageReceiptsController,
+  ],
+  providers: [
+    GitRepositoryService,
+    /* The API's one Redis budget primitive (D22). Provided here as well as in
+       `PublicationsModule`, which imports this module and so cannot be imported
+       back; the service holds no state of its own, so two instances share one
+       Redis keyspace. */
+    PublicationRateLimiterService,
+    GitLfsService,
+    /* DW1/DW2: the route step of git admission, ahead of every lease. */
+    repositoryRouteGuardProvider,
+    /* DA6: the owner step, after the route step: 10 git requests and 5 pushes in flight per owner. */
+    ownerInFlightGateProvider,
+    /* DC1: git executes in tau-storage behind a signed grant; receipts come back signed. */
+    gitExecutionProvider,
+    gitExecutorProvider,
+    receiptVerificationProvider,
+    DeriveScheduler,
+    S3RepositoryStore,
+    { provide: repositoryStoreKey, useExisting: S3RepositoryStore },
+  ],
+  /* The executor is exported so `ProjectsModule` uses this one: one git execution, and so at most one in-process worker, per process. */
+  exports: [GitRepositoryService, S3RepositoryStore, repositoryStoreKey, gitExecutorKey],
+})
+export class GitModule implements NestModule, OnModuleInit {
+  public constructor(private readonly adapterHost: HttpAdapterHost) {}
+
+  public onModuleInit(): void {
+    // Fastify refuses a content type it has no parser for, and git's request
+    // bodies are streams this module pipes into a child process unparsed.
+    registerGitContentTypeParsers(this.adapterHost.httpAdapter.getInstance<FastifyInstance>());
+  }
+
+  public configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(GitBasicAuthMiddleware).forRoutes(GitController);
+  }
+}

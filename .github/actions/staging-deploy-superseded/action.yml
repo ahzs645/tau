@@ -1,0 +1,112 @@
+name: 'Staging deploy superseded'
+description: >-
+  Reports whether a newer commit on `main` has already deployed this app to staging, or
+  is on its way to, so an older `staging.yml` push run does not publish its commit. Run it
+  inside the deploy job, which holds the app's staging deploy queue, just before
+  publishing.
+
+# Each push to `main` runs on its own, so an older run can reach its deploy after a
+# newer one. A newer commit on `main` contains this one, so once its run's deploy job
+# for the same app has passed there is nothing left for this commit to ship. A newer
+# job that passed by skipping on this check counts too: something newer than it
+# deployed first.
+#
+# When this deploy comes from a `staging.yml` push run, a newer run that is still going
+# supersedes it as well, once that run's plan has passed, its `Wait for CI checks` job
+# has finished and recorded every deploy gate as passed, and its deploy job for this
+# app has not ended without deploying. Its plan diffs the app against the last commit
+# staging recorded (`staging-deploy-history`), which this unpublished commit is not, so
+# it deploys this change too, or the app is unchanged since that record and there is
+# nothing to publish. A newer run whose gates are unrecorded or failed does not supersede: its
+# deploy jobs skip on a red check, so deferring to it left staging on an older commit
+# until the next green push (2026-11-08: #1527 passed CI, skipped for c6362d1e8f, whose
+# CI then failed). Publishing this commit first costs one extra deploy at most; waiting
+# here instead would hold the deploy queue the newer job needs.
+
+inputs:
+  job-name:
+    description: 'The deploy job name as the reusable workflow declares it, e.g. `Deploy api to staging`'
+    required: true
+  github-token:
+    description: 'Token with actions: read and contents: read'
+    required: true
+
+outputs:
+  superseded:
+    description: "'true' when a newer commit's run has deployed, or will deploy, this app to staging"
+    value: ${{ steps.check.outputs.superseded }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Look for a newer staging deploy of this app
+      id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        JOB_NAME: ${{ inputs.job-name }}
+        # The plan job of `staging.yml`.
+        PLAN_JOB: Plan affected lanes
+      run: |
+        set -euo pipefail
+        jobs_of() {
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$1/jobs?per_page=100" \
+            --jq '.jobs[] | {name, conclusion}' | jq -s .
+        }
+        # The checks `staging.yml`'s `Wait for CI checks` job gates every deploy on; keep
+        # in step with its CHECKS.
+        gates='["Validate workspace","Run affected tasks","API tests (Postgres + MinIO)","Billing contracts (no Stripe credentials)"]'
+        gates_passed() {
+          local job log
+          # Its `Wait for CI checks` job has finished and recorded every gate as passed,
+          # one `<check>: <conclusion>` line each in its log. Until it has, what it will
+          # record is unproven (a gate can be re-run after its last poll, or it can give
+          # up at its deadline), so this older deploy goes ahead.
+          job=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$1/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name == "Wait for CI checks" and .status == "completed") | .id')
+          [ -n "$job" ] || return 1
+          log=$(gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs") || return 1
+          jq -r '.[]' <<< "$gates" | while IFS= read -r g; do
+            grep -qF " $g: success" <<< "$log" || exit 1
+          done
+        }
+        # In a called workflow the run is the caller's, so this is the staging.yml push run;
+        # a manual dispatch looks at the runs started since it began.
+        created=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+        # The caller job's name, e.g. `Deploy UI (Staging)`: a newer run that decides
+        # not to deploy shows only that job, as skipped.
+        caller=''
+        if [ "$GITHUB_EVENT_NAME" = push ]; then
+          caller=$(jobs_of "$GITHUB_RUN_ID" | jq -r --arg job "$JOB_NAME" \
+            'map(.name | select(endswith(" / " + $job)) | rtrimstr(" / " + $job)) | first // empty')
+        fi
+        runs=$(gh api --paginate -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/staging.yml/runs" \
+          -f branch=main -f event=push -f created=">=$created" -f per_page=100 \
+          --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID and .head_sha != \"$GITHUB_SHA\") | \"\(.id) \(.head_sha) \(.status)\"")
+        while read -r run_id sha status; do
+          [ -n "$run_id" ] || continue
+          # `ahead`: that commit descends from this one, so it carries this change.
+          [ "$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$sha" --jq .status)" = ahead ] || continue
+          verdict=$(jobs_of "$run_id" | jq -r --arg job "$JOB_NAME" --arg caller "$caller" \
+            --arg plan "$PLAN_JOB" --arg status "$status" '
+            def deploy: .name == $job or (.name | endswith(" / " + $job))
+              or ($caller != "" and (.name == $caller or (.name | startswith($caller + " / "))));
+            if any(.[]; deploy and .conclusion == "success") then "deployed"
+            elif $caller != "" and $status != "completed"
+              and any(.[]; .name == $plan and .conclusion == "success")
+              and (any(.[]; deploy and .conclusion != null) | not) then "coming"
+            else "none" end')
+          # A newer run only takes this deploy over once its `Wait for CI checks` job has
+          # finished and recorded every deploy gate as passed.
+          if [ "$verdict" = coming ] && ! gates_passed "$run_id"; then
+            continue
+          fi
+          case "$verdict" in
+            deployed) echo "::notice::Run $run_id already deployed $sha, which contains $GITHUB_SHA; skipping this older deploy." ;;
+            coming) echo "::notice::Run $run_id for $sha, which contains $GITHUB_SHA, passed its plan and CI gates and has not ended its deploy; skipping this older deploy." ;;
+            *) continue ;;
+          esac
+          echo "superseded=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        done <<< "$runs"
+        echo "superseded=false" >> "$GITHUB_OUTPUT"

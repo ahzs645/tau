@@ -5,9 +5,18 @@
   },
   "ignorePatterns": [
     "repos/**",
+    "**/.claude/skills/**",
+    "**/.next/**",
+    "**/.next-*/**",
     "**/assets/**",
     "**/dist/**",
+    "**/dist-*/**",
     "**/generated/**",
+    // `@taucad/api-extractor` output: eight kernels emit `agent/resources.{js,d.ts}` verbatim from
+    // their published API, and a generator is not edited to satisfy a style rule.
+    "**/agent/resources.js",
+    "**/agent/resources.d.ts",
+    "**/wasm/**",
     "**/out-tsc/**",
     "**/coverage/**",
     "**/.nx/**",
@@ -19,10 +28,18 @@
     "**/*.prompt.example-multifile/**",
     "**/public/**",
     "**/content/docs/**",
-    "tarballs/**",
     "experiments/**",
+    // Compute-reuse baseline harness (charter W0): opt-in benchmark code
+    // reaching runtime-internal seams through a loader hook; outside tsconfig.
+    "apps/runtime-e2e/src/compute-baseline/harness/**",
+    // Pinned external CAD model sources are fixture bytes, not GeoSpec library code.
     "**/*.jscad.js",
-    "**/routes/playground/projects/*/**"
+    // Same class: PicoVoxel example sources are byte-pinned upstream ports (`provenance.json`
+    // hashes, `picovoxel-provenance.test.ts`). Only Tau's `main.ts` adapters and GeoSpec suites are linted.
+    "libs/tau-examples/src/kernels/picovoxel/*/*.ts",
+    "!libs/tau-examples/src/kernels/picovoxel/*/main.ts",
+    "!libs/tau-examples/src/kernels/picovoxel/*/*.geospec.ts",
+    "**/fixtures/scripts/**"
   ],
   "plugins": [
     "unicorn",
@@ -88,6 +105,7 @@
     "tau-lint/require-ignore-description": "error",
     "tau-lint/no-literal-const-assertion": "error",
     "tau-lint/no-useless-catch-unknown": "error",
+    "tau-lint/no-auth-instance-outside-api-auth": "error",
     "tau-lint/validate-jsdoc-codeblocks": "error",
     "tau-lint/require-public-export-jsdoc": "warn",
     "tau-lint/no-consecutive-jsdoc-blank-lines": "warn",
@@ -96,8 +114,28 @@
     "tau-lint/no-time-unit-suffix": "error",
     "tau-lint/no-bare-time-identifier": "error",
     "tau-lint/no-async-iife": "error",
-    "tau-lint/no-monaco-create-model": "error",
+    // Storage-policy Rule 0: direct indexedDB access only in allowlisted storage providers.
+    "tau-lint/no-bare-random-uuid": "error",
+    "tau-lint/no-direct-indexeddb": "error",
+    // Adaptive app deployment mode I8: a Cloud import() only through the one loader; no lazy() of Cloud code.
+    "tau-lint/no-cloud-import-outside-loader": "error",
+    "tau-lint/no-bare-rpc-error-code": "error",
     "tau-lint/no-scene-override-material": "error",
+    "tau-lint/no-impl-in-index": "error",
+    "tau-lint/no-test-bridge-redeclaration": "error",
+    "tau-lint/plugin-capability-filename": "error",
+    // First-party plugin surface (filename-scoped in each rule; each plugin's own lint enforces it on itself):
+    // named-only implementation modules, no default import of a plugin module, the package-named `definePlugin`
+    // binding, and no non-`const` type assertion in a kernel module. The cross-file entry re-export check is
+    // `assertPluginContractSurface` from `@taucad/runtime-testing`, called by each plugin's `index.test.ts`.
+    "tau-lint/no-plugin-default-export": "error",
+    "tau-lint/no-plugin-default-import": "error",
+    "tau-lint/require-plugin-package-binding": "error",
+    "tau-lint/no-kernel-type-assertion": "error",
+    "tau-lint/no-authored-pointer-cursor": "error",
+    "tau-lint/no-inline-actor-selector": "error",
+    // Agent substrate contract (docs/policy/xstate-policy.md, MC-R1–MC-R30). No options, so no override can replace them.
+    "tau-lint/xstate-contract": "error",
     "unicorn/no-accessor-recursion": "error",
     "unicorn/no-anonymous-default-export": "error",
     "unicorn/no-array-callback-reference": "error",
@@ -445,8 +483,40 @@
     "no-restricted-imports": [
       "error",
       {
-        "paths": ["error", "domain", "freelist", "smalloc", "punycode", "sys", "querystring", "colors"],
+        "paths": [
+          "error",
+          "domain",
+          "freelist",
+          "smalloc",
+          "punycode",
+          "sys",
+          "querystring",
+          "colors",
+          {
+            "name": "react-router",
+            "allowTypeImports": true,
+            "importNames": [
+              "UNSAFE_DataRouterContext",
+              "UNSAFE_DataRouterStateContext",
+              "UNSAFE_FetchersContext",
+              "UNSAFE_FrameworkContext",
+              "UNSAFE_LocationContext",
+              "UNSAFE_NavigationContext",
+              "UNSAFE_RouteContext",
+              "UNSAFE_ViewTransitionContext"
+            ],
+            "message": "React Router's private contexts change shape in minor releases (8.4 split the state context). Use the public hooks (useNavigation, useLocation, useRouteLoaderData). The exceptions are the live router reads in project-route-intent.tsx (RD9 amendment) and use-workspace-frame-state.ts (A15b2, F11)."
+          },
+          {
+            "name": "@nx/vite/plugins/nx-tsconfig-paths.plugin",
+            "message": "nxViteTsPaths applies tsconfig paths to every importer before Vite's resolver. Resolve # through package.json#imports, or add a scoped resolve.alias. See docs/research/scoped-hash-import-resolution.md."
+          }
+        ],
         "patterns": [
+          {
+            "group": ["cadmpeg-ts", "cadmpeg-ts/**", "!cadmpeg-ts/core", "!cadmpeg-ts/digests", "!cadmpeg-ts/formats"],
+            "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+          },
           {
             "regex": "^\\.",
             "allowImportNamePattern": "^Route$",
@@ -459,7 +529,7 @@
       "error",
       "always",
       {
-        "ignorePattern": "pragma|ignore|prettier-ignore|webpack\\w+:|c8|type-coverage:|async-iife:",
+        "ignorePattern": "pragma|ignore|prettier-ignore|webpack\\w+:|c8|v8 ignore|type-coverage:|async-iife:|ponytail:",
         "ignoreInlineComments": true,
         "ignoreConsecutiveComments": true
       }
@@ -571,6 +641,10 @@
       "error",
       {
         "types": {
+          "AppLoadContext": {
+            "message": "React Router 8 removes AppLoadContext: with middleware on, loaders, actions and the entry take a RouterContextProvider (RR3). Type the context as RouterContextProvider and read per-request values through createContext keys.",
+            "fixWith": "RouterContextProvider"
+          },
           "object": {
             "message": "The `object` type is hard to use. Use `Record<string, unknown>` instead. See: https://github.com/typescript-eslint/typescript-eslint/pull/848",
             "fixWith": "Record<string, unknown>"
@@ -963,6 +1037,38 @@
   },
   "overrides": [
     {
+      // Generated standalone CAD projects must keep relative imports when copied outside this workspace.
+      "files": ["packages/warehouse/parts/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // The compiler reports a real redeclaration (ts(2451)); the core rule only misreads a
+      // type and a same-named value (`type Placement` + `const Placement`). Mirrors
+      // typescript-eslint's `eslint-recommended`.
+      "files": ["**/*.{ts,tsx,mts,cts}"],
+      "rules": {
+        "no-redeclare": "off"
+      }
+    },
+    {
       /*
        * NestJS overrides:
        * - consistent-type-imports: off — DI requires runtime imports, type-only imports would break injection.
@@ -981,7 +1087,19 @@
         "apps/api/**/*.provider.ts",
         "apps/api/**/*.resolver.ts",
         "apps/api/**/*.middleware.ts",
-        "apps/api/**/testing/*.ts"
+        "apps/api/**/testing/*.ts",
+        "apps/libs/api-*/**/*.service.ts",
+        "apps/libs/api-*/**/*.controller.ts",
+        "apps/libs/api-*/**/*.module.ts",
+        "apps/libs/api-*/**/*.guard.ts",
+        "apps/libs/api-*/**/*.gateway.ts",
+        "apps/libs/api-*/**/*.interceptor.ts",
+        "apps/libs/api-*/**/*.filter.ts",
+        "apps/libs/api-*/**/*.pipe.ts",
+        "apps/libs/api-*/**/*.provider.ts",
+        "apps/libs/api-*/**/*.resolver.ts",
+        "apps/libs/api-*/**/*.middleware.ts",
+        "apps/libs/api-*/**/testing/*.ts"
       ],
       "rules": {
         "@typescript-eslint/consistent-type-imports": "off",
@@ -991,6 +1109,7 @@
           {
             "capIsNewExceptions": [
               "Injectable",
+              "LlmGatewayPrincipal",
               "Module",
               "Controller",
               "Get",
@@ -1007,6 +1126,7 @@
               "Res",
               "Req",
               "HttpCode",
+              "Ip",
               "Inject",
               "Global",
               "UseGuards",
@@ -1030,7 +1150,66 @@
       "files": ["apps/ui/react-router.config.ts"],
       "rules": {
         "import/extensions": "off",
-        "no-restricted-imports": "off"
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "apps/ui/app/**/*.{ts,tsx}",
+        "apps/libs/project-workspace/src/**/*.{ts,tsx}",
+        "apps/libs/files-ui/src/**/*.{ts,tsx}",
+        "apps/libs/editor-ui/src/**/*.{ts,tsx}",
+        "apps/libs/revisions-ui/src/**/*.{ts,tsx}",
+        "apps/libs/settings-ui/src/**/*.{ts,tsx}",
+        "apps/libs/publish-ui/src/**/*.{ts,tsx}",
+        "apps/libs/billing-ui/src/**/*.{ts,tsx}",
+        "apps/libs/ui-core/src/**/*.{ts,tsx}"
+      ],
+      // Tests and route entries retain the uncompiled React Router/Vitest transform paths.
+      "excludeFiles": [
+        "apps/ui/app/**/*.{test,spec}.{ts,tsx}",
+        "apps/libs/project-workspace/src/**/*.{test,spec}.{ts,tsx}",
+        "apps/libs/files-ui/src/**/*.{test,spec}.{ts,tsx}",
+        "apps/libs/editor-ui/src/**/*.{test,spec}.{ts,tsx}",
+        "apps/libs/revisions-ui/src/**/*.{test,spec}.{ts,tsx}",
+        "apps/libs/settings-ui/src/**/*.{test,spec}.{ts,tsx}",
+        "apps/libs/publish-ui/src/**/*.{test,spec}.{ts,tsx}",
+        "apps/libs/billing-ui/src/**/*.{test,spec}.{ts,tsx}",
+        "apps/libs/ui-core/src/**/*.{test,spec}.{ts,tsx}",
+        "apps/ui/app/root.{ts,tsx}",
+        "apps/ui/app/routes/*.{ts,tsx}",
+        "apps/ui/app/routes/**/route.{ts,tsx}"
+      ],
+      "rules": {
+        "react/error-boundaries": "error",
+        "react/globals": "error",
+        "react/immutability": "error",
+        "react/incompatible-library": "error",
+        "react/preserve-manual-memoization": "error",
+        "react/purity": "error",
+        "react/refs": "error",
+        "react/set-state-in-effect": "error",
+        "react/set-state-in-render": "error",
+        "react/static-components": "error",
+        "react/unsupported-syntax": "error",
+        "react/use-memo": "error",
+        "react/void-use-memo": "error"
       }
     },
     {
@@ -1162,7 +1341,8 @@
         "jsdoc-js/informative-docs": "warn",
         // Catches empty JSDoc blocks (/** */) that satisfy require-jsdoc but carry zero information.
         "jsdoc-js/no-blank-blocks": "warn",
-        // Enforces consistent tag ordering: @template → @param → @returns → @throws → @example → @see.
+        // Enforces eslint-plugin-jsdoc's default tag order, including the visibility tags:
+        // @template → @internal → @param → @returns → @throws → @public → @see → @example.
         // Only checks order, not spacing between groups (formatting is handled by oxfmt).
         "jsdoc-js/sort-tags": [
           "warn",
@@ -1171,6 +1351,17 @@
             "reportIntraTagGroupSpacing": false
           }
         ]
+      },
+      "plugins": ["jsdoc"]
+    },
+    {
+      // React components in the design system always return an element; a
+      // `@returns` on each one restates the signature without adding meaning.
+      "files": ["packages/ui/src/components/**/*.tsx"],
+      "rules": {
+        "jsdoc/require-returns": "off",
+        "jsdoc/require-returns-description": "off",
+        "jsdoc-js/sort-tags": "off"
       },
       "plugins": ["jsdoc"]
     },
@@ -1196,7 +1387,7 @@
       // is the UI app's internal package-equivalent layer (each subdirectory
       // behaves like a libs/-style local package without being extracted),
       // so its `index.ts` aggregators inherit the same exemption.
-      "files": ["{packages,libs}/**/index.ts", "apps/ui/app/lib/**/index.ts"],
+      "files": ["{packages,libs,apps/libs}/**/index.ts", "apps/ui/app/lib/**/index.ts"],
       "rules": {
         "no-barrel-files/no-barrel-files": "off"
       }
@@ -1210,12 +1401,11 @@
        * every downstream import site.
        */
       "files": [
-        "packages/runtime/src/worker-internals.ts",
+        "packages/runtime/src/node.ts",
+        "packages/runtime/src/vm.ts",
         "packages/runtime/src/filesystem/runtime-filesystem.ts",
-        "packages/runtime/src/transport/define-runtime-transport.ts",
         "packages/runtime/src/transport/in-process-transport.ts",
-        "packages/runtime/src/transport/transport-projections.ts",
-        "packages/runtime/src/transport/_internal/runtime-worker-dispatcher.ts"
+        "packages/runtime/src/transport/transport-projections.ts"
       ],
       "rules": {
         "no-barrel-files/no-barrel-files": "off"
@@ -1252,11 +1442,50 @@
     {
       // CAD examples may not always follow typical conventions. For example, it's
       // easier to read d_x rather than dX, so we relax the rules here.
-      "files": ["libs/tau-examples/src/kernels/**/*.ts"],
+      // Multi-file Tau examples are also editor-loadable fixture trees, so they
+      // use local relative imports rather than Tau-only package aliases. Bundler
+      // fixtures also author `.tsx`/`.js`/`.jsx` modules, pragma JSX and directory
+      // index imports that the library tsconfig cannot type, so `any` operands are
+      // warnings like the other unsafe-`any` rules.
+      "files": [
+        "libs/tau-examples/src/kernels/**/*.{ts,tsx,js,jsx}",
+        "libs/tau-examples/src/standalone/**/*.{ts,tsx,mjs}"
+      ],
       "rules": {
-        "unicorn-js/prevent-abbreviations": "warn",
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ],
+        "tau-lint/no-impl-in-index": "off",
+        "react/react-in-jsx-scope": "off",
+        "@typescript-eslint/restrict-plus-operands": "warn",
+        "import/extensions": "off",
+        "import/consistent-type-specifier-style": "off",
+        "no-barrel-files/no-barrel-files": "off",
+        "unicorn-js/prefer-export-from": "off",
+        "unicorn-js/prevent-abbreviations": [
+          "warn",
+          {
+            "replacements": {
+              "params": false
+            }
+          }
+        ],
         "unicorn/no-array-callback-reference": "warn",
-        "@typescript-eslint/explicit-module-boundary-types": "warn",
+        "@typescript-eslint/explicit-module-boundary-types": "off",
         "@typescript-eslint/no-unsafe-assignment": "warn",
         "@typescript-eslint/no-unsafe-call": "warn",
         "@typescript-eslint/no-restricted-types": "warn",
@@ -1264,6 +1493,297 @@
         "max-params": "warn"
       },
       "plugins": ["typescript"]
+    },
+    {
+      // Hooks are below components and routes; W1 removes the billing exceptions.
+      "files": ["apps/ui/app/hooks/**/*.{ts,tsx,mts,cts}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              "error",
+              "domain",
+              "freelist",
+              "smalloc",
+              "punycode",
+              "sys",
+              "querystring",
+              "colors",
+              {
+                "name": "react-router",
+                "allowTypeImports": true,
+                "importNames": [
+                  "UNSAFE_DataRouterContext",
+                  "UNSAFE_DataRouterStateContext",
+                  "UNSAFE_FetchersContext",
+                  "UNSAFE_FrameworkContext",
+                  "UNSAFE_LocationContext",
+                  "UNSAFE_NavigationContext",
+                  "UNSAFE_RouteContext",
+                  "UNSAFE_ViewTransitionContext"
+                ],
+                "message": "React Router's private contexts change shape in minor releases (8.4 split the state context). Use the public hooks (useNavigation, useLocation, useRouteLoaderData). The exceptions are the live router reads in project-route-intent.tsx (RD9 amendment) and use-workspace-frame-state.ts (A15b2, F11)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              },
+              {
+                "group": ["#components/*", "#routes/*"],
+                "message": "Hooks must not import from UI components or routes. Move the dependency down or inject it."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Infrastructure layers may not depend on hooks, components, or routes.
+      "files": [
+        "apps/ui/app/machines/**/*.{ts,tsx,mts,cts}",
+        "apps/ui/app/lib/**/*.{ts,tsx,mts,cts}",
+        "apps/ui/app/services/**/*.{ts,tsx,mts,cts}",
+        "apps/ui/app/utils/**/*.{ts,tsx,mts,cts}",
+        "apps/ui/app/constants/**/*.{ts,tsx,mts,cts}",
+        "apps/ui/app/filesystem/**/*.{ts,tsx,mts,cts}",
+        "apps/ui/app/db/**/*.{ts,tsx,mts,cts}",
+        "apps/ui/app/workers/**/*.{ts,tsx,mts,cts}"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              "error",
+              "domain",
+              "freelist",
+              "smalloc",
+              "punycode",
+              "sys",
+              "querystring",
+              "colors",
+              {
+                "name": "react-router",
+                "allowTypeImports": true,
+                "importNames": [
+                  "UNSAFE_DataRouterContext",
+                  "UNSAFE_DataRouterStateContext",
+                  "UNSAFE_FetchersContext",
+                  "UNSAFE_FrameworkContext",
+                  "UNSAFE_LocationContext",
+                  "UNSAFE_NavigationContext",
+                  "UNSAFE_RouteContext",
+                  "UNSAFE_ViewTransitionContext"
+                ],
+                "message": "React Router's private contexts change shape in minor releases (8.4 split the state context). Use the public hooks (useNavigation, useLocation, useRouteLoaderData). The exceptions are the live router reads in project-route-intent.tsx (RD9 amendment) and use-workspace-frame-state.ts (A15b2, F11)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              },
+              {
+                "group": ["#components/*", "#hooks/*", "#routes/*"],
+                "message": "Infrastructure must not import from hooks, UI components, or routes. Move the dependency down or inject it."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Current auth component inversion. -- W5
+      "files": ["apps/ui/app/utils/magic-link-plugin.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Current graphics inversions. -- W3
+      "files": [
+        "apps/ui/app/machines/resolve-screenshot-overlay.ts",
+        "apps/ui/app/machines/screenshot-capability.machine.test.ts",
+        "apps/ui/app/machines/screenshot-capability.machine.ts",
+        "apps/ui/app/machines/screenshot-capability.utils.test.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Current file/telemetry inversion. -- W4
+      "files": ["apps/ui/app/utils/workspace-telemetry.utils.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Current chat inversions. -- W6
+      "files": [
+        "apps/ui/app/hooks/use-chat.tsx",
+        "apps/ui/app/lib/skill-resolver.ts",
+        "apps/ui/app/lib/system-skills-catalog.test.ts",
+        "apps/ui/app/services/chat-session-store.ts",
+        "apps/ui/app/utils/chat.utils.test.ts",
+        "apps/ui/app/utils/chat.utils.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Current publish/import inversions. -- W9
+      "files": ["apps/ui/app/lib/github-api.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Current settings inversion. -- W10
+      "files": ["apps/ui/app/constants/route.constants.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // libcascade exposes generated OCCT/Emscripten names whose constructor
+      // and factory conventions intentionally do not match JavaScript new-cap
+      // heuristics.
+      "files": [
+        "libs/tau-examples/src/kernels/opencascade/**/*.ts",
+        "libs/tau-examples/src/standalone/opencascadejs/*.{ts,mjs}"
+      ],
+      "rules": {
+        "new-cap": "off"
+      }
+    },
+    {
+      // Agent skill folders are self-contained units (SKILL.md + scripts +
+      // references travel together into agent harnesses), so sibling relative
+      // imports are their contract — same reasoning as examples/**. The
+      // `.claude/skills` symlink twin is ignored outright (ignorePatterns)
+      // to avoid double-linting the same files.
+      "files": ["**/.agents/skills/**/*.{ts,mts}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": ["error", "domain", "freelist", "smalloc", "punycode", "sys", "querystring", "colors"]
+          }
+        ]
+      }
     },
     {
       /*
@@ -1279,10 +1799,51 @@
        */
       "files": ["examples/**/*.{ts,tsx,mts,cts}"],
       "rules": {
-        "no-restricted-imports": "off",
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ],
         "import/extensions": "off",
-        "unicorn-js/prevent-abbreviations": "warn",
+        "unicorn-js/prevent-abbreviations": [
+          "warn",
+          {
+            "replacements": {
+              "params": false
+            }
+          }
+        ],
         "@typescript-eslint/explicit-module-boundary-types": "warn"
+      }
+    },
+    {
+      /*
+       * Cross-framework E2E fixtures are standalone consumer applications
+       * compiled independently by Next.js, Vite, and Electron Vite. Their
+       * portable local imports follow each host bundler rather than Tau's
+       * production-app `#alias` and emitted `.js` conventions.
+       */
+      "files": ["apps/react-e2e/**/*.{ts,tsx}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": ["error", "domain", "freelist", "smalloc", "punycode", "sys", "querystring", "colors"]
+          }
+        ],
+        "import/extensions": "off"
       }
     },
     {
@@ -1318,14 +1879,71 @@
       // Type-aware rules produce false positives in .js files (JSON.parse → any, ESTree AST types).
       "files": ["libs/oxlint/src/**/*.js"],
       "rules": {
-        "no-restricted-imports": "off",
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "cadmpeg-ts",
+                  "cadmpeg-ts/**",
+                  "!cadmpeg-ts/core",
+                  "!cadmpeg-ts/digests",
+                  "!cadmpeg-ts/formats"
+                ],
+                "message": "Import cadmpeg-ts only through its engine-free entries cadmpeg-ts/core, cadmpeg-ts/digests and cadmpeg-ts/formats. The default entry and cadmpeg-ts/wasm/* name all 13 engines, so a bundler copies every one into each build that imports them (cadmpeg engine delivery charter D16, I1)."
+              }
+            ]
+          }
+        ],
         "@typescript-eslint/no-unsafe-assignment": "off",
         "@typescript-eslint/no-unsafe-argument": "off",
         "@typescript-eslint/no-unsafe-call": "off",
+        "@typescript-eslint/no-unsafe-return": "off",
         "@typescript-eslint/no-unnecessary-condition": "off",
         "@typescript-eslint/no-unnecessary-type-assertion": "off",
         "@typescript-eslint/prefer-optional-chain": "off",
         "@typescript-eslint/no-duplicate-type-constituents": "off"
+      }
+    },
+    {
+      // Public package exports are pre-1.0 contracts; missing @public is an error before release.
+      "files": ["packages/**/*.{ts,tsx,mts,cts}"],
+      "rules": {
+        "tau-lint/require-public-export-jsdoc": "error"
+      }
+    },
+    {
+      // Runtime framework production modules must split before they exceed the workspace ceiling.
+      "files": ["packages/runtime/src/framework/**/*.{ts,tsx,mts,cts}"],
+      "rules": {
+        "max-lines": [
+          "error",
+          {
+            "max": 1500,
+            "skipComments": true
+          }
+        ]
+      }
+    },
+    {
+      // Test modules follow testing-policy structure instead of the production-module ceiling.
+      "files": ["packages/runtime/src/framework/**/*.test.{ts,tsx,mts,cts}"],
+      "rules": {
+        "max-lines": "off"
+      }
+    },
+    {
+      // Ratified exception: the stateful kernel orchestrator is split only by a dedicated refactor.
+      "files": ["packages/runtime/src/framework/kernel-worker.ts"],
+      "rules": {
+        "max-lines": [
+          "warn",
+          {
+            "max": 1500,
+            "skipComments": true
+          }
+        ]
       }
     },
     {
@@ -1347,17 +1965,364 @@
       }
     },
     {
-      // Static `new URL(literal, import.meta.url)` invariant for the runtime
-      // and standalone kernels. Computed first arguments silently opt out of
+      // Revisions-policy Rule 1: engineering vocabulary never reaches product copy.
+      // Scoped to the UI app, the only place that authors words a person reads.
+      // See docs/policy/revisions-policy.md Rule 1.
+      "files": [
+        "apps/ui/app/**/*.{ts,tsx}",
+        "apps/libs/project-workspace/src/**/*.{ts,tsx}",
+        "apps/libs/files-ui/src/**/*.{ts,tsx}",
+        "apps/libs/editor-ui/src/**/*.{ts,tsx}",
+        "apps/libs/revisions-ui/src/**/*.{ts,tsx}",
+        "apps/libs/settings-ui/src/**/*.{ts,tsx}",
+        "apps/libs/publish-ui/src/**/*.{ts,tsx}",
+        "apps/libs/billing-ui/src/**/*.{ts,tsx}",
+        "apps/libs/ui-core/src/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "tau-lint/no-engineering-vocabulary-in-copy": "error"
+      }
+    },
+    {
+      // History, Versions and Branch Graph (C8, M11): a save is a history entry with no number, so product copy never
+      // says "revision" or `Rev` and a digit. JSX text, toast copy and the two copy modules. Tests are fixtures, not copy.
+      // See docs/policy/revisions-policy.md Rule 1.
+      "files": [
+        "apps/ui/app/**/*.{ts,tsx}",
+        "apps/libs/project-workspace/src/**/*.{ts,tsx}",
+        "apps/libs/files-ui/src/**/*.{ts,tsx}",
+        "apps/libs/editor-ui/src/**/*.{ts,tsx}",
+        "apps/libs/revisions-ui/src/**/*.{ts,tsx}",
+        "apps/libs/settings-ui/src/**/*.{ts,tsx}",
+        "apps/libs/publish-ui/src/**/*.{ts,tsx}",
+        "apps/libs/billing-ui/src/**/*.{ts,tsx}",
+        "apps/libs/ui-core/src/**/*.{ts,tsx}"
+      ],
+      "excludeFiles": ["**/*.{test,spec}.{ts,tsx}", "**/*.test-harness.{ts,tsx}", "**/*.stories.{ts,tsx}"],
+      "rules": {
+        "tau-lint/no-save-revision-in-copy": "error"
+      }
+    },
+    {
+      // Overlays share z-50 and stack by open order (each portals to the end of <body> as it opens). A surface raised
+      // above that layer forces everything opened from it to be raised too, and the one that is missed opens behind it.
+      "files": [
+        "apps/ui/app/**/*.{ts,tsx}",
+        "apps/libs/project-workspace/src/**/*.{ts,tsx}",
+        "apps/libs/files-ui/src/**/*.{ts,tsx}",
+        "apps/libs/editor-ui/src/**/*.{ts,tsx}",
+        "apps/libs/revisions-ui/src/**/*.{ts,tsx}",
+        "apps/libs/settings-ui/src/**/*.{ts,tsx}",
+        "apps/libs/publish-ui/src/**/*.{ts,tsx}",
+        "apps/libs/billing-ui/src/**/*.{ts,tsx}",
+        "apps/libs/ui-core/src/**/*.{ts,tsx}",
+        "packages/ui/src/**/*.{ts,tsx}"
+      ],
+      "excludeFiles": ["**/*.{test,spec}.{ts,tsx}"],
+      "rules": {
+        "tau-lint/no-raised-overlay-layer": "error"
+      }
+    },
+    {
+      // Permanent: the WebXR DOM overlay must paint over everything the browser composites for the session.
+      "files": ["apps/ui/app/components/cad/ar-webxr-session.ts"],
+      "rules": {
+        "tau-lint/no-raised-overlay-layer": "off"
+      }
+    },
+    {
+      // UI Policy §3 (docs/policy/ui-policy.md): the heading scale owns size, weight, line height and
+      // tracking on headings and title slots. Every app library renders headings, so the scope is wider
+      // than the Page Composition gates below.
+      "files": ["apps/ui/app/**/*.tsx", "apps/libs/*/src/**/*.tsx", "packages/ui/src/**/*.tsx"],
+      "excludeFiles": ["**/*.{test,spec}.tsx", "apps/ui/app/routes/?__e2e?.*/**"],
+      "rules": {
+        "tau-lint/no-raw-heading-type": "error"
+      }
+    },
+    {
+      // Page Composition Policy gates (docs/policy/page-composition-policy.md, Enforcement).
+      // Product page components only: tests and `[__e2e]` fixture routes author no product copy.
+      // Autofixable rules are errors; judgment rules warn for one release, then become errors.
+      "files": [
+        "apps/ui/app/**/*.tsx",
+        "apps/libs/project-workspace/src/**/*.tsx",
+        "apps/libs/files-ui/src/**/*.tsx",
+        "apps/libs/editor-ui/src/**/*.tsx",
+        "apps/libs/revisions-ui/src/**/*.tsx",
+        "apps/libs/settings-ui/src/**/*.tsx",
+        "apps/libs/publish-ui/src/**/*.tsx",
+        "apps/libs/billing-ui/src/**/*.tsx",
+        "apps/libs/ui-core/src/**/*.tsx",
+        "packages/ui/src/**/*.tsx"
+      ],
+      "excludeFiles": ["**/*.{test,spec}.tsx", "apps/ui/app/routes/?__e2e?.*/**"],
+      "rules": {
+        "tau-lint/no-ascii-ellipsis": "error",
+        "tau-lint/require-accessible-name": "warn",
+        "tau-lint/no-label-replacing-loader": "warn",
+        "tau-lint/no-arbitrary-pixel-size": "error",
+        "tau-lint/no-accent-hover": "warn",
+        "tau-lint/no-button-size-override": "warn",
+        // The jsx-a11y subset that fits Tau's patterns (Page Composition Policy Rules 7 and 13).
+        // Left off: prefer-tag-over-role (codified role="status"), anchor-is-valid (Link `to`),
+        // no-autofocus (UX Policy inline editors), control-has-associated-label and
+        // label-has-associated-control (cannot see Button/SearchInput; require-accessible-name covers them).
+        "jsx-a11y/tabindex-no-positive": "error",
+        "jsx-a11y/no-noninteractive-tabindex": "error",
+        "jsx-a11y/aria-props": "error",
+        "jsx-a11y/aria-proptypes": "error",
+        "jsx-a11y/aria-role": "error",
+        "jsx-a11y/role-has-required-aria-props": "error",
+        "jsx-a11y/role-supports-aria-props": "error",
+        "jsx-a11y/alt-text": "error",
+        "jsx-a11y/heading-has-content": "error",
+        "jsx-a11y/anchor-has-content": "error",
+        "jsx-a11y/iframe-has-title": "error",
+        "jsx-a11y/no-access-key": "error"
+      }
+    },
+    {
+      // Static `new URL(literal, import.meta.url)` invariant for the runtime.
+      // Computed first arguments silently opt out of
       // bundler asset emission and break downstream consumers.
       // See docs/research/runtime-zero-config-bundling.md (Finding 1, R5).
-      "files": ["packages/runtime/src/**/*.{ts,tsx}", "kernels/openscad/src/**/*.{ts,tsx}"],
+      "files": ["packages/runtime/src/**/*.{ts,tsx}"],
       "rules": {
         "tau-lint/static-import-meta-url": "error"
+      }
+    },
+    {
+      // Agent substrate owner machines in published packages (docs/policy/xstate-policy.md, MC-R1–MC-R30).
+      // `portable`: MC-R2 import boundary. `spec`: the owner has a TLA+ spec, so MC-R27 (`transitionMeta`) applies.
+      "files": [
+        "packages/revisions/src/*.machine.ts",
+        "packages/agent-host/src/**/*.machine.ts",
+        "packages/agent-host/src/**/*.logic.ts",
+        "packages/host/src/**/*.machine.ts"
+      ],
+      "rules": {
+        "tau-lint/xstate-owner-machine": ["error", { "portable": true, "spec": true }]
+      }
+    },
+    {
+      // Agent substrate owner machines in the UI (MC-Q5: owner mode, not portable; no spec yet, so no MC-R27).
+      "files": [
+        "apps/ui/app/machines/{chat-session,project-session,sessions,composer-record}.machine.ts",
+        "apps/ui/app/machines/*.logic.ts",
+        "apps/ui/app/hooks/{chat-persistence,draft}.machine.ts"
+      ],
+      "rules": {
+        "tau-lint/xstate-owner-machine": "error"
+      }
+    },
+    /*
+     * Ratchet (MC-S6). Each entry lists exactly the message ids its files violate today; overrides replace
+     * options, so each restates the full options. The owning change deletes its entry. Keep these after the
+     * owner globs above: the last matching override wins.
+     */
+    {
+      // Ratchet, W5 (revisions machines).
+      "files": ["packages/revisions/src/*.machine.ts"],
+      "rules": {
+        "tau-lint/xstate-owner-machine": [
+          "error",
+          { "portable": true, "spec": true, "pending": ["rootOnError", "version", "transitionMeta"] }
+        ]
+      }
+    },
+    {
+      // Ratchet, W5.
+      "files": ["packages/revisions/src/sync.machine.ts"],
+      "rules": {
+        "tau-lint/xstate-owner-machine": [
+          "error",
+          { "portable": true, "spec": true, "pending": ["impure", "rootOnError", "version", "transitionMeta"] }
+        ]
+      }
+    },
+    {
+      // Ratchet, W5.
+      "files": ["packages/revisions/src/project-revisions.machine.ts"],
+      "rules": {
+        "tau-lint/xstate-owner-machine": [
+          "error",
+          {
+            "portable": true,
+            "spec": true,
+            "pending": ["rootOnError", "snapshotRead", "spawnByKey", "version", "transitionMeta"]
+          }
+        ]
+      }
+    },
+    {
+      // Ratchet, W9: `admitTurn` and `settleTurn` are deleted in PV-S13.
+      "files": ["apps/ui/app/machines/chat-session.machine.ts"],
+      "rules": {
+        "tau-lint/xstate-owner-machine": ["error", { "pending": ["fromSafeAsync"] }]
+      }
+    },
+    {
+      /*
+       * D22: a mutation convenience awaited in a loop is one changeset per
+       * iteration. Collect the entries and `apply` them as one changeset. The
+       * provider layer's own primitives and tests are exempt.
+       */
+      "files": ["packages/filesystem/src/**/*.ts", "libs/fs-bridge/src/**/*.ts"],
+      "rules": {
+        "tau-lint/no-awaited-mutation-in-loop": "error"
+      }
+    },
+    {
+      "files": ["packages/filesystem/src/backend/**", "**/*.test.ts", "**/*.bench.ts", "**/test-utils/**"],
+      "rules": {
+        "tau-lint/no-awaited-mutation-in-loop": "off"
+      }
+    },
+    {
+      /*
+       * Guard G1 of the progressive loading architecture (Brain research/progressive-loading-architecture.md):
+       * a heavy module is loaded only through import(). `modules` is the heavy list of
+       * apps/ui/scripts/critical-path.mts, and apps/ui/app/lib/critical-graph.node.test.ts (G2) holds it
+       * equal, holds every `deferredLeaves` entry off each route class's static graph and every `known`
+       * entry on one. Scope: the web UI and the app libraries it composes; tests, workers and server
+       * modules are never in a document's interactive tier.
+       */
+      "files": [
+        "apps/ui/app/**/*.{ts,tsx}",
+        "apps/libs/chat-ui/src/**/*.{ts,tsx}",
+        "apps/libs/editor-ui/src/**/*.{ts,tsx}",
+        "apps/libs/project-workspace/src/**/*.{ts,tsx}",
+        "apps/libs/revisions-ui/src/**/*.{ts,tsx}",
+        "apps/libs/ui-core/src/**/*.{ts,tsx}",
+        "apps/libs/ui-kit/src/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "tau-lint/no-static-heavy-import": [
+          "error",
+          {
+            "modules": [
+              "ai",
+              "ai/*",
+              "@ai-sdk/*",
+              "three",
+              "three/*",
+              "@react-three/*",
+              "@taucad/runtime",
+              "@taucad/assimp",
+              "@taucad/assimp/*",
+              "@taucad/brep",
+              "@taucad/brep/*",
+              "@taucad/build123d",
+              "@taucad/build123d/*",
+              "@taucad/esbuild",
+              "@taucad/esbuild/*",
+              "@taucad/jscad",
+              "@taucad/jscad/*",
+              "@taucad/manifold",
+              "@taucad/manifold/*",
+              "@taucad/opencascade",
+              "@taucad/opencascade/*",
+              "@taucad/openrscad",
+              "@taucad/openrscad/*",
+              "@taucad/picogk",
+              "@taucad/picogk/*",
+              "@taucad/picovoxel",
+              "@taucad/picovoxel/*",
+              "@taucad/replicad",
+              "@taucad/replicad/*",
+              "@taucad/rolldown",
+              "@taucad/rolldown/*",
+              "@taucad/smlib",
+              "@taucad/smlib/*",
+              "@taucad/smlibpy",
+              "@taucad/smlibpy/*",
+              "@taucad/tscircuit",
+              "@taucad/tscircuit/*",
+              "@taucad/zoo",
+              "@taucad/zoo/*",
+              "@codemirror/*",
+              "posthog-js",
+              "posthog-js/*",
+              "@sentry/react"
+            ],
+            // Reached only through a dynamic import: the chat's AI SDK (PL1), the editor, the viewer tier, the printer
+            // viewer and the part visuals (PL5), the viewer's loaders and debug tools, the language services, the
+            // conversion and preview routes and the e2e fixtures.
+            "deferredLeaves": [
+              "apps/libs/chat-ui/src/chat-clients/_internal/shared-chat-transport.ts",
+              "apps/libs/editor-ui/src/components/code/code-editor-view.client.tsx",
+              "apps/libs/editor-ui/src/components/code/editor-definition.ts",
+              "apps/libs/editor-ui/src/components/code/editor-language-features.ts",
+              "apps/libs/editor-ui/src/components/code/editor-lint.ts",
+              "apps/libs/editor-ui/src/components/code/editor-search-panel.tsx",
+              "apps/libs/editor-ui/src/components/code/editor-surface-theme.ts",
+              "apps/libs/editor-ui/src/components/code/json-depth-highlighting.ts",
+              "apps/libs/editor-ui/src/lib/csharp-language/",
+              "apps/libs/editor-ui/src/lib/json-language/",
+              "apps/libs/editor-ui/src/lib/kcl-language/",
+              "apps/libs/editor-ui/src/lib/openscad-language/",
+              "apps/libs/editor-ui/src/lib/typescript-language/",
+              "apps/libs/ui-core/src/lib/lsp-completion-apply.ts",
+              "apps/libs/ui-core/src/services/headless-capture-presentation.ts",
+              "apps/ui/app/components/cad/ar-webxr-scene.ts",
+              "apps/ui/app/components/geometry/debug/",
+              "apps/ui/app/components/geometry/loader/glass-prism-controller.ts",
+              "apps/ui/app/components/geometry/loader/glass-prism-light-sheet.ts",
+              "apps/ui/app/components/geometry/loader/glass-prism-material.node.ts",
+              "apps/ui/app/components/geometry/loader/glass-prism.constants.ts",
+              "apps/ui/app/components/geometry/loader/metal-morph-controller.ts",
+              "apps/ui/app/components/geometry/loader/metal-morph-environment.ts",
+              "apps/ui/app/components/geometry/loader/metal-morph-material.node.ts",
+              "apps/ui/app/components/geometry/loader/metal-morph.constants.ts",
+              "apps/ui/app/components/geometry/loader/showcase-capture.ts",
+              "apps/ui/app/components/geometry/loader/showcase-post.ts",
+              "apps/ui/app/components/printer/printer-camera-controls.tsx",
+              "apps/ui/app/components/printer/printer-filament-material.node.ts",
+              "apps/ui/app/components/printer/printer-filament-material.ts",
+              "apps/ui/app/components/printer/printer-hardware.ts",
+              "apps/ui/app/components/printer/printer-plate-surface.ts",
+              "apps/ui/app/components/printer/printer-plates.ts",
+              "apps/ui/app/components/printer/printer-scene.tsx",
+              "apps/ui/app/components/printer/printer-toolpath.ts",
+              "apps/ui/app/hooks/rpc-handlers.ts",
+              "apps/ui/app/lib/kcl-language/",
+              "apps/ui/app/lib/sentry-stack-parser.ts",
+              "apps/ui/app/lib/sentry-tracing.lib.ts",
+              "apps/ui/app/lib/sentry.lib.ts",
+              "apps/ui/app/routes/[__e2e].onshape-render-profile/",
+              "apps/ui/app/routes/[__e2e].remote-host/",
+              "apps/ui/app/routes/[__e2e].shader-fixture/",
+              "apps/ui/app/routes/convert/",
+              "apps/ui/app/routes/w.$workspace.$project/chat-converter.tsx",
+              "apps/ui/app/routes/w.$workspace.$project/chat-editor-code-viewer.tsx",
+              "apps/ui/app/routes/w.$workspace.$project/chat-print-prepare.tsx",
+              "apps/ui/app/routes/w.$workspace.$project/chat-viewer.tsx",
+              "apps/ui/app/routes/w.$workspace.$project_.preview/",
+              "apps/ui/app/runtime/ui-runtime.definition.ts",
+              "apps/ui/app/runtime/usdz-runtime.definition.ts",
+              "apps/ui/app/services/chat-sdk.ts",
+              "apps/ui/app/services/headless-capture.ts",
+              "apps/ui/app/services/part-thumbnail-visual.ts",
+              "apps/ui/app/workers/geospec-runner.impl.ts"
+            ],
+            "known": []
+          }
+        ]
       }
     }
   ],
   "settings": {
+    // Let jsx-a11y see the design-system primitives as the elements they render.
+    "jsx-a11y": {
+      "components": {
+        "Button": "button",
+        "Input": "input",
+        "SearchInput": "input",
+        "Link": "a",
+        "NavLink": "a"
+      }
+    },
     "jsdoc": {
       "definedTags": ["vitest-environment", "remarks", "internal"]
     }

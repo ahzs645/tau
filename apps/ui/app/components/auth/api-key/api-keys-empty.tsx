@@ -3,15 +3,15 @@
 import { useAuthPlugin } from '@better-auth-ui/react';
 import { Key } from 'lucide-react';
 
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent } from '#components/ui/card.js';
-import { apiKeyPlugin } from '#utils/api-key-plugin.js';
+import { Button } from '@taucad/ui/components/button';
+import { Card, CardContent } from '@taucad/ui/components/card';
+import { apiKeyPlugin } from '@taucad/ui-core/utils/api-key-plugin';
 
 export type ApiKeysEmptyProps = {
   onCreatePress: () => void;
 };
 
-export function ApiKeysEmpty({ onCreatePress }: ApiKeysEmptyProps) {
+export function ApiKeysEmpty({ onCreatePress }: ApiKeysEmptyProps): React.JSX.Element {
   const { localization: apiKeyLocalization } = useAuthPlugin(apiKeyPlugin);
 
   return (

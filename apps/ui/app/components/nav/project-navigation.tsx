@@ -1,0 +1,646 @@
+import { Fragment, useMemo, useState } from 'react';
+import { ChevronRight, Cloud, Copy, Forward, EllipsisVertical, Pencil, SquarePen, Trash2, X } from 'lucide-react';
+import { useLocation, useNavigate, useNavigation } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import type { ProjectListItem } from '@taucad/files-ui/types/project-library.types';
+import { useProjects } from '#hooks/use-projects.js';
+import { useProjectManager } from '#hooks/use-project-manager.js';
+import { useAppUiPreferences } from '#hooks/use-app-ui-preferences.js';
+import { projectChatUrl, projectUrl, projectUrlOr } from '@taucad/files-ui/utils/project-url.utils';
+import { searchParameterName } from '@taucad/ui-core/constants/search-parameter.constants';
+import {
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '#components/ui/sidebar.js';
+import { Button } from '@taucad/ui/components/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@taucad/ui/components/tooltip';
+import { cn } from '@taucad/ui/utils/cn';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@taucad/ui/components/dropdown-menu';
+import { InlineTextEditor } from '#components/inline-text-editor.js';
+import { ProjectChatList } from '#components/nav/project-chat-list.js';
+import { sidebarDisclosureButtonClass } from '#components/nav/sidebar-disclosure.styles.js';
+import { toast } from '@taucad/ui/components/sonner';
+import { StatusMark } from '#components/nav/status-mark.js';
+import { ProjectSyncStatus, projectSyncIndicator } from '#components/nav/project-sync-status.js';
+import { useTauCloudIntent } from '#hooks/use-cloud-projects.js';
+import {
+  SidebarFailureRow,
+  SidebarRowActions,
+  SidebarRowContextMenu,
+  SidebarRowLink,
+  SidebarRowMenuButton,
+  SidebarRowSkeleton,
+  sidebarRowButtonClass,
+  sidebarRowClass,
+  sidebarRowEditorClass,
+} from '#components/nav/sidebar-row.js';
+import type { SidebarRowMenuItems } from '#components/nav/sidebar-row.js';
+import { CloseProjectDialog } from '#components/nav/project-close-dialogs.js';
+import { useLiveProjectIds, useProjectLiveness } from '#hooks/use-sessions.js';
+import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
+import type { ProjectClosePlan } from '#services/chat-session-store.js';
+import {
+  pluralize,
+  selectProjectFacts,
+  useLiveNow,
+  useProjectSidebarRow,
+  useSidebarCommands,
+} from '#hooks/use-sidebar-status.js';
+
+import { NativeFileManagerIcon, useOpenProjectInFileManager } from '#hooks/use-native-file-manager.js';
+
+const projectsPerPage = 5;
+
+/** Skeleton rows drawn while the first listing is pending: one page, whatever the device has. */
+const skeletonRowCount = projectsPerPage;
+
+/** What a sidebar project row draws: a listed project. */
+export type SidebarProject = Pick<ProjectListItem, 'id' | 'name' | 'lastActivityAt' | 'slugs'> &
+  Partial<Pick<ProjectListItem, 'locator'>>;
+
+export const sortProjectsByActivity = <Row extends Pick<ProjectListItem, 'id' | 'lastActivityAt'>>(
+  projects: readonly Row[],
+): Row[] =>
+  [...projects].sort((left, right) => right.lastActivityAt - left.lastActivityAt || left.id.localeCompare(right.id));
+
+/** The project a reload opened, while its session has not yet gone live; `ended` once it has, or the page moved on. */
+type ReloadOpen = { readonly id: string; readonly pathname: string } | 'ended' | undefined;
+
+/**
+ * The projects the list draws as live: the live sessions, and on a reload the open project from the first listing
+ * until its session first goes live. A reload lists the rows, and only then does the open project's session go live;
+ * it would otherwise move above the rest at that point (U6). After that, once the page leaves that project, or when
+ * its session is closed, only the registry says what is live (R1/P46). A list mounted over an answered listing has no
+ * reload to wait for.
+ */
+const useShownLiveIds = ({
+  liveProjectIds,
+  listedProjects,
+  isAwaitingListing,
+  pathname,
+}: {
+  readonly liveProjectIds: readonly string[];
+  readonly listedProjects: readonly SidebarProject[];
+  readonly isAwaitingListing: boolean;
+  readonly pathname: string;
+}): ReadonlySet<string> => {
+  const [reloadOpen, setReloadOpen] = useState<ReloadOpen>(isAwaitingListing ? undefined : 'ended');
+  const openId = listedProjects.find(
+    (project) => project.slugs !== undefined && pathname === projectUrlOr(project.slugs),
+  )?.id;
+  /* A closed session is the registry's answer already (R1/P46). */
+  const isOpenClosed = useProjectLiveness(openId ?? '').closedReason !== undefined;
+  /* Render-time state adjustments, not effects: decided once, on the first listing, and ended once. */
+  if (reloadOpen === undefined && !isAwaitingListing) {
+    setReloadOpen(openId !== undefined && !isOpenClosed ? { id: openId, pathname } : 'ended');
+  }
+  const pendingId =
+    typeof reloadOpen === 'object' &&
+    reloadOpen.pathname === pathname &&
+    !liveProjectIds.includes(reloadOpen.id) &&
+    !isOpenClosed
+      ? reloadOpen.id
+      : undefined;
+  if (typeof reloadOpen === 'object' && pendingId === undefined) {
+    setReloadOpen('ended');
+  }
+  const shownOpenId =
+    pendingId ?? (reloadOpen === undefined && !isAwaitingListing && !isOpenClosed ? openId : undefined);
+  return useMemo(
+    () => new Set(shownOpenId === undefined ? liveProjectIds : [...liveProjectIds, shownOpenId]),
+    [liveProjectIds, shownOpenId],
+  );
+};
+
+export function ProjectNavigation({ className }: { readonly className?: string }): React.JSX.Element {
+  const { projects, isLoading, error, deleteProject, duplicateProject, updateName } = useProjects();
+  const { createChat } = useProjectManager();
+  const { isProjectExpanded, setProjectDisclosure } = useAppUiPreferences();
+  const queryClient = useQueryClient();
+  const chatSessions = useChatSessionStore();
+  const navigate = useNavigate();
+  const navigation = useNavigation();
+  const location = useLocation();
+  const [editingProjectId, setEditingProjectId] = useState<string | undefined>();
+  const [visibleCount, setVisibleCount] = useState(projectsPerPage);
+  const liveProjectIds = useLiveProjectIds();
+  /* Until the first listing answers, the list draws one page of skeleton rows. */
+  const isAwaitingListing = isLoading && projects.length === 0;
+  const rows: readonly SidebarProject[] = projects;
+  /* A29's temporal hiding: what is live now sits above what is not, and the
+   * rest keeps its recency order. On a reload the open project counts as live
+   * from the first listing until its session goes live (U6). */
+  const shownLiveIds = useShownLiveIds({
+    liveProjectIds,
+    listedProjects: projects,
+    isAwaitingListing,
+    pathname: location.pathname,
+  });
+  const sortedProjects = useMemo(
+    () =>
+      sortProjectsByActivity(rows).sort(
+        (left, right) => Number(shownLiveIds.has(right.id)) - Number(shownLiveIds.has(left.id)),
+      ),
+    [shownLiveIds, rows],
+  );
+  const visibleProjects = sortedProjects.slice(0, visibleCount);
+  const earlierFromId = useMemo(
+    () =>
+      visibleProjects.some((entry) => shownLiveIds.has(entry.id))
+        ? visibleProjects.find((entry) => !shownLiveIds.has(entry.id))?.id
+        : undefined,
+    [shownLiveIds, visibleProjects],
+  );
+  const isKnownEmpty = !isLoading && !error && projects.length === 0;
+  const pendingUrl = navigation.location ? `${navigation.location.pathname}${navigation.location.search}` : undefined;
+
+  /* `isActive` gates the merge: the open project's parameters belong to its own
+   * URL, so they travel with a chat switch but never onto another project. */
+  const handleCreateChat = async (project: SidebarProject, isActive: boolean): Promise<void> => {
+    if (!project.slugs) {
+      return;
+    }
+    const chat = await createChat(project.id, { name: 'New chat', messages: [] });
+    // Created empty here, so the lane shows its empty state at once rather than waiting for the log (I21).
+    chatSessions.noteCreatedEmpty(chat.id);
+    void queryClient.invalidateQueries({ queryKey: ['chats', project.id] });
+    await navigate(projectChatUrl(project.slugs, chat.id, isActive ? location.search : undefined), {
+      state: { focusChatComposer: true },
+    });
+  };
+
+  const handleDuplicate = async (project: SidebarProject): Promise<void> => {
+    let duplicate: Awaited<ReturnType<typeof duplicateProject>>;
+    try {
+      duplicate = await duplicateProject(project.id);
+    } catch (error) {
+      toast.error(`Could not duplicate ${project.name}`);
+      console.error('Error duplicating project:', error);
+      return;
+    }
+    toast.success(`Duplicated ${project.name}`, {
+      action: {
+        label: 'Open',
+        onClick() {
+          void navigate(projectUrl(duplicate.slugs));
+        },
+      },
+    });
+  };
+
+  return (
+    /* Chat rows and New chat shortcuts share a delay as the pointer travels
+     * down the list. Project status descriptions stay screen-reader-only. */
+    <TooltipProvider delayDuration={500} skipDelayDuration={300}>
+      <SidebarGroup className={cn('px-2 group-data-[collapsible=icon]:hidden', className)}>
+        <ProjectsLabel />
+        {/* One row pitch throughout: projects, a project and its first chat, and
+          chats between themselves all sit `gap-0.5` apart, so expanding or
+          collapsing a project shifts nothing. */}
+        <SidebarMenu className='gap-0.5' aria-busy={isAwaitingListing ? true : undefined}>
+          {isAwaitingListing
+            ? Array.from({ length: skeletonRowCount }, (_, index) => (
+                <SidebarMenuItem key={index} aria-hidden data-testid='project-navigation-skeleton'>
+                  <SidebarRowSkeleton />
+                </SidebarMenuItem>
+              ))
+            : null}
+          {isKnownEmpty && liveProjectIds.length === 0 ? (
+            <SidebarMenuItem>
+              <div className='flex h-7 items-center px-2 text-xs text-muted-foreground'>No projects yet</div>
+            </SidebarMenuItem>
+          ) : null}
+          {visibleProjects.map((project) => {
+            const projectPath = projectUrlOr(project.slugs);
+            const isActive = project.slugs !== undefined && location.pathname === projectPath;
+            const isExpanded = isProjectExpanded(project.id, isActive);
+            return (
+              <Fragment key={project.id}>
+                {earlierFromId === project.id ? (
+                  <SidebarMenuItem>
+                    <div className='flex h-6 items-center px-1.5 text-xs text-muted-foreground'>Earlier</div>
+                  </SidebarMenuItem>
+                ) : null}
+                <ProjectNavigationItem
+                  project={project}
+                  isActive={isActive}
+                  isPending={pendingUrl === projectPath}
+                  isExpanded={isExpanded}
+                  isEditing={editingProjectId === project.id}
+                  onToggle={async () => setProjectDisclosure(project.id, !isExpanded)}
+                  onOpen={() => {
+                    if (!isExpanded) {
+                      void setProjectDisclosure(project.id, true);
+                    }
+                  }}
+                  onCreateChat={async () => handleCreateChat(project, isActive)}
+                  onRename={() => {
+                    setEditingProjectId(project.id);
+                  }}
+                  onRenameSave={async (name) => {
+                    await updateName(project.id, name);
+                  }}
+                  onEditingChange={(editing) => {
+                    if (!editing) {
+                      setEditingProjectId(undefined);
+                    }
+                  }}
+                  onDuplicate={async () => handleDuplicate(project)}
+                  onShare={() => {
+                    if (!project.slugs) {
+                      return;
+                    }
+                    const parameters = new URLSearchParams(isActive ? location.search : '');
+                    parameters.set(searchParameterName.workbench, 'share');
+                    void navigate(`${projectUrl(project.slugs)}?${parameters.toString()}`);
+                  }}
+                  onDelete={async () => {
+                    try {
+                      const trashed = await deleteProject(project.id);
+                      if (trashed) {
+                        toast.success(`Moved ${project.name} to Trash`);
+                      } else {
+                        toast.error(`Could not move ${project.name} to Trash`);
+                      }
+                    } catch (error) {
+                      toast.error(`Could not move ${project.name} to Trash`);
+                      console.error('Error trashing project:', error);
+                    }
+                  }}
+                />
+              </Fragment>
+            );
+          })}
+          {/* D18: a failed refresh over a list already on screen shows nothing;
+            the last good list stays. */}
+          {error && projects.length === 0 ? (
+            <SidebarMenuItem>
+              <SidebarFailureRow what='projects' />
+            </SidebarMenuItem>
+          ) : null}
+          {visibleCount < sortedProjects.length ? (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                type='button'
+                className={sidebarDisclosureButtonClass}
+                aria-label='Show more projects'
+                onClick={() => {
+                  setVisibleCount((count) => count + projectsPerPage);
+                }}
+              >
+                Show more projects
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ) : null}
+        </SidebarMenu>
+      </SidebarGroup>
+    </TooltipProvider>
+  );
+}
+
+function ProjectNavigationItem({
+  project,
+  isActive,
+  isPending,
+  isExpanded,
+  isEditing,
+  onToggle,
+  onOpen,
+  onCreateChat,
+  onRename,
+  onRenameSave,
+  onEditingChange,
+  onDuplicate,
+  onShare,
+  onDelete,
+}: {
+  readonly project: SidebarProject;
+  readonly isActive: boolean;
+  readonly isPending: boolean;
+  readonly isExpanded: boolean;
+  readonly isEditing: boolean;
+  readonly onToggle: () => Promise<unknown>;
+  readonly onOpen: () => void;
+  readonly onCreateChat: () => Promise<void>;
+  readonly onRename: () => void;
+  readonly onRenameSave: (name: string) => Promise<void>;
+  readonly onEditingChange: (isEditing: boolean) => void;
+  readonly onDuplicate: () => Promise<void>;
+  readonly onShare: () => void;
+  readonly onDelete: () => Promise<void>;
+}): React.JSX.Element {
+  const openInFileManager = useOpenProjectInFileManager(project);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const chatsId = `project-chats-${project.id}`;
+  const target = projectUrlOr(project.slugs);
+  /* S46's "one coalesced status object per project", in the render tree too
+   * (R10): the item reads the row once and hands it to everything that draws
+   * it, instead of three folds and three subscription trees per row. */
+  const row = useProjectSidebarRow(project.id);
+  const facts = selectProjectFacts(row, isExpanded);
+  const isCloudPending = useTauCloudIntent(project.id) === 'open';
+  const canCreateChat = Boolean(project.slugs) && !isCloudPending;
+  const openSyncDetails = (): void => {
+    if (!project.slugs) {
+      return;
+    }
+    const parameters = new URLSearchParams(isActive ? location.search : '');
+    parameters.set(searchParameterName.workbench, 'revisions');
+    void navigate(`${projectUrl(project.slugs)}?${parameters.toString()}`);
+  };
+  /* D3: a mark sits on the disclosure control; hover or focus returns the
+   * chevron, so the control always shows what it does when it is reached. */
+  const hasMark = facts.mark !== 'none';
+  const { closeProject } = useSidebarCommands();
+  const chatSessions = useChatSessionStore();
+  const [askingToClose, setAskingToClose] = useState(false);
+  const [askingToDelete, setAskingToDelete] = useState(false);
+  const [closePlan, setClosePlan] = useState<ProjectClosePlan | undefined>();
+  const askToClose = async (deleting: boolean): Promise<void> => {
+    try {
+      const plan = await chatSessions.getProjectClosePlan(project.id);
+      setClosePlan(plan);
+      if (deleting) {
+        if (plan.continuingRuns.length > 0) {
+          toast.error(`Can’t delete ${project.name} while work continues in another window or build.`);
+          return;
+        }
+        if (plan.liveChatIds.length === 0) {
+          await onDelete();
+          return;
+        }
+        setAskingToDelete(true);
+      } else {
+        setAskingToClose(true);
+      }
+    } catch {
+      toast.error(`Couldn’t check running work in ${project.name}. Try closing it again.`);
+    }
+  };
+
+  const menuItems: SidebarRowMenuItems = ({ Item, Separator }) => (
+    <>
+      <Item
+        disabled={!canCreateChat}
+        onSelect={() => {
+          if (canCreateChat) {
+            void onCreateChat();
+          }
+        }}
+      >
+        <SquarePen aria-hidden />
+        New chat
+      </Item>
+      {openInFileManager ? (
+        <Item
+          disabled={openInFileManager.isOpening}
+          aria-busy={openInFileManager.isOpening}
+          onSelect={() => {
+            void openInFileManager.open();
+          }}
+        >
+          <NativeFileManagerIcon icon={openInFileManager.icon} />
+          {openInFileManager.label}
+        </Item>
+      ) : null}
+      <Separator />
+      <Item onSelect={onRename}>
+        <Pencil aria-hidden />
+        Rename
+      </Item>
+      <Item
+        onSelect={() => {
+          void onDuplicate();
+        }}
+      >
+        <Copy aria-hidden />
+        Duplicate
+      </Item>
+      <Item disabled={!project.slugs} onSelect={onShare}>
+        <Forward aria-hidden />
+        Share project
+      </Item>
+      <Item disabled={!project.slugs} onSelect={openSyncDetails}>
+        <Cloud aria-hidden />
+        Open History
+      </Item>
+      <Separator />
+      {row.glyph === 'none' ? null : (
+        <Item
+          aria-label={`Close ${project.name}`}
+          onSelect={() => {
+            if (row.runs > 0) {
+              void askToClose(false);
+              return;
+            }
+            closeProject(project.id);
+          }}
+        >
+          <X aria-hidden />
+          Close
+        </Item>
+      )}
+      <Item
+        variant='destructive'
+        onSelect={() => {
+          void askToClose(true);
+        }}
+      >
+        <Trash2 aria-hidden />
+        Move to Trash
+      </Item>
+    </>
+  );
+
+  return (
+    <SidebarMenuItem>
+      <SidebarRowContextMenu items={menuItems} isDisabled={isEditing} className='w-48'>
+        <div
+          data-slot='project-trigger'
+          data-active={isActive}
+          className={sidebarRowClass(isEditing)}
+          onDoubleClick={isEditing ? undefined : onRename}
+        >
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon'
+            className={sidebarRowButtonClass}
+            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${project.name}`}
+            aria-expanded={isExpanded}
+            aria-controls={chatsId}
+            onClick={() => {
+              void onToggle();
+            }}
+            /* Two quick toggles are a toggle, not a rename. */
+            onDoubleClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            {hasMark || isPending ? (
+              /* A loading row keeps its spinner under the pointer that started
+               * it, so only a mark gives the chevron back on hover. */
+              <StatusMark
+                facts={facts}
+                isPending={isPending}
+                className={cn(!isPending && 'group-focus-within/row:hidden group-hover/row:hidden')}
+              />
+            ) : null}
+            <ChevronRight
+              aria-hidden
+              className={cn(
+                'size-3.5 transition-transform motion-reduce:transition-none',
+                isExpanded && 'rotate-90',
+                isPending ? 'hidden' : hasMark && 'hidden group-focus-within/row:block group-hover/row:block',
+              )}
+            />
+          </Button>
+          {isEditing ? (
+            <InlineTextEditor
+              value={project.name}
+              variant='ghost'
+              shouldStartEditing
+              className={sidebarRowEditorClass}
+              onSave={onRenameSave}
+              onEditingChange={onEditingChange}
+            />
+          ) : (
+            <>
+              <SidebarRowLink
+                to={target}
+                name={project.name}
+                sentence={facts.sentence}
+                descriptionId={`project-status-${project.id}`}
+                isActive={isActive}
+                isPending={isPending}
+                hasTooltip={false}
+                onClick={onOpen}
+              />
+              {/* R13, D13: the row's actions are for the row being reached and sit over the name's dissolved tail, so
+                  revealing them never moves the name; a sync exception stays shown in the same slot. */}
+              <SidebarRowActions
+                status={
+                  projectSyncIndicator(row.sync, isCloudPending) === undefined ? undefined : (
+                    <ProjectSyncStatus
+                      sync={row.sync}
+                      isCloudPending={isCloudPending}
+                      onOpenDetails={openSyncDetails}
+                    />
+                  )
+                }
+              >
+                <SidebarRowMenuButton isResponsive name={project.name} items={menuItems} className='w-48' />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon'
+                      className={sidebarRowButtonClass}
+                      aria-label={`New chat in ${project.name}`}
+                      aria-disabled={!canCreateChat}
+                      onClick={() => {
+                        if (canCreateChat) {
+                          void onCreateChat();
+                        }
+                      }}
+                    >
+                      <SquarePen aria-hidden className='size-3.5' />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom'>
+                    {isCloudPending
+                      ? 'New chat — Wait for project files to be ready.'
+                      : project.slugs
+                        ? 'New chat'
+                        : 'New chat — Project address is not ready.'}
+                  </TooltipContent>
+                </Tooltip>
+              </SidebarRowActions>
+            </>
+          )}
+        </div>
+      </SidebarRowContextMenu>
+      <CloseProjectDialog
+        row={row}
+        name={project.name}
+        closePlan={closePlan}
+        isOpen={askingToClose}
+        onOpenChange={setAskingToClose}
+      />
+      <CloseProjectDialog
+        row={row}
+        name={project.name}
+        closePlan={closePlan}
+        isBeforeDelete
+        isOpen={askingToDelete}
+        onOpenChange={setAskingToDelete}
+        onConfirm={() => {
+          closeProject(project.id);
+        }}
+      />
+      <ProjectChatList project={project} isProjectActive={isActive} isExpanded={isExpanded} />
+    </SidebarMenuItem>
+  );
+}
+
+/**
+ * The group label: "Recents", how many are live, and *Close idle* (D5, D19).
+ *
+ * The budget stays stated (I28) in two words, and its way out — closing exactly
+ * the projects the registry says a policy may close — is the label's overflow
+ * menu, reachable on hover, focus and coarse pointers.
+ *
+ * @returns The label.
+ */
+function ProjectsLabel(): React.JSX.Element {
+  const { projects, idleProjectIds } = useLiveNow();
+  const { closeProject } = useSidebarCommands();
+  return (
+    <div className='group/label flex h-7 items-center gap-1 pr-0.5'>
+      {/* As quiet as the "Earlier" divider below it: the nav row above already says "Projects". */}
+      <SidebarGroupLabel className='min-w-0 flex-1 text-xs font-normal text-muted-foreground'>
+        Recents
+        {projects > 0 ? <span className='ml-1.5 tabular-nums'>{`${String(projects)} live`}</span> : null}
+      </SidebarGroupLabel>
+      {idleProjectIds.length > 0 ? (
+        <span className='hidden group-focus-within/label:flex group-hover/label:flex has-[:is([aria-haspopup=menu],[aria-haspopup=dialog])[data-state=open]]:flex pointer-coarse:flex'>
+          <DropdownMenu isResponsive>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type='button'
+                variant='ghost'
+                size='icon'
+                className={sidebarRowButtonClass}
+                aria-label='More actions for recent projects'
+              >
+                <EllipsisVertical aria-hidden className='size-3.5' />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent drawerTitle='Recents' side='right' align='start' className='w-48'>
+              <DropdownMenuItem
+                onSelect={() => {
+                  for (const projectId of idleProjectIds) {
+                    closeProject(projectId);
+                  }
+                }}
+              >
+                <X aria-hidden />
+                {`Close ${pluralize(idleProjectIds.length, 'idle project')}`}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
+      ) : null}
+    </div>
+  );
+}

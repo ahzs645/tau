@@ -1,0 +1,57 @@
+{
+  "name": "@taucad/lsp",
+  "version": "0.0.1",
+  "description": "Language services and rooted filesystem bridges for the source editor",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "exports": {
+    "./in-process-jsonrpc": {
+      "types": "./src/in-process-jsonrpc.ts",
+      "import": "./src/in-process-jsonrpc.ts",
+      "default": "./src/in-process-jsonrpc.ts"
+    },
+    "./language-fs-bridge": {
+      "types": "./src/language-fs-bridge.ts",
+      "import": "./src/language-fs-bridge.ts",
+      "default": "./src/language-fs-bridge.ts"
+    },
+    "./language-fs-sync-host": {
+      "types": "./src/language-fs-sync-host.ts",
+      "import": "./src/language-fs-sync-host.ts",
+      "default": "./src/language-fs-sync-host.ts"
+    },
+    "./typescript-worker/client": {
+      "types": "./src/typescript-worker/client.ts",
+      "import": "./src/typescript-worker/client.ts",
+      "default": "./src/typescript-worker/client.ts"
+    },
+    "./typescript-worker/protocol": {
+      "types": "./src/typescript-worker/protocol.ts",
+      "import": "./src/typescript-worker/protocol.ts",
+      "default": "./src/typescript-worker/protocol.ts"
+    },
+    "./typescript-worker/typescript-service": {
+      "types": "./src/typescript-worker/typescript-service.ts",
+      "import": "./src/typescript-worker/typescript-service.ts",
+      "default": "./src/typescript-worker/typescript-service.ts"
+    }
+  },
+  "dependencies": {
+    "@taucad/fs-client": "workspace:*",
+    "@taucad/lsp-fs": "workspace:*",
+    "@taucad/types": "workspace:*",
+    "@taucad/utils": "workspace:*",
+    "json-rpc-2.0": "^1.7.1",
+    "typescript": "catalog:",
+    "vscode-languageserver-protocol": "^3.18.0",
+    "vscode-uri": "catalog:"
+  },
+  "devDependencies": {
+    "zod": "catalog:"
+  },
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  }
+}

@@ -1,0 +1,154 @@
+import { expect, test } from 'vitest';
+import { page as selectors } from 'vitest/browser';
+import type { Locator } from 'vitest/browser';
+import * as target from '#support/external-target.js';
+
+const html = selectors.getByCss('html');
+const pointerSwitch = selectors.getByRole('switch', { name: 'Pointer cursors' });
+const themeButton = selectors.getByRole('button', { name: /^(?:light|dark|black|high contrast|system)$/i });
+const linkProbe = selectors.getByCss('[data-cursor-link-probe]');
+const settingsSearch = selectors.getByRole('searchbox', { name: 'Search settings' });
+
+const computedCursor = async (locator: Locator): Promise<string> =>
+  target.evaluateLocator(locator, (element) => getComputedStyle(element).cursor);
+
+const computedBackground = async (locator: Locator): Promise<string> =>
+  target.evaluateLocator(locator, (element) => getComputedStyle(element).backgroundColor);
+
+const visibleNonLinkPointers = async (): Promise<string[]> =>
+  target.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('*')]
+      .filter((element) => {
+        const { cursor, display, visibility } = getComputedStyle(element);
+        const { width, height } = element.getBoundingClientRect();
+        return (
+          cursor === 'pointer' &&
+          (element.parentElement === null || getComputedStyle(element.parentElement).cursor !== 'pointer') &&
+          display !== 'none' &&
+          visibility !== 'hidden' &&
+          width > 0 &&
+          height > 0 &&
+          element.closest('a[href], area[href]') === null
+        );
+      })
+      .map((element) => element.outerHTML.slice(0, 300)),
+  );
+
+const visibleSidebarLinkCursors = async (): Promise<string[]> =>
+  target.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>("[data-slot='sidebar'] a[href]")]
+      .filter((element) => {
+        const { display, visibility } = getComputedStyle(element);
+        const { width, height } = element.getBoundingClientRect();
+        return display !== 'none' && visibility !== 'hidden' && width > 0 && height > 0;
+      })
+      .map((element) => getComputedStyle(element).cursor),
+  );
+
+test('defaults actions to arrows and persists the pointer-cursor opt-in', async () => {
+  await target.navigate('/?settings=general');
+  await target.evaluate(() => {
+    const link = document.createElement('a');
+    link.href = '/';
+    link.dataset['cursorLinkProbe'] = '';
+    link.textContent = 'Cursor link probe';
+    document.body.append(link);
+  });
+
+  await expect.poll(async () => computedCursor(themeButton)).toBe('default');
+  expect(await computedCursor(linkProbe)).toBe('pointer');
+  expect(await computedCursor(settingsSearch)).toBe('text');
+  expect(await target.getAttribute(html, 'data-pointer-cursors')).toBeNull();
+  expect(await visibleNonLinkPointers()).toEqual([]);
+
+  await target.click(themeButton);
+  const blackOption = selectors.getByRole('option', { name: /^black/i });
+  const restBackground = await computedBackground(blackOption);
+  expect(await computedCursor(blackOption)).toBe('default');
+  await target.hover(blackOption);
+  await expect.poll(async () => computedBackground(blackOption)).not.toBe(restBackground);
+  await target.keyboardPress('Escape');
+
+  await target.click(pointerSwitch);
+  await expect.poll(async () => target.getAttribute(html, 'data-pointer-cursors')).toBe('true');
+  await expect.poll(async () => computedCursor(themeButton)).toBe('pointer');
+  expect(await computedCursor(linkProbe)).toBe('pointer');
+  const cookies = await target.cookies();
+  expect(cookies.some(({ name }) => name === 'tau-pointer-cursors')).toBe(false);
+  expect(
+    await target.evaluate(
+      () => JSON.parse(localStorage.getItem('tau-client-facts') ?? '{}') as { pointerCursors?: boolean },
+    ),
+  ).toMatchObject({ pointerCursors: true });
+
+  await target.reload();
+  await target.expectAttribute(pointerSwitch, 'data-state', 'checked');
+  await expect.poll(async () => target.getAttribute(html, 'data-pointer-cursors')).toBe('true');
+  expect(await computedCursor(themeButton)).toBe('pointer');
+
+  await target.click(pointerSwitch);
+  await expect.poll(async () => target.getAttribute(html, 'data-pointer-cursors')).toBeNull();
+  await expect.poll(async () => computedCursor(themeButton)).toBe('default');
+  expect(
+    await target.evaluate(
+      () => JSON.parse(localStorage.getItem('tau-client-facts') ?? '{}') as { pointerCursors?: boolean },
+    ),
+  ).toMatchObject({ pointerCursors: false });
+
+  await target.evaluateLocator(pointerSwitch, (element) => {
+    element.setAttribute('disabled', '');
+  });
+  expect(await computedCursor(pointerSwitch)).toBe('not-allowed');
+  expect(
+    await target.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.className = 'cursor-col-resize';
+      document.body.append(probe);
+      const { cursor } = getComputedStyle(probe);
+      probe.remove();
+      return cursor;
+    }),
+  ).toBe('col-resize');
+
+  await target.navigate('/__e2e/project-navigation');
+  // The seeded project's name shows in the sidebar before the fixture navigates, so wait for the project route itself,
+  // then open the sidebar its links live in (the project shell keeps the person's sidebar state).
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+  await target.expectVisible(selectors.getByText('Project Navigation A', { exact: true }), 60_000);
+  const sidebarTrigger = selectors.getByCss('[data-slot="sidebar-trigger"]').first();
+  await target.expectVisible(sidebarTrigger);
+  if ((await target.getAttribute(sidebarTrigger, 'data-open')) !== 'true') {
+    await target.click(sidebarTrigger);
+  }
+  await target.expectAttribute(sidebarTrigger, 'data-open', 'true');
+  expect(await visibleNonLinkPointers()).toEqual([]);
+  const sidebarLinkCursors = await visibleSidebarLinkCursors();
+  expect(sidebarLinkCursors.length).toBeGreaterThan(0);
+  expect(new Set(sidebarLinkCursors)).toEqual(new Set(['default']));
+
+  await target.evaluate(() => {
+    document.documentElement.dataset['pointerCursors'] = 'true';
+  });
+  expect(new Set(await visibleSidebarLinkCursors())).toEqual(new Set(['pointer']));
+  await target.evaluate(() => {
+    delete document.documentElement.dataset['pointerCursors'];
+  });
+
+  expect(
+    await target.evaluate(() => {
+      const tab = document.querySelector<HTMLElement>('.dv-tab');
+      const tabBar = tab?.closest<HTMLElement>('.dv-tabs-and-actions-container');
+
+      if (!tab || !tabBar) {
+        throw new Error('Expected a Dockview tab and tab bar');
+      }
+
+      const tabStyle = getComputedStyle(tab);
+      return {
+        tabBarHeight: tabBar.getBoundingClientRect().height,
+        tabHeight: tab.getBoundingClientRect().height,
+        tabMarginBlock: [tabStyle.marginBlockStart, tabStyle.marginBlockEnd],
+      };
+    }),
+  ).toEqual({ tabBarHeight: 36, tabHeight: 27, tabMarginBlock: ['4px', '4px'] });
+});

@@ -1,34 +1,44 @@
 import { PackagePlus } from 'lucide-react';
 import { NavLink, useMatch, useNavigate } from 'react-router';
 import { SidebarGroup, SidebarMenuButton } from '#components/ui/sidebar.js';
-import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { useKeybinding } from '#hooks/use-keyboard.js';
-import { Loader } from '#components/ui/loader.js';
-import { useFeature } from '#flags/use-feature.js';
+import { KeyShortcut } from '@taucad/ui/components/key-shortcut';
+import { useKeybinding } from '@taucad/ui/components/keyboard';
+import { Loader } from '@taucad/ui/components/loader';
+import { cn } from '@taucad/ui/utils/cn';
 
-export function NavChat(): React.JSX.Element | undefined {
+/** Starts a project from the Home chat composer; "Build from code" there opens `/projects/new`. */
+const newProjectState = { focusChatComposer: true } as const;
+
+/**
+ * The sidebar's New project button.
+ *
+ * @param props - `isCompact` tightens the desktop app's row; `isTouchSized` gives the phone sheet its 44px target
+ * (canvas SB-02, I3), where the keyboard chip already stays hidden.
+ * @returns The button.
+ */
+export function NavChat({
+  isCompact = false,
+  isTouchSized = false,
+}: {
+  readonly isCompact?: boolean;
+  readonly isTouchSized?: boolean;
+}): React.JSX.Element {
   const navigate = useNavigate();
   const isMatch = useMatch('/');
-  const isProjectCreationEnabled = useFeature('enableProjectCreation');
   const { formattedKeyCombination } = useKeybinding(
     {
       key: 'n',
       ctrlKey: true,
     },
     () => {
-      if (!isMatch) {
-        void navigate('/');
-      }
+      // Already there: replace, so repeated presses do not stack history entries.
+      void navigate('/', { replace: Boolean(isMatch), state: newProjectState });
     },
   );
-  if (!isProjectCreationEnabled) {
-    return undefined;
-  }
-
   return (
     // Elevate the sidebar group above the other items to ensure the new project button is always clickable
-    <SidebarGroup className='z-10'>
-      <NavLink to='/'>
+    <SidebarGroup className={cn('z-10 px-0', isCompact && 'py-0')}>
+      <NavLink end to='/' state={newProjectState}>
         {({ isActive, isPending }) => (
           <SidebarMenuButton
             asChild
@@ -36,7 +46,7 @@ export function NavChat(): React.JSX.Element | undefined {
             tooltip={{
               children: (
                 <>
-                  New Project{` `}
+                  New project{` `}
                   <KeyShortcut variant='tooltip' className='ml-1'>
                     {formattedKeyCombination}
                   </KeyShortcut>
@@ -44,10 +54,11 @@ export function NavChat(): React.JSX.Element | undefined {
               ),
             }}
             variant='outline'
+            size={isTouchSized ? 'lg' : 'default'}
           >
             <span>
               {isPending ? <Loader /> : <PackagePlus className='size-4 shrink-0' />}
-              <span className='flex-1 whitespace-nowrap'>New Project</span>
+              <span className='flex-1 whitespace-nowrap'>New project</span>
               <KeyShortcut className='ml-2 shrink-0'>{formattedKeyCombination}</KeyShortcut>
             </span>
           </SidebarMenuButton>

@@ -7,18 +7,117 @@
  * - Node.js headless (via enhanced RuntimeFileSystem in the worker, runtime kernel)
  * - Workers or other JS runtimes
  */
+import type { RevisionChangeOutput, RevisionRowOutput } from '#schemas/tools/revisions.tool.schema.js';
+import type { SourceRevisionOutput } from '#schemas/tools/source-revision.schema.js';
+import type { ExportValidation } from '#schemas/tools/export-model.tool.schema.js';
+import type { DeterministicEditFileInput } from '#schemas/tools/edit-file.tool.schema.js';
 import type {
-  CaptureObservationsRpcResult,
-  CaptureScreenshotRpcResult,
-  ExportGeometryRpcInput,
-  FetchGeometryRpcResult,
-  GetKernelResultRpcResult,
+  CaptureImagesRpcResult,
+  CaptureImagesRpcInput,
+  EvaluateModelRpcInput,
+  ExportModelRpcInput,
+  EvaluateModelRpcResult,
   RpcClientErrorCode,
+  RunGeoSpecTestsRpcInput,
+  RunGeoSpecTestsRpcResult,
+  ResolveSkillRpcResult,
+  ApplyParameterOperationRpcInput,
+  ApplyParameterOperationRpcResult,
+  GetParametersRpcInput,
+  GetParametersRpcResult,
 } from '#schemas/rpc.schema.js';
+import type { DiffStatsWithContent } from '#schemas/tools/diff.schema.js';
+import type {
+  CheckedFileWrite,
+  CheckedFileWriteResult,
+  FileWritePrecondition,
+  ExportFile,
+  FileContentMetadata,
+  FileProvenance,
+  StatContentMetadata,
+} from '@taucad/types';
+import type { KernelIssue } from '@taucad/runtime';
+import type { ViewFieldValues, WorkbenchView } from '@taucad/workbench';
+
+/** Local execution metadata that never enters an RPC payload or durable record. @public */
+export type RpcInvocationContext = Readonly<{
+  /** Cancels only the active wait and its cooperative operation. */
+  signal?: AbortSignal;
+  /**
+   * Receives the operation's progress while it runs, when the caller listens; never its answer. `progress` increases
+   * with every report, and `total` is present only when the end is known.
+   */
+  onProgress?: ((report: RpcProgressReport) => void) | undefined;
+}>;
+
+/** One progress report of a running operation, as {@link RpcInvocationContext.onProgress} receives it. @public */
+export type RpcProgressReport = Readonly<{ progress: number; total?: number; message?: string }>;
+/**
+ * One direct child returned by {@link RpcFileSystem.readdir}.
+ * `name` is a basename, never a path. A file carries its kind, and a text
+ * file its exact line count, where a listing could measure them within its
+ * byte cap (charter D4, EQ15); otherwise its size alone.
+ *
+ * @public
+ */
+export type RpcDirectoryEntry =
+  | {
+      name: string;
+      type: 'dir';
+      size: number;
+      modifiedAt?: string;
+      /** False for virtual directories that recursive project-wide search must skip. */
+      traverseOnImplicitSearch?: boolean;
+      /** What the composed view says about this entry. */
+      provenance?: FileProvenance;
+    }
+  | ({
+      name: string;
+      type: 'file';
+      size: number;
+      modifiedAt?: string;
+      /** What the composed view says about this entry. */
+      provenance?: FileProvenance;
+    } & StatContentMetadata);
+
+/**
+ * Options for {@link RpcFileSystem.readdir}.
+ *
+ * @public
+ */
+export type RpcReaddirOptions = Readonly<{
+  /**
+   * False when the caller needs names, types and sizes only — a walk that
+   * reads every file anyway (`grep`) — so the listing measures no content
+   * facts. Defaults to true.
+   */
+  contentFacts?: boolean;
+}>;
+
+/**
+ * One file of an index-backed listing ({@link RpcFileSystem.indexedFiles}):
+ * its project-relative path and head metadata, with content facts only where
+ * the index already knows them (charter D4, I3).
+ *
+ * @public
+ */
+export type RpcIndexedFile = Readonly<
+  {
+    path: string;
+    size: number;
+    modifiedAt?: string;
+  } & StatContentMetadata
+>;
 
 /**
  * Abstract filesystem for RPC handlers.
  * Implementations can wrap browser fileManager, `fromMemoryFS()` / `fromNodeFS()` (which yield a `RuntimeFileSystemHandle`), etc.
+ *
+ * Paths use one canonical project-relative namespace: root is `''`, and
+ * descendants are normalized POSIX keys such as `src/main.ts` with no leading
+ * slash. Raw agent aliases never reach this interface. Implementations must
+ * translate these keys to their backing filesystem namespace.
+ *
  * @public
  */
 export type RpcFileSystem = {
@@ -34,33 +133,83 @@ export type RpcFileSystem = {
    * pattern — never call `readFile` on agent-supplied paths without bounds.
    */
   readFile(path: string): Promise<string>;
+  /** Exact owned bytes from a canonical rooted path; refuses files above 256 MiB. */
+  readBinaryFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  /**
+   * Which of these files are pending entries: their large object is not on
+   * the device yet (D9). Answered from the index without reading, so a
+   * consumer that only searches never starts a download. Optional: a host
+   * without an index offers none, and its reads refuse with `PENDING`.
+   */
+  pendingPaths?(paths: readonly string[]): Promise<readonly string[]>;
+  /**
+   * Every file below a directory, from the authority's Project Index in one
+   * call (charter D13): what `grep` and `glob_search` search instead of
+   * walking the tree. The index applies the project's ignore rules (a
+   * `node_modules` or cache directory is never indexed) and the view's mask.
+   * Resolves `undefined` when the index cannot answer for that directory — no
+   * index, or a directory it does not hold, such as an ignored one named
+   * explicitly — and the caller walks it instead. Optional: a host without an
+   * index offers none.
+   */
+  indexedFiles?(path: string): Promise<readonly RpcIndexedFile[] | undefined>;
+  /**
+   * The content kind of each file, from the index where it is known and
+   * otherwise from the file's head alone (charter D4): what lets a search skip
+   * a binary without reading it. A path the host cannot classify is left out.
+   */
+  contentKinds?(paths: readonly string[]): Promise<ReadonlyMap<string, 'text' | 'binary'>>;
   writeFile(path: string, content: string): Promise<void>;
+  writeFileChecked(input: CheckedFileWrite): Promise<CheckedFileWriteResult>;
+  deleteFileChecked(input: {
+    path: string;
+    preconditions: readonly FileWritePrecondition[];
+  }): Promise<CheckedFileWriteResult>;
   writeBinaryFile(path: string, data: Uint8Array<ArrayBuffer>): Promise<void>;
   deleteFile(path: string): Promise<void>;
-  readdir(path: string): Promise<
-    Array<{
-      name: string;
-      type: 'file' | 'dir';
-      size: number;
-      modifiedAt?: string;
-    }>
-  >;
+  readdir(path: string, options?: RpcReaddirOptions): Promise<RpcDirectoryEntry[]>;
   exists(path: string): Promise<boolean>;
   appendFile(path: string, content: string): Promise<void>;
-  editFile(path: string, oldString: string, newString: string, replaceAll?: boolean): Promise<{ occurrences: number }>;
+  editFile(input: DeterministicEditFileInput): Promise<{
+    occurrences: number;
+    staleRecovered?: true;
+    diffStats: DiffStatsWithContent;
+    /** R4: `sha256:` digest of the bytes the edit committed, when the adapter can prove them. */
+    digest?: string;
+  }>;
   stat(path: string): Promise<RpcFileStat>;
 };
+
+/**
+ * Structured file metadata returned on read refusals.
+ * @public
+ */
+export type RpcFileMetadata = {
+  type: 'file';
+  size: number;
+} & FileContentMetadata;
 
 /**
  * File metadata returned by stat().
  * @public
  */
-export type RpcFileStat = {
-  size: number;
-  isDirectory: boolean;
-  createdAt: string;
-  modifiedAt: string;
-};
+export type RpcFileStat =
+  | {
+      size: number;
+      isDirectory: true;
+      createdAt: string;
+      modifiedAt: string;
+      /** What the composed view says about this path. */
+      provenance?: FileProvenance;
+    }
+  | ({
+      size: number;
+      isDirectory: false;
+      createdAt: string;
+      modifiedAt: string;
+      /** What the composed view says about this path. */
+      provenance?: FileProvenance;
+    } & StatContentMetadata);
 
 /**
  * Abstract runtime client for getting compilation results.
@@ -68,17 +217,49 @@ export type RpcFileStat = {
  * @public
  */
 export type RpcRuntimeClient = {
-  getKernelResult(targetFile: string): Promise<GetKernelResultRpcResult>;
+  evaluateModel(input: EvaluateModelRpcInput, context?: RpcInvocationContext): Promise<EvaluateModelRpcResult>;
+};
+
+/** The inheritable view leaves one `arrange_workbench` call named for a view, with the values it wrote. @public */
+export type ViewFieldsSet = Readonly<Partial<ViewFieldValues>>;
+
+/** Connected runtime's model-file predicate for workbench view entry paths. @public */
+export type RpcWorkbenchClient = {
+  isModelFile(path: string): Promise<boolean>;
+  /**
+   * Record, on the person's device, that a written view sets these leaves (onboarding blueprint, BD7): a leaf written
+   * at the format value over a personal default is kept as an exception, as the view menu keeps it. Called after the
+   * view record is written. A host with no person (the CLI, MCP) leaves it absent and writes the value alone.
+   */
+  markViewFieldsSet?(viewId: string, fields: ViewFieldsSet): void | Promise<void>;
+};
+
+/** Shared semantic parameter client attached by a host with checked authority. @public */
+export type RpcParameterClient = {
+  getParameters(input: GetParametersRpcInput, context?: RpcInvocationContext): Promise<GetParametersRpcResult>;
+  applyParameterOperation(
+    input: ApplyParameterOperationRpcInput,
+    context?: RpcInvocationContext,
+  ): Promise<ApplyParameterOperationRpcResult>;
 };
 
 /**
- * Success/failure surface for {@link RpcGraphicsClient.exportGeometry} before
+ * Success/failure surface for {@link RpcGraphicsClient.exportModel} before
  * the RPC handler persists bytes to `.tau/artifacts/`.
  *
  * @public
  */
-export type RpcGraphicsExportGeometryResult =
-  | { success: true; bytes: Uint8Array<ArrayBuffer>; mimeType: string }
+export type RpcGraphicsExportModelResult =
+  | {
+      success: true;
+      exportId: string;
+      files: ExportFile[];
+      sourceRevision?: SourceRevisionOutput;
+      /** What the exported files say about themselves, read from their bytes. */
+      validation?: ExportValidation;
+      /** The non-fatal issues the runtime returned with the files; the handler hands the warnings to the agent. */
+      issues?: KernelIssue[];
+    }
   | {
       success: false;
       errorCode: RpcClientErrorCode;
@@ -86,18 +267,127 @@ export type RpcGraphicsExportGeometryResult =
     };
 
 /**
- * Abstract graphics client for capturing observations (screenshots).
- * Only available in browser environments with a mounted 3D view.
+ * Geometry export client independent of image capture.
  *
  * Every method takes an explicit `targetFile` so the agent must name the
- * geometry unit it is acting on; there is no project-level fallback.
+ * geometry unit it is acting on; there is no project-level fallback. Export
+ * options, when present, are the host's and go to the runtime export as
+ * given. Of the content, only a key set to `true` is a request: an export
+ * carries no edges or topology by default, so `false` means the same as
+ * leaving the key out.
  * @public
  */
 export type RpcGraphicsClient = {
-  captureObservations(args: { targetFile: string }): Promise<CaptureObservationsRpcResult>;
-  fetchGeometry(args: { targetFile: string }): Promise<FetchGeometryRpcResult>;
-  exportGeometry(args: Pick<ExportGeometryRpcInput, 'targetFile' | 'format'>): Promise<RpcGraphicsExportGeometryResult>;
-  captureScreenshot(args: { targetFile: string }): Promise<CaptureScreenshotRpcResult>;
+  exportModel(
+    args: Pick<ExportModelRpcInput, 'targetFile' | 'to' | 'options' | 'content' | 'parameters'>,
+    context?: RpcInvocationContext,
+  ): Promise<RpcGraphicsExportModelResult>;
+};
+
+/**
+ * A saved workbench view as a capture draws it: its camera (the selected kernel view's own, when it saved one), field
+ * of view, up direction, display toggles and section cuts, in metres in `tau:root`. @public
+ */
+export type CaptureWorkbenchView = Readonly<
+  { id: string } & Pick<WorkbenchView, 'camera' | 'fieldOfView' | 'upDirection' | 'display' | 'section'>
+>;
+
+/**
+ * What an image client captures: the screenshot input with `workbenchView` resolved against its record, so the
+ * target file, kernel view, instance and options are the view's own. @public
+ */
+export type CaptureImagesClientInput = Omit<CaptureImagesRpcInput, 'targetFile' | 'workbenchView'> & {
+  targetFile: string;
+  workbenchView?: CaptureWorkbenchView | undefined;
+};
+
+/** Browser/headless image capture client independent of a mounted viewport. @public */
+export type RpcImageClient = {
+  captureImages(args: CaptureImagesClientInput, context?: RpcInvocationContext): Promise<CaptureImagesRpcResult>;
+};
+
+/**
+ * Abstract GeoSpec client for executing tests where geometry bytes already
+ * live. Browser implementations run the VM and mesh analysis locally so large
+ * GLB/STEP payloads do not cross the chat RPC boundary.
+ *
+ * @public
+ */
+export type RpcGeoSpecClient = {
+  runTests(args: RunGeoSpecTestsRpcInput, context?: RpcInvocationContext): Promise<RunGeoSpecTestsRpcResult>;
+};
+
+/**
+ * Abstract skill resolver for live skill activation.
+ *
+ * Browser implementations merge workspace `.agents/skills`, installed Tau
+ * Store skills, and virtual system skills. API-side
+ * tool execution calls this through RPC so prompt-visible catalog metadata is
+ * only a discovery hint, not activation authority.
+ *
+ * @public
+ */
+export type RpcSkillResolver = {
+  resolveSkill(skillName: string): Promise<ResolveSkillRpcResult>;
+};
+
+/**
+ * One history entry as a host reads it: the wire row, with every version naming it (B6), lowest first.
+ *
+ * @public
+ */
+export type RpcHistoryRow = Omit<RevisionRowOutput, 'version'> &
+  Readonly<{ versions?: ReadonlyArray<Readonly<{ name: string; number: number }>> | undefined }>;
+
+/**
+ * The read half of a project's revision graph (S28), behind the agent's `history` tool.
+ *
+ * Read-only on purpose: an agent sees where it is, what changed and both sides of a conflict, and every
+ * verb that *moves* anything — branch, merge, restore, discard, sync — belongs
+ * to a person (I10). The host satisfies this with the same functions the
+ * History pane and `tau history` call, so the three cannot disagree.
+ *
+ * @public
+ */
+export type RpcRevisionsClient = {
+  log(
+    request: Readonly<{
+      branch?: string | undefined;
+      limit?: number | undefined;
+    }>,
+  ): Promise<readonly RpcHistoryRow[]>;
+  diff(from: string | undefined, to: string): Promise<readonly RevisionChangeOutput[]>;
+  describe(): Promise<
+    Readonly<{
+      branch: string | undefined;
+      revisionId: string | undefined;
+      branches: ReadonlyArray<Readonly<{ name: string; revisionId: string }>>;
+      line: string;
+    }>
+  >;
+  /**
+   * One conflicted revision's files as text (rule 8): the side the turn's checkout does not hold is otherwise
+   * unreadable, because no tree ever holds conflict markers.
+   *
+   * @param revision - The conflicted revision; absent for the one waiting on the current branch.
+   * @returns Its files, or `undefined` when no revision is named and none is waiting.
+   */
+  conflict(revision: string | undefined): Promise<
+    | Readonly<{
+        revisionId: string;
+        labels: Readonly<{ ours: string; theirs: string }>;
+        files: ReadonlyArray<
+          Readonly<{
+            path: string;
+            chooseOne: boolean;
+            base: string | undefined;
+            ours: string | undefined;
+            theirs: string | undefined;
+          }>
+        >;
+      }>
+    | undefined
+  >;
 };
 
 /**
@@ -110,6 +400,17 @@ export type RpcDependencies = {
   fileSystem: RpcFileSystem;
   kernelClient: RpcRuntimeClient;
   graphics?: RpcGraphicsClient;
+  images?: RpcImageClient;
+  geospec?: RpcGeoSpecClient;
+  skillResolver?: RpcSkillResolver;
+  revisions?: RpcRevisionsClient;
+  parameters?: RpcParameterClient;
+  workbench?: RpcWorkbenchClient;
+  /**
+   * The host's managed acquisition profile (`TAU_ACQUISITION`). Under `locked` the host makes no registry request, so
+   * `install_packages` refuses with `registry-unavailable` and writes nothing. Absent is `open`.
+   */
+  acquisition?: 'open' | 'locked';
 };
 
 /**
@@ -120,4 +421,6 @@ export type RpcHandlerError = {
   success: false;
   errorCode: RpcClientErrorCode;
   message: string;
+  fileMetadata?: RpcFileMetadata;
+  retryable?: true;
 };
