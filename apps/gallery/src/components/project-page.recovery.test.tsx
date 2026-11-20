@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { contentDigest } from '@taucad/cache-core';
 import { compileParameterManifest } from '@taucad/parameters';
 import type { JSONSchema7 } from '@taucad/json-schema';
 import { createKernelParameterDeclaration } from '@taucad/runtime/kernel';
@@ -128,7 +129,7 @@ beforeAll(async () => {
       public disconnect = vi.fn();
     },
   );
-  const digest = 'sha256:0000000000000000000000000000000000000000000000000000000000000000';
+  const digest = contentDigest({ value: 'sha256:0000000000000000000000000000000000000000000000000000000000000000' });
   const manifest = await compileParameterManifest({
     declaration: createKernelParameterDeclaration(defaults, schema, {
       id: 'urn:gallery:keyguard-recovery-fixture',
@@ -191,12 +192,12 @@ describe('gallery recovery from an initially failing saved preset', () => {
     const user = userEvent.setup();
     render(<RoutedProject />);
     const download = screen.getByRole('button', { name: /^Export$/u });
-    const frame = await screen.findByRole('combobox', { name: 'Select for Have a keyguard frame', exact: true });
+    const frame = await screen.findByRole('combobox', { name: 'Select for Have a keyguard frame' });
     expect(frame.textContent).toBe('no');
     expect(screen.queryByRole('status', { name: 'Loading model parameters' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Reset parameters' })).toHaveProperty('disabled', false);
     expect(download).toHaveProperty('disabled', true);
-    expect(screen.getByRole('combobox', { name: 'Preset', exact: true })).toHaveProperty('value', 'preset-2');
+    expect(screen.getByRole('combobox', { name: 'Preset' })).toHaveProperty('value', 'preset-2');
 
     await act(async () => {
       first.reject(new Error(frameError));
@@ -210,7 +211,7 @@ describe('gallery recovery from an initially failing saved preset', () => {
     expect(client.export).not.toHaveBeenCalled();
 
     await user.click(frame);
-    await user.click(screen.getByRole('option', { name: 'yes', exact: true }));
+    await user.click(screen.getByRole('option', { name: 'yes' }));
     await waitFor(() => {
       expect(client.render).toHaveBeenCalledTimes(2);
     });

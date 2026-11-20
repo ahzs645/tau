@@ -82,7 +82,7 @@ corepack enable
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 corepack pnpm install --frozen-lockfile
 corepack pnpm nx run-many -p gallery -t lint,typecheck,test,build --parallel=1
 corepack pnpm nx run gallery:verify-runtime
-corepack pnpm nx run gallery:verify-models --all-exports --regressions --write-glb --variant-timeout=600000
+corepack pnpm nx run gallery:verify-models --all-exports --regressions --write-glb --variant-timeout=1200000
 corepack pnpm nx run scripts:validate-fork-workflows
 corepack pnpm exec playwright install chromium
 corepack pnpm nx run gallery:verify-browser
@@ -107,12 +107,15 @@ prove the models work. Browser checks serve the built files from a plain static
 server and exercise the real WASM workers, links and downloads.
 
 The verifier runs each executable variant in a separate process, with both an
-operation deadline and an absolute parent watchdog. The hosted whole-variant cap
-is ten minutes because it includes every preset and export: the SCAD lamp alone
-has four dense cases and twenty format requests. A local default-only attempt
-reached five geometry outputs before its process was killed at 117 seconds; that
-incomplete attempt is not a timing or geometry pass. Source resolution, export
-coverage and validation requirements remain unchanged. Reports distinguish a paused
+operation deadline and an absolute parent watchdog. Native export and structural
+validation have separate operation deadlines. The hosted whole-variant cap is
+twenty minutes because it includes every preset, export and validation: the SCAD
+lamp alone has four dense cases and twenty format requests. Its fourth hosted
+run spent 417 seconds on those cases before STEP validation encountered the
+single-string limit. Incremental parsing needs additional time to inspect all
+returned bytes, with measured local faceted STEP throughput of about 12–14 MiB/s.
+The bounded headroom changes no native-operation limit, source resolution,
+export coverage or validation requirement. Reports distinguish a paused
 or incomplete run from a successful run. Use `--resume` to continue a report whose
 source and toolchain fingerprint still matches; use `--retry-failures` explicitly
 to rerun recorded failures. `--max-variants=N` bounds a local batch. Export checks
@@ -341,6 +344,44 @@ on `a682177e3892176a541377fbc480dd5232bd9efe`, integrated upstream
   stamp cases rendered and passed their other formats but failed strict 3MF
   conversion. The passing browser stamp download used replacement artwork and
   did not cover that original-artwork failure.
+
+The fourth hosted run,
+[44656896671](https://github.com/ahzs645/tau/actions/runs/44656896671),
+on `dda296792543826bb488e9b2ed7c3053cdf9b972`, exercised the direct native 3MF
+route, corrected decimal validation and initial-render recovery:
+
+- The frozen install, workflow guards, all five lint targets, all four changed
+  public-package typechecks, 184 gallery tests, production build and 25 native
+  compatibility tests passed. Gallery typechecking found five diagnostics in
+  the new recovery test: three unsupported Testing Library query options and
+  two digest fixtures that needed the public `contentDigest` constructor.
+- The complete matrix reached all 93 rows, all 90 measured geometry rows and
+  all 378 format requests. There were 89 passing rows and four failures, all in
+  the SCAD lamp's STEP validation. All 74 3MF requests passed, including the
+  unchanged original stamp artwork and every valid keyguard preset. All eleven
+  comparisons completed: ten passed and the documented stamp difference remained.
+- The lamp produced all four STEP files successfully. The verifier then tried
+  to decode each entire file into one JavaScript string and hit the engine's
+  string-size limit. This was a verification-reader limitation, not a native
+  export error. All four lamp cases were attempted; no variant deadline expired.
+  Validation must read the actual output incrementally while retaining the same
+  structural checks and all original model resolutions.
+- Seven of eight real Chromium scenarios passed. The new keyguard recovery
+  scenario reached the actionable error and available controls, then failed to
+  locate a field outside the mounted portion of the virtualized form. Its schema
+  preserves the raw `have_a_keyguard_frame` title. The scenario now uses the real
+  parameter search and that exact accessible name before exercising correction,
+  download, failed-preset reapplication and reset.
+
+The follow-up STEP reader decodes at most 64 KiB at a time, tracks lexical and
+section state across chunks, and preserves exact entity-ID uniqueness without
+collecting full records. It passes 26 focused cases, including a logical 513 MiB
+input, every split point through quoted/commented UTF-8 content and malformed
+section headers. Four retained native STEP exports also pass, including the
+11,719,946-byte, 234,686-entity rack. Returned filenames and byte lengths are
+recorded before validation so later failures retain useful evidence. The full
+local gallery suite passes 210 tests; the complete hosted matrix and Chromium
+recovery scenario remain the acceptance gates for these corrections.
 
 Further local investigation established that the original unchanged rack support
 is a closed solid in the original engine: 96 vertices, 192 triangles, no boundary

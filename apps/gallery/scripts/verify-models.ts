@@ -318,6 +318,9 @@ const verifyScenario = async (input: {
       onStart(format) {
         reportOperation(`export:${format}`, scenario.name);
       },
+      onValidationStart(format) {
+        reportOperation(`validate:${format}`, scenario.name);
+      },
       async saveFile({ format, file, index }) {
         if (format === 'glb' ? writeGeometry : writeArtifacts) {
           return saveArtifact(

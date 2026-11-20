@@ -9,6 +9,7 @@ export const exportEvidenceSchema = z.object({
   format: z.string(),
   files: z.array(z.string()),
   artifacts: z.array(z.string()),
+  fileSizes: z.array(z.object({ name: z.string(), byteLength: z.number().int().nonnegative() })).optional(),
   error: z.string().optional(),
   validation: exportValidationSchema.optional(),
 });
@@ -19,6 +20,7 @@ type ExportVerificationInput = {
   readonly geometry: GeometrySummary;
   readonly formats: readonly GalleryExportFormat[];
   readonly onStart?: (format: GalleryExportFormat) => void;
+  readonly onValidationStart?: (format: GalleryExportFormat) => void;
   readonly saveFile?: (input: {
     readonly format: GalleryExportFormat;
     readonly file: GalleryExportFile;
@@ -27,11 +29,12 @@ type ExportVerificationInput = {
 };
 
 const verifyFormat = async (input: ExportVerificationInput, format: GalleryExportFormat): Promise<ExportEvidence> => {
-  const evidence: ExportEvidence = { format, files: [], artifacts: [] };
+  const evidence: ExportEvidence = { format, files: [], artifacts: [], fileSizes: [] };
   try {
     input.onStart?.(format);
     const files = await input.session.export(format);
     evidence.files = files.map((file) => file.name);
+    evidence.fileSizes = files.map(({ name, bytes }) => ({ name, byteLength: bytes.byteLength }));
     // Retain diagnostic bytes before validation, including malformed exports.
     for (const [index, file] of files.entries()) {
       const filename = await input.saveFile?.({ format, file, index });
@@ -43,6 +46,7 @@ const verifyFormat = async (input: ExportVerificationInput, format: GalleryExpor
     for (const file of files) {
       assert.ok(file.bytes.byteLength > 0, `Exported ${file.name} is empty`);
     }
+    input.onValidationStart?.(format);
     evidence.validation = await validateExportArtifact({ format, files, reference: input.geometry });
   } catch (error) {
     evidence.error = error instanceof Error ? error.message : String(error);

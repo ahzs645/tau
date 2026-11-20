@@ -1138,6 +1138,9 @@ importers:
       '@tailwindcss/vite':
         specifier: ^4.3.1
         version: 4.3.3(vite@8.0.16(@types/node@24.0.15)(esbuild@0.28.2)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.105.1)(sass@1.105.1)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+      '@taucad/cache-core':
+        specifier: workspace:*
+        version: link:../../packages/core/cache
       '@testing-library/dom':
         specifier: ^10.4.2
         version: 10.4.2

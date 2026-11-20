@@ -56,8 +56,8 @@ jobs:
         run: pnpm nx run gallery:verify-runtime
       - name: Validate model geometry and exports
         if: ${{ !cancelled() && (github.event_name == 'pull_request' || inputs.geometry) }}
-        # The cap covers every preset and export for a variant, including the four dense lamp cases.
-        run: pnpm nx run gallery:verify-models --all-exports --regressions --write-glb --variant-timeout=600000
+        # Include incremental validation of the four dense lamp STEP files, each beyond V8's string limit.
+        run: pnpm nx run gallery:verify-models --all-exports --regressions --write-glb --variant-timeout=1200000
       - name: Install Chromium
         id: chromium
         if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'pull_request' || inputs.browser) }}

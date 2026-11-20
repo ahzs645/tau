@@ -3,6 +3,7 @@ import path from 'node:path';
 import { unzipSync } from 'fflate';
 import { SaxesParser } from 'saxes';
 import type { SaxesTagPlain } from 'saxes';
+import { validateStepChunks } from '#scripts/step-structure.js';
 
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const localName = (name: string): string => name.slice(name.lastIndexOf(':') + 1);
@@ -219,46 +220,8 @@ export const validateThreeMfStructure = (bytes: Uint8Array<ArrayBuffer>): Record
 };
 
 /** Validate STEP physical-file sections and geometric entity structure, without claiming BRep validity. */
-export const validateStepStructure = (bytes: Uint8Array<ArrayBuffer>): Record<string, number> => {
-  // STEP strings and comments can contain arbitrary entity-like text; they are never geometry records.
-  const text = decoder
-    .decode(bytes)
-    .replaceAll(/'(?:''|[^'])*'|\/\*[\s\S]*?\*\//gu, ' ')
-    .trim();
-  assert.ok(
-    !text.includes("'") && !text.includes('/*') && !text.includes('*/'),
-    'STEP contains an unterminated string or comment',
-  );
-  assert.ok(
-    text.startsWith('ISO-10303-21;') && text.endsWith('END-ISO-10303-21;'),
-    'STEP physical-file markers are missing',
-  );
-  const header = /\bHEADER\s*;([\s\S]*?)\bENDSEC\s*;/iu.exec(text)?.[1];
-  const blocks = [...text.matchAll(/\bDATA(?:\s*\([^)]*\))?\s*;([\s\S]*?)\bENDSEC\s*;/giu)].map(
-    (match) => match[1] ?? '',
-  );
-  assert.ok(
-    header !== undefined && /\bFILE_SCHEMA\s*\(/iu.test(header) && blocks.length > 0,
-    'STEP header, schema or data section is missing',
-  );
-  const entityPattern = /#(\d+)\s*=\s*([^;]+);/gu;
-  const records = blocks.flatMap((block) => {
-    const records = [...block.matchAll(entityPattern)];
-    assert.equal(block.replaceAll(entityPattern, '').trim(), '', 'STEP DATA contains incomplete entity records');
-    return records;
-  });
-  const entities = records.map((match) => integer(match[1], 'STEP entity ID', 1));
-  assert.ok(
-    entities.length > 0 && new Set(entities).size === entities.length,
-    'STEP entity IDs are empty or duplicated',
-  );
-  const data = records.map((record) => record[2]).join('\n');
-  const points = [...data.matchAll(/\bCARTESIAN_POINT\s*\(/giu)].length;
-  const surfaces = [...data.matchAll(/\b(?:ADVANCED_FACE|FACE_SURFACE|POLY_LOOP|TRIANGULATED_FACE_SET)\s*\(/giu)]
-    .length;
-  assert.ok(points > 0 && surfaces > 0, 'STEP file has no geometric surface entities');
-  return { entities: entities.length, points, surfaces };
-};
+export const validateStepStructure = (bytes: Uint8Array<ArrayBuffer>): Record<string, number> =>
+  validateStepChunks([bytes]);
 
 const checkFaceIndices = (values: readonly string[], available: readonly number[], maximum: number[]): void => {
   assert.ok(values.length >= 3, 'OBJ face has fewer than three vertices');

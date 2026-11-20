@@ -183,7 +183,9 @@ test('a failing saved keyguard link stays editable and recovers without exportin
   const panel = page.getByRole('complementary', { name: 'Model parameters' });
   await expect(panel.getByRole('status', { name: 'Loading model parameters' })).toHaveCount(0);
   await expect(panel.getByRole('button', { name: 'Reset parameters' })).toBeEnabled();
-  const frame = panel.getByRole('combobox', { name: /^Select for Have a keyguard frame$/iu });
+  // Search mounts the matching group in this large virtualized form; authored field titles keep underscores.
+  await panel.getByRole('searchbox', { name: 'Filter parameters…', exact: true }).fill(frameParameter);
+  const frame = panel.getByRole('combobox', { name: `Select for ${frameParameter}`, exact: true });
   await expect(frame).toHaveText('no');
   await frame.click();
   await page.getByRole('option', { name: 'yes', exact: true }).click();
