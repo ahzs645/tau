@@ -232,7 +232,9 @@ describe('gallery recovery from an initially failing saved preset', () => {
     await waitFor(() => {
       expect(mocks.download).toHaveBeenCalledOnce();
     });
-    expect(client.export).toHaveBeenCalledExactlyOnceWith('glb');
+    expect(client.export).toHaveBeenCalledOnce();
+    expect(vi.mocked(client.export).mock.calls[0]?.[0]).toBe('glb');
+    expect(vi.mocked(client.export).mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset parameters' }));
     await waitFor(() => {

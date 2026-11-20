@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createStepEntityIds } from '#scripts/step-entity-ids.js';
 import { createStepLexer } from '#scripts/step-lexer.js';
 import type { StepToken } from '#scripts/step-lexer.js';
 
@@ -8,26 +9,6 @@ const markersMissing = 'STEP physical-file markers are missing';
 const sectionsMissing = 'STEP header, schema or data section is missing';
 const incompleteRecords = 'STEP DATA contains incomplete entity records';
 
-/** Dense native exports need one prefix counter; only out-of-order or sparse IDs occupy the set. */
-const createEntityIds = () => {
-  let next = 1;
-  const pending = new Set<number>();
-  return {
-    add(id: number): void {
-      assert.ok(Number.isSafeInteger(id) && id >= 1, 'STEP entity ID must be an integer ≥ 1');
-      assert.ok(id >= next && !pending.has(id), 'STEP entity IDs are empty or duplicated');
-      if (id !== next) {
-        pending.add(id);
-        return;
-      }
-      next += 1;
-      while (pending.delete(next)) {
-        next += 1;
-      }
-    },
-  };
-};
-
 type StepSection = 'outside' | 'header' | 'data';
 const isSymbol = (token: StepToken | undefined, value: string): boolean =>
   token?.kind === 'symbol' && token.value === value;
@@ -35,12 +16,12 @@ const isSymbol = (token: StepToken | undefined, value: string): boolean =>
 /**
  * Validate physical-file sections and actual geometric entity records from bounded byte chunks.
  * This is a structural check, not STEP semantic or BRep validation. Text memory is bounded independently
- * of file and record length; exact ID uniqueness retains only IDs above the contiguous seen prefix.
+ * of file and record length; exact ID uniqueness uses sparse pages and compact dense bitmaps.
  * @internal
  */
 export const validateStepChunks = (chunks: Iterable<Uint8Array<ArrayBuffer>>): Record<string, number> => {
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  const ids = createEntityIds();
+  const ids = createStepEntityIds();
   const counts = { entities: 0, points: 0, surfaces: 0 };
   let section: StepSection = 'outside';
   let started = false;

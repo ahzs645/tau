@@ -129,14 +129,14 @@ ENDSEC;DATA('two');
     expect(validateStepChunks(chunks())).toEqual(expected);
   });
 
-  it('should summarize a dense native-style entity stream without keeping a record array', () => {
+  it('should summarize a dense native-style stream with the lowest ID declared last', () => {
     const records = 100_000;
     const chunks = function* (): Generator<Uint8Array<ArrayBuffer>> {
       yield encoder.encode("ISO-10303-21;HEADER;FILE_SCHEMA(('AP214'));ENDSEC;DATA;");
-      for (let index = 1; index <= records; index += 1) {
+      for (let index = 2; index <= records + 1; index += 1) {
         yield encoder.encode(`#${index}=CARTESIAN_POINT('',(1.,2.,3.));\n`);
       }
-      yield encoder.encode(`#${records + 1}=POLY_LOOP('',(#1,#2,#3));ENDSEC;END-ISO-10303-21;`);
+      yield encoder.encode("#1=POLY_LOOP('',(#2,#3,#4));ENDSEC;END-ISO-10303-21;");
     };
     expect(validateStepChunks(chunks())).toEqual({ entities: records + 1, points: records, surfaces: 1 });
   });

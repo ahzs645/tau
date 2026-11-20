@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@taucad/ui/components/button';
 import { cn } from '@taucad/ui/utils/cn';
 import type { GalleryProject, GalleryUpload, GalleryVariantId } from '#catalog/types.js';
@@ -48,7 +48,6 @@ export const ProjectPage = ({
   const [mobilePane, setMobilePane] = useState<'3d' | 'parameters'>('3d');
   const [retry, setRetry] = useState(0);
   const [operationError, setOperationError] = useState<string>();
-  const [exporting, setExporting] = useState(false);
   const [format, setFormat] = useState('stl');
   const model = useGalleryModel({
     project,
@@ -58,6 +57,34 @@ export const ProjectPage = ({
     operationTimeout: variant?.renderTimeout ?? 120_000,
     retry,
   });
+  const exportSource = useMemo(
+    () => ({
+      id: Symbol(identity),
+      parameters,
+      uploads,
+      retry,
+      session: model.session,
+      result: model.result,
+      status: model.status,
+    }),
+    [identity, parameters, uploads, retry, model.session, model.result, model.status],
+  );
+  const [exportingSource, setExportingSource] = useState<symbol>();
+  const activeExport = useRef<{
+    readonly source: symbol;
+    readonly controller: AbortController;
+  }>(undefined);
+  // Invalidate on commit, before an old export can settle between navigation and passive effects.
+  useLayoutEffect(() => {
+    const source = exportSource.id;
+    return () => {
+      const pending = activeExport.current;
+      if (pending?.source === source) {
+        activeExport.current = undefined;
+        pending.controller.abort();
+      }
+    };
+  }, [exportSource]);
   const formats = useMemo(() => {
     const advertised = model.result?.formats ?? [];
     return advertised.filter((item) => !variant || variant.exportFormats.includes(item));
@@ -153,14 +180,26 @@ export const ProjectPage = ({
   );
 
   const exportModel = useCallback(async () => {
-    if (!selectedFormat || model.status !== 'ready' || !model.result) {
+    if (
+      !selectedFormat ||
+      model.status !== 'ready' ||
+      !model.result ||
+      activeExport.current?.source === exportSource.id
+    ) {
       return;
     }
-    setExporting(true);
+    const attempt = { source: exportSource.id, controller: new AbortController() };
+    activeExport.current = attempt;
+    setExportingSource(attempt.source);
     setOperationError(undefined);
+    const isCurrent = (): boolean => activeExport.current === attempt && !attempt.controller.signal.aborted;
     try {
       if (model.session) {
-        const files = await model.session.export(selectedFormat);
+        const files = await model.session.export(selectedFormat, { signal: attempt.controller.signal });
+        // Runtime exports pin an evaluation; an edit must not deliver that older model after it finishes.
+        if (!isCurrent()) {
+          return;
+        }
         for (const file of files) {
           downloadBytes(file);
         }
@@ -178,11 +217,16 @@ export const ProjectPage = ({
         });
       }
     } catch (error) {
-      setOperationError(`The model could not be exported. ${errorMessage(error)}`);
+      if (isCurrent()) {
+        setOperationError(`The model could not be exported. ${errorMessage(error)}`);
+      }
     } finally {
-      setExporting(false);
+      if (isCurrent()) {
+        activeExport.current = undefined;
+        setExportingSource(undefined);
+      }
     }
-  }, [model, selectedFormat, project.id]);
+  }, [model, selectedFormat, project.id, exportSource]);
   const retryRender = useCallback(() => {
     setRetry((value) => value + 1);
     setOperationError(undefined);
@@ -226,7 +270,7 @@ export const ProjectPage = ({
         formats={formats}
         selectedFormat={selectedFormat}
         isBusy={model.busy}
-        isExporting={exporting}
+        isExporting={exportingSource === exportSource.id}
         isReady={model.status === 'ready'}
         onFormatChange={setFormat}
         onExport={exportModel}

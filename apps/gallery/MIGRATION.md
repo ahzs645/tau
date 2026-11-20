@@ -59,6 +59,10 @@ force-push shared main.
   A saved link whose first CAD render fails still has fields for correcting that
   render. Form edits normalize legacy flat keys before applying grouped changes;
   downloads remain unavailable while the current render is pending or failed.
+- Cancel an in-flight export when its parameters, source assets, variant or
+  session change, or when the page closes. A superseded operation must not
+  download the old geometry, report an obsolete error or clear a newer export's
+  busy state. Parameter editing remains available during exports.
 - Use the public viewer's artifact/hash contract, controls, measurement and
   section tools. Preview dimensions are reported in millimetres. Browser proofs
   run without cross-origin-isolation headers, as on GitHub Pages.
@@ -382,6 +386,47 @@ section headers. Four retained native STEP exports also pass, including the
 recorded before validation so later failures retain useful evidence. The full
 local gallery suite passes 210 tests; the complete hosted matrix and Chromium
 recovery scenario remain the acceptance gates for these corrections.
+
+The fifth hosted run,
+[44662411916](https://github.com/ahzs645/tau/actions/runs/44662411916),
+on `6bdaab7d420b585cef3441915503fb0c6e3e5d04`, confirmed the incremental reader
+and saved-preset recovery while exposing a second large-file bookkeeping limit:
+
+- The frozen install, workflow guards, all five lint and typecheck targets,
+  210 gallery tests, production build, 25 native compatibility tests and all
+  eight real Chromium scenarios passed.
+- All 93 case rows, 90 measured geometry rows, 378 format requests and eleven
+  comparisons were reached. There were 91 passing rows and two failures, both
+  STEP structural validation for the denser SCAD lamp presets. The other 376
+  format requests passed; this run still failed acceptance.
+- The default and first preset STEP files passed at 641,106,167 and 704,900,535
+  bytes, containing 12,990,983 and 14,235,465 entities. The second and third
+  preset files were produced at 942,270,551 and 1,247,634,180 bytes, then failed
+  with `Set maximum size exceeded`. Their geometry and native export succeeded.
+- A missing or deferred low entity ID kept all later IDs in the prefix tracker's
+  single pending set. The replacement uses exact sparse pages that become compact
+  bitmaps, with bounded map levels across the complete safe-integer range. It
+  retains duplicate detection for unordered and sparse IDs without a collection
+  entry per dense entity or an allocation up to the largest ID. Its regression
+  admits more than 16.7 million descending IDs with the lowest ID deferred, then
+  rejects repeated IDs at the beginning, middle and end.
+
+The completion review also found an export lifecycle race: the runtime correctly
+pins an export to its requested evaluation, but the page previously downloaded
+its result after the user had changed that evaluation. Deferred-operation
+regressions now cover failed edits, overlapping old and new exports, source and
+variant replacement, and unmounting. The page forwards cancellation and checks
+request ownership before downloading or changing export state. These corrections
+keep the complete geometry, native and browser gates required on the final PR
+revision; the fifth run's passing subset is not a substitute for them.
+
+Local completion checks pass all 228 gallery unit/helper tests and the production
+build. Scoped typed lint, ESLint and formatting pass for the changes; the local
+ESLint invocation cannot exercise the graph-dependent boundary rule. The full
+application typecheck and a selected native lamp matrix were terminated by the
+local environment before producing a complete result, and Chromium still cannot
+create its required process socket. Those attempts are not passing evidence;
+the final hosted run owns the complete type, geometry and browser verdicts.
 
 Further local investigation established that the original unchanged rack support
 is a closed solid in the original engine: 96 vertices, 192 triangles, no boundary
