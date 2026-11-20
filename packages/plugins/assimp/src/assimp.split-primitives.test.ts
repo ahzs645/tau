@@ -4,7 +4,7 @@ import type { GlbMaterial, GlbNode } from '@taucad/geometry-core';
 import { assertSuccess, createMockKernelRuntime, glbToDocument } from '@taucad/runtime-testing';
 import { resolveRuntimePluginDefinition } from '@taucad/runtime/plugin';
 import type { ExportFile } from '@taucad/runtime/types';
-import { createAssimp } from 'libassimp';
+import { createAssimp, defaultPostProcess } from 'libassimp';
 import type { Assimp, AssimpFile } from 'libassimp';
 import { assimpTranscoder } from '#index.js';
 
@@ -178,6 +178,67 @@ describe('strict 3MF export of split face primitives', () => {
   it('should still reject a box with a missing face under strict manifold validation', async () => {
     const openBox = splitBox('Open box', [1, 0, 0]);
     openBox.primitives.pop();
+    const result = await convert(sourceFile([openBox]));
+
+    expect(result.success).toBe(false);
+    expect(
+      result.issues
+        .filter(({ severity }) => severity === 'error')
+        .map(({ message }) => message)
+        .join('; '),
+    ).toMatch(/not manifold and oriented/u);
+  });
+
+  it('should preserve closed surface geometry and placement when the BRep also has free points and lines', async () => {
+    const box = splitBox('Surface with free topology', [1, 0, 0], [0.05, 0.07, -0.02]);
+    box.primitives.push(
+      { mode: 0, positions: new Float32Array([0.002, 0.003, 0.004]), indices: new Uint16Array([0]), material: {} },
+      {
+        mode: 1,
+        positions: new Float32Array([0.004, 0.005, 0.006, 0.007, 0.008, 0.009]),
+        indices: new Uint16Array([0, 1]),
+        material: {},
+      },
+    );
+    const file = sourceFile([box, splitBox('Blue surface', [0, 0, 1], [-0.04, -0.03, 0.08])]);
+
+    await expect(
+      currentContext().assimp.convert(file, {
+        to: '3mf',
+        exportOptions: { requireManifold: true },
+        postProcess: [...defaultPostProcess, 'optimizeMeshes'],
+      }),
+    ).rejects.toThrow('contains no mesh geometry');
+
+    const result = await convert(file);
+    assertSuccess(result, 'Closed surfaces with free topology');
+    const parts = await sceneParts(requiredFile(result.data, '.3mf'));
+    expect(parts).toHaveLength(2);
+    const expected = [
+      { color: [1, 0, 0, 1], min: [0.05, 0.07, -0.02], max: [0.06, 0.09, 0.01] },
+      { color: [0, 0, 1, 1], min: [-0.04, -0.03, 0.08], max: [-0.03, -0.01, 0.11] },
+    ] as const;
+    for (const part of expected) {
+      const actual = parts.find(({ colors }) => JSON.stringify(colors[0]) === JSON.stringify(part.color));
+      expect(actual?.colors).toEqual([part.color]);
+      expect(actual?.triangles).toBe(12);
+      for (const axis of [0, 1, 2] as const) {
+        expect(actual?.min[axis]).toBeCloseTo(part.min[axis], 7);
+        expect(actual?.max[axis]).toBeCloseTo(part.max[axis], 7);
+      }
+    }
+  });
+
+  it('should still reject an open surface even when it also contains a free vertex', async () => {
+    const openBox = splitBox('Open mixed box', [1, 0, 0]);
+    openBox.primitives.pop();
+    openBox.primitives.push({
+      mode: 0,
+      positions: new Float32Array([0.002, 0.003, 0.004]),
+      indices: new Uint16Array([0]),
+      material: {},
+    });
+
     const result = await convert(sourceFile([openBox]));
 
     expect(result.success).toBe(false);

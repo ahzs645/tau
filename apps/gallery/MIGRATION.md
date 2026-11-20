@@ -22,7 +22,7 @@ that private checkout or replaces those symlinks.
 ## History and rollback
 
 The integration preserves both Git parents. It incorporates upstream main at
-`c63defc4de87d95c425b5cbc644e481949e7c3b0`, starting from fork main at
+`787e47d2a4cefa5d28c7488ef447253332679310`, starting from fork main at
 `996774cc25a147c085fbdcc47a4a89cc0dfe701f`. A local backup branch,
 `backup/pre-upstream-20261119`, records the original fork revision. The old gallery
 and its source history remain accessible at that exact commit.
@@ -52,13 +52,17 @@ force-push shared main.
   static; cached pictures never stand in for a failed CAD model.
 - Use dedicated browser workers and the public runtime document lifecycle.
   Recreate sessions when uploaded files change. Dispose sessions on navigation.
-  Parameter reset means the model defaults plus current overrides; removed
-  overrides must not linger in a worker or an export.
+  Parameter reset restores source defaults plus the project's declared initial
+  parameters on its default variant, or source defaults alone on other variants.
+  Other overrides must not linger in a worker or an export.
 - Use the public viewer's artifact/hash contract, controls, measurement and
   section tools. Preview dimensions are reported in millimetres. Browser proofs
   run without cross-origin-isolation headers, as on GitHub Pages.
 - Honour explicit model `jsonSchema` exports for OpenCASCADE and Replicad so
   authored ranges, choices and units survive the runtime upgrade.
+- Preserve every authored preset. Apply its values over source defaults on the
+  declared default variant, including legacy `$fn`, `$fa` and `$fs` overrides.
+  Reset removes those overrides rather than inventing a resolution default.
 - Keep source downloads complete, including binary dependencies and attribution.
   Shared URLs encode parameters; local uploaded files remain local.
 - Preserve upstream `LICENSE` and `NOTICE` and the licences of bundled models
@@ -107,6 +111,9 @@ continue after an individual format fails so the report describes every attempte
 format. The GLB and STL checks verify transformed geometry and signed axis
 correspondence; OBJ, 3MF and STEP checks also inspect each format's actual data
 structures. Structural export checks do not by themselves prove solid validity.
+The complete regression selection covers all 50 authored public presets: 93
+case rows and 383 format requests when every render succeeds. See
+`scripts/README.md` for the exact coverage and acceptance requirements.
 
 ## OpenSCAD and export compatibility
 
@@ -125,8 +132,16 @@ See `src/runtime/classic/NOTICE.md` for source, package integrity, font hashes a
 component licenses. The production output includes those notices and the engine
 and font license files, linked from the gallery footer.
 
-Native OFF supplies colored preview geometry and native STL preserves Z-up
-millimetres. The GLB representation uses Y-up metres; the public viewer reports
+The original native OFF writer rounds coordinates to six significant digits,
+which can collapse very small edges in otherwise distinct native triangles.
+The compatibility adapter requests OFF and ASCII STL together, then checks every
+face corner and shared OFF vertex identity before recovering the higher-precision
+coordinates. It preserves the OFF faces and colors and rejects mismatched paired
+outputs. Matching-resolution STL exports reuse a copy of that exact native ASCII
+output instead of evaluating the source again. This does not make a canonical
+topology claim when the coordinates subsequently collapse in GLB Float32 storage.
+
+Native STL preserves Z-up millimetres. The GLB representation uses Y-up metres; the public viewer reports
 dimensions in its Z-up world. These coordinate frames must not be confused when
 comparing dimensions. The pinned engine's native 3MF command traps even for a
 plain cube, so 3MF uses the public strict Assimp transcoder. OBJ and faceted STEP
@@ -140,6 +155,29 @@ placement and material boundaries and does not weld unrelated parts or repair
 invalid geometry. Inputs that declare canonical manifold topology retain their
 existing conversion path. Native regression fixtures must prove both successful
 closed-part conversion and continued rejection of an open part.
+
+OpenCascade can also emit a free native vertex as a GLB POINTS primitive. For a
+noncanonical 3MF surface conversion that contains both triangle surfaces and
+points or lines, the adapter uses Assimp's supported primitive filter to exclude
+those nonsurface primitives before strict validation. Pure point-cloud input
+keeps its existing route. The saved pre-chamber export independently demonstrates
+why this is necessary: its native BRep is valid, and the filtered strict round
+trip retains all 49,860 exported surface triangles and the original part.
+
+The precision bridge preserves the original indexed faces before GLB storage;
+this is a different guarantee from the downstream mesh converter's output. The
+existing noncanonical 3MF converter may normalize facets that collapse during
+Float32 serialization. For the investigated keyguard preset, the bridge retains
+4,258 native faces, while strict 3MF contains 3,738 triangles. Do not report that
+as identical triangulation, or infer a universal printability guarantee from
+matching bounds alone.
+
+The keyguard's `include_screenshot` option referenced a user-created
+`screenshot.svg` that was never included in this fork. Its author documents this
+as an alignment overlay to hide before rendering or printing. The source now
+guards only that helper with `$preview`, leaving all preset values and printable
+CSG expressions intact. See the model's `SOURCE.md` for provenance and the exact
+one-line change. Missing assets required by actual geometry still fail.
 
 ## Workflows
 
@@ -178,16 +216,25 @@ origin/main...upstream/main`; do not guess the distance from calendar age.
 
 ## Validation record
 
-The integration remains a draft until the current commit passes every gate. The
-initial hosted run is [Actions run 44629360588](https://github.com/ahzs645/tau/actions/runs/44629360588)
-on the first review commit, `6026eaebd85f6071fec940e6414655f931272127`:
+Current hosted results are attached to the
+[integration PR](https://github.com/ahzs645/tau/pull/28/checks). Acceptance requires
+the current commit to pass every gate and the complete model report to meet the
+coverage contract in `scripts/README.md`. A draft checkpoint, a historical green
+subset, or a successful build alone does not meet that requirement.
+
+The first hosted run,
+[44629360588](https://github.com/ahzs645/tau/actions/runs/44629360588),
+on `6026eaebd85f6071fec940e6414655f931272127`, established the production path and
+found the first compiler and browser issues:
 
 - The complete frozen install, 49 gallery unit/helper tests, nine focused kernel
   tests and the static production build passed.
 - Six of seven real Chromium browser scenarios passed, including routing, SCAD
   parameter edits and downloads, native OpenCascade and Replicad STEP downloads,
   and mobile controls. The remaining assertion confused the exported GLB's Y-up
-  dimension order with the viewer's Z-up labels; its geometry assertions passed.
+  dimension order with the viewer's Z-up labels. This run predated strict rejection
+  of success responses containing error diagnostics; its stamp envelope check is
+  not evidence of faithful Boolean geometry.
 - Full application typechecking found one indexed-property access error. Typed
   lint also found actionable diagnostics. These were corrected in the review
   branch; a later green run must establish their final status.
@@ -195,18 +242,46 @@ on the first review commit, `6026eaebd85f6071fec940e6414655f931272127`:
   parameter form that could overlap attribution. Both were corrected, and the
   browser suite now asserts those layout boundaries.
 
+The second hosted run,
+[44639701892](https://github.com/ahzs645/tau/actions/runs/44639701892),
+on `d82c011e253387c90a0fbf729d85dbf44ada0b09`, ran the pinned classic engine:
+
+- The frozen install, workflow guards, 107 unit/helper tests, production build and
+  17 native compatibility tests passed. Six of seven real Chromium scenarios
+  passed, including actual license responses and exact original font hashes.
+- All 30 executable variants were attempted. The then-current 54-case matrix
+  completed with 48 passing cases and six failures; it reached 195 format
+  requests. It was a failed run, not complete passing export coverage.
+- Failures identified numeric Customizer choices, legacy resolution overrides,
+  the pre-chamber's free point in a surface conversion, and lost precision in
+  classic OFF output. The stamp browser scenario stopped at rendering; its later
+  3MF, STEP and artwork replacement assertions were not reached.
+- Further compiler/lint findings were corrected with scoped typed lint and nine
+  passing native OCCT, Replicad and OpenRSCAD compatibility tests. The expanded
+  preset selection and subsequent geometry fixes require new hosted evidence.
+
 Further local investigation established that the original unchanged rack support
 is a closed solid in the original engine: 96 vertices, 192 triangles, no boundary
 or over-incident edges, and 14.3 × 222.4 × 249 mm Z-up bounds. The classic adapter's
 native integration tests exercise the public document lifecycle, parameter edits
 and reset, all five export formats, per-face color/alpha, binary SVG replacement,
-and missing-include rejection. All four real session integrations pass. Both the
+and missing-include rejection. All four real session integrations in the
+`d82c011e` checkpoint passed. Both the
 full rack assembly and its individually colored support export native STL and
 strict 3MF without error issues. Before/after canonical-topology checks establish
 exact equality of triangle counts, dimensions, signed volume and surface area.
 Closed multi-color bodies carry canonical topology only when the original OFF
 vertex identities, winding, vertex links and serialized Float32 areas pass the
 explicit validation; open or invalid bodies receive no canonical claim.
+
+The paired precision conversion has independent native checks beyond its parser
+fixtures. Forty-two signed midpoint, adjacent-double and decimal-boundary samples
+establish the pinned OFF writer's exact nearest-even rounding. A public document
+session checks those coordinates and independent copies of cached ASCII STL.
+The original stamp's isolated paired operation retains all 4,360 vertices and
+8,716 faces, passes the GLB/STL geometry comparison and reports no native error or
+warning issues. These focused proofs do not replace the full preset matrix or
+the browser artwork-replacement and download scenarios.
 
 Independent native BRep validation of the preserved OpenCascade rack found five
 valid solids, no open or non-manifold edges, no free bounds, and a maximum stored

@@ -44,9 +44,13 @@ const assimpTranscoderOptionsSchema = z
 type InputFile = Readonly<{ name: string; bytes: Uint8Array<ArrayBuffer> }>;
 
 const gltfPointsMode = 0;
+const gltfSurfaceModes: ReadonlySet<unknown> = new Set([4, 5, 6]);
+const gltfPointAndLineModes: ReadonlySet<unknown> = new Set([0, 1, 2, 3]);
 const glbMagic = 0x46_54_6c_67;
 const glbJsonChunk = 0x4e_4f_53_4a;
 const threeMfPostProcess = [...defaultPostProcess, 'optimizeMeshes'] as const;
+// Public ImportOptions uses aiPrimitiveType flags POINT (1) + LINE (2), not glTF mode values.
+const assimpPointAndLineTypes = 3;
 
 /**
  * Read the glTF JSON of a `.gltf` file or a GLB's first chunk.
@@ -114,6 +118,43 @@ const hasManifoldTopology = (files: readonly InputFile[]): boolean =>
   });
 
 /**
+ * Identify surface models that also contain zero- or one-dimensional primitives.
+ * @param files - The complete input artifact set.
+ * @returns Whether valid glTF primitive modes include both surfaces and points or lines.
+ */
+const hasMixedSurfacePrimitives = (files: readonly InputFile[]): boolean => {
+  let hasSurface = false;
+  let hasPointsOrLines = false;
+  for (const file of files) {
+    const document = gltfJson(file);
+    if (
+      document === null ||
+      typeof document !== 'object' ||
+      !('meshes' in document) ||
+      !Array.isArray(document.meshes)
+    ) {
+      continue;
+    }
+    const meshes: unknown[] = document.meshes;
+    for (const mesh of meshes) {
+      if (mesh === null || typeof mesh !== 'object' || !('primitives' in mesh) || !Array.isArray(mesh.primitives)) {
+        continue;
+      }
+      const primitives: unknown[] = mesh.primitives;
+      for (const primitive of primitives) {
+        if (primitive === null || typeof primitive !== 'object') {
+          continue;
+        }
+        const mode = 'mode' in primitive ? primitive.mode : 4;
+        hasSurface ||= gltfSurfaceModes.has(mode);
+        hasPointsOrLines ||= gltfPointAndLineModes.has(mode);
+      }
+    }
+  }
+  return hasSurface && hasPointsOrLines;
+};
+
+/**
  * Combine form options with the hidden options Tau chooses for this model.
  * @param to - The requested export format.
  * @param formOptions - User-selected export options.
@@ -153,7 +194,7 @@ const failureMessage = (error: unknown): string => {
 export const assimpTranscoder = defineTranscoder({
   id: 'assimp',
   name: 'AssimpTranscoder',
-  version: '0.1.3',
+  version: '0.1.4',
   edges,
   optionsSchema: assimpTranscoderOptionsSchema,
 
@@ -180,8 +221,9 @@ export const assimpTranscoder = defineTranscoder({
 
     try {
       services.logger.log(`Transcoding ${input.from} -> ${input.to}`);
-      const optimizeFacePrimitives =
-        input.to === '3mf' && (input.from === 'glb' || input.from === 'gltf') && !hasManifoldTopology(input.files);
+      // The declared TauAssimpRoute edges accept only GLB/glTF inputs.
+      const optimizeFacePrimitives = input.to === '3mf' && !hasManifoldTopology(input.files);
+      const surfaceOnly = optimizeFacePrimitives && hasMixedSurfacePrimitives(input.files);
       const options = {
         to: input.to,
         exportOptions: exportOptionsFor(input.to, input.options, input.files),
@@ -191,6 +233,9 @@ export const assimpTranscoder = defineTranscoder({
         // The native step preserves materials, placements and instancing; it does not repair
         // topology. Canonical EXT_mesh_manifold inputs already carry their whole-part indices.
         ...(optimizeFacePrimitives ? { postProcess: threeMfPostProcess } : {}),
+        // A valid BRep can contain free vertices alongside its closed surface. A surface
+        // 3MF exports only its triangles; keep point-only inputs and canonical owners intact.
+        ...(surfaceOnly ? { importOptions: { ppSbpRemove: assimpPointAndLineTypes } } : {}),
       };
       const { files } = await context.assimp.convert(
         input.files.map(({ name, bytes }) => ({ name, bytes })),

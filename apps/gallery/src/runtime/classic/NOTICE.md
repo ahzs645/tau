@@ -36,8 +36,15 @@ copyright and SIL Open Font License 1.1 are in [fonts/OFL.txt](fonts/OFL.txt).
 ## Geometry and operation boundaries
 
 Models, their binary assets, and explicitly selected BOSL2 files remain project inputs. Every input byte
-participates in the source dependency closure. The engine runs its original Manifold backend. Native STL
-retains Z-up millimetres; the preview and default GLB export convert once to Y-up metres. The public Assimp
+participates in the source dependency closure. Saved presets may supply the explicitly validated `$fn`, `$fa`,
+and `$fs` resolution overrides. Omitting these values preserves the model's own definitions and expressions;
+explicit render tessellation retains its existing precedence. Other undeclared special parameters are rejected.
+The engine runs its original Manifold backend. One native invocation produces paired OFF and ASCII STL outputs.
+The OFF writer rounds coordinates to six significant digits; the ASCII STL retains native double precision.
+The adapter verifies face/corner correspondence and shared original vertex identities before restoring those
+coordinates, preserving every original indexed face and color. Inconsistent or ambiguous output is rejected.
+The paired ASCII STL is cached with the exact rendered mesh and copied for export, without another evaluation.
+Native STL retains Z-up millimetres; the preview and default GLB export convert once to Y-up metres. The public Assimp
 transcoder provides strict 3MF, OBJ, and faceted STEP exports from that GLB. Faceted STEP retains the mesh
 surface; it does not reconstruct analytic CAD surfaces. The original engine's native 3MF command is not
 declared because the pinned binary traps even on a plain cube. The OFF

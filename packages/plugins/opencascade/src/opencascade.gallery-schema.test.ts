@@ -8,7 +8,7 @@ import { opencascade } from '@taucad/opencascade';
 const runtime = defineRuntime({
   plugins: [opencascade({ kernels: { default: { wasm: 'full' } } }), esbuild()],
 });
-const createClient = () => createNodeClient({ runtime });
+const createClient = async () => createNodeClient({ runtime });
 
 const source = (schema: string): string => `
 import { BRepPrimAPI_MakeBox } from 'libcascade';
@@ -37,7 +37,7 @@ describe('OpenCascade exported gallery parameter schema', { timeout: 60_000 }, (
   });
 
   afterAll(async () => {
-    await client?.shutdown();
+    await client.shutdown();
   });
 
   it('should preserve authored constraints and labels through public parameter discovery', async () => {

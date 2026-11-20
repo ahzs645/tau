@@ -65,6 +65,8 @@ The transcoder accepts every file in a GLB/glTF input set, preserves ordered sid
 
 For GLB/glTF input exported to 3MF without `EXT_mesh_manifold`, Assimp joins compatible face primitives within each original scene node before applying its strict manifold check. This lets a closed CAD part export when its faces were encoded as separate glTF primitives, while preserving separate nodes, placements and materials. This operation does not repair open surfaces or combine incompatible material partitions. Inputs carrying canonical `EXT_mesh_manifold` topology retain their original topology and primitive provenance without this optimization.
 
+For those noncanonical 3MF conversions, a model containing both triangle surfaces and point or line primitives exports its surfaces through libassimp's public primitive-type filter. This handles valid CAD solids that also retain free vertices. Triangle geometry, materials and placement remain subject to the same strict manifold checks; the original GLB is unchanged. Pure point-cloud inputs retain their point-cloud export behavior, and canonical topology inputs bypass the filter.
+
 ## Versioning and stability
 
 Pre-1.0: a minor version may break. Pin `~0.1.0` rather than `^0.1.0`. This package releases in the

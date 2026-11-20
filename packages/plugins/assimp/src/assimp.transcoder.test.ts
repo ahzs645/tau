@@ -141,9 +141,19 @@ describe('assimp transcoder', () => {
   });
 
   it.each([
-    { label: 'used extension', document: { extensionsUsed: ['EXT_mesh_manifold'] } },
-    { label: 'required extension', document: { extensionsRequired: ['EXT_mesh_manifold'] } },
-    { label: 'mesh topology', document: { meshes: [{ extensions: { EXT_mesh_manifold: {} } }] } },
+    {
+      label: 'used extension',
+      document: { extensionsUsed: ['EXT_mesh_manifold'], meshes: [{ primitives: [{}, { mode: 0 }] }] },
+    },
+    {
+      label: 'required extension',
+      document: { extensionsRequired: ['EXT_mesh_manifold'], meshes: [{ primitives: [{}, { mode: 1 }] }] },
+    },
+    {
+      label: 'mesh topology',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- The glTF extension key is an external format identifier.
+      document: { meshes: [{ extensions: { EXT_mesh_manifold: {} }, primitives: [{}, { mode: 0 }] }] },
+    },
   ])('should preserve canonical topology provenance from $label', async ({ document }) => {
     const resolved = await definition();
     const runtime = createRuntime();
@@ -159,19 +169,10 @@ describe('assimp transcoder', () => {
     });
   });
 
-  it('should leave postprocessing unchanged for input formats outside the glTF routes', async () => {
+  it('should keep STL input outside the declared 3MF conversion routes', async () => {
     const resolved = await definition();
-    const runtime = createRuntime();
-    const context = await resolved.initialize({ backend: 'auto' }, runtime);
-    const input = file('model.stl');
-
-    await resolved.transcode({ from: 'stl', to: '3mf', files: [input], options: {} }, runtime, context);
-
-    expect(assimpMock.convert).toHaveBeenCalledWith([{ name: input.name, bytes: input.bytes }], {
-      to: '3mf',
-      exportOptions: { application: 'Tau' },
-      signal: runtime.signal,
-    });
+    expect(resolved.edges).not.toContainEqual(expect.objectContaining({ from: 'stl', to: '3mf' }));
+    expect(assimpMock.convert).not.toHaveBeenCalled();
   });
 
   it('preserves sidecar order, copies bytes, and maps MIME types', async () => {
@@ -331,6 +332,48 @@ describe('assimp transcoder', () => {
       ['a glTF file', () => [file('model.gltf', json(points)), file('model.bin', new Uint8Array([1]))]],
     ])('should enable point clouds when every primitive in %s draws points', async (_name, files) => {
       expect(await exported('stl', files(), { binary: false })).toEqual({ binary: false, pointClouds: true });
+    });
+
+    it.each([
+      ['GLB', () => file('model.glb', glb([{ primitives: [{}, { mode: 0 }, { mode: 1 }] }]))],
+      ['glTF', () => file('model.gltf', json([{ primitives: [{ mode: 5 }, { mode: 6 }, { mode: 2 }, { mode: 3 }] }]))],
+    ])('should filter only point and line types from mixed %s surface exports to 3MF', async (_name, input) => {
+      await exported('3mf', [input()], { requireManifold: true });
+
+      expect(assimpMock.convert).toHaveBeenLastCalledWith(
+        expect.any(Array),
+        expect.objectContaining({
+          exportOptions: { application: 'Tau', requireManifold: true },
+          importOptions: { ppSbpRemove: 3 },
+          postProcess: [...libassimpExporter.defaultPostProcess, 'optimizeMeshes'],
+        }),
+      );
+    });
+
+    it.each([
+      ['a pure point cloud', points],
+      ['only lines', [{ primitives: [{ mode: 1 }, { mode: 3 }] }]],
+      ['only triangle surfaces', [{ primitives: [{}, { mode: 4 }] }]],
+    ])('should preserve primitive types for a 3MF input containing %s', async (_name, meshes) => {
+      await exported('3mf', [file('model.glb', glb(meshes))]);
+
+      const convertOptions: unknown = assimpMock.convert.mock.calls.at(-1)?.[1];
+      expect(convertOptions).not.toHaveProperty('importOptions');
+      if (_name === 'a pure point cloud') {
+        expect(assimpMock.convert).toHaveBeenLastCalledWith(
+          expect.any(Array),
+          expect.objectContaining({
+            exportOptions: { application: 'Tau', pointClouds: true },
+          }),
+        );
+      }
+    });
+
+    it('should keep mixed input primitive filtering out of non-3MF exports', async () => {
+      await exported('stl', [file('model.glb', glb([{ primitives: [{}, { mode: 0 }] }]))]);
+
+      const convertOptions: unknown = assimpMock.convert.mock.calls.at(-1)?.[1];
+      expect(convertOptions).not.toHaveProperty('importOptions');
     });
 
     it.each([

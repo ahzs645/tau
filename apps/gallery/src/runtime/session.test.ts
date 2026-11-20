@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createNodeClient } from '@taucad/runtime/node';
 import { defineRuntime } from '@taucad/runtime/worker';
+import type { AnyRuntimeDefinition } from '@taucad/runtime/worker';
+import type { RuntimeClient } from '@taucad/runtime/client';
 import { createKernelParameterDeclaration, defineKernel } from '@taucad/runtime/kernel';
 import type { KernelIssue } from '@taucad/runtime/types';
 import { createGallerySessionWithClient } from '#runtime/session.js';
@@ -15,7 +17,7 @@ const previewBytes = new TextEncoder().encode('Fixture artifact returned despite
 const sessionInput = { kernel: 'openrscad', entryPath: 'main.fixture', files: { 'main.fixture': 'model' } } as const;
 
 /** Real runtime boundaries with a kernel that deliberately returns partial artifacts and issues together. */
-const createClient = async (descriptionIssue?: KernelIssue, warning?: KernelIssue) => {
+const createClient = async (descriptionIssue?: KernelIssue, warning?: KernelIssue): Promise<RuntimeClient> => {
   const kernel = defineKernel({
     id: 'gallery-diagnostic-fixture',
     name: 'GalleryDiagnosticFixture',
@@ -67,7 +69,8 @@ const createClient = async (descriptionIssue?: KernelIssue, warning?: KernelIssu
       };
     },
   });
-  return createNodeClient({ runtime: defineRuntime({ kernels: [kernel()] }) });
+  // Match the gallery's dynamic public-client boundary; the real worker still validates the fixture's capabilities.
+  return createNodeClient<AnyRuntimeDefinition>({ runtime: defineRuntime({ kernels: [kernel()] }) });
 };
 
 describe('gallery runtime diagnostic policy', () => {

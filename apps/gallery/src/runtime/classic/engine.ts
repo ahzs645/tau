@@ -8,7 +8,12 @@ import { classicParameterArguments } from '#runtime/classic/parameters.js';
 import type { ClassicSources } from '#runtime/classic/sources.js';
 
 export type ClassicNativeFormat = 'off' | 'stl' | 'param';
-export type ClassicNativeOutput = Readonly<{ bytes: Uint8Array<ArrayBuffer>; issues: readonly KernelIssue[] }>;
+export type ClassicNativeOutput = Readonly<{
+  bytes: Uint8Array<ArrayBuffer>;
+  /** Paired native ASCII STL retains coordinates that the pinned OFF writer rounds to six significant digits. */
+  precisionBytes?: Uint8Array<ArrayBuffer>;
+  issues: readonly KernelIssue[];
+}>;
 
 export class ClassicBuildError extends Error {
   public readonly issues: readonly KernelIssue[];
@@ -103,17 +108,43 @@ const nativeArguments = (
   sources: ClassicSources,
   format: ClassicNativeFormat,
   options: { parameters: Readonly<Record<string, unknown>>; resolution: Readonly<Record<string, number>> },
-): { arguments: string[]; outputPath: string } => {
+): { arguments: string[]; outputPath: string; precisionPath?: string } => {
   const outputPath = `/output/model.${format === 'param' ? 'json' : format}`;
   const arguments_ = [sources.entryPath, '-o', outputPath, '--backend=manifold'];
+  const precisionPath = format === 'off' ? '/output/model-precision.stl' : undefined;
+  if (precisionPath) {
+    // The pinned CLI supports multiple outputs and defaults .stl to ASCII. Both outputs must correspond;
+    // the precision bridge verifies every original indexed face and shared vertex before accepting them.
+    arguments_.push('-o', precisionPath);
+  }
   if (format === 'param') {
     arguments_.push('--export-format=param');
   } else if (format === 'stl') {
-    arguments_.push('--export-format=binstl');
+    arguments_.push('--export-format=asciistl');
   }
   arguments_.push(...classicParameterArguments(options.parameters));
   arguments_.push(...Object.entries(options.resolution).map(([name, value]) => `-D${name}=${value}`));
-  return { arguments: arguments_, outputPath };
+  return { arguments: arguments_, outputPath, precisionPath };
+};
+
+const copyNativeOutput = (
+  instance: ClassicOpenScadInstance,
+  input: { path: string; format: string; entryPath: string; issues: readonly KernelIssue[] },
+): Uint8Array<ArrayBuffer> => {
+  const { path, format, entryPath, issues } = input;
+  let bytes: Uint8Array<ArrayBuffer>;
+  try {
+    bytes = new Uint8Array(instance.FS.readFile(path, { encoding: 'binary' }));
+  } catch (error) {
+    throw new ClassicBuildError([
+      ...issues,
+      failure(`OpenSCAD produced no ${format} output: ${String(error)}`, entryPath),
+    ]);
+  }
+  if (bytes.byteLength === 0) {
+    throw new ClassicBuildError([...issues, failure(`OpenSCAD produced an empty ${format} file.`, entryPath)]);
+  }
+  return bytes;
 };
 
 /**
@@ -152,7 +183,11 @@ export const runClassicOpenScad = async (input: {
   signal.throwIfAborted();
   const instance = engine.getInstance();
   mountInputs(instance, sources, fonts);
-  const { arguments: arguments_, outputPath } = nativeArguments(sources, format, {
+  const {
+    arguments: arguments_,
+    outputPath,
+    precisionPath,
+  } = nativeArguments(sources, format, {
     parameters: input.parameters ?? {},
     resolution: input.resolution ?? {},
   });
@@ -174,17 +209,14 @@ export const runClassicOpenScad = async (input: {
         : [...issues, failure(`OpenSCAD exited with status ${exitCode} while producing ${format}.`, sources.entryPath)],
     );
   }
-  let bytes: Uint8Array<ArrayBuffer>;
-  try {
-    bytes = new Uint8Array(instance.FS.readFile(outputPath, { encoding: 'binary' }));
-  } catch (error) {
-    throw new ClassicBuildError([
-      ...issues,
-      failure(`OpenSCAD produced no ${format} output: ${String(error)}`, sources.entryPath),
-    ]);
-  }
-  if (bytes.byteLength === 0) {
-    throw new ClassicBuildError([...issues, failure(`OpenSCAD produced an empty ${format} file.`, sources.entryPath)]);
-  }
-  return { bytes, issues };
+  const bytes = copyNativeOutput(instance, { path: outputPath, format, entryPath: sources.entryPath, issues });
+  const precisionBytes = precisionPath
+    ? copyNativeOutput(instance, {
+        path: precisionPath,
+        format: 'ASCII STL precision',
+        entryPath: sources.entryPath,
+        issues,
+      })
+    : undefined;
+  return { bytes, precisionBytes, issues };
 };

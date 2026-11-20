@@ -34,17 +34,19 @@ enabled = true; // [true,false]
 required = true; // [true:Required]
 cube(enabled ? 2 : 1);`,
       },
-    };
+    } as const;
     try {
       const description = await client.describe({ source });
       if (!description.success) {
         throw new Error(description.issues.map(({ message }) => message).join('; '));
       }
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Customizer group names are preserved external parameter keys.
       expect(description.parameters.defaults).toEqual({ Features: { enabled: true, required: true } });
       expect(description.parameters.legacyProjection).toMatchObject({
         status: 'usable',
         schema: {
           properties: {
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- The authored Customizer group is part of the public schema.
             Features: {
               properties: {
                 enabled: { type: 'boolean', oneOf: [{ const: true }, { const: false }] },
@@ -65,6 +67,7 @@ cube(enabled ? 2 : 1);`,
       }
       const view = document.view('model');
       const initialVolume = Math.abs(await getSignedVolumeFromGlb(await renderBytes(view)));
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Updates must use the unchanged authored Customizer group.
       await document.update({ parameters: { Features: { enabled: false, required: true } } });
       const disabledVolume = Math.abs(await getSignedVolumeFromGlb(await renderBytes(view)));
       expect(disabledVolume / initialVolume).toBeCloseTo(1 / 8, 4);
@@ -108,6 +111,7 @@ cube(enabled ? 2 : 1);`,
       const initial = await renderBytes(view);
       const initialVolume = Math.abs(await getSignedVolumeFromGlb(initial));
       expect(initialVolume).toBeGreaterThan(0);
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- These group and parameter names belong to the authored SCAD interface.
       await document.update({ parameters: { Artwork: { asset_file: 'art/second.svg' } } });
       const selected = await renderBytes(view);
       expect(Math.abs(await getSignedVolumeFromGlb(selected)) / initialVolume).toBeCloseTo(2, 4);

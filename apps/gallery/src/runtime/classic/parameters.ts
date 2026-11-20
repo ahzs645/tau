@@ -29,7 +29,14 @@ const propertySchema = (parameter: ClassicParameter): JSONSchema7 => {
     return {
       ...base,
       type: parameter.type,
-      oneOf: parameter.options.map(({ name, value }) => ({ type: parameter.type, const: value, title: name })),
+      ...(parameter.type === 'number' ? { enum: parameter.options.map(({ value }) => value) } : {}),
+      // Numeric options share the parent's one binding and complete allowed-value constraint. Re-declaring
+      // a numeric type on each const branch would assert contradictory bindings at the same instance path.
+      oneOf: parameter.options.map(({ name, value }) => ({
+        ...(parameter.type === 'number' ? {} : { type: parameter.type }),
+        const: value,
+        title: name,
+      })),
     };
   }
   return { ...base, type: parameter.type, ...(parameter.type === 'number' ? numericConstraints(parameter) : {}) };
@@ -39,7 +46,28 @@ const propertySchema = (parameter: ClassicParameter): JSONSchema7 => {
 export const classicParameterDeclaration = (
   exported: ClassicParameterExport,
 ): { defaultParameters: Record<string, unknown>; jsonSchema: JSONSchema7 } => {
-  const properties: Record<string, JSONSchema7Definition> = {};
+  // These engine controls are optional overrides. Injecting parsed defaults would freeze an authored
+  // expression such as `$fn = smoothness` when its ordinary model parameter changes.
+  const properties: Record<string, JSONSchema7Definition> = {
+    $fn: {
+      type: 'integer',
+      minimum: 0,
+      title: 'Curve segments ($fn)',
+      description: 'Optional segment override. Zero uses the angle and segment-length settings; omit to use the model.',
+    },
+    $fa: {
+      type: 'number',
+      exclusiveMinimum: 0,
+      title: 'Minimum segment angle ($fa)',
+      description: 'Optional curve angle in degrees; omit to use the model.',
+    },
+    $fs: {
+      type: 'number',
+      exclusiveMinimum: 0,
+      title: 'Minimum segment length ($fs)',
+      description: 'Optional curve segment length in millimetres; omit to use the model.',
+    },
+  };
   const defaultParameters: Record<string, unknown> = {};
   const groups = new Map<
     string,

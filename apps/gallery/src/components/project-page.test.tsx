@@ -114,7 +114,7 @@ describe('gallery export after a failed model update', () => {
     };
     mocks.create.mockResolvedValue(client);
     render(<RoutedProject />);
-    const download = screen.getByRole('button', { name: 'Export', exact: true });
+    const download = screen.getByRole('button', { name: /^Export$/u });
     const preview = screen.getByRole('img', { name: '3D model preview' });
     await waitFor(() => {
       expect(download).toHaveProperty('disabled', false);

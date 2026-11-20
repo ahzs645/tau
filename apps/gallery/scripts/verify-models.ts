@@ -19,6 +19,8 @@ import type { PrintabilityEvidence } from '#scripts/verify-printability.js';
 import { exportEvidenceSchema, verifyGalleryExports } from '#scripts/verification-exports.js';
 import type { ExportEvidence } from '#scripts/verification-exports.js';
 import { canReuseVariant } from '#scripts/verification-progress.js';
+import { verificationScenarios } from '#scripts/verification-scenarios.js';
+import type { VerificationScenario } from '#scripts/verification-scenarios.js';
 
 type CaseResult = {
   readonly project: string;
@@ -51,15 +53,6 @@ type VerificationReport = {
   fingerprint?: string;
   complete: boolean;
   finishedVariants: string[];
-};
-type Scenario = {
-  name: string;
-  parameters?: Record<string, unknown>;
-  expectedSizeMm?: readonly [number, number, number];
-  expectedWidthMm?: number;
-  expectedError?: string;
-  expectedComponents?: number;
-  bedSizeMm?: readonly [number, number];
 };
 
 const pointSchema = z.tuple([z.number(), z.number(), z.number()]);
@@ -228,87 +221,7 @@ const hasEnumeration = (value: unknown): boolean => {
   );
 };
 
-const scenariosFor = (project: GalleryProject, variant: GalleryVariant): Scenario[] => {
-  const scenarios: Scenario[] = [{ name: 'defaults' }];
-  if (withRegressions && project.components?.variantIds.includes(variant.id)) {
-    const { parameter, options } = project.components;
-    scenarios.push(
-      ...options.map(
-        (option): Scenario => ({
-          name: `component-${option.value}`,
-          parameters: { [parameter]: option.value },
-          // Measured from the preserved binary handle template; this branch imports it without scaling.
-          ...(project.id === 'stamp' && option.value === 'handle'
-            ? { expectedSizeMm: [20, 50, 23.094011306762695] as const }
-            : {}),
-        }),
-      ),
-    );
-  }
-  if (withRegressions && project.id === 'pet-bottle-opener') {
-    scenarios.push(...project.presets.map((preset) => ({ name: preset.id, parameters: preset.parameters })));
-    return scenarios;
-  }
-  if (!withRegressions || project.id !== 'bottle-separator' || variant.id !== 'openscad') {
-    return scenarios;
-  }
-  for (const fit of [
-    { parameters: {}, widths: [300.6, 400, 400, 101.8] },
-    { parameters: { bottle_diameter: 80, side_clearance: 1.5, bottle_gap: 6 }, widths: [261, 347, 347, 89] },
-  ]) {
-    for (const [index, preset] of project.presets.entries()) {
-      scenarios.push({
-        name: `${preset.id}-${Object.keys(fit.parameters).length === 0 ? 'standard' : '80mm'}`,
-        parameters: { ...preset.parameters, 'Bottle fit': fit.parameters },
-        expectedWidthMm: fit.widths[index],
-        expectedComponents: 1,
-      });
-    }
-  }
-  scenarios.push(
-    {
-      name: 'single-hex-cell',
-      parameters: { output_part: 'Print one cell', bed_width: 180, bed_depth: 180 },
-      expectedSizeMm: [103, 65, 115.05],
-      expectedComponents: 1,
-      bedSizeMm: [180, 180],
-    },
-    {
-      name: 'rotated-small-bed-cell',
-      parameters: { output_part: 'Print one cell', bed_width: 120, bed_depth: 105 },
-      expectedSizeMm: [115.05, 65, 103],
-      expectedComponents: 1,
-      bedSizeMm: [120, 105],
-    },
-    {
-      name: 'inline-cell',
-      parameters: { layout: 'Inline', output_part: 'Print one cell', bed_width: 110, bed_depth: 110 },
-      expectedSizeMm: [103, 65, 103],
-      expectedComponents: 1,
-      bedSizeMm: [110, 110],
-    },
-    {
-      name: 'dovetail-fit-pair',
-      parameters: { output_part: 'Joint test pair', bed_width: 100, bed_depth: 100 },
-      expectedSizeMm: [5.05, 12, 22.8],
-      expectedComponents: 2,
-      bedSizeMm: [100, 100],
-    },
-    {
-      name: 'invalid-bottle-gap',
-      parameters: { bottle_gap: 2, side_clearance: 1.5 },
-      expectedError: 'Bottle gap must be at least 4',
-    },
-    {
-      name: 'bed-too-small',
-      parameters: { output_part: 'Print one cell', bed_width: 100 },
-      expectedError: 'Usable bed',
-    },
-  );
-  return scenarios;
-};
-
-const checkSize = (summary: GeometrySummary, scenario: Scenario): void => {
+const checkSize = (summary: GeometrySummary, scenario: VerificationScenario): void => {
   if (scenario.bedSizeMm) {
     assert.ok(
       summary.boundsMm.size[0] <= scenario.bedSizeMm[0] && summary.boundsMm.size[2] <= scenario.bedSizeMm[1],
@@ -357,7 +270,7 @@ const verifyScenario = async (input: {
   readonly session: GallerySession;
   readonly project: GalleryProject;
   readonly variant: GalleryVariant;
-  readonly scenario: Scenario;
+  readonly scenario: VerificationScenario;
 }): Promise<CaseResult> => {
   const { session, project, variant, scenario } = input;
   const started = performance.now();
@@ -475,7 +388,7 @@ const verifyVariant = async (entry: NodeCatalogEntry, variant: GalleryVariant): 
     operationTimeout: variant.renderTimeout ?? 180_000,
   });
   try {
-    for (const scenario of scenariosFor(project, variant)) {
+    for (const scenario of verificationScenarios(project, variant, withRegressions)) {
       const result = await verifyScenario({ session, project, variant, scenario });
       report.cases.push(result);
       report.passed &&= result.error === undefined;
@@ -528,7 +441,7 @@ const verifyVariantInChild = async (entry: NodeCatalogEntry, variant: GalleryVar
     }
   }
   report.cases.push(...saved.cases);
-  const missingScenarios = scenariosFor(entry.project, variant).filter(
+  const missingScenarios = verificationScenarios(entry.project, variant, withRegressions).filter(
     (scenario) => !saved.cases.some((row) => row.scenario === scenario.name),
   );
   if (outcome.exitCode === 0 && missingScenarios.length > 0) {

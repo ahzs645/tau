@@ -31,8 +31,8 @@ const triangleArea = (a: Point, b: Point, c: Point): number => {
 
 /** Decode all printable part files and map the declared STL Z-up millimetres into GLB Y-up millimetres. */
 export const measureStlFiles = async (files: readonly GalleryExportFile[]): Promise<StlSummary> => {
-  const { STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js');
-  const loader = new STLLoader();
+  const stlModule = await import('three/examples/jsm/loaders/STLLoader.js');
+  const loader = new stlModule.STLLoader();
   const minimum: [number, number, number] = [Infinity, Infinity, Infinity];
   const maximum: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   let triangles = 0;
@@ -45,7 +45,7 @@ export const measureStlFiles = async (files: readonly GalleryExportFile[]): Prom
     try {
       const positions = geometry.getAttribute('position');
       assert.ok(
-        positions?.itemSize === 3 && positions.count === expected * 3,
+        positions.itemSize === 3 && positions.count === expected * 3,
         `STL ${file.name} has incomplete triangle vertices`,
       );
       const positionAt = (index: number): Point => {

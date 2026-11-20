@@ -13,6 +13,7 @@ import { loadClassicFonts } from '#runtime/classic/fonts.js';
 import type { ClassicFonts } from '#runtime/classic/fonts.js';
 import { classicMeshToGlb, parseClassicOff } from '#runtime/classic/mesh.js';
 import type { ClassicMesh } from '#runtime/classic/mesh.js';
+import { restoreClassicOffPrecision } from '#runtime/classic/precision.js';
 import { classicParameterDeclaration } from '#runtime/classic/parameters.js';
 import { listClassicSourcePaths, readClassicSources } from '#runtime/classic/sources.js';
 import type { ClassicSources } from '#runtime/classic/sources.js';
@@ -25,6 +26,7 @@ type ClassicMeshResult = {
   issues: readonly KernelIssue[];
   resolution: Record<string, number>;
   key: string;
+  stlBytes: Uint8Array<ArrayBuffer>;
 };
 type ClassicHandle = {
   sources: ClassicSources;
@@ -53,8 +55,15 @@ const meshAt = async (
     signal: services.signal,
     logger: services.logger,
   });
-  const mesh = parseClassicOff(new TextDecoder().decode(output.bytes));
-  const result = { mesh, issues: output.issues, resolution, key };
+  if (!output.precisionBytes) {
+    throw new Error('OpenSCAD did not return the paired native ASCII STL precision output.');
+  }
+  const preciseOff = restoreClassicOffPrecision(
+    new TextDecoder().decode(output.bytes),
+    new TextDecoder().decode(output.precisionBytes),
+  );
+  const mesh = parseClassicOff(preciseOff);
+  const result = { mesh, issues: output.issues, resolution, key, stlBytes: output.precisionBytes };
   handle.latestMesh = result;
   return result;
 };
@@ -64,7 +73,7 @@ export const classicOpenScad = defineKernel({
   id: 'openscad',
   extensions: ['scad'],
   name: 'ClassicOpenScadGalleryKernel',
-  version: '1.2.0+gallery.2',
+  version: '1.2.0+gallery.5',
   evaluateOptionsSchema: z.object({}),
   views: {
     model: {
@@ -132,20 +141,12 @@ export const classicOpenScad = defineKernel({
       });
       return { files: [createExportFile('glb', 'model.glb', bytes)] as const, issues: result.issues };
     }
-    const resolution =
-      options.tessellation === undefined
-        ? (handle.latestMesh?.resolution ?? {})
-        : classicResolution(options.tessellation);
-    const result = await runClassicOpenScad({
-      sources: handle.sources,
-      fonts: context.fonts,
-      parameters: handle.parameters,
-      resolution,
-      format: exportId,
-      signal: services.signal,
-      logger: services.logger,
-    });
-    return { files: [createExportFile(exportId, `model.${exportId}`, result.bytes)] as const, issues: result.issues };
+    const result = await meshAt(handle, options.tessellation, { services, context });
+    // Return a transfer-safe copy of the exact native output paired with this mesh, without re-evaluating the model.
+    return {
+      files: [createExportFile('stl', 'model.stl', new Uint8Array(result.stlBytes))] as const,
+      issues: result.issues,
+    };
   },
   async onDispose(context) {
     context.fonts = [];

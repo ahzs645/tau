@@ -8,7 +8,7 @@ import { replicad } from '@taucad/replicad';
 const runtime = defineRuntime({
   plugins: [replicad({ kernels: { default: { wasm: 'single' } } }), esbuild()],
 });
-const createClient = () => createNodeClient({ runtime });
+const createClient = async () => createNodeClient({ runtime });
 
 const source = (schema: string): string => `
 import { makeBaseBox } from 'replicad';
@@ -37,7 +37,7 @@ describe('Replicad exported gallery parameter schema', { timeout: 60_000 }, () =
   });
 
   afterAll(async () => {
-    await client?.shutdown();
+    await client.shutdown();
   });
 
   it('should preserve authored constraints and labels through public parameter discovery', async () => {

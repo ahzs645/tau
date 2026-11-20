@@ -36,7 +36,7 @@ export const galleryStaticPages = (): Plugin => ({
         {
           application: '@taucad/gallery',
           commit: process.env['VITE_COMMIT_SHA'] ?? 'local',
-          upstream: 'c63defc4de87d95c425b5cbc644e481949e7c3b0',
+          upstream: '787e47d2a4cefa5d28c7488ef447253332679310',
           publicProjects: publicProjects.length,
           models: publicProjects.map(({ project }) => project.id),
         },

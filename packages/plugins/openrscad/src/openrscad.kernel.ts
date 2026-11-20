@@ -279,7 +279,7 @@ const collectSourceBundle = async (options: {
   const files = new Map<string, string>();
   const binaryFiles = new Map<string, Uint8Array<ArrayBuffer>>();
   const visited = new Set<string>();
-  let needsDynamicAssets = false;
+  const assetDiscovery = { needsDynamicAssets: false };
 
   const visit = async (input: {
     source: string;
@@ -296,7 +296,7 @@ const collectSourceBundle = async (options: {
       return;
     }
     visited.add(visitKey);
-    needsDynamicAssets ||= hasDynamicAssetImport(input.source);
+    assetDiscovery.needsDynamicAssets ||= hasDynamicAssetImport(input.source);
     /* oxlint-disable no-await-in-loop -- static imported assets are resolved in source order. */
     for (const specifier of parseImportedAssets(input.source)) {
       const absolutePath = resolveImportPath(
@@ -348,7 +348,7 @@ const collectSourceBundle = async (options: {
   };
 
   await visit({ source, absolutePath: entryPath, engineKey: '', depth: 0 });
-  if (needsDynamicAssets) {
+  if (assetDiscovery.needsDynamicAssets) {
     // An expression such as import(svg_file) may choose any supported project asset. Include those assets in
     // both the engine request and dependency closure: replacing uploaded bytes must invalidate cached geometry.
     const collectAssets = async (directory: string, depth: number): Promise<void> => {
@@ -367,7 +367,7 @@ const collectSourceBundle = async (options: {
           continue;
         }
         const extension = entry.name.slice(entry.name.lastIndexOf('.') + 1).toLowerCase();
-        if (entry.type !== 'file' || !importedAssetExtensions.has(extension)) {
+        if (!importedAssetExtensions.has(extension)) {
           continue;
         }
         const key = relativeAssetKey(entryPath, entry.path);

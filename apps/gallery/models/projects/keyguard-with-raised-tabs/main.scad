@@ -5333,6 +5333,7 @@ module make_snap_ins(size,width){
 
 
 module show_screenshot(thickness){
+    if ($preview)
 	color("DarkMagenta",.5)
 	translate([msh,msv,-thickness/2-0.5])
 	resize([swm,shm,0])
