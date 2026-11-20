@@ -33,7 +33,19 @@ export const verificationScenarios = (
     );
   }
   if (withRegressions && variant.id === project.defaultVariantId && project.id !== 'bottle-separator') {
-    scenarios.push(...project.presets.map((preset) => ({ name: preset.id, parameters: preset.parameters })));
+    scenarios.push(
+      ...project.presets.map((preset) => ({
+        name: preset.id,
+        parameters: preset.parameters,
+        // The original engine confirms this preserved frame-disabled preset produces an empty result; see its SOURCE.md.
+        ...(project.id === 'keyguard-with-raised-tabs' && preset.id === 'preset-2'
+          ? {
+              expectedError:
+                'Keyguard frame output requires Have a case and Have a keyguard frame set to yes. Enable both, or choose keyguard output.',
+            }
+          : {}),
+      })),
+    );
   }
   if (!withRegressions || project.id !== 'bottle-separator' || variant.id !== 'openscad') {
     return scenarios;
@@ -92,6 +104,6 @@ export const verificationScenarios = (
       expectedError: 'Usable bed',
     },
   );
-  /* eslint-enable @typescript-eslint/naming-convention */
+  /* eslint-enable @typescript-eslint/naming-convention -- Restore naming checks after the authored OpenSCAD override payloads. */
   return scenarios;
 };

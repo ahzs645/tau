@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
 import { allExtensions } from '@taucad/geometry-core';
+import { createNodeClient } from '@taucad/runtime/node';
 import { unzipSync } from 'fflate';
 import { createNodeGallerySession } from '#runtime/node.js';
 import type { GalleryRenderResult } from '#runtime/types.js';
+import { runtime } from '#runtime/definitions/openscad.js';
+import { resolveGalleryParameters } from '#runtime/parameters.js';
+import { loadNodeProjectFiles, readNodeCatalog } from '#scripts/catalog-node.js';
 import { measureGlb } from '#scripts/measure-glb.js';
 import { validateExportArtifact } from '#scripts/verification-artifacts.js';
 
@@ -123,6 +127,74 @@ translate([20,0,0]) color([0,1,0,0.5]) cube(1);`,
       expect(second[0]?.bytes).toEqual(committed);
     } finally {
       await session.dispose();
+    }
+  });
+
+  it('should evaluate an authored negative decimal step and retain rejection of values between steps', async () => {
+    const session = await createNodeGallerySession({
+      kernel: 'openscad',
+      entryPath: 'main.scad',
+      files: { 'main.scad': 'pleat_offset = -1; // [-2:0.1:2]\ncube([10 + pleat_offset, 2, 3]);' },
+    });
+    try {
+      const initial = await session.render();
+      expect(initial.defaultParameters['pleat_offset']).toBe(-1);
+      if (typeof initial.artifact.content === 'string') {
+        throw new TypeError('Expected binary GLB preview.');
+      }
+      const initialGeometry = await measureGlb(initial.artifact.content);
+      expect(initialGeometry.boundsMm.size[0]).toBeCloseTo(9, 5);
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- The authored Customizer parameter is named pleat_offset.
+      const edited = await session.render({ pleat_offset: -0.3 });
+      expect(edited.parameters['pleat_offset']).toBe(-0.3);
+      if (typeof edited.artifact.content === 'string') {
+        throw new TypeError('Expected binary GLB preview.');
+      }
+      const editedGeometry = await measureGlb(edited.artifact.content);
+      expect(editedGeometry.boundsMm.size[0]).toBeCloseTo(9.7, 5);
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- The invalid value targets the same authored parameter.
+      await expect(session.render({ pleat_offset: -0.35 })).rejects.toThrow('INVALID_SCHEMA at /pleat_offset');
+      const reset = await session.render({});
+      expect(reset.parameters['pleat_offset']).toBe(-1);
+      expect(reset.artifactHash).toBe(initial.artifactHash);
+    } finally {
+      await session.dispose();
+    }
+  });
+
+  it('should evaluate the unchanged pendant defaults and all preserved presets through the public runtime', async () => {
+    const catalog = await readNodeCatalog();
+    const entry = catalog.find(({ project }) => project.id === 'pendant-lamp');
+    const variant = entry?.project.variants.find(({ id }) => id === 'openscad');
+    if (!entry || !variant) {
+      throw new Error('Missing the preserved pendant OpenSCAD variant.');
+    }
+    expect(variant.kernel).toBe('openscad');
+    expect(entry.project.presets.map(({ name }) => name)).toEqual(['Small', 'Medium', 'Large']);
+    const source = { files: await loadNodeProjectFiles(entry), entry: variant.entry };
+    const client = await createNodeClient({ runtime });
+    try {
+      const description = await client.describe({ source });
+      expect(description.success).toBe(true);
+      if (!description.success) {
+        throw new Error('The preserved pendant description failed.');
+      }
+      expect(description.parameters.defaults['pleat_offset']).toBe(-1);
+      const cases = [{ name: 'defaults', parameters: {} }, ...entry.project.presets];
+      for (const candidate of cases) {
+        const parameters = resolveGalleryParameters(description.parameters.defaults, candidate.parameters);
+        expect(parameters['pleat_offset'], candidate.name).toBe(-1);
+        const document = client.open({ source, parameters, watch: false });
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- Evaluate the original saved cases sequentially without native meshing.
+          const outcome = await document.evaluation();
+          expect(outcome, candidate.name).toMatchObject({ superseded: false, evaluation: { success: true } });
+        } finally {
+          document.close();
+        }
+      }
+    } finally {
+      await client.shutdown();
     }
   });
 

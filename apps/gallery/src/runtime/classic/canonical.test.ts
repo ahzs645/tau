@@ -40,6 +40,7 @@ describe('classic OFF canonical topology provenance', () => {
     expect(primitives[1]?.attributes['POSITION']).toBe(positions);
     expect(primitives[1]?.attributes['NORMAL']).toBe(normals);
     expect(mesh?.extensions?.['EXT_mesh_manifold']).toMatchObject({
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- POSITION is the glTF attribute semantic.
       manifoldPrimitive: { attributes: { POSITION: positions }, mode: 4 },
     });
     const document = await io().readBinary(bytes);

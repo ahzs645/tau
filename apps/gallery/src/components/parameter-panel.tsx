@@ -5,7 +5,7 @@ import { Button } from '@taucad/ui/components/button';
 import { Heading } from '@taucad/ui/components/heading';
 import { Skeleton } from '@taucad/ui/components/skeleton';
 import type { GalleryComponents, GalleryFiles, GalleryProject, GalleryUpload, GalleryVariant } from '#catalog/types.js';
-import type { GalleryRenderResult } from '#runtime.js';
+import type { GalleryParameterDescription } from '#runtime.js';
 import { resolveGalleryParameters } from '#runtime/parameters.js';
 import type { UploadedAsset, UploadedAssets } from '#components/use-gallery-model.js';
 import { errorMessage } from '#components/download.js';
@@ -159,7 +159,7 @@ export const ParameterPanel = ({
   project,
   variant,
   parameters,
-  result,
+  parameterDescription,
   files,
   uploads,
   onChange,
@@ -170,7 +170,7 @@ export const ParameterPanel = ({
   readonly project: GalleryProject;
   readonly variant?: GalleryVariant;
   readonly parameters: Record<string, unknown>;
-  readonly result?: GalleryRenderResult;
+  readonly parameterDescription?: GalleryParameterDescription;
   readonly files: GalleryFiles;
   readonly uploads: UploadedAssets;
   readonly onChange: (next: Record<string, unknown>, base: Record<string, unknown>) => void;
@@ -183,13 +183,13 @@ export const ParameterPanel = ({
     [project.presets, variant],
   );
   const activePreset = useMemo(() => {
-    const defaults = result?.defaultParameters ?? {};
+    const defaults = parameterDescription?.defaultParameters ?? {};
     const current = JSON.stringify(resolveGalleryParameters(defaults, parameters));
     return (
       presets.find((preset) => JSON.stringify(resolveGalleryParameters(defaults, preset.parameters)) === current)?.id ??
       ''
     );
-  }, [presets, parameters, result?.defaultParameters]);
+  }, [presets, parameters, parameterDescription?.defaultParameters]);
   const applyPreset = useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>) => {
       const preset = presets.find((item) => item.id === event.target.value);
@@ -204,8 +204,11 @@ export const ParameterPanel = ({
   }, [project, variant, onReplace]);
   const components = variant && project.components?.variantIds.includes(variant.id) ? project.components : undefined;
   const presentation = useMemo(
-    () => (result ? projectGalleryParameters(result, parameters, components?.parameter) : undefined),
-    [result, parameters, components?.parameter],
+    () =>
+      parameterDescription
+        ? projectGalleryParameters(parameterDescription, parameters, components?.parameter)
+        : undefined,
+    [parameterDescription, parameters, components?.parameter],
   );
   return (
     <aside
@@ -269,14 +272,14 @@ export const ParameterPanel = ({
           />
         ))}
       </div>
-      {presentation?.jsonSchema && result?.parameterManifest ? (
+      {presentation?.jsonSchema && parameterDescription?.parameterManifest ? (
         <div className='shrink-0 px-2 pb-4'>
           <Parameters
             parameters={presentation.parameters}
             defaultParameters={presentation.defaultParameters}
             jsonSchema={presentation.jsonSchema}
             onParametersChange={onChange}
-            parameterManifest={result.parameterManifest}
+            parameterManifest={parameterDescription.parameterManifest}
             parameterEdit={parameterEdit}
             units={units}
             enableSearch
@@ -284,7 +287,7 @@ export const ParameterPanel = ({
             presentation='embedded'
           />
         </div>
-      ) : result ? (
+      ) : parameterDescription ? (
         <p className='px-4 pb-6 text-sm text-muted-foreground'>This model has no additional editable parameters.</p>
       ) : (
         <div role='status' aria-label='Loading model parameters' aria-busy='true' className='flex flex-col gap-4 p-4'>

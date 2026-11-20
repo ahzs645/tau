@@ -41,16 +41,21 @@ export type GalleryStaticOptions = GalleryOperationOptions &
     coordinateSystem?: 'y-up' | 'z-up';
   }>;
 
-export type GalleryRenderResult = Readonly<{
-  artifact: Artifact;
-  artifactHash: string;
+/** Admitted parameter metadata is available before geometry and remains stable for the source revision. */
+export type GalleryParameterDescription = Readonly<{
   jsonSchema: JSONSchema7 | undefined;
   parameterManifest: ParameterManifest | undefined;
-  defaultParameters: Record<string, unknown>;
-  parameters: Record<string, unknown>;
-  formats: readonly GalleryExportFormat[];
-  issues: readonly KernelIssue[];
+  defaultParameters: Readonly<Record<string, unknown>>;
 }>;
+
+export type GalleryRenderResult = GalleryParameterDescription &
+  Readonly<{
+    artifact: Artifact;
+    artifactHash: string;
+    parameters: Record<string, unknown>;
+    formats: readonly GalleryExportFormat[];
+    issues: readonly KernelIssue[];
+  }>;
 
 export type GalleryExportFile = Readonly<{
   name: string;
@@ -60,6 +65,8 @@ export type GalleryExportFile = Readonly<{
 
 /** One immutable source revision, with a reusable document for parameter changes. */
 export type GallerySession = Readonly<{
+  /** Frozen metadata for editing and resetting parameters, including after a failed first render. */
+  parameterDescription: GalleryParameterDescription;
   /** Replace overrides over model defaults; omit parameters to reuse the current values. */
   render(
     parameters?: Readonly<Record<string, unknown>>,

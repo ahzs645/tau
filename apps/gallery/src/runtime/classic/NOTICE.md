@@ -44,11 +44,14 @@ The OFF writer rounds coordinates to six significant digits; the ASCII STL retai
 The adapter verifies face/corner correspondence and shared original vertex identities before restoring those
 coordinates, preserving every original indexed face and color. Inconsistent or ambiguous output is rejected.
 The paired ASCII STL is cached with the exact rendered mesh and copied for export, without another evaluation.
-Native STL retains Z-up millimetres; the preview and default GLB export convert once to Y-up metres. The public Assimp
-transcoder provides strict 3MF, OBJ, and faceted STEP exports from that GLB. Faceted STEP retains the mesh
-surface; it does not reconstruct analytic CAD surfaces. The original engine's native 3MF command is not
-declared because the pinned binary traps even on a plain cube. The OFF
-adapter preserves face colors and disconnected bodies, but OFF does not carry authored module names.
+Native STL retains Z-up millimetres; the preview and default GLB export convert once to Y-up metres. The public
+Assimp transcoder provides OBJ and faceted STEP exports from that GLB. Faceted STEP retains the mesh surface;
+it does not reconstruct analytic CAD surfaces. The original engine's native 3MF command is not used because
+the pinned binary traps even on a plain cube. Instead, the gallery explicitly declares a 3MF Core serializer
+over its validated native mesh. It retains decimal Float64 coordinates in Z-up millimetres, each original
+indexed face, existing body ownership, and per-face byte RGBA. Core palette display colors preserve appearance,
+not printer-specific material assignments. See the [3MF Core 1.4 specification](https://github.com/3MFConsortium/spec_core/blob/997b385e06f3181cf9aae0c578e0b45ccd48ccb2/3MF%20Core%20Specification.md).
+The OFF adapter preserves face colors and disconnected bodies, but OFF does not carry authored module names.
 
 No geometry repair is applied. Colored closed bodies retain canonical topology from their original OFF
 vertex indices only after closure, opposite winding, connected vertex links, and finite nonzero area at
@@ -58,3 +61,9 @@ retain their owner-local line primitives without canonical surface metadata. Nat
 nonzero exit codes, and absent output fail the operation. Warnings remain visible. Browser worker termination
 and the Node verification parent enforce deadlines while synchronous native code runs; an AbortSignal alone
 does not interrupt a synchronous WASM call.
+
+Direct 3MF checks the native Float64 surface independently: all coordinates and indices must be valid, every
+face must have finite nonzero area, and each existing owner must be closed, consistently oriented, have connected
+vertex links, and enclose positive volume. It performs no welding, facet removal, winding reversal, or fallback
+after an export error. A separate inward cavity component is rejected rather than silently reassigned to a
+different owner. Passing these native checks does not relax the separate Float32 canonical checks for GLB.

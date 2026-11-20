@@ -49,6 +49,7 @@ const rendered = (width: number): GalleryRenderResult => ({
   issues: [],
 });
 const session = (): GallerySession => ({
+  parameterDescription: { jsonSchema: undefined, parameterManifest: undefined, defaultParameters: { width: 10 } },
   render: vi.fn<GallerySession['render']>().mockResolvedValue(rendered(10)),
   export: vi.fn<GallerySession['export']>().mockResolvedValue([]),
   dispose: vi.fn<GallerySession['dispose']>().mockResolvedValue(),
@@ -130,6 +131,35 @@ describe('gallery model lifecycle', () => {
     });
     expect(result.current.error).toBe('Invalid width');
     expect(result.current.result?.artifactHash).toBe('width-10');
+  });
+
+  it('should expose admitted parameter metadata while the first render is pending and after it fails', async () => {
+    const client = session();
+    const first = Promise.withResolvers<GalleryRenderResult>();
+    vi.mocked(client.render).mockReturnValueOnce(first.promise).mockResolvedValueOnce(rendered(20));
+    mocks.create.mockResolvedValue(client);
+    const { result, rerender } = renderHook((props) => useGalleryModel(props), { initialProps: input });
+    await waitFor(() => {
+      expect(client.render).toHaveBeenCalledOnce();
+    });
+    expect(result.current.result).toBeUndefined();
+    expect(result.current.parameterDescription).toBe(client.parameterDescription);
+    expect(result.current.status).toBe('rendering');
+    await act(async () => {
+      first.reject(new Error('Enable the frame to render it.'));
+    });
+    await waitFor(() => {
+      expect(result.current.status).toBe('error');
+    });
+    expect(result.current.error).toBe('Enable the frame to render it.');
+    expect(result.current.parameterDescription).toBe(client.parameterDescription);
+    expect(result.current.result).toBeUndefined();
+    rerender({ ...input, parameters: { width: 20 } });
+    await waitFor(() => {
+      expect(result.current.status).toBe('ready');
+    });
+    expect(result.current.result?.artifactHash).toBe('width-20');
+    expect(mocks.create).toHaveBeenCalledOnce();
   });
 
   it('should dispose a session that finishes opening after the view has unmounted', async () => {

@@ -1725,6 +1725,8 @@ else if (generate=="vertical mini clip2"){
 	}
 }
 else if (generate=="keyguard frame" && type_of_keyguard!="Laser-Cut"){
+	assert(have_a_case=="yes" && have_a_keyguard_frame=="yes",
+		"Keyguard frame output requires Have a case and Have a keyguard frame set to yes. Enable both, or choose keyguard output.");
 	color("Turquoise")
 	keyguard_frame("no");
 	

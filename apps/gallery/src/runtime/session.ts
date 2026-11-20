@@ -5,6 +5,7 @@ import { copyParameters, resolveGalleryParameters } from '#runtime/parameters.js
 import type {
   GalleryExportFormat,
   GalleryOperationOptions,
+  GalleryParameterDescription,
   GalleryRenderResult,
   GallerySession,
   GallerySessionInput,
@@ -12,6 +13,18 @@ import type {
 } from '#runtime/types.js';
 
 const exportFormats: readonly GalleryExportFormat[] = ['glb', 'stl', '3mf', 'obj', 'step'];
+
+/** Wire transport clones can lose freezing; keep the admitted JSON snapshot immutable for every consumer. */
+const freezeParameterMetadata = <T>(value: T): T => {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    const children: readonly unknown[] = Object.values(value);
+    for (const child of children) {
+      freezeParameterMetadata(child);
+    }
+  }
+  return value;
+};
 
 const aborted = (message = 'The gallery operation was cancelled.'): DOMException =>
   new DOMException(message, 'AbortError');
@@ -102,10 +115,15 @@ export const createGallerySessionWithClient = async (
       throw runtimeError('Could not read model parameters', description.issues);
     }
     assertNoErrorIssues('Could not read model parameters', description.issues);
-    const parameterManifest = description.parameters;
-    const defaultParameters = copyParameters(parameterManifest.defaults);
+    const parameterManifest = freezeParameterMetadata(structuredClone(description.parameters));
+    const defaultParameters = parameterManifest.defaults;
     const jsonSchema =
       parameterManifest.legacyProjection.status === 'usable' ? parameterManifest.legacyProjection.schema : undefined;
+    const parameterDescription: GalleryParameterDescription = Object.freeze({
+      parameterManifest,
+      defaultParameters,
+      jsonSchema,
+    });
     let currentParameters = resolveGalleryParameters(defaultParameters, input.parameters ?? {});
     admitParameterValues(parameterManifest, currentParameters);
     const model = client.open({ source, parameters: currentParameters, watch: false, signal: sessionLifetime.signal });
@@ -207,6 +225,7 @@ export const createGallerySessionWithClient = async (
     };
 
     return {
+      parameterDescription,
       render,
       async export(format, operation = {}) {
         const signal = AbortSignal.any([sessionLifetime.signal, ...(operation.signal ? [operation.signal] : [])]);

@@ -35,7 +35,9 @@ body();`,
     }
     const declaration = classicParameterDeclaration(exported);
     expect(declaration.defaultParameters).toEqual({
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- The native Customizer parameter is named enable_center_dots.
       'Tip / chamber': { width: 12.5, height: 25, enable_center_dots: true, mode: 'print', offset: [1, -2, 3] },
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Preserve the authored Model group and component_selection parameter.
       Model: { component_selection: 'stamp' },
     });
     const identity = { id: 'urn:gallery:classic-customizer-fixture', name: 'ClassicCustomizerFixture' };
@@ -46,7 +48,9 @@ body();`,
       createKernelParameterDeclaration(
         {
           ...declaration.defaultParameters,
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- Admission consumes the authored Model/component_selection keys.
           Model: { component_selection: 'handle' },
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- Admission consumes the authored enable_center_dots parameter.
           'Tip / chamber': { width: 12.5, height: 25, enable_center_dots: false, mode: 'display', offset: [1, -2, 3] },
         },
         declaration.jsonSchema,
@@ -64,6 +68,7 @@ body();`,
   it('should round-trip quotes, backslashes, newlines, booleans, and numeric vectors as CLI values', () => {
     const text = 'A "quoted" \\ path\nnext line';
     expect(parseCustomizerValue(JSON.stringify(text), {})).toBe(text);
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Customizer group names preserve the supplied Group key.
     expect(classicParameterArguments({ Group: { label: text, enabled: false, offset: [1, 2, -3] } })).toEqual([
       `-Dlabel=${JSON.stringify(text)}`,
       '-Denabled=false',

@@ -10,6 +10,7 @@ const glb = (): Uint8Array<ArrayBuffer> => {
       scenes: [{ nodes: [0] }],
       nodes: [{ translation: [2, 3, 4], mesh: 0 }],
       extensionsUsed: ['EXT_test_preserved'],
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- The glTF extension identifier must retain its external format spelling.
       extensions: { EXT_test_preserved: { value: 123 } },
     }),
   );
@@ -43,6 +44,7 @@ describe('legacy static GLB orientation', () => {
         { children: [0], rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2] },
       ],
       scenes: [{ nodes: [1] }],
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- The original glTF extension key and payload must survive normalization.
       extensions: { EXT_test_preserved: { value: 123 } },
     });
     const position = new Vector3(2, 3, 4).applyQuaternion(new Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2));
@@ -67,6 +69,7 @@ describe('legacy static GLB orientation', () => {
         { children: [0], rotation: [Math.SQRT1_2, 0, 0, Math.SQRT1_2] },
       ],
       scenes: [{ nodes: [1] }],
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- The original glTF extension key and payload must survive normalization.
       extensions: { EXT_test_preserved: { value: 123 } },
     });
     const position = new Vector3(2, 3, 4).applyQuaternion(new Quaternion(Math.SQRT1_2, 0, 0, Math.SQRT1_2));

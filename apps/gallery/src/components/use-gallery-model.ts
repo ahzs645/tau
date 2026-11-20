@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { loadProjectFiles } from '#catalog/catalog.js';
 import type { GalleryFiles, GalleryProject, GalleryVariant } from '#catalog/types.js';
 import { createGallerySession, loadGalleryStaticArtifact } from '#runtime.js';
-import type { GalleryRenderResult, GallerySession } from '#runtime.js';
+import type { GalleryParameterDescription, GalleryRenderResult, GallerySession } from '#runtime.js';
 import { errorMessage } from '#components/download.js';
 
 export type UploadedAsset = {
@@ -32,6 +32,7 @@ type ModelInput = {
 
 type GalleryModelState = {
   readonly result?: GalleryRenderResult;
+  readonly parameterDescription?: GalleryParameterDescription;
   readonly session?: GallerySession;
   readonly files: GalleryFiles;
   readonly status: 'loading' | 'rendering' | 'ready' | 'error';
@@ -161,15 +162,17 @@ export const useGalleryModel = ({
   const matchesRequest =
     rendered?.source === source && (project.mode === 'static' || rendered.parameters === parameters);
   const currentStatus = status === 'ready' && !matchesRequest ? 'rendering' : status;
+  const session = resource?.identity === identity && resource.source === source ? resource.session : undefined;
   return useMemo(
     () => ({
       result,
-      session: resource?.identity === identity && resource.source === source ? resource.session : undefined,
+      parameterDescription: session?.parameterDescription ?? result,
+      session,
       files: resource?.identity === identity ? resource.files : emptyFiles,
       status: currentStatus,
       error,
       busy: currentStatus === 'loading' || currentStatus === 'rendering',
     }),
-    [result, resource, identity, source, currentStatus, error],
+    [result, resource, identity, session, currentStatus, error],
   );
 };

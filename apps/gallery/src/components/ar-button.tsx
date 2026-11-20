@@ -53,12 +53,12 @@ export const ArButton = ({
         throw new Error('AR requires a binary 3D model.');
       }
       if (prepared.current?.hash !== hash) {
-        const [{ GLTFLoader }, { USDZExporter }] = await Promise.all([
+        const [gltfLoaderModule, usdzExporterModule] = await Promise.all([
           import('three/addons/loaders/GLTFLoader.js'),
           import('three/addons/exporters/USDZExporter.js'),
         ]);
-        const gltf = await new GLTFLoader().parseAsync(new Uint8Array(artifact.content).buffer, '');
-        const bytes = await new USDZExporter().parseAsync(gltf.scene);
+        const gltf = await new gltfLoaderModule.GLTFLoader().parseAsync(new Uint8Array(artifact.content).buffer, '');
+        const bytes = await new usdzExporterModule.USDZExporter().parseAsync(gltf.scene);
         if (!mounted.current || !canLaunch.current) {
           return;
         }

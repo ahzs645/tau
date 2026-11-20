@@ -37,16 +37,16 @@ export const verifyPrintability = async (
 ): Promise<PrintabilityEvidence> => {
   // GeoSpec 0.6 refuses Y-up admission. Reorient scene roots while preserving every binary chunk and extension.
   const admittedBytes = normalizeStaticGlb(bytes, 'y-up', 'z-up');
-  const [
-    { createGeoSpecAssertionClient, GeoSpecAssertionError },
-    { encodeGeoSpecCanonicalJson },
-    { createNodeGeoSpecEngine },
-  ] = await Promise.all([import('geospec/assertion-client'), import('geospec/engine'), import('geospec/runner/node')]);
+  const [assertionModule, { encodeGeoSpecCanonicalJson }, { createNodeGeoSpecEngine }] = await Promise.all([
+    import('geospec/assertion-client'),
+    import('geospec/engine'),
+    import('geospec/runner/node'),
+  ]);
   const runClaim = (invoke: () => GeoSpecCanonicalClaimReport): GeoSpecCanonicalClaimReport => {
     try {
       return invoke();
     } catch (error) {
-      if (error instanceof GeoSpecAssertionError) {
+      if (error instanceof assertionModule.GeoSpecAssertionError) {
         // Failed, refused and unsupported evidence stays visible; none becomes a geometric pass.
         return error.report;
       }
@@ -79,7 +79,7 @@ export const verifyPrintability = async (
       ),
     );
     const { subjectHash } = admitted.result.subject;
-    const client = createGeoSpecAssertionClient({ engine, evidenceProfile: 'bounded' });
+    const client = assertionModule.createGeoSpecAssertionClient({ engine, evidenceProfile: 'bounded' });
     const reports = [
       { matcher: 'toBeWatertight', report: runClaim(() => client.expectGeo({ subjectHash }).toBeWatertight()) },
       {

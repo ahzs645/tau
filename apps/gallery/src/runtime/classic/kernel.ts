@@ -19,6 +19,7 @@ import { listClassicSourcePaths, readClassicSources } from '#runtime/classic/sou
 import type { ClassicSources } from '#runtime/classic/sources.js';
 import { classicRenderSchema, classicResolution } from '#runtime/classic/tessellation.js';
 import type { ClassicTessellation } from '#runtime/classic/tessellation.js';
+import { classicMeshToThreeMf } from '#runtime/classic/three-mf.js';
 
 type ClassicContext = { fonts: ClassicFonts };
 type ClassicMeshResult = {
@@ -73,7 +74,7 @@ export const classicOpenScad = defineKernel({
   id: 'openscad',
   extensions: ['scad'],
   name: 'ClassicOpenScadGalleryKernel',
-  version: '1.2.0+gallery.5',
+  version: '1.2.0+gallery.6',
   evaluateOptionsSchema: z.object({}),
   views: {
     model: {
@@ -95,6 +96,12 @@ export const classicOpenScad = defineKernel({
       title: 'STL',
       mimeType: 'model/stl',
       extension: 'stl',
+      optionsSchema: classicRenderSchema,
+    },
+    '3mf': {
+      title: '3MF',
+      mimeType: 'model/3mf',
+      extension: '3mf',
       optionsSchema: classicRenderSchema,
     },
   },
@@ -142,6 +149,12 @@ export const classicOpenScad = defineKernel({
       return { files: [createExportFile('glb', 'model.glb', bytes)] as const, issues: result.issues };
     }
     const result = await meshAt(handle, options.tessellation, { services, context });
+    if (exportId === '3mf') {
+      return {
+        files: [createExportFile('3mf', 'model.3mf', classicMeshToThreeMf(result.mesh))] as const,
+        issues: result.issues,
+      };
+    }
     // Return a transfer-safe copy of the exact native output paired with this mesh, without re-evaluating the model.
     return {
       files: [createExportFile('stl', 'model.stl', new Uint8Array(result.stlBytes))] as const,

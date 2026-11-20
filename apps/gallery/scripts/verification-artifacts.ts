@@ -43,6 +43,7 @@ const validateStructure = (files: readonly GalleryExportFile[], format: '3mf' | 
       'unique entity IDs',
       'geometric surface entities',
     ],
+    // eslint-disable-next-line id-denylist -- Wavefront OBJ is a public export format key.
     obj: ['finite vertex records', 'nonempty face records', 'positive and negative face indices'],
   } as const;
   for (const file of selected) {

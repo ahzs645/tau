@@ -9,6 +9,7 @@ import {
 import type { GeometryOutputTransformOptions, GlbNode, GlbPrimitive } from '@taucad/geometry-core';
 import { cadEdgeOverlayMaterialDefaults, cadMaterialDefaults } from '@taucad/runtime/types';
 import { classicCanonicalSurface } from '#runtime/classic/canonical.js';
+import { splitClassicBodies } from '#runtime/classic/topology.js';
 
 type Point = readonly [number, number, number];
 type Color = readonly [number, number, number, number];
@@ -191,39 +192,6 @@ export const parseClassicOff = (text: string): ClassicMesh => {
   return { vertices, triangles };
 };
 
-const splitBodies = (mesh: ClassicMesh): ClassicTriangle[][] => {
-  const parents = mesh.vertices.map((_, index) => index);
-  const find = (index: number): number => {
-    let root = index;
-    while (itemAt(parents, root) !== root) {
-      root = itemAt(parents, root);
-    }
-    let current = index;
-    while (current !== root) {
-      const next = itemAt(parents, current);
-      parents[current] = root;
-      current = next;
-    }
-    return root;
-  };
-  for (const triangle of mesh.triangles) {
-    const [a, b, c] = triangle.indices;
-    parents[find(b)] = find(a);
-    parents[find(c)] = find(a);
-  }
-  const bodies = new Map<number, ClassicTriangle[]>();
-  for (const triangle of mesh.triangles) {
-    const root = find(triangle.indices[0]);
-    const body = bodies.get(root);
-    if (body) {
-      body.push(triangle);
-    } else {
-      bodies.set(root, [triangle]);
-    }
-  }
-  return [...bodies.values()];
-};
-
 const surfacePrimitive = (
   vertices: readonly Point[],
   triangles: readonly ClassicTriangle[],
@@ -279,6 +247,7 @@ const edgePrimitive = (surfaces: readonly GlbPrimitive[]): GlbPrimitive | undefi
       },
       doubleSided: cadEdgeOverlayMaterialDefaults.doubleSided,
       alphaMode: cadEdgeOverlayMaterialDefaults.alphaMode,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- The glTF extension requires its registered KHR_materials_unlit name.
       extensions: { KHR_materials_unlit: {} },
     },
   };
@@ -290,7 +259,7 @@ export const classicMeshToGlb = (mesh: ClassicMesh, options: MeshOptions = {}): 
     coordinateSystem: options.coordinateSystem ?? 'y-up',
     unit: { length: options.unit ?? 'meter' },
   };
-  const nodes: GlbNode[] = splitBodies(mesh).map((body, index) => {
+  const nodes: GlbNode[] = splitClassicBodies(mesh.vertices.length, mesh.triangles).map((body, index) => {
     const colors = new Map<string, ClassicTriangle[]>();
     for (const triangle of body) {
       const key = triangle.color.join(',');

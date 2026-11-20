@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createKernelParameterDeclaration } from '@taucad/runtime/kernel';
+import { validateJsonSchemaValue } from '@taucad/parameters/schema';
 import { parseClassicCustomizer } from '#runtime/classic/customizer.js';
 import { classicParameterArguments, classicParameterDeclaration } from '#runtime/classic/parameters.js';
 import { resolveGalleryParameters } from '#runtime/parameters.js';
@@ -47,26 +48,31 @@ describe('classic OpenSCAD resolution overrides', () => {
   it.each([
     { project: 'pendant-lamp', entry: 'Main.scad', names: ['Small', 'Medium', 'Large'] },
     { project: 'vane-trap', entry: 'main.scad', names: ['New set 1'] },
-  ])('should admit the preserved $project presets without dropping $fn', async ({ project, entry, names }) => {
-    const directory = new URL(`../../../models/projects/${project}/`, import.meta.url);
-    const [source, presetText] = await Promise.all([
-      readFile(new URL(entry, directory), 'utf8'),
-      readFile(new URL('presets.json', directory), 'utf8'),
-    ]);
-    const parsed = parseClassicCustomizer(source, entry);
-    if (!parsed) {
-      throw new Error(`Expected a Customizer declaration for ${project}.`);
-    }
-    const declaration = classicParameterDeclaration(parsed);
-    const decoded: unknown = JSON.parse(presetText);
-    const presets = z
-      .array(z.object({ name: z.string(), parameters: z.record(z.string(), z.unknown()) }))
-      .parse(decoded);
-    expect(presets.map(({ name }) => name)).toEqual(names);
-    for (const preset of presets) {
-      const values = resolveGalleryParameters(declaration.defaultParameters, preset.parameters);
-      expect(values['$fn']).toBe(100);
-      expect(() => createKernelParameterDeclaration(values, declaration.jsonSchema, identity)).not.toThrow();
-    }
-  });
+  ])(
+    'should admit the preserved $project presets through parameter and execution validation',
+    async ({ project, entry, names }) => {
+      const directory = new URL(`../../../models/projects/${project}/`, import.meta.url);
+      const [source, presetText] = await Promise.all([
+        readFile(new URL(entry, directory), 'utf8'),
+        readFile(new URL('presets.json', directory), 'utf8'),
+      ]);
+      const parsed = parseClassicCustomizer(source, entry);
+      if (!parsed) {
+        throw new Error(`Expected a Customizer declaration for ${project}.`);
+      }
+      const declaration = classicParameterDeclaration(parsed);
+      const decoded: unknown = JSON.parse(presetText);
+      const presets = z
+        .array(z.object({ name: z.string(), parameters: z.record(z.string(), z.unknown()) }))
+        .parse(decoded);
+      expect(presets.map(({ name }) => name)).toEqual(names);
+      expect(validateJsonSchemaValue(declaration.jsonSchema, declaration.defaultParameters)).toBe(true);
+      for (const preset of presets) {
+        const values = resolveGalleryParameters(declaration.defaultParameters, preset.parameters);
+        expect(values['$fn']).toBe(100);
+        expect(() => createKernelParameterDeclaration(values, declaration.jsonSchema, identity)).not.toThrow();
+        expect(validateJsonSchemaValue(declaration.jsonSchema, values), preset.name).toBe(true);
+      }
+    },
+  );
 });

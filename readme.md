@@ -8,6 +8,9 @@ This fork hosts the [parametric model gallery](https://3dd.ahmadjalil.com) in
 [`apps/gallery`](apps/gallery). See the [gallery integration and maintenance
 guide](apps/gallery/MIGRATION.md) for local checks, upstream updates and Pages
 deployment. The upstream Tau application and reusable packages remain below.
+Gallery [model sources](apps/gallery/models/projects) and the original OpenSCAD
+adapter retain their component licenses; see the [engine and font
+notices](apps/gallery/src/runtime/classic/NOTICE.md).
 
 Open-source, AI-native CAD: browser-based and kernel-agnostic. Design anything from 3D prints, game assets, and more.
 

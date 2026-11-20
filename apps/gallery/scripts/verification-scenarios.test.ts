@@ -42,7 +42,7 @@ describe('public gallery verification coverage', () => {
     }
   });
 
-  it('should require all 93 public cases and 383 positive export requests for the full command', async () => {
+  it('should require all 93 public cases and 378 positive export requests for the full command', async () => {
     const entries = await readNodeCatalog();
     const catalogue = entries.filter(({ project }) => !project.hidden);
     const cases = catalogue.flatMap(({ project }) =>
@@ -56,11 +56,20 @@ describe('public gallery verification coverage', () => {
     expect(rejections.map(({ project, scenario }) => `${project.id}/${scenario.name}`).sort()).toEqual([
       'bottle-separator/bed-too-small',
       'bottle-separator/invalid-bottle-gap',
+      'keyguard-with-raised-tabs/preset-2',
     ]);
+    const keyguardRejection = rejections.find(({ project }) => project.id === 'keyguard-with-raised-tabs');
+    expect(keyguardRejection?.scenario.expectedError).toBe(
+      'Keyguard frame output requires Have a case and Have a keyguard frame set to yes. Enable both, or choose keyguard output.',
+    );
+    expect(keyguardRejection?.scenario.parameters?.['generate']).toBe('keyguard frame');
+    expect(keyguardRejection?.scenario.parameters?.['have_a_keyguard_frame']).toBe('no');
+    expect(cases.filter(({ scenario }) => scenario.expectedError === undefined)).toHaveLength(89);
+    expect(staticCount).toBe(1);
     const exports = cases
       .filter(({ scenario }) => scenario.expectedError === undefined)
       .flatMap(({ variant }) => variant.exportFormats);
-    expect(exports).toHaveLength(383);
+    expect(exports).toHaveLength(378);
     expect(
       Object.fromEntries(
         ['glb', 'stl', 'step', '3mf', 'obj'].map((format) => [
@@ -69,12 +78,12 @@ describe('public gallery verification coverage', () => {
         ]),
       ),
     ).toEqual({
-      glb: 90,
-      stl: 81,
-      step: 81,
-      '3mf': 75,
+      glb: 89,
+      stl: 80,
+      step: 80,
+      '3mf': 74,
       // eslint-disable-next-line id-denylist -- Wavefront OBJ is a public export format key.
-      obj: 56,
+      obj: 55,
     });
     expect(cases.filter(({ scenario }) => scenario.expectedComponents !== undefined)).toHaveLength(12);
     expect(

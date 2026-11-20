@@ -74,6 +74,37 @@ const createClient = async (descriptionIssue?: KernelIssue, warning?: KernelIssu
 };
 
 describe('gallery runtime diagnostic policy', () => {
+  it('should expose immutable admitted parameters before a failed first render and allow a later correction', async () => {
+    const client = await createClient();
+    const session = await createGallerySessionWithClient(client, sessionInput);
+    try {
+      const description = session.parameterDescription;
+      expect(description.defaultParameters).toEqual({ faultStage: 'none' });
+      const field = description.jsonSchema?.properties?.['faultStage'];
+      if (!field || typeof field !== 'object') {
+        throw new Error('Expected the admitted fault-stage field.');
+      }
+      expect(field.enum).toEqual(['none', 'evaluate', 'render', 'export']);
+      expect(Reflect.set(description.defaultParameters, 'faultStage', 'render')).toBe(false);
+      expect(Reflect.set(field, 'type', 'number')).toBe(false);
+      const declared = description.parameterManifest?.defaults;
+      if (!declared) {
+        throw new Error('Expected the admitted parameter manifest.');
+      }
+      expect(Reflect.set(declared, 'faultStage', 'render')).toBe(false);
+      await expect(session.render({ faultStage: 'render' })).rejects.toThrow(skippedBoolean.message);
+      expect(session.parameterDescription).toBe(description);
+      await expect(session.export('glb')).rejects.toThrow(skippedBoolean.message);
+      const recovered = await session.render({ faultStage: 'none' });
+      expect(recovered.parameters).toEqual({ faultStage: 'none' });
+      expect(recovered.defaultParameters).toEqual({ faultStage: 'none' });
+      expect(recovered.jsonSchema).toEqual(description.jsonSchema);
+      await expect(session.export('glb')).resolves.toMatchObject([{ name: 'model.glb', bytes: previewBytes }]);
+    } finally {
+      await session.dispose();
+    }
+  });
+
   it('should reject a successful description carrying an error diagnostic', async () => {
     const client = await createClient(skippedBoolean);
     await expect(createGallerySessionWithClient(client, sessionInput)).rejects.toThrow(skippedBoolean.message);

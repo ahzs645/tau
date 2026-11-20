@@ -1,73 +1,7 @@
 import type { GlbManifoldTopology, GlbPrimitive } from '@taucad/geometry-core';
+import { closedNativeTopology } from '#runtime/classic/topology.js';
 
 type NativeTriangle = readonly [number, number, number];
-type VertexLink = Map<number, Set<number>>;
-
-const linkEdge = (links: Map<number, VertexLink>, center: number, edge: readonly [number, number]): void => {
-  let link = links.get(center);
-  if (!link) {
-    link = new Map();
-    links.set(center, link);
-  }
-  const [left, right] = edge;
-  const forward = link.get(left) ?? new Set<number>();
-  const reverse = link.get(right) ?? new Set<number>();
-  forward.add(right);
-  reverse.add(left);
-  link.set(left, forward);
-  link.set(right, reverse);
-};
-
-const connectedLink = (link: VertexLink): boolean => {
-  if ([...link.values()].some((neighbors) => neighbors.size !== 2)) {
-    return false;
-  }
-  const start = link.keys().next().value;
-  if (start === undefined) {
-    return false;
-  }
-  const pending = [start];
-  const visited = new Set<number>();
-  while (pending.length > 0) {
-    const vertex = pending.pop();
-    if (vertex === undefined || visited.has(vertex)) {
-      continue;
-    }
-    visited.add(vertex);
-    pending.push(...(link.get(vertex) ?? []));
-  }
-  return visited.size === link.size;
-};
-
-/** Eligibility uses native OFF identities, never approximate or exact-position welding. */
-const closedNativeTopology = (triangles: readonly NativeTriangle[]): boolean => {
-  const edges = new Map<string, { count: number; winding: number }>();
-  const links = new Map<number, VertexLink>();
-  for (const [a, b, c] of triangles) {
-    if (a === b || b === c || c === a) {
-      return false;
-    }
-    for (const [left, right] of [
-      [a, b],
-      [b, c],
-      [c, a],
-    ] as const) {
-      const key = left < right ? `${left}:${right}` : `${right}:${left}`;
-      const edge = edges.get(key) ?? { count: 0, winding: 0 };
-      edge.count += 1;
-      edge.winding += left < right ? 1 : -1;
-      edges.set(key, edge);
-    }
-    linkEdge(links, a, [b, c]);
-    linkEdge(links, b, [c, a]);
-    linkEdge(links, c, [a, b]);
-  }
-  return (
-    edges.size > 0 &&
-    [...edges.values()].every(({ count, winding }) => count === 2 && winding === 0) &&
-    [...links.values()].every((link) => connectedLink(link))
-  );
-};
 
 /** Match the pinned Assimp float arithmetic, including cross-product cancellation and squared-area underflow. */
 const finiteSerializedTriangle = (positions: Float32Array, offset: number): boolean => {

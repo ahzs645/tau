@@ -4,6 +4,8 @@ import { expect, test } from 'playwright/test';
 import type { Page } from 'playwright/test';
 import { measureGlb } from '#scripts/measure-glb.js';
 import { validateStepStructure, validateThreeMfStructure } from '#scripts/export-structure.js';
+import { readNodeCatalog } from '#scripts/catalog-node.js';
+import { readGalleryLocation } from '#sharing/location.js';
 
 const waitForModel = async (page: Page): Promise<void> => {
   await expect(page.getByRole('img', { name: '3D model preview', exact: true })).toBeVisible({ timeout: 120_000 });
@@ -153,6 +155,69 @@ test('mobile layout keeps the viewer and parameter controls usable', async ({ pa
   await page.screenshot({ path: testInfo.outputPath('parameters-mobile.png'), fullPage: true });
   await page.getByRole('button', { name: '3D view', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Interactive model viewer' })).toBeVisible();
+});
+
+test('a failing saved keyguard link stays editable and recovers without exporting a stale preview', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const catalogue = await readNodeCatalog();
+  const project = catalogue.find((entry) => entry.project.id === 'keyguard-with-raised-tabs')?.project;
+  const preset = project?.presets.find(({ id }) => id === 'preset-2');
+  if (!project || !preset) {
+    throw new Error('Missing the preserved keyguard frame preset.');
+  }
+  const frameParameter = 'have_a_keyguard_frame';
+  expect(preset.parameters['generate']).toBe('keyguard frame');
+  expect(preset.parameters[frameParameter]).toBe('no');
+  const payload = Buffer.from(JSON.stringify(preset.parameters)).toString('base64url');
+  await page.goto(`/${project.id}/?p=1.raw.${payload}`);
+  const actionableError =
+    'Keyguard frame output requires Have a case and Have a keyguard frame set to yes. Enable both, or choose keyguard output.';
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText(actionableError, { timeout: 120_000 });
+  await alert.getByText('Error details', { exact: true }).click();
+  await expect(alert.getByText(/Keyguard frame output requires/u)).toBeVisible();
+  const downloadButton = page.getByRole('button', { name: 'Export', exact: true });
+  await expect(downloadButton).toBeDisabled();
+  const panel = page.getByRole('complementary', { name: 'Model parameters' });
+  await expect(panel.getByRole('status', { name: 'Loading model parameters' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Reset parameters' })).toBeEnabled();
+  const frame = panel.getByRole('combobox', { name: /^Select for Have a keyguard frame$/iu });
+  await expect(frame).toHaveText('no');
+  await frame.click();
+  await page.getByRole('option', { name: 'yes', exact: true }).click();
+  await waitForModel(page);
+  await expect(frame).toHaveText('yes');
+  const corrected = readGalleryLocation(new URL(page.url())).parameters;
+  expect(corrected).not.toHaveProperty(frameParameter);
+  expect(corrected['Keyguard Frame Info']).toMatchObject({ [frameParameter]: 'yes' });
+  expect(corrected['Keyguard Basics']).toMatchObject({ generate: 'keyguard frame' });
+
+  await page.getByRole('combobox', { name: 'Export format' }).selectOption('glb');
+  const pending = page.waitForEvent('download');
+  await downloadButton.click();
+  const download = await pending;
+  const filename = await download.path();
+  if (!filename) {
+    throw new Error('No corrected keyguard GLB download was written.');
+  }
+  const geometry = await measureGlb(new Uint8Array(await readFile(filename)));
+  expect(geometry.triangles).toBeGreaterThan(0);
+  expect(geometry.surfaceAreaMm2).toBeGreaterThan(0);
+
+  const dimensions = await page.getByLabel('Model dimensions', { exact: true }).textContent();
+  await panel.getByRole('combobox', { name: 'Preset', exact: true }).selectOption('preset-2');
+  await expect(downloadButton).toBeDisabled();
+  await expect(alert).toContainText(actionableError, { timeout: 120_000 });
+  await expect(alert).toContainText('The last successful preview is still visible.');
+  await expect(page.getByRole('img', { name: '3D model preview', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Model dimensions', { exact: true })).toHaveText(dimensions ?? '');
+  await expect(downloadButton).toBeDisabled();
+  await panel.getByRole('button', { name: 'Reset parameters' }).click();
+  await waitForModel(page);
+  await expect(frame).toHaveText('no');
+  expect(readGalleryLocation(new URL(page.url())).parameters).toEqual(project.initialParameters);
 });
 
 test('stamp artwork and the handle selector change the real exported geometry', async ({ page }) => {

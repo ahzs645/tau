@@ -5,13 +5,13 @@ The catalogue is shared by the browser loader, static route builder, source arch
 From the workspace root, run the complete geometry and export matrix:
 
 ```sh
-pnpm nx run gallery:verify-models -- --all-exports --regressions --write-artifacts
+corepack pnpm nx run gallery:verify-models --all-exports --regressions --write-artifacts --variant-timeout=600000
 ```
 
 Where Nx cannot create its local plugin socket, the equivalent standalone command is:
 
 ```sh
-node --import tsx apps/gallery/scripts/verify-models.ts --all-exports --regressions --write-artifacts --report=out/reports/gallery/verification.json
+node --import tsx apps/gallery/scripts/verify-models.ts --all-exports --regressions --write-artifacts --variant-timeout=600000 --report=out/reports/gallery/verification.json
 ```
 
 Each executable variant runs in a separate process. An external watchdog covers startup, description, synchronous native rendering, export, analysis and disposal; it can terminate a blocked WASM/native operation. The controller does not load the runtime graph. The parent writes a checkpoint after every variant and the child after every scenario. A process killed by the environment is a failed case, never a pass.
@@ -22,7 +22,7 @@ Every requested format is attempted even when an earlier format fails. Per-forma
 
 ## Expected public coverage
 
-With `--all-exports --regressions --write-glb --variant-timeout=120000`, no project or variant filters, and the current catalogue, an entirely passing run has these counts:
+With `--all-exports --regressions --write-glb --variant-timeout=600000`, no project or variant filters, and the current catalogue, an entirely passing run has these counts:
 
 | Evidence                                    |                                            Expected count |
 | ------------------------------------------- | --------------------------------------------------------: |
@@ -38,18 +38,18 @@ With `--all-exports --regressions --write-glb --variant-timeout=120000`, no proj
 | Additional bottle part/bed cases            |                                                         4 |
 | Expected bottle input rejections            |                                                         2 |
 | Total case rows                             |                                                        93 |
-| Rows with measured geometry                 |                               91: 90 executable, 1 static |
-| Export-format attempts                      |                                                       383 |
+| Rows with measured geometry                 |                               90: 89 executable, 1 static |
+| Export-format attempts                      |                                                       378 |
 | Default cross-variant comparisons           | 11: 10 passing comparisons, 1 documented stamp difference |
 | Bottle printability cases / compiled claims |                                                   12 / 24 |
 
-The 383 export attempts comprise 90 GLB, 81 STL, 81 STEP, 75 3MF and 56 OBJ conversions. These are format requests, not output-file counts: a format can return multiple part files. Explicit curated format allowlists are retained. Successful expected-rejection cases contain no geometry or exports. A render failure or timeout can reduce the number of reached exports and leave fewer scenario rows; neither counts as passing coverage.
+The 378 export attempts comprise 89 GLB, 80 STL, 80 STEP, 74 3MF and 55 OBJ conversions. These are format requests, not output-file counts: a format can return multiple part files. Explicit curated format allowlists are retained. Three cases require specific input rejections: the two bottle cases and the inherited keyguard `New set 2` preset included in the 39 other-project preset rows. Successful expected-rejection cases contain no geometry or exports. A render failure or timeout can reduce the number of reached exports and leave fewer scenario rows; neither counts as passing coverage.
 
-The preserved Wham source remains hidden and is excluded from the public matrix, including explicit `--project=wham` requests. The command exercises every one of the 50 authored public preset definitions on its declared default variant. Each preset replaces overrides over the source defaults, matching the UI. The 4 bottle presets receive their existing two fit cases instead of duplicate ordinary preset cases; the other 46 presets, including all 7 PET opener presets, each receive one ordinary case. No preset is presumed to be an expected failure. Stamp artwork uses the preserved binary files; upload replacement also has dedicated runtime and browser tests.
+The preserved Wham source remains hidden and is excluded from the public matrix, including explicit `--project=wham` requests. The command exercises every one of the 50 authored public preset definitions on its declared default variant. Each preset replaces overrides over the source defaults, matching the UI. The 4 bottle presets receive their existing two fit cases instead of duplicate ordinary preset cases; the other 46 presets, including all 7 PET opener presets, each receive one case. Keyguard `New set 2` requests a frame while explicitly disabling its frame flag. The original source and original engine produce an empty result for that exact preset; the matrix now requires the precise actionable assertion documented in its [source notes](../models/projects/keyguard-with-raised-tabs/SOURCE.md), retaining every saved value. Its separate native integration control enables only that flag and requires a real frame and STL. No other saved preset is expected to fail. Stamp artwork uses the preserved binary files; upload replacement also has dedicated runtime and browser tests.
 
-With `--write-glb`, the 90 successful executable geometry cases retain 180 files in total: one preview and one exported GLB each. The static source is measured directly and is not duplicated into the artifact directory. Other formats are validated but their bytes are retained only with `--write-artifacts`. Artifact references in the matrix report are repository-relative.
+With `--write-glb`, the 89 successful executable geometry cases retain 178 files in total: one preview and one exported GLB each. The static source is measured directly and is not duplicated into the artifact directory. Other formats are validated but their bytes are retained only with `--write-artifacts`. Artifact references in the matrix report are repository-relative.
 
-The absolute 120-second child cap covers the entire variant, including all its scenarios and exports; for example, the bottle variant has 15 cases and up to 65 format requests, the periodic-table variant has 14 cases and up to 70 requests, and the keyguard variant has 11 cases and up to 55 requests. These are whole-variant deadlines; an expensive preset or accumulated work can cause an explicit timeout, which must be investigated rather than counted as coverage. `complete` records whether the controller finished its selected variant attempts, so it can be true alongside failures. Acceptance requires `complete: true`, `passed: true`, all expected coverage, and exit code 0. Failed cases, exports, parity comparisons and timed-out children produce a nonzero exit code. A deliberately paused batch can exit 0 with `complete: false` and `passed: false`.
+The absolute ten-minute child cap covers the entire variant, including all its scenarios and exports; for example, the bottle variant has 15 cases and up to 65 format requests, the periodic-table variant has 14 cases and up to 70 requests, and the keyguard variant has 11 cases and up to 50 requests. The dense SCAD lamp requires four cases and twenty exports; a local default-only attempt reached geometry outputs but was killed after 117 seconds before completing its final format. That incomplete attempt does not establish hosted timing or passing coverage. These are whole-variant deadlines; an expensive preset or accumulated work can cause an explicit timeout, which must be investigated rather than counted as coverage. `complete` records whether the controller finished its selected variant attempts, so it can be true alongside failures. Acceptance requires `complete: true`, `passed: true`, all expected coverage, and exit code 0. Failed cases, exports, parity comparisons and timed-out children produce a nonzero exit code. A deliberately paused batch can exit 0 with `complete: false` and `passed: false`.
 
 ## Share a bounded verification slot
 
@@ -62,7 +62,7 @@ node --import tsx apps/gallery/scripts/verify-models.ts --all-exports --regressi
 
 `--max-variants` stops after whole variant processes. Sending `SIGUSR1` to the controller requests the same checkpoint boundary after its current child finishes. A paused report has `complete: false` and `passed: false`; completed attempts can be reused, and existing failures remain failures. A successful pause returns exit code 0, while any failed check returns nonzero. A complete passing run requires `complete: true` and `passed: true`.
 
-`--variant-timeout=120000` adds an absolute two-minute cap for each child across all its operations. An outer host deadline can also bound the controller, for example `timeout --kill-after=5s 300s node --import tsx ...`. Each cap fails unfinished work; it never turns a timeout into completed evidence.
+`--variant-timeout=600000` adds an absolute ten-minute cap for each child across all its operations. An outer host deadline can also bound the controller, for example `timeout --kill-after=5s 300s node --import tsx ...` for a deliberately limited local batch. Each cap fails unfinished work; it never turns a timeout into completed evidence.
 
 Resume fingerprints the exact model/library bytes, relevant runtime/plugin sources, harness sources, dependency lockfile, Node version/platform and selected checks. It refuses stale evidence when those inputs change. Completed variant attempts are reused, including their failures, so a small batch can advance beyond a known failure. `--retry-failures` explicitly reruns completed failed variants; interrupted attempts without a final completion marker are rerun automatically. A successful child missing a required scenario also fails coverage validation. Start a new report after a source fix. The optional `--baseline=path/to/report.json` compares matching scenario envelopes against an independently produced report.
 

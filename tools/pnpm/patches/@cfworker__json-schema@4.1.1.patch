@@ -1,0 +1,39 @@
+diff --git a/dist/commonjs/validate.js b/dist/commonjs/validate.js
+index 75a3d4d9986e7fbb049103d4c6a4a7b0465a3f22..03b109e77c35c598de20cff21cdf5803cee71667 100644
+--- a/dist/commonjs/validate.js
++++ b/dist/commonjs/validate.js
+@@ -750,7 +750,7 @@ function validate(instance, schema, draft = '2019-09', lookup = (0, dereference_
+             }
+         }
+         if ($multipleOf !== undefined) {
+-            const remainder = instance % $multipleOf;
++            const remainder = Math.abs(instance % $multipleOf);
+             if (Math.abs(0 - remainder) >= 1.1920929e-7 &&
+                 Math.abs($multipleOf - remainder) >= 1.1920929e-7) {
+                 errors.push({
+diff --git a/dist/esm/validate.js b/dist/esm/validate.js
+index 7a523741614bd8255f5adaf0393e1ab5e7595b59..6091182f088a581337f6689913fed426861e5c6d 100644
+--- a/dist/esm/validate.js
++++ b/dist/esm/validate.js
+@@ -747,7 +747,7 @@ export function validate(instance, schema, draft = '2019-09', lookup = dereferen
+             }
+         }
+         if ($multipleOf !== undefined) {
+-            const remainder = instance % $multipleOf;
++            const remainder = Math.abs(instance % $multipleOf);
+             if (Math.abs(0 - remainder) >= 1.1920929e-7 &&
+                 Math.abs($multipleOf - remainder) >= 1.1920929e-7) {
+                 errors.push({
+diff --git a/src/validate.ts b/src/validate.ts
+index d80ff44cee7aad9e4507b80c410ad59a96a74e6b..b35e2d6b0f0f340e3c428fc5bb4028e77d987467 100644
+--- a/src/validate.ts
++++ b/src/validate.ts
+@@ -1108,7 +1108,7 @@ export function validate(
+       }
+     }
+     if ($multipleOf !== undefined) {
+-      const remainder = instance % $multipleOf;
++      const remainder = Math.abs(instance % $multipleOf);
+       if (
+         Math.abs(0 - remainder) >= 1.1920929e-7 &&
+         Math.abs($multipleOf - remainder) >= 1.1920929e-7

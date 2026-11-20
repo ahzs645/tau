@@ -5,6 +5,7 @@ export type {
   GalleryExportFormat,
   GalleryKernel,
   GalleryOperationOptions,
+  GalleryParameterDescription,
   GalleryRenderOptions,
   GalleryRenderResult,
   GallerySession,

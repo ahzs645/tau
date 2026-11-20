@@ -86,16 +86,17 @@ export const ProjectPage = ({
           : variantId === project.defaultVariantId
             ? project.initialParameters
             : emptyParameters;
-      const canonical = model.result ? resolveGalleryParameters(model.result.defaultParameters, current) : current;
+      const description = model.parameterDescription;
+      const canonical = description ? resolveGalleryParameters(description.defaultParameters, current) : current;
       replaceParameters(
         mergeGalleryParameterChanges(
-          { defaultParameters: model.result?.defaultParameters ?? {}, jsonSchema: model.result?.jsonSchema },
+          { defaultParameters: description?.defaultParameters ?? {}, jsonSchema: description?.jsonSchema },
           canonical,
           { next, base },
         ),
       );
     },
-    [project, variantId, replaceParameters, model.result],
+    [project, variantId, replaceParameters, model.parameterDescription],
   );
 
   const switchVariant = useCallback(
@@ -138,7 +139,8 @@ export const ProjectPage = ({
       });
       if (slot.parameter) {
         const next = new Map(Object.entries(parameters));
-        const original = project.initialParameters[slot.parameter] ?? model.result?.defaultParameters[slot.parameter];
+        const original =
+          project.initialParameters[slot.parameter] ?? model.parameterDescription?.defaultParameters[slot.parameter];
         if (original === undefined) {
           next.delete(slot.parameter);
         } else {
@@ -147,7 +149,7 @@ export const ProjectPage = ({
         replaceParameters(Object.fromEntries(next));
       }
     },
-    [variantId, parameters, project, model.result?.defaultParameters, replaceParameters],
+    [variantId, parameters, project, model.parameterDescription?.defaultParameters, replaceParameters],
   );
 
   const exportModel = useCallback(async () => {
@@ -262,7 +264,7 @@ export const ProjectPage = ({
               project={project}
               variant={variant}
               parameters={parameters}
-              result={model.result}
+              parameterDescription={model.parameterDescription}
               files={model.files}
               uploads={uploads}
               onChange={changeParameters}

@@ -102,6 +102,7 @@ describe('gallery export after a failed model update', () => {
   it('should keep the last valid preview visible while blocking export until a later render succeeds', async () => {
     const failed = Promise.withResolvers<GalleryRenderResult>();
     const client: GallerySession = {
+      parameterDescription: { jsonSchema: undefined, parameterManifest: undefined, defaultParameters: { width: 10 } },
       render: vi
         .fn<GallerySession['render']>()
         .mockResolvedValueOnce(artifact(10))
